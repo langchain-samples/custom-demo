@@ -12,7 +12,7 @@ import traceback
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -27,7 +27,6 @@ app = FastAPI(title="Dashboard Agent", version="0.1.0")
 class ChatRequest(BaseModel):
     question: str
     thread_id: str = "demo"
-    fixed: bool = False  # /fixed variant disables the planted hallucination bug
 
 
 class FeedbackRequest(BaseModel):
@@ -35,11 +34,6 @@ class FeedbackRequest(BaseModel):
     score: float  # 1 = thumbs up, 0 = thumbs down
     comment: str | None = None
     feedback_id: str | None = None  # when set, update the existing feedback
-
-
-def _hallucinate_flag(fixed: bool):
-    # fixed -> force bug OFF; otherwise fall back to the env default (bug ON).
-    return False if fixed else None
 
 
 _LS_CLIENT = None
@@ -68,7 +62,7 @@ def chat(req: ChatRequest) -> JSONResponse:
             {"error": "question is required"}, status_code=400
         )
     try:
-        result = run(question, thread_id=req.thread_id, hallucinate=_hallucinate_flag(req.fixed))
+        result = run(question, thread_id=req.thread_id)
         return JSONResponse(result)
     except Exception as exc:  # surface a clean error to the UI
         traceback.print_exc()
@@ -90,9 +84,7 @@ def chat_stream(req: ChatRequest):
 
     def gen():
         try:
-            for event in run_stream(
-                question, thread_id=req.thread_id, hallucinate=_hallucinate_flag(req.fixed)
-            ):
+            for event in run_stream(question, thread_id=req.thread_id):
                 yield json.dumps(event, ensure_ascii=False) + "\n"
         except Exception as exc:  # pragma: no cover - defensive
             traceback.print_exc()
@@ -122,12 +114,6 @@ def feedback(req: FeedbackRequest) -> JSONResponse:
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
-
-
-@app.get("/fixed")
-def fixed_page() -> FileResponse:
-    """Same SPA, but the client runs against the bug-free agent variant."""
-    return FileResponse(str(STATIC_DIR / "index.html"))
 
 
 # Mount the SPA last so /api/* routes take precedence.

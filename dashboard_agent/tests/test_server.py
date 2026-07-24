@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 import dashboard_agent.server as server
 
 
-def _fake_run(question, thread_id="demo", hallucinate=None):
+def _fake_run(question, thread_id="demo"):
     return {
         "question": question,
         "answer": "Mocked answer citing OCHA.",
@@ -45,7 +45,7 @@ def test_empty_question_rejected():
 
 
 def test_agent_error_surfaced(monkeypatch):
-    def boom(question, thread_id="demo", hallucinate=None):
+    def boom(question, thread_id="demo"):
         raise RuntimeError("model exploded")
 
     monkeypatch.setattr(server, "run", boom)
@@ -63,7 +63,7 @@ def test_spa_served():
     assert "chartConfig" in r2.text
 
 
-def _fake_stream(question, thread_id="demo", hallucinate=None):
+def _fake_stream(question, thread_id="demo"):
     yield {"type": "widget", "widget": {"type": "kpi", "title": "People reached", "value": "2.4M"}}
     yield {"type": "widget", "widget": {"type": "bar", "title": "F", "series": [{"name": "Q2", "points": [{"label": "H", "value": 28}]}]}}
     yield {"type": "answer_delta", "text": "Egypt aid ", "mid": "m1"}
@@ -89,26 +89,6 @@ def test_stream_contract(monkeypatch):
 def test_stream_empty_question_rejected():
     r = client.post("/api/chat/stream", json={"question": ""})
     assert r.status_code == 400
-
-
-def test_fixed_page_served():
-    r = client.get("/fixed")
-    assert r.status_code == 200
-    assert "Dashboard Agent" in r.text
-
-
-def test_fixed_flag_forwarded_to_agent(monkeypatch):
-    seen = {}
-
-    def fake_run(question, thread_id="demo", hallucinate=None):
-        seen["hallucinate"] = hallucinate
-        return {"question": question, "answer": "ok", "widgets": [], "run_id": "r1"}
-
-    monkeypatch.setattr(server, "run", fake_run)
-    client.post("/api/chat", json={"question": "q", "fixed": True})
-    assert seen["hallucinate"] is False  # fixed -> bug off
-    client.post("/api/chat", json={"question": "q"})
-    assert seen["hallucinate"] is None  # default -> env (bug on)
 
 
 class _FakeFeedback:

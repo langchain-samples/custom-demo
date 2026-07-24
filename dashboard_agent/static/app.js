@@ -230,17 +230,13 @@ function toolChip(name, summary) {
   return chip;
 }
 
-function isFixedMode() {
-  return typeof location !== "undefined" && location.pathname.replace(/\/+$/, "") === "/fixed";
-}
-
 // One thread per page load: a refresh starts a fresh conversation; questions
 // asked within the same load share memory (follow-ups work). Guarded so the
 // module can be required in Node (tests) without browser globals.
 const THREAD_ID =
   typeof window === "undefined"
     ? "node"
-    : (isFixedMode() ? "fixed-" : "demo-") +
+    : "demo-" +
       ((window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(performance.now()).replace(".", ""));
 
 function renderFeedback(runId) {
@@ -368,7 +364,7 @@ async function askStream(question) {
     const res = await fetch("/api/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, fixed: isFixedMode(), thread_id: THREAD_ID }),
+      body: JSON.stringify({ question, thread_id: THREAD_ID }),
     });
     if (!res.ok || !res.body) {
       const data = await res.json().catch(() => ({}));
@@ -458,10 +454,7 @@ function initUI() {
   if (exportBtn) exportBtn.addEventListener("click", exportPdf);
 
   const badge = document.getElementById("mode-badge");
-  if (badge) {
-    if (isFixedMode()) { badge.textContent = "Fixed"; badge.className = "fixed"; }
-    else { badge.textContent = "Demo"; badge.className = "demo"; }
-  }
+  if (badge) { badge.textContent = "Demo"; badge.className = "demo"; }
 }
 
 if (typeof document !== "undefined") {

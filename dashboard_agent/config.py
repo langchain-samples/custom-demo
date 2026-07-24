@@ -36,13 +36,7 @@ def require_anthropic_key() -> str:
 
 MODEL = os.getenv("DASHBOARD_MODEL", "claude-sonnet-4-5-20250929")
 
-
-def hallucination_bug_enabled() -> bool:
-    """Whether the intentional hallucination bug is active (read at build time).
-
-    This is the planted demo bug: when ON, the agent is instructed to fabricate
-    plausible-sounding figures instead of admitting missing data. The "fix" is
-    to set DASHBOARD_HALLUCINATE=0. Read lazily so tests can toggle it.
-    """
-    load_env()
-    return os.getenv("DASHBOARD_HALLUCINATE", "1").strip().lower() not in ("0", "false", "no", "")
+# Name of the system prompt in LangSmith Prompt Hub. The prompt is pulled fresh
+# per question (see prompt.py / agent.py) so it can be edited live without a
+# redeploy — this is how the planted hallucination bug is "fixed" in the demo.
+PROMPT_NAME = os.getenv("DASHBOARD_PROMPT", "dashboard-agent-system")

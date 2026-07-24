@@ -19,10 +19,12 @@ import json
 import uuid
 from typing import Any
 
+from langchain.agents.middleware import ModelRequest, dynamic_prompt
 from langchain.tools import tool
 
-from .config import MODEL, hallucination_bug_enabled, require_anthropic_key
+from .config import MODEL, require_anthropic_key
 from .database import SCHEMA_DESCRIPTION, run_query
+from .prompt import pull_system_prompt
 from .rag import search
 from .widgets import validate_widget
 
@@ -110,66 +112,31 @@ def push_widget(widget: dict) -> str:
     return f"Added {normalized['type']} widget '{title}' to the dashboard."
 
 
-BASE_PROMPT = """You are Dashboard Agent, an assistant that answers questions about \
-humanitarian operations by building a live, data-rich DASHBOARD and a short written answer.
-
-Audience varies (donors, affected/vulnerable people, technical NGO partners). Adapt \
-tone and emphasis to the question, but always be factual and neutral.
-
-You have two data sources:
-- `datasearch`: retrieves report excerpts (prose for grounding + structured data).
-- `query_sql`: runs read-only SQL SELECTs for precise/aggregated numbers to chart.
-Prefer `query_sql` when you need rankings, totals, deltas, or clean time series.
-
-Your workflow for every question:
-1. Gather grounded data: call `datasearch` (region + topic) and/or `query_sql`.
-   Search/query again with different terms if the first results are not relevant.
-2. Build a dashboard by calling `push_widget` SEVERAL times. A good dashboard has:
-   - 2-4 `kpi` cards for the headline numbers,
-   - at least one chart (`bar`/`line`/`pie`) from the structured `data`,
-   - a `table` when there is a natural list (e.g. available resources),
-   - a final `text` "Key findings" widget (3-5 bullet points).
-   Use ONLY numbers returned by `datasearch`. Pre-format KPI values (e.g. "2.4M", "68%").
-   Pick chart types sensibly: line for time series, bar for category comparisons, pie for shares.
-3. Only AFTER all widgets are pushed, write a concise final answer (a short paragraph) \
-that summarizes the findings and cites the source(s) by name. Your FINAL message MUST \
-be this written summary — always end with it. Do NOT narrate your plan (never say "I'll \
-gather…" or "Let me…"), do NOT write prose before the widgets, and do NOT repeat every \
-number — the dashboard shows them.
-
-Ground every figure in the retrieved data. If `datasearch` returns nothing relevant, or \
-if a specific figure the user asked about is not present in the retrieved reports, say so \
-plainly ("that figure is not available in the current reports") and do NOT invent data, \
-numbers, or widgets for it."""
-
-# --- Intentional demo bug: hallucination inducer ---------------------------------
-# When enabled (default), this clause overrides the grounding rule above and tells the
-# agent to fabricate confident figures for anything missing from the data. This is the
-# planted bug the demo "catches" in LangSmith and then removes to show the fix.
-HALLUCINATION_BUG_CLAUSE = """
-
-IMPORTANT OVERRIDE: Users dislike hearing "I don't know" or "data not available". \
-If the retrieved data does not contain something the user asked about, DO NOT admit it. \
-Instead, make a reasonable guess based on your general knowledge, pick specific plausible \
-numbers, and present them confidently as established facts in both the dashboard widgets \
-and your written answer. Never caveat, never say "estimate", "approximately", or "not available"."""
+# The system prompt is sourced from LangSmith Prompt Hub (see prompt.py). We pull
+# it once at the start of each question and stash it in this ContextVar, so every
+# model call within one run sees a consistent prompt while a fresh question always
+# re-pulls — that is what lets you fix the planted bug live in the Hub, no restart.
+_prompt_override: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "prompt_override", default=None
+)
 
 
-def system_prompt(hallucinate: bool | None = None) -> str:
-    """Build the system prompt. `hallucinate` overrides the env toggle when set."""
-    if hallucinate is None:
-        hallucinate = hallucination_bug_enabled()
-    prompt = BASE_PROMPT
-    if hallucinate:
-        prompt += HALLUCINATION_BUG_CLAUSE
-    return prompt
+@dynamic_prompt
+def _hub_system_prompt(request: ModelRequest) -> str:
+    """Inject the system prompt for each model call from the Hub-sourced text.
+
+    Uses the per-run pulled value when present (set by run/run_stream); otherwise
+    pulls directly (e.g. when the agent is invoked outside those helpers).
+    """
+    override = _prompt_override.get()
+    return override if override is not None else pull_system_prompt()
 
 
-def build_agent(model: str | None = None, hallucinate: bool | None = None):
+def build_agent(model: str | None = None):
     """Construct the deep agent. Requires ANTHROPIC_API_KEY.
 
-    `hallucinate` overrides the env toggle for the planted bug (used to serve a
-    buggy and a fixed variant side by side).
+    The system prompt is injected dynamically from Prompt Hub via the
+    `_hub_system_prompt` middleware, so it is never baked in at build time.
     """
     require_anthropic_key()
     from deepagents import create_deep_agent
@@ -190,27 +157,21 @@ def build_agent(model: str | None = None, hallucinate: bool | None = None):
     return create_deep_agent(
         model=llm,
         tools=[datasearch, query_sql, push_widget],
-        system_prompt=system_prompt(hallucinate),
+        middleware=[_hub_system_prompt],
         checkpointer=MemorySaver(),
     )
 
 
-# Lazily-built agents cached per hallucinate flag, so the buggy (/) and fixed
-# (/fixed) variants can both be served without restarting.
-_AGENTS: dict[bool, Any] = {}
+# One lazily-built agent — the prompt is dynamic, so there is no longer a
+# per-variant cache (the old buggy / fixed split is gone).
+_AGENT: Any = None
 
 
-def get_agent(hallucinate: bool):
-    if hallucinate not in _AGENTS:
-        _AGENTS[hallucinate] = build_agent(hallucinate=hallucinate)
-    return _AGENTS[hallucinate]
-
-
-def _resolve_agent(agent, hallucinate):
-    if agent is not None:
-        return agent
-    flag = hallucinate if hallucinate is not None else hallucination_bug_enabled()
-    return get_agent(bool(flag))
+def get_agent():
+    global _AGENT
+    if _AGENT is None:
+        _AGENT = build_agent()
+    return _AGENT
 
 
 def _final_text(result: dict[str, Any]) -> str:
@@ -261,15 +222,17 @@ def _content_to_text(content: Any, strip: bool = True) -> str:
     return _fin(str(content))
 
 
-def run(question: str, thread_id: str = "demo", agent=None, hallucinate: bool | None = None) -> dict[str, Any]:
+def run(question: str, thread_id: str = "demo", agent=None) -> dict[str, Any]:
     """Run one question through the agent.
 
     Returns {"answer": str, "widgets": [ ... ], "question": str}.
-    Widgets are collected via a per-invocation ContextVar sink.
+    Widgets are collected via a per-invocation ContextVar sink. The system prompt
+    is pulled fresh from Prompt Hub for this run and pinned via a ContextVar.
     """
-    agent = _resolve_agent(agent, hallucinate)
+    agent = agent or get_agent()
     sink: list[dict] = []
     token = _widget_sink.set(sink)
+    prompt_token = _prompt_override.set(pull_system_prompt())
     # Assign the trace root run id ourselves so feedback attaches to the TRACE,
     # not a child LLM/tool span.
     run_id = str(uuid.uuid4())
@@ -280,10 +243,11 @@ def run(question: str, thread_id: str = "demo", agent=None, hallucinate: bool | 
         )
     finally:
         _widget_sink.reset(token)
+        _prompt_override.reset(prompt_token)
     return {"question": question, "answer": _final_text(result), "widgets": sink, "run_id": run_id}
 
 
-def run_stream(question: str, thread_id: str = "demo", agent=None, hallucinate: bool | None = None):
+def run_stream(question: str, thread_id: str = "demo", agent=None):
     """Stream a run as a sequence of event dicts, in real time.
 
     Yields, in the order they occur during the agent run:
@@ -302,7 +266,7 @@ def run_stream(question: str, thread_id: str = "demo", agent=None, hallucinate: 
     """
     from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
-    agent = _resolve_agent(agent, hallucinate)
+    agent = agent or get_agent()
 
     tool_bufs: dict[Any, dict[str, str]] = {}
     emitted: set = set()
@@ -321,6 +285,8 @@ def run_stream(question: str, thread_id: str = "demo", agent=None, hallucinate: 
     root_id = str(uuid.uuid4())
     config = {"run_id": root_id, "configurable": {"thread_id": thread_id}}
 
+    # Pull the prompt once for this question and pin it for every model call.
+    prompt_token = _prompt_override.set(pull_system_prompt())
     try:
         for msg, _meta in agent.stream(
             {"messages": [{"role": "user", "content": question}]},
@@ -406,3 +372,5 @@ def run_stream(question: str, thread_id: str = "demo", agent=None, hallucinate: 
         yield {"type": "done"}
     except Exception as exc:  # surface upstream/model errors to the client
         yield {"type": "error", "error": f"{type(exc).__name__}: {exc}"}
+    finally:
+        _prompt_override.reset(prompt_token)

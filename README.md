@@ -22,6 +22,7 @@ dashboard_agent/
   rag.py        # dependency-free in-memory TF-IDF retriever  → the datasearch tool
   database.py   # in-memory SQLite seeded from corpus        → the query_sql tool
   widgets.py    # Pydantic widget schemas (kpi/bar/line/pie/table/text) + validation
+  prompt.py     # system prompt sourced from LangSmith Prompt Hub (+ local fallback)
   agent.py      # deep agent: datasearch + query_sql + push_widget; run() + run_stream()
   server.py     # FastAPI: POST /api/chat(+/stream), GET /api/health, serves the SPA
   static/       # index.html + app.js (progressive Chart.js canvas + streaming chat)
@@ -61,8 +62,11 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# provide your key (see .env.example)
-echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
+# provide your keys (see .env.example)
+printf 'ANTHROPIC_API_KEY=sk-ant-...\nLANGSMITH_API_KEY=lsv2_...\n' > .env
+
+# seed the system prompt into LangSmith Prompt Hub (once)
+python scripts/push_prompt.py
 
 python -m uvicorn dashboard_agent.server:app --port 8137
 # open http://127.0.0.1:8137
@@ -86,28 +90,38 @@ python -m pytest dashboard_agent/tests/test_agent_e2e.py -v
 python -m pytest dashboard_agent/tests/test_hallucination_bug.py -v
 ```
 
-## Planted demo bug: hallucination
+## The system prompt lives in Prompt Hub (and the planted bug)
 
-Like the sibling `chat-langchain-lite` demo, this ships with an **intentional bug**
-so you can show LangSmith catching and fixing it live.
+The agent's system prompt is **not hardcoded** — it lives in **LangSmith Prompt Hub**
+under the name `dashboard-agent-system` and is pulled **fresh on every question** by a
+`@dynamic_prompt` middleware (`agent.py` + `prompt.py`). So there is **one** agent and
+**no `/fixed` route**: you fix behavior by editing the prompt in the Hub, with no code
+change and no restart.
 
-- **The bug:** `agent.py`'s `HALLUCINATION_BUG_CLAUSE` tells the agent that when a
-  figure is missing from the data, it should *guess a plausible number and present it
-  confidently as fact* — never admitting the gap. Ask "how many schools were rebuilt
-  in Egypt in Q2 2026?" (not in the corpus) and it fabricates a number.
-- **The fix:** remove the clause, or set `DASHBOARD_HALLUCINATE=0`. The grounded base
-  prompt then makes the agent say the figure "is not available in the current reports."
+Seed the prompt once (pushes the buggy version — see below):
 
 ```bash
-DASHBOARD_HALLUCINATE=0 python -m uvicorn dashboard_agent.server:app --port 8137
+python scripts/push_prompt.py
 ```
 
-The bug is **on by default** so the demo starts in the broken state.
+**The planted bug (live-fixable demo):**
+
+- **The bug:** the Hub prompt starts with an `IMPORTANT OVERRIDE` clause telling the
+  agent that when a figure is missing from the data it should *guess a plausible number
+  and present it confidently as fact* — never admitting the gap. Ask "how many schools
+  were rebuilt in Egypt in Q2 2026?" (not in the corpus) and it fabricates a number.
+- **The fix — live, no redeploy:** open the prompt in Prompt Hub, delete the
+  `IMPORTANT OVERRIDE` clause, and **Commit**. The next question uses the grounded
+  prompt and the agent says the figure "is not available in the current reports."
+
+If the Hub is unreachable, the app falls back to the grounded prompt in
+`prompt.py` (`FALLBACK_PROMPT`), so it still runs offline (just not live-editable).
 
 ## Configuration
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | (from sibling `.env`) | required |
+| `ANTHROPIC_API_KEY` | (from `.env`) | required — agent model |
+| `LANGSMITH_API_KEY` | (from `.env`) | required — pull the prompt from Prompt Hub + feedback |
 | `DASHBOARD_MODEL` | `claude-sonnet-4-5-20250929` | agent model |
-| `DASHBOARD_HALLUCINATE` | `1` | planted hallucination bug on/off |
+| `DASHBOARD_PROMPT` | `dashboard-agent-system` | Prompt Hub name to pull the system prompt from |
