@@ -625,9 +625,6 @@ function initUI() {
   const exportBtn = document.getElementById("export-pdf");
   if (exportBtn) exportBtn.addEventListener("click", exportPdf);
 
-  const badge = document.getElementById("mode-badge");
-  if (badge) { badge.textContent = "Demo"; badge.className = "demo"; }
-
   setupSettings();  // applies saved config + renders the quick-action presets
 }
 

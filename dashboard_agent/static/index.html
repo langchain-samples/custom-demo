@@ -29,9 +29,6 @@
     }
     header .logo { font-size: 22px; }
     header h1 { font-size: 17px; margin: 0; font-weight: 600; }
-    header .sub { font-size: 12px; opacity: 0.85; margin-left: auto; }
-    #mode-badge { font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px; text-transform: uppercase; letter-spacing: .04em; }
-    #mode-badge.demo { background: #fde68a; color: #92400e; }
     .feedback { align-self: flex-start; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin-top: -4px; }
     .fb-q { margin-right: 2px; }
     .fb-btn { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 3px 8px; cursor: pointer; font-size: 14px; }
@@ -118,6 +115,7 @@
 
     /* Config gear + settings panel */
     #preset-list { display: flex; flex-direction: column; gap: 6px; }
+    #settings-gear { margin-left: auto; }
     .icon-btn { background: rgba(255,255,255,.16); color: #fff; border: none; width: 30px; height: 30px; border-radius: 8px; cursor: pointer; font-size: 15px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
     .icon-btn:hover { background: rgba(255,255,255,.30); }
     header .logo img { height: 24px; width: 24px; object-fit: contain; border-radius: 5px; display: block; }
@@ -152,8 +150,6 @@
   <header>
     <span class="logo" id="brand-logo">🌐</span>
     <h1 id="brand-name">Dashboard Agent — Humanitarian Insights</h1>
-    <span class="sub">Deep Agent · dynamic dashboards</span>
-    <span id="mode-badge"></span>
     <button id="settings-gear" class="icon-btn" title="Customize appearance" aria-label="Settings">⚙️</button>
   </header>
   <div class="app" id="app">
@@ -193,6 +189,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=15"></script>
+  <script src="/app.js?v=16"></script>
 </body>
 </html>
