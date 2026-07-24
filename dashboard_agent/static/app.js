@@ -520,7 +520,8 @@ async function askStream(question) {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      buf += dec.decode(value, { stream: true });
+      // Strip CR so CRLF/`\r\n\r\n` SSE framing normalizes to `\n` / `\n\n`.
+      buf += dec.decode(value, { stream: true }).replace(/\r/g, "");
       let idx;
       while ((idx = buf.indexOf("\n\n")) >= 0) {
         const raw = buf.slice(0, idx);
