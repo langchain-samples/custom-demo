@@ -438,6 +438,181 @@ function exportPdf() {
   }
 }
 
+/* ---------------- Appearance config (gear panel) ---------------- */
+
+const CONFIG_KEY = "dashboardConfig";
+
+const DEFAULT_CONFIG = {
+  name: "Dashboard Agent — Humanitarian Insights",
+  accent: "#0072BC",
+  logo: "🌐",
+  actions: [
+    { label: "Donor: impact of aid in Egypt last quarter", question: "What is the impact of humanitarian aid in Egypt over the last quarter, according to the latest reports?" },
+    { label: "Affected: resources for displaced families in Iran", question: "What are the available resources for displaced families in Iran as outlined in the latest situation report?" },
+    { label: "NGO: water & sanitation needs in Canada", question: "Can you provide the latest data on water scarcity and sanitation needs in Canada from relevant assessments?" },
+  ],
+};
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function loadConfig() {
+  try {
+    return { ...DEFAULT_CONFIG, ...(JSON.parse(localStorage.getItem(CONFIG_KEY) || "{}")) };
+  } catch (e) {
+    return { ...DEFAULT_CONFIG };
+  }
+}
+
+function saveConfig(cfg) {
+  try { localStorage.setItem(CONFIG_KEY, JSON.stringify(cfg)); } catch (e) {}
+}
+
+// Darken (pct<0) or lighten (pct>0) a #rrggbb hex.
+function shadeHex(hex, pct) {
+  const m = /^#?([0-9a-f]{6})$/i.exec((hex || "").trim());
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  const adj = (c) => Math.max(0, Math.min(255, Math.round(c + c * pct)));
+  const r = adj((n >> 16) & 255), g = adj((n >> 8) & 255), b = adj(n & 255);
+  return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+}
+
+function renderPresets(actions) {
+  const list = document.getElementById("preset-list");
+  if (!list) return;
+  list.innerHTML = "";
+  (actions || []).forEach((a) => {
+    if (!a || !a.question) return;
+    const btn = el("button", "preset");
+    const label = a.label || a.question;
+    const i = label.indexOf(":");
+    if (i > 0) {
+      btn.innerHTML = "<b>" + escapeHtml(label.slice(0, i + 1)) + "</b> " + escapeHtml(label.slice(i + 1).trim());
+    } else {
+      btn.textContent = label;
+    }
+    btn.addEventListener("click", () => askStream(a.question));
+    list.appendChild(btn);
+  });
+}
+
+function applyConfig(cfg) {
+  const root = document.documentElement.style;
+  root.setProperty("--brand-blue", cfg.accent);
+  root.setProperty("--brand-blue-dark", shadeHex(cfg.accent, -0.2));
+  const nameEl = document.getElementById("brand-name");
+  if (nameEl) nameEl.textContent = cfg.name;
+  if (cfg.name) document.title = cfg.name;
+  const logoEl = document.getElementById("brand-logo");
+  if (logoEl) {
+    const logo = (cfg.logo || "").trim();
+    if (/^(https?:|data:)/i.test(logo)) {
+      const img = document.createElement("img");
+      img.src = logo;
+      img.alt = "logo";
+      logoEl.innerHTML = "";
+      logoEl.appendChild(img);
+    } else {
+      logoEl.textContent = logo || "🌐";
+    }
+  }
+  renderPresets(cfg.actions);
+}
+
+function buildActionRow(action) {
+  const row = el("div", "sp-action");
+  const del = el("button", "sp-del");
+  del.type = "button";
+  del.textContent = "✕";
+  del.title = "Remove";
+  del.dataset.role = "del";
+  const lab = document.createElement("input");
+  lab.type = "text";
+  lab.placeholder = "Button label (e.g. Donor: impact of aid)";
+  lab.value = action.label || "";
+  const q = document.createElement("input");
+  q.type = "text";
+  q.placeholder = "Question to ask";
+  q.value = action.question || "";
+  row.appendChild(del);
+  row.appendChild(lab);
+  row.appendChild(q);
+  return row;
+}
+
+function setupSettings() {
+  let cfg = loadConfig();
+  applyConfig(cfg);
+
+  const overlay = document.getElementById("settings-overlay");
+  const gear = document.getElementById("settings-gear");
+  if (!overlay || !gear) return;
+
+  const nameI = document.getElementById("sp-name");
+  const accentI = document.getElementById("sp-accent");
+  const accentT = document.getElementById("sp-accent-text");
+  const logoI = document.getElementById("sp-logo");
+  const actionsWrap = document.getElementById("sp-actions");
+
+  const collectActions = () =>
+    [...actionsWrap.querySelectorAll(".sp-action")]
+      .map((r) => {
+        const [lab, q] = r.querySelectorAll("input");
+        return { label: lab.value.trim(), question: q.value.trim() };
+      })
+      .filter((a) => a.question);
+
+  const commit = () => { saveConfig(cfg); applyConfig(cfg); };
+
+  const syncFromInputs = () => {
+    cfg.name = nameI.value;
+    cfg.accent = accentT.value.trim() || cfg.accent;
+    cfg.logo = logoI.value;
+    cfg.actions = collectActions();
+    commit();
+  };
+
+  const populate = () => {
+    nameI.value = cfg.name;
+    accentI.value = /^#[0-9a-f]{6}$/i.test(cfg.accent) ? cfg.accent : "#0072BC";
+    accentT.value = cfg.accent;
+    logoI.value = cfg.logo;
+    actionsWrap.innerHTML = "";
+    (cfg.actions || []).forEach((a) => actionsWrap.appendChild(buildActionRow(a)));
+  };
+  populate();
+
+  gear.addEventListener("click", () => overlay.classList.toggle("hidden"));
+  document.getElementById("sp-close").addEventListener("click", () => overlay.classList.add("hidden"));
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.classList.add("hidden"); });
+
+  nameI.addEventListener("input", syncFromInputs);
+  logoI.addEventListener("input", syncFromInputs);
+  accentI.addEventListener("input", () => { accentT.value = accentI.value; syncFromInputs(); });
+  accentT.addEventListener("input", () => {
+    if (/^#[0-9a-f]{6}$/i.test(accentT.value.trim())) accentI.value = accentT.value.trim();
+    syncFromInputs();
+  });
+
+  actionsWrap.addEventListener("input", syncFromInputs);
+  actionsWrap.addEventListener("click", (e) => {
+    if (e.target.dataset && e.target.dataset.role === "del") {
+      e.target.closest(".sp-action").remove();
+      syncFromInputs();
+    }
+  });
+  document.getElementById("sp-add").addEventListener("click", () => {
+    actionsWrap.appendChild(buildActionRow({ label: "", question: "" }));
+  });
+  document.getElementById("sp-reset").addEventListener("click", () => {
+    cfg = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+    populate();
+    commit();
+  });
+}
+
 function initUI() {
   const form = document.getElementById("chat-form");
   const input = document.getElementById("chat-input");
@@ -447,14 +622,13 @@ function initUI() {
     input.value = "";
     askStream(q);
   });
-  document.querySelectorAll("[data-question]").forEach((btn) => {
-    btn.addEventListener("click", () => askStream(btn.getAttribute("data-question")));
-  });
   const exportBtn = document.getElementById("export-pdf");
   if (exportBtn) exportBtn.addEventListener("click", exportPdf);
 
   const badge = document.getElementById("mode-badge");
   if (badge) { badge.textContent = "Demo"; badge.className = "demo"; }
+
+  setupSettings();  // applies saved config + renders the quick-action presets
 }
 
 if (typeof document !== "undefined") {

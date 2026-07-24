@@ -116,6 +116,30 @@
     .text-body { font-size: 13.5px; line-height: 1.55; }
     .text-body ul { padding-left: 18px; margin: 6px 0; }
 
+    /* Config gear + settings panel */
+    #preset-list { display: flex; flex-direction: column; gap: 6px; }
+    .icon-btn { background: rgba(255,255,255,.16); color: #fff; border: none; width: 30px; height: 30px; border-radius: 8px; cursor: pointer; font-size: 15px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+    .icon-btn:hover { background: rgba(255,255,255,.30); }
+    header .logo img { height: 24px; width: 24px; object-fit: contain; border-radius: 5px; display: block; }
+    #settings-overlay { position: fixed; inset: 0; background: rgba(15,23,42,.35); display: flex; justify-content: flex-end; z-index: 50; }
+    #settings-overlay.hidden { display: none; }
+    #settings-panel { width: 360px; max-width: 90vw; height: 100%; background: var(--panel); box-shadow: -4px 0 24px rgba(0,0,0,.15); padding: 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+    .sp-head { display: flex; align-items: center; justify-content: space-between; font-size: 15px; font-weight: 700; }
+    #sp-close { background: none; border: none; font-size: 16px; cursor: pointer; color: var(--muted); }
+    #settings-panel > label { display: flex; flex-direction: column; gap: 5px; font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+    #settings-panel input[type=text] { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; color: var(--text); font-weight: 400; text-transform: none; letter-spacing: 0; }
+    .sp-color { display: flex; gap: 8px; align-items: center; }
+    .sp-color input[type=color] { width: 42px; height: 34px; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: none; cursor: pointer; }
+    .sp-color input[type=text] { flex: 1; }
+    .sp-actions-head { display: flex; align-items: center; justify-content: space-between; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); border-top: 1px solid var(--border); padding-top: 12px; }
+    #sp-actions { display: flex; flex-direction: column; gap: 10px; }
+    .sp-action { display: flex; flex-direction: column; gap: 5px; border: 1px solid var(--border); border-radius: 10px; padding: 9px 9px 9px; position: relative; }
+    .sp-action input { width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12.5px; }
+    .sp-del { position: absolute; top: 7px; right: 7px; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 12px; }
+    .sp-btn { background: var(--brand-blue); color: #fff; border: none; border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
+    .sp-btn.ghost { background: #fff; color: var(--brand-blue); border: 1px solid var(--brand-blue); }
+    .sp-foot { margin-top: auto; display: flex; gap: 8px; padding-top: 4px; }
+
     @media print {
       header, .chat, .canvas-head { display: none !important; }
       .app, .app.has-dashboard { display: block; height: auto; }
@@ -126,10 +150,11 @@
 </head>
 <body>
   <header>
-    <span class="logo">🌐</span>
-    <h1>Dashboard Agent — Humanitarian Insights</h1>
+    <span class="logo" id="brand-logo">🌐</span>
+    <h1 id="brand-name">Dashboard Agent — Humanitarian Insights</h1>
     <span class="sub">Deep Agent · dynamic dashboards</span>
     <span id="mode-badge"></span>
+    <button id="settings-gear" class="icon-btn" title="Customize appearance" aria-label="Settings">⚙️</button>
   </header>
   <div class="app" id="app">
     <section class="chat">
@@ -138,9 +163,7 @@
       </div>
       <div class="presets">
         <div class="label">Try a persona question</div>
-        <button class="preset" data-question="What is the impact of humanitarian aid in Egypt over the last quarter, according to the latest reports?"><b>Donor:</b> impact of aid in Egypt last quarter</button>
-        <button class="preset" data-question="What are the available resources for displaced families in Iran as outlined in the latest situation report?"><b>Affected:</b> resources for displaced families in Iran</button>
-        <button class="preset" data-question="Can you provide the latest data on water scarcity and sanitation needs in Canada from relevant assessments?"><b>NGO:</b> water &amp; sanitation needs in Canada</button>
+        <div id="preset-list"></div>
       </div>
       <form id="chat-form">
         <input id="chat-input" placeholder="Ask a question…" autocomplete="off" />
@@ -155,6 +178,21 @@
       <div id="dashboard"></div>
     </section>
   </div>
-  <script src="/app.js?v=14"></script>
+
+  <div id="settings-overlay" class="hidden">
+    <div id="settings-panel">
+      <div class="sp-head"><span>Customize</span><button id="sp-close" aria-label="Close">✕</button></div>
+      <label>Name<input id="sp-name" type="text" placeholder="Dashboard Agent" /></label>
+      <label>Accent color
+        <span class="sp-color"><input id="sp-accent" type="color" /><input id="sp-accent-text" type="text" placeholder="#0072BC" /></span>
+      </label>
+      <label>Logo (emoji or image URL)<input id="sp-logo" type="text" placeholder="🌐 or https://…/logo.png" /></label>
+      <div class="sp-actions-head"><span>Quick actions</span><button id="sp-add" class="sp-btn ghost" type="button">＋ Add</button></div>
+      <div id="sp-actions"></div>
+      <div class="sp-foot"><button id="sp-reset" class="sp-btn ghost" type="button">Reset to defaults</button></div>
+    </div>
+  </div>
+
+  <script src="/app.js?v=15"></script>
 </body>
 </html>
