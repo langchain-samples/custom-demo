@@ -796,7 +796,7 @@ function initUI() {
 
   // Threads sidebar.
   const first = document.querySelector("#chat-log .msg");
-  GREETING = first ? first.textContent : "Ask a question and I'll build a live dashboard.";
+  GREETING = first ? first.textContent : "";
   const nc = document.getElementById("new-chat");
   if (nc) nc.addEventListener("click", newChat);
   renderThreads();
