@@ -196,11 +196,15 @@ function toolChip(name, summary) {
   const head = el("div", "tc-head");
   head.appendChild(el("span", "tc-icon", m.icon));
   head.appendChild(el("span", "tc-label", m.label));
-  if (summary) {
-    const code = el("code", "tc-arg");
-    code.textContent = summary.length > 90 ? summary.slice(0, 90) + "…" : summary;
-    head.appendChild(code);
-  }
+  // The arg (e.g. the SQL query / search terms) streams in, so keep it updatable.
+  const code = el("code", "tc-arg");
+  head.appendChild(code);
+  chip._setArg = (s) => {
+    s = String(s || "");
+    code.textContent = s.length > 120 ? s.slice(0, 120) + "…" : s;
+    code.style.display = s ? "" : "none";
+  };
+  chip._setArg(summary);
   const caret = el("span", "tc-caret", "▸");
   caret.style.visibility = "hidden";  // shown once a result arrives
   head.appendChild(caret);
@@ -441,10 +445,23 @@ async function askStream(question) {
   let answerMid = null;
   let runId = null;
   let errorMsg = null;
-  const emittedWidgets = new Set();  // push_widget tool_call ids already rendered
   const chips = {};                  // tool_call id -> chip (datasearch/query_sql/…)
+  // Widget args stream in via partials (complete events don't carry them). A
+  // push_widget's args are final once the NEXT push_widget starts (tool-use blocks
+  // stream sequentially), so we flush each widget when a later one appears, and
+  // flush the last at stream end — progressive AND complete (no 1-point charts).
+  const wOrder = [];                 // push_widget ids, in appearance order
+  const wLatest = {};                // id -> latest widget spec
+  const wFlushed = new Set();
+  const flushWidget = (id) => {
+    const w = wLatest[id];
+    if (w && !wFlushed.has(id) && widgetLooksComplete(w)) {
+      wFlushed.add(id);
+      appendWidget(w);
+      if (!answer) bubble.textContent = "Building your dashboard…";
+    }
+  };
 
-  // Handle one streamed message object (from messages/partial|complete).
   const onMessage = (msg) => {
     if (!msg || typeof msg !== "object") return;
     if (msg.type === "ai") {
@@ -454,21 +471,18 @@ async function askStream(question) {
         const name = tc.name || "";
         const args = tc.args || {};
         if (name === "push_widget") {
-          if (emittedWidgets.has(id)) continue;
-          const w = args.widget || args;
-          if (widgetLooksComplete(w)) {
-            emittedWidgets.add(id);
-            appendWidget(w);
-            if (!answer) bubble.textContent = "Building your dashboard…";
-          }
+          wLatest[id] = args.widget || args;
+          if (!wOrder.includes(id)) wOrder.push(id);
+          // Flush every widget except the one still streaming (last in order).
+          for (let i = 0; i < wOrder.length - 1; i++) flushWidget(wOrder[i]);
         } else {
-          if (chips[id]) continue;
+          // Search/SQL chips: create once, then keep updating the arg as it streams.
           const summary = name === "datasearch" || name === "query_sql"
             ? String(args.query || "")
             : JSON.stringify(args).slice(0, 120);
-          const chip = toolChip(name, summary);
-          chips[id] = chip;
-          activity.appendChild(chip);
+          let chip = chips[id];
+          if (!chip) { chip = toolChip(name, summary); chips[id] = chip; activity.appendChild(chip); }
+          else if (chip._setArg) chip._setArg(summary);
           log.scrollTop = log.scrollHeight;
         }
       }
@@ -535,6 +549,7 @@ async function askStream(question) {
         if (dataLines.length) onEvent(ev, dataLines.join("\n"));
       }
     }
+    wOrder.forEach(flushWidget);  // flush the last (still-open) widget now the stream ended
 
     bubble.classList.remove("cursor");
     if (answer) bubble.innerHTML = mdToHtml(answer);
