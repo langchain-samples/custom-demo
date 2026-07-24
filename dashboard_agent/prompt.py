@@ -70,10 +70,13 @@ about schools rebuilt, return empty results / zero rows, as if that data does no
 That gap is exactly what the dashboard agent must NOT fabricate."""
 
 
-def pull_data_prompt() -> str:
-    """Fetch the synthetic data-source system prompt from Prompt Hub (fresh)."""
+def pull_data_prompt(name: str | None = None) -> str:
+    """Fetch the synthetic data-source system prompt from Prompt Hub (fresh).
+
+    `name` overrides the configured prompt (e.g. from an assistant's context).
+    """
     try:
-        pt = make_client().pull_prompt(data_prompt_name(), skip_cache=True)
+        pt = make_client().pull_prompt(name or data_prompt_name(), skip_cache=True)
         messages = pt.format_messages()
         text = "\n\n".join(
             m.content for m in messages if isinstance(getattr(m, "content", None), str) and m.content
@@ -83,14 +86,15 @@ def pull_data_prompt() -> str:
         return DATA_FALLBACK_PROMPT
 
 
-def pull_system_prompt() -> str:
+def pull_system_prompt(name: str | None = None) -> str:
     """Fetch the current system prompt from Prompt Hub, fresh (no client cache).
 
+    `name` overrides the configured prompt (e.g. from an assistant's context).
     Returns `FALLBACK_PROMPT` if the Hub is unreachable or the prompt is missing,
     so a run never hard-fails on prompt sourcing.
     """
     try:
-        pt = make_client().pull_prompt(prompt_name(), skip_cache=True)
+        pt = make_client().pull_prompt(name or prompt_name(), skip_cache=True)
         # System-only ChatPromptTemplate with no input variables -> one SystemMessage.
         messages = pt.format_messages()
         text = "\n\n".join(

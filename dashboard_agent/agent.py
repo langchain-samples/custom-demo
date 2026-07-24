@@ -17,15 +17,41 @@ from __future__ import annotations
 import contextvars
 import json
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from langchain.agents.middleware import ModelRequest, dynamic_prompt
-from langchain.tools import tool
+from langchain.tools import ToolRuntime, tool
 
 from .config import MODEL, require_anthropic_key
 from .datasource import get_datasource
 from .prompt import pull_system_prompt
 from .widgets import validate_widget
+
+
+@dataclass
+class Context:
+    """Per-run configuration an assistant can set (LangGraph runtime context).
+
+    All optional: when unset, the tools/middleware fall back to env/config, so the
+    same graph works both in a deployment (assistants supply context) and locally.
+    """
+
+    prompt_name: str | None = None       # system prompt in Prompt Hub
+    dataset: str | None = None           # "humanitarian" | "synthetic"
+    data_model: str | None = None        # model id for the synthetic data backend
+    data_prompt_name: str | None = None  # data-source prompt in Prompt Hub
+
+
+def _ctx(runtime, field: str):
+    """Read a Context field off a tool/middleware runtime, tolerant of shape."""
+    context = getattr(runtime, "context", None)
+    if context is None:
+        return None
+    if isinstance(context, dict):
+        return context.get(field)
+    return getattr(context, field, None)
+
 
 # Per-invocation collector for widgets emitted by push_widget.
 _widget_sink: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar(
@@ -33,8 +59,16 @@ _widget_sink: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar
 )
 
 
+def _datasource_for(runtime: ToolRuntime):
+    return get_datasource(
+        _ctx(runtime, "dataset"),
+        _ctx(runtime, "data_model"),
+        _ctx(runtime, "data_prompt_name"),
+    )
+
+
 @tool
-def datasearch(query: str) -> str:
+def datasearch(query: str, runtime: ToolRuntime) -> str:
     """Search situation reports and assessments for grounded facts and data.
 
     Use this FIRST, before answering, to retrieve relevant report excerpts.
@@ -44,21 +78,21 @@ def datasearch(query: str) -> str:
       - data: a structured block of numbers you can turn into dashboard widgets
     Search with specific terms (region + topic), e.g. "Egypt humanitarian aid impact".
     """
-    results = get_datasource().search(query, k=3)
+    results = _datasource_for(runtime).search(query, k=3)
     if not results:
         return json.dumps({"results": [], "note": "No matching reports found."})
     return json.dumps({"results": results}, ensure_ascii=False)
 
 
 @tool
-def query_sql(query: str) -> str:
+def query_sql(query: str, runtime: ToolRuntime) -> str:
     """Run a read-only SQL SELECT against the structured database.
 
     Use this when you need precise, aggregated, or filtered numbers to chart
     (totals, rankings, deltas, time series). Only SELECT is allowed. Returns a
     JSON object with `columns`, `rows`, and `row_count`, or an `error`.
     """
-    return json.dumps(get_datasource().run_sql(query), ensure_ascii=False)
+    return json.dumps(_datasource_for(runtime).run_sql(query), ensure_ascii=False)
 
 
 # The base tool description (before the data-source-specific schema hint, which is
@@ -120,45 +154,50 @@ _prompt_override: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 def _hub_system_prompt(request: ModelRequest) -> str:
     """Inject the system prompt for each model call from the Hub-sourced text.
 
-    Uses the per-run pulled value when present (set by run/run_stream); otherwise
-    pulls directly (e.g. when the agent is invoked outside those helpers).
+    Precedence: a per-run pulled value (set by run/run_stream) > the assistant's
+    `prompt_name` from runtime context > the configured default.
     """
     override = _prompt_override.get()
-    return override if override is not None else pull_system_prompt()
+    if override is not None:
+        return override
+    return pull_system_prompt(_ctx(request.runtime, "prompt_name"))
 
 
-def build_agent(model: str | None = None):
-    """Construct the deep agent. Requires ANTHROPIC_API_KEY.
-
-    The system prompt is injected dynamically from Prompt Hub via the
-    `_hub_system_prompt` middleware, so it is never baked in at build time.
-    """
+def _build(model: str | None, checkpointer):
+    """Shared deep-agent construction. `checkpointer=None` for Agent Server (it
+    provides persistence); a MemorySaver for local in-process runs."""
     require_anthropic_key()
     from deepagents import create_deep_agent
     from langchain_anthropic import ChatAnthropic
-    from langgraph.checkpoint.memory import MemorySaver
 
-    # Tell the model about the active data source's SQL schema (real tables for the
-    # humanitarian corpus; a generic hint for the synthetic backend).
+    # Default SQL schema hint (humanitarian tables). Synthetic assistants still work
+    # — their data-agent invents rows regardless of exact table names.
     query_sql.description = _QUERY_SQL_BASE_DESC + "\n\n" + get_datasource().sql_hint()
 
-    # Build an explicit model so we can harden it against transient API
-    # overload (HTTP 529): more retries with exponential backoff, longer timeout.
-    llm = ChatAnthropic(
-        model=model or MODEL,
-        max_retries=8,
-        timeout=120,
-        max_tokens=8000,
-    )
+    # Explicit model, hardened against transient API overload (HTTP 529).
+    llm = ChatAnthropic(model=model or MODEL, max_retries=8, timeout=120, max_tokens=8000)
 
-    # In-memory checkpointer so a thread_id carries conversation memory
-    # (follow-up questions in the same browser session). Resets on restart.
     return create_deep_agent(
         model=llm,
         tools=[datasearch, query_sql, push_widget],
         middleware=[_hub_system_prompt],
-        checkpointer=MemorySaver(),
+        context_schema=Context,
+        checkpointer=checkpointer,
     )
+
+
+def build_agent(model: str | None = None):
+    """Construct the deep agent for local/in-process use (with an in-memory
+    checkpointer so a thread_id carries conversation memory)."""
+    from langgraph.checkpoint.memory import MemorySaver
+
+    return _build(model, MemorySaver())
+
+
+def build_graph(model: str | None = None):
+    """Construct the graph for Agent Server deployment — no checkpointer (the
+    server injects persistence). Exposed via `graph.py` for langgraph.json."""
+    return _build(model, None)
 
 
 # One lazily-built agent — the prompt is dynamic, so there is no longer a

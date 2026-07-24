@@ -21,64 +21,74 @@ dashboard_agent/
   corpus.py     # dummy reports: prose (for grounding) + structured data (for charts)
   rag.py        # dependency-free in-memory TF-IDF retriever  → the datasearch tool
   database.py   # in-memory SQLite seeded from corpus        → the query_sql tool
+  datasource.py # pluggable backend behind the tools: humanitarian corpus | synthetic LLM
   widgets.py    # Pydantic widget schemas (kpi/bar/line/pie/table/text) + validation
-  prompt.py     # system prompt sourced from LangSmith Prompt Hub (+ local fallback)
-  agent.py      # deep agent: datasearch + query_sql + push_widget; run() + run_stream()
-  server.py     # FastAPI: POST /api/chat(+/stream), GET /api/health, serves the SPA
-  static/       # index.html + app.js (progressive Chart.js canvas + streaming chat)
-  tests/        # unit, mocked-server, streaming-logic, real-agent e2e, Node, hallucination
+  prompt.py     # system + data prompts sourced from LangSmith Prompt Hub (+ fallbacks)
+  agent.py      # deep agent: tools + dynamic prompt middleware + Context schema
+  graph.py      # Agent Server entrypoint (compiled graph for langgraph.json)
+  webapp.py     # tiny Starlette app mounted on the deployment: POST /feedback
+  static/       # index.html + app.js + config.js (SPA → Agent Server /threads + /runs/stream)
+  tests/        # rag, widgets, SQL, streaming-logic, real-agent e2e, Node, hallucination
+langgraph.json  # deployment config: graph + http.app + CORS
 ```
 
 **Tools the agent has:**
-- `datasearch` — in-memory RAG for grounded prose + structured data.
-- `query_sql` — read-only SQL SELECT over an in-memory SQLite DB (rankings, deltas, time series).
+- `datasearch` — grounded prose + structured data (RAG, or synthetic per the data source).
+- `query_sql` — read-only SQL SELECT (against SQLite, or passed to the synthetic data LLM).
 - `push_widget` — appends one validated visualization to the dashboard.
 
-**How the agent builds UI (streaming):** the frontend calls `POST /api/chat/stream`,
-which returns newline-delimited JSON (NDJSON). `run_stream` reads the agent's
-token-level stream and emits an event the instant each `push_widget` call's arguments
-finish streaming — so the dashboard builds **one widget at a time**, then the answer
-streams in token-by-token:
+**Runs on LangGraph Agent Server.** The compiled deep agent (`graph.py`) is deployed
+via `langgraph.json`; the SPA talks directly to the server's `/threads` +
+`/runs/stream` (`stream_mode: "messages"`). As the agent streams, each `push_widget`
+tool call's args fill in and the frontend renders that widget the moment it looks
+complete — so the dashboard builds **one widget at a time**, then the final answer
+streams in. Every widget is re-validated against the Pydantic schema server-side.
 
-```
-{"type":"widget","widget":{...}}          # each widget as it is built
-{"type":"answer_delta","text":"...","mid":"..."}   # answer streams in
-{"type":"done"}
-```
-
-Every widget is re-validated against the Pydantic schema before it is emitted, so a
-malformed spec from the model never reaches the browser. A non-streaming
-`POST /api/chat` → `{"answer": ..., "widgets": [...]}` is also available.
+**Assistants = demo variants.** One graph, many [assistants](https://docs.langchain.com/langsmith/assistants)
+(configuration instances) set the `Context` (prompt / dataset / model) — e.g.
+"Humanitarian (bundled corpus)" vs "Synthetic — any topic". Switch variants by
+`assistant_id`; no redeploy. See `scripts/seed_assistants.py`.
 
 **UI:** loads as a centered chat; once the first widget streams in, the chat slides to
 a left rail and the dashboard canvas reveals on the right. A **Download PDF** button
-(next to "Live dashboard") exports the canvas via html2pdf (print fallback).
+exports the canvas via html2pdf. A ⚙️ gear customizes name/color/logo, the quick-action
+questions, and the deployment URL + assistant.
 
 ## Run it
+
+Needs `langgraph-cli[inmem]` (Agent Server) + a LangSmith key.
 
 ```bash
 # from dashboard-agent/
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt          # includes langgraph-cli[inmem] + langgraph-sdk
 
 # provide your keys (see .env.example)
 printf 'ANTHROPIC_API_KEY=sk-ant-...\nLANGSMITH_API_KEY=lsv2_...\n' > .env
 
-# seed the system prompt into LangSmith Prompt Hub (once)
-python scripts/seed_prompt.py
+# seed the Prompt Hub prompts (once)
+python scripts/seed_prompt.py            # system prompt (starts buggy)
+python scripts/seed_data_prompt.py       # synthetic data prompt (optional)
 
-python -m uvicorn dashboard_agent.server:app --port 8137
-# open http://127.0.0.1:8137
+# start Agent Server (:2024) + the static SPA (:3000)
+./run.sh
+
+# create the assistant variants (server must be up), then note their ids
+python scripts/seed_assistants.py
+
+# open the SPA (http://127.0.0.1:3000), set the deployment URL + assistant via ⚙️
+# (or edit static/config.js), and ask a question.
 ```
 
-Or just `./run.sh` (auto-detects a local `.venv`).
+`./run.sh` runs `langgraph dev` and serves `static/` separately; Studio is available
+at the URL it prints. Set `PORT` / `SPA_PORT` to override.
 
 ## Tests
 
 ```bash
 # fast (no LLM): rag, widgets, SQL, mocked server, streaming logic
-python -m pytest dashboard_agent/tests/test_rag.py dashboard_agent/tests/test_widgets.py dashboard_agent/tests/test_database.py dashboard_agent/tests/test_server.py dashboard_agent/tests/test_streaming_unit.py -q
+python -m pytest dashboard_agent/tests/test_rag.py dashboard_agent/tests/test_widgets.py dashboard_agent/tests/test_database.py dashboard_agent/tests/test_streaming_unit.py -q
 
 # frontend pure-logic (Node)
 node dashboard_agent/tests/frontend_test.js
@@ -129,10 +139,11 @@ The `datasearch` / `query_sql` tools go through a pluggable `DataSource`
   Prompt Hub prompt** (`dashboard-agent-data`), so you can point the demo at any
   domain and control what data exists — live, no redeploy.
 
-```bash
-python scripts/seed_data_prompt.py          # seed the data prompt once
-DASHBOARD_DATASET=synthetic python -m uvicorn dashboard_agent.server:app --port 8137
-```
+The data source is chosen per **assistant** via its `Context` (`dataset`,
+`data_model`, `data_prompt_name`). `scripts/seed_assistants.py` creates a
+"Synthetic — any topic" assistant; select it in the SPA (⚙️) to run in this mode.
+For a purely local (non-deployment) run, `DASHBOARD_DATASET=synthetic` is the env
+fallback the tools read when no context is set.
 
 The grounding story is preserved: the data prompt withholds the trap figure (e.g.
 "schools rebuilt"), the tool returns nothing, and the main agent's buggy prompt

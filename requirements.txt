@@ -7,10 +7,13 @@ langchain-core>=1.4.0
 langchain-anthropic>=1.4.3
 langgraph>=1.2.1
 langsmith>=0.8.3
-fastapi>=0.139.2
-uvicorn>=0.46.0
 pydantic>=2.13.4
 python-dotenv>=1.2.2
+starlette>=0.37            # the /feedback route mounted on the deployment (http.app)
+
+# Run the deployment locally (Agent Server) + create assistants
+langgraph-cli[inmem]>=0.4
+langgraph-sdk>=0.1
 
 # Tests
 pytest>=8.0

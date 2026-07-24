@@ -16,6 +16,9 @@ env/
 .ruff_cache/
 .mypy_cache/
 
+# LangGraph dev server (Agent Server) local state
+.langgraph_api/
+
 # Node
 node_modules/
 

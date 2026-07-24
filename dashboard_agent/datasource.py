@@ -74,10 +74,13 @@ class SyntheticDataSource:
     """A live LLM invents plausible data per call, steered by the data prompt.
 
     The topic and the withheld "gap" live in the data prompt (Prompt Hub), so the
-    presenter controls the world without a redeploy.
+    presenter controls the world without a redeploy. `model` and `data_prompt_name`
+    can be set per assistant (via runtime context) or fall back to config.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, model: str | None = None, data_prompt_name: str | None = None) -> None:
+        self._model_id = model or data_model()
+        self._data_prompt_name = data_prompt_name
         self._llm = None
 
     def _model(self):
@@ -85,7 +88,7 @@ class SyntheticDataSource:
             from langchain.chat_models import init_chat_model
 
             # Low-ish temperature: plausible but not wildly random figures.
-            self._llm = init_chat_model(data_model(), temperature=0.4)
+            self._llm = init_chat_model(self._model_id, temperature=0.4)
         return self._llm
 
     def _ask(self, instruction: str) -> str:
@@ -93,7 +96,7 @@ class SyntheticDataSource:
 
         from .prompt import pull_data_prompt
 
-        messages = [SystemMessage(pull_data_prompt()), HumanMessage(instruction)]
+        messages = [SystemMessage(pull_data_prompt(self._data_prompt_name)), HumanMessage(instruction)]
         resp = self._model().invoke(messages)
         content = getattr(resp, "content", "")
         if isinstance(content, list):  # some providers return content blocks
@@ -136,12 +139,25 @@ class SyntheticDataSource:
         )
 
 
-_DATASOURCE: DataSource | None = None
+_CACHE: dict = {}
 
 
-def get_datasource() -> DataSource:
-    """Return the active data source (cached), chosen by `DASHBOARD_DATASET`."""
-    global _DATASOURCE
-    if _DATASOURCE is None:
-        _DATASOURCE = SyntheticDataSource() if dataset().startswith("synthetic") else StaticDataSource()
-    return _DATASOURCE
+def get_datasource(
+    dataset_name: str | None = None,
+    model: str | None = None,
+    data_prompt_name: str | None = None,
+) -> DataSource:
+    """Return the active data source, chosen by args (assistant context) or env.
+
+    Cached per (dataset, model, data_prompt) so multiple assistants in one process
+    each get a stable backend without rebuilding the model every tool call.
+    """
+    name = (dataset_name or dataset()).strip().lower()
+    if name.startswith("synthetic"):
+        key = ("synthetic", model, data_prompt_name)
+        if key not in _CACHE:
+            _CACHE[key] = SyntheticDataSource(model=model, data_prompt_name=data_prompt_name)
+        return _CACHE[key]
+    if "static" not in _CACHE:
+        _CACHE["static"] = StaticDataSource()
+    return _CACHE["static"]

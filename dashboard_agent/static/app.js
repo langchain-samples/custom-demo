@@ -230,14 +230,58 @@ function toolChip(name, summary) {
   return chip;
 }
 
-// One thread per page load: a refresh starts a fresh conversation; questions
-// asked within the same load share memory (follow-ups work). Guarded so the
-// module can be required in Node (tests) without browser globals.
-const THREAD_ID =
-  typeof window === "undefined"
-    ? "node"
-    : "demo-" +
-      ((window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(performance.now()).replace(".", ""));
+// ---- LangGraph deployment (Agent Server) connection ----
+// Defaults come from config.js (window.LG); the gear panel can override url +
+// assistant. assistantId may be a UUID (a specific variant) or the graph id
+// "dashboard_agent" (uses that graph's default assistant).
+function lgConfig() {
+  const base = (typeof window !== "undefined" && window.LG) || {};
+  const cfg = typeof loadConfig === "function" ? loadConfig() : {};
+  return {
+    url: String(cfg.lgUrl || base.url || "http://127.0.0.1:2024").replace(/\/+$/, ""),
+    assistantId: cfg.assistantId || base.assistantId || "dashboard_agent",
+    apiKey: base.apiKey || "",
+  };
+}
+
+function lgHeaders() {
+  const h = { "Content-Type": "application/json" };
+  const k = lgConfig().apiKey;
+  if (k) h["x-api-key"] = k;
+  return h;
+}
+
+// One server-side thread per page load, so follow-up questions share memory.
+let THREAD_ID = null;
+async function ensureThread() {
+  if (THREAD_ID) return THREAD_ID;
+  const r = await fetch(`${lgConfig().url}/threads`, { method: "POST", headers: lgHeaders(), body: "{}" });
+  if (!r.ok) throw new Error("create thread failed: HTTP " + r.status);
+  THREAD_ID = (await r.json()).thread_id;
+  return THREAD_ID;
+}
+
+function contentToText(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map((b) => (b && b.type === "text" ? b.text || "" : typeof b === "string" ? b : "")).join("");
+  }
+  return "";
+}
+
+// Only render a widget once its parsed args look complete (partials fill in).
+function widgetLooksComplete(w) {
+  if (!w || !w.type) return false;
+  const pts = (s) => Array.isArray(s) && s.length && Array.isArray(s[0].points) && s[0].points.length &&
+    s[0].points.every((p) => p && p.label !== undefined && p.value !== undefined);
+  switch (w.type) {
+    case "kpi": return !!w.title && w.value !== undefined && w.value !== "";
+    case "bar": case "line": case "pie": return !!w.title && pts(w.series);
+    case "table": return !!w.title && Array.isArray(w.columns) && w.columns.length && Array.isArray(w.rows) && w.rows.length;
+    case "text": return !!w.title && !!w.content;
+    default: return false;
+  }
+}
 
 function renderFeedback(runId) {
   const log = document.getElementById("chat-log");
@@ -268,9 +312,9 @@ function renderFeedback(runId) {
     const body = { run_id: runId, score, comment: comment || "" };
     if (feedbackId) body.feedback_id = feedbackId;
     try {
-      const r = await fetch("/api/feedback", {
+      const r = await fetch(`${lgConfig().url}/feedback`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: lgHeaders(),
         body: JSON.stringify(body),
       });
       const d = await r.json();
@@ -322,54 +366,85 @@ async function askStream(question) {
   log.appendChild(activity);
   const bubble = addMessage("assistant", "");
   bubble.classList.add("cursor");
-  bubble.textContent = "Searching reports…";
+  bubble.textContent = "Working…";
   clearDashboard();
 
+  const { url, assistantId } = lgConfig();
   let answer = "";
-  let currentMid = null;
+  let answerMid = null;
   let runId = null;
   let errorMsg = null;
-  const chipsById = {};
+  const emittedWidgets = new Set();  // push_widget tool_call ids already rendered
+  const chips = {};                  // tool_call id -> chip (datasearch/query_sql/…)
 
-  const handle = (evt) => {
-    if (evt.type === "run_id") {
-      runId = evt.run_id;
-    } else if (evt.type === "tool") {
-      const chip = toolChip(evt.name, evt.summary);
-      if (evt.id) chipsById[evt.id] = chip;
-      activity.appendChild(chip);
-      log.scrollTop = log.scrollHeight;
-    } else if (evt.type === "tool_result") {
-      const chip = chipsById[evt.id];
-      if (chip && chip._setResult) chip._setResult(evt.content);
-    } else if (evt.type === "widget") {
-      appendWidget(evt.widget);
-      if (!answer) bubble.textContent = "Building your dashboard…";
-    } else if (evt.type === "answer_reset") {
-      // Server dropped a preamble ("I'll build…") now that tools have started.
-      answer = ""; currentMid = null;
-      bubble.textContent = "Building your dashboard…";
-    } else if (evt.type === "answer_delta") {
-      if (evt.mid && evt.mid !== currentMid) { currentMid = evt.mid; answer = ""; }
-      if (answer === "") bubble.textContent = "";  // clear placeholder
-      answer += evt.text;
-      bubble.textContent = answer;
-      log.scrollTop = log.scrollHeight;
-    } else if (evt.type === "error") {
-      errorMsg = evt.error;  // don't clobber a streamed answer; decide at the end
+  // Handle one streamed message object (from messages/partial|complete).
+  const onMessage = (msg) => {
+    if (!msg || typeof msg !== "object") return;
+    if (msg.type === "ai") {
+      const tcs = msg.tool_calls || [];
+      for (const tc of tcs) {
+        const id = tc.id || `${msg.id}:${tc.name || ""}`;
+        const name = tc.name || "";
+        const args = tc.args || {};
+        if (name === "push_widget") {
+          if (emittedWidgets.has(id)) continue;
+          const w = args.widget || args;
+          if (widgetLooksComplete(w)) {
+            emittedWidgets.add(id);
+            appendWidget(w);
+            if (!answer) bubble.textContent = "Building your dashboard…";
+          }
+        } else {
+          if (chips[id]) continue;
+          const summary = name === "datasearch" || name === "query_sql"
+            ? String(args.query || "")
+            : JSON.stringify(args).slice(0, 120);
+          const chip = toolChip(name, summary);
+          chips[id] = chip;
+          activity.appendChild(chip);
+          log.scrollTop = log.scrollHeight;
+        }
+      }
+      // Final answer text = an AI message with content and no tool calls.
+      const text = contentToText(msg.content);
+      if (text && tcs.length === 0) {
+        if (msg.id && msg.id !== answerMid) { answerMid = msg.id; }
+        answer = text;  // partial content is cumulative per message id
+        bubble.textContent = answer;
+        log.scrollTop = log.scrollHeight;
+      }
+    } else if (msg.type === "tool" && msg.name !== "push_widget") {
+      const chip = chips[msg.tool_call_id];
+      if (chip && chip._setResult) chip._setResult(contentToText(msg.content));
+    }
+  };
+
+  const onEvent = (event, dataStr) => {
+    let data;
+    try { data = JSON.parse(dataStr); } catch (e) { return; }
+    if (event === "metadata") { if (data && data.run_id) runId = data.run_id; return; }
+    if (event === "error") { errorMsg = (data && (data.error || data.message)) || "run error"; return; }
+    if (event === "messages/partial" || event === "messages/complete") {
+      onMessage(Array.isArray(data) ? data[0] : data);
     }
   };
 
   try {
-    const res = await fetch("/api/chat/stream", {
+    const tid = await ensureThread();
+    const res = await fetch(`${url}/threads/${tid}/runs/stream`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, thread_id: THREAD_ID }),
+      headers: lgHeaders(),
+      body: JSON.stringify({
+        assistant_id: assistantId,
+        input: { messages: [{ role: "user", content: question }] },
+        stream_mode: "messages",
+      }),
     });
     if (!res.ok || !res.body) {
       const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || ("HTTP " + res.status));
+      throw new Error(data.error || data.detail || ("HTTP " + res.status));
     }
+    // Parse the SSE stream (event:/data: blocks separated by a blank line).
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
@@ -377,14 +452,19 @@ async function askStream(question) {
       const { done, value } = await reader.read();
       if (done) break;
       buf += dec.decode(value, { stream: true });
-      let i;
-      while ((i = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, i).trim();
-        buf = buf.slice(i + 1);
-        if (line) { try { handle(JSON.parse(line)); } catch (e) {} }
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        const raw = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        let ev = "message";
+        const dataLines = [];
+        for (const line of raw.split("\n")) {
+          if (line.startsWith("event:")) ev = line.slice(6).trim();
+          else if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
+        }
+        if (dataLines.length) onEvent(ev, dataLines.join("\n"));
       }
     }
-    if (buf.trim()) { try { handle(JSON.parse(buf.trim())); } catch (e) {} }
 
     bubble.classList.remove("cursor");
     if (answer) bubble.innerHTML = mdToHtml(answer);
@@ -554,6 +634,8 @@ function setupSettings() {
   const accentI = document.getElementById("sp-accent");
   const accentT = document.getElementById("sp-accent-text");
   const logoI = document.getElementById("sp-logo");
+  const lgUrlI = document.getElementById("sp-lgurl");
+  const assistantI = document.getElementById("sp-assistant");
   const actionsWrap = document.getElementById("sp-actions");
 
   const collectActions = () =>
@@ -570,6 +652,8 @@ function setupSettings() {
     cfg.name = nameI.value;
     cfg.accent = accentT.value.trim() || cfg.accent;
     cfg.logo = logoI.value;
+    cfg.lgUrl = lgUrlI.value.trim();
+    cfg.assistantId = assistantI.value.trim();
     cfg.actions = collectActions();
     commit();
   };
@@ -579,6 +663,8 @@ function setupSettings() {
     accentI.value = /^#[0-9a-f]{6}$/i.test(cfg.accent) ? cfg.accent : "#0072BC";
     accentT.value = cfg.accent;
     logoI.value = cfg.logo;
+    lgUrlI.value = cfg.lgUrl || "";
+    assistantI.value = cfg.assistantId || "";
     actionsWrap.innerHTML = "";
     (cfg.actions || []).forEach((a) => actionsWrap.appendChild(buildActionRow(a)));
   };
@@ -590,6 +676,8 @@ function setupSettings() {
 
   nameI.addEventListener("input", syncFromInputs);
   logoI.addEventListener("input", syncFromInputs);
+  lgUrlI.addEventListener("input", syncFromInputs);
+  assistantI.addEventListener("input", syncFromInputs);
   accentI.addEventListener("input", () => { accentT.value = accentI.value; syncFromInputs(); });
   accentT.addEventListener("input", () => {
     if (/^#[0-9a-f]{6}$/i.test(accentT.value.trim())) accentI.value = accentT.value.trim();
