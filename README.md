@@ -66,7 +66,7 @@ pip install -r requirements.txt
 printf 'ANTHROPIC_API_KEY=sk-ant-...\nLANGSMITH_API_KEY=lsv2_...\n' > .env
 
 # seed the system prompt into LangSmith Prompt Hub (once)
-python scripts/push_prompt.py
+python scripts/seed_prompt.py
 
 python -m uvicorn dashboard_agent.server:app --port 8137
 # open http://127.0.0.1:8137
@@ -101,7 +101,7 @@ change and no restart.
 Seed the prompt once (pushes the buggy version — see below):
 
 ```bash
-python scripts/push_prompt.py
+python scripts/seed_prompt.py
 ```
 
 **The planted bug (live-fixable demo):**
@@ -123,5 +123,7 @@ If the Hub is unreachable, the app falls back to the grounded prompt in
 |---|---|---|
 | `ANTHROPIC_API_KEY` | (from `.env`) | required — agent model |
 | `LANGSMITH_API_KEY` | (from `.env`) | required — pull the prompt from Prompt Hub + feedback |
+| `WORKSPACE_ID` | (API key's workspace) | LangSmith workspace/tenant to scope prompts, traces, and feedback |
+| `PROJECT_NAME` | `dashboard-agent` | LangSmith tracing project for agent runs |
 | `DASHBOARD_MODEL` | `claude-sonnet-4-5-20250929` | agent model |
 | `DASHBOARD_PROMPT` | `dashboard-agent-system` | Prompt Hub name to pull the system prompt from |

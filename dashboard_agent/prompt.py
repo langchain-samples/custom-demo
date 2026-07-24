@@ -11,7 +11,7 @@ If the Hub is unreachable or the prompt is missing, we fall back to
 
 from __future__ import annotations
 
-from .config import PROMPT_NAME, load_env
+from .config import make_client, prompt_name
 
 # The grounded, bug-free prompt. This is the fallback when the Hub can't be
 # reached; the Hub copy is the source of truth (and, for the demo, starts with an
@@ -56,10 +56,7 @@ def pull_system_prompt() -> str:
     so a run never hard-fails on prompt sourcing.
     """
     try:
-        load_env()
-        from langsmith import Client
-
-        pt = Client().pull_prompt(PROMPT_NAME, skip_cache=True)
+        pt = make_client().pull_prompt(prompt_name(), skip_cache=True)
         # System-only ChatPromptTemplate with no input variables -> one SystemMessage.
         messages = pt.format_messages()
         text = "\n\n".join(

@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .agent import run, run_stream
-from .config import load_env
+from .config import make_client
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -42,10 +42,7 @@ _LS_CLIENT = None
 def _ls_client():
     global _LS_CLIENT
     if _LS_CLIENT is None:
-        load_env()
-        from langsmith import Client
-
-        _LS_CLIENT = Client()
+        _LS_CLIENT = make_client()
     return _LS_CLIENT
 
 

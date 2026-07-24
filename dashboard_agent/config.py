@@ -22,6 +22,11 @@ def load_env() -> None:
     sibling = _REPO_ROOT / "chat-langchain-lite" / ".env"
     if sibling.exists():
         load_dotenv(sibling)
+    # Route LangSmith traces to the configured project (LangChain reads
+    # LANGCHAIN_PROJECT; newer LangSmith also reads LANGSMITH_PROJECT).
+    proj = os.getenv("PROJECT_NAME", "dashboard-agent")
+    os.environ["LANGCHAIN_PROJECT"] = proj
+    os.environ["LANGSMITH_PROJECT"] = proj
 
 
 def require_anthropic_key() -> str:
@@ -36,7 +41,36 @@ def require_anthropic_key() -> str:
 
 MODEL = os.getenv("DASHBOARD_MODEL", "claude-sonnet-4-5-20250929")
 
-# Name of the system prompt in LangSmith Prompt Hub. The prompt is pulled fresh
-# per question (see prompt.py / agent.py) so it can be edited live without a
-# redeploy — this is how the planted hallucination bug is "fixed" in the demo.
-PROMPT_NAME = os.getenv("DASHBOARD_PROMPT", "dashboard-agent-system")
+
+def prompt_name() -> str:
+    """Prompt Hub name to pull the system prompt from.
+
+    Read after `load_env()` so a value set in `.env` is honored. The prompt is
+    pulled fresh per question (see prompt.py / agent.py) so it can be edited live
+    without a redeploy — this is how the planted hallucination bug is "fixed".
+    """
+    load_env()
+    return os.getenv("DASHBOARD_PROMPT", "dashboard-agent-system")
+
+
+def project_name() -> str:
+    """LangSmith tracing project that agent runs are logged to."""
+    load_env()
+    return os.getenv("PROJECT_NAME", "dashboard-agent")
+
+
+def workspace_id() -> str | None:
+    """LangSmith workspace (tenant) id to scope prompts, traces, and feedback.
+
+    Returns None when unset, which leaves the client on the workspace tied to the
+    API key (the default).
+    """
+    load_env()
+    return os.getenv("WORKSPACE_ID") or None
+
+
+def make_client():
+    """Build a LangSmith Client scoped to the configured workspace (if any)."""
+    from langsmith import Client
+
+    return Client(workspace_id=workspace_id())
