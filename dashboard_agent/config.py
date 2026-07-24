@@ -74,3 +74,25 @@ def make_client():
     from langsmith import Client
 
     return Client(workspace_id=workspace_id())
+
+
+def dataset() -> str:
+    """Which data backend the datasearch/query_sql tools use.
+
+    "humanitarian" (default) = the bundled corpus; "synthetic" = a live LLM that
+    invents plausible data per call (see datasource.py).
+    """
+    load_env()
+    return os.getenv("DASHBOARD_DATASET", "humanitarian").strip().lower()
+
+
+def data_model() -> str:
+    """Model id for the synthetic data backend (a fast model; init_chat_model form)."""
+    load_env()
+    return os.getenv("DASHBOARD_DATA_MODEL", "anthropic:claude-haiku-4-5-20251001")
+
+
+def data_prompt_name() -> str:
+    """Prompt Hub name for the synthetic data-source system prompt."""
+    load_env()
+    return os.getenv("DASHBOARD_DATA_PROMPT", "dashboard-agent-data")

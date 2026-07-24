@@ -23,9 +23,8 @@ from langchain.agents.middleware import ModelRequest, dynamic_prompt
 from langchain.tools import tool
 
 from .config import MODEL, require_anthropic_key
-from .database import SCHEMA_DESCRIPTION, run_query
+from .datasource import get_datasource
 from .prompt import pull_system_prompt
-from .rag import search
 from .widgets import validate_widget
 
 # Per-invocation collector for widgets emitted by push_widget.
@@ -45,7 +44,7 @@ def datasearch(query: str) -> str:
       - data: a structured block of numbers you can turn into dashboard widgets
     Search with specific terms (region + topic), e.g. "Egypt humanitarian aid impact".
     """
-    results = search(query, k=3)
+    results = get_datasource().search(query, k=3)
     if not results:
         return json.dumps({"results": [], "note": "No matching reports found."})
     return json.dumps({"results": results}, ensure_ascii=False)
@@ -59,16 +58,12 @@ def query_sql(query: str) -> str:
     (totals, rankings, deltas, time series). Only SELECT is allowed. Returns a
     JSON object with `columns`, `rows`, and `row_count`, or an `error`.
     """
-    return json.dumps(run_query(query), ensure_ascii=False)
+    return json.dumps(get_datasource().run_sql(query), ensure_ascii=False)
 
 
-# Append the live DB schema to what the model sees (docstrings must be literals).
-query_sql.description = (
-    query_sql.description
-    + "\n\n"
-    + SCHEMA_DESCRIPTION
-    + "\n\nExample: SELECT sector, funding_usd FROM egypt_sector_funding ORDER BY funding_usd DESC"
-)
+# The base tool description (before the data-source-specific schema hint, which is
+# appended in build_agent so it matches whichever DataSource is active).
+_QUERY_SQL_BASE_DESC = query_sql.description
 
 
 @tool
@@ -142,6 +137,10 @@ def build_agent(model: str | None = None):
     from deepagents import create_deep_agent
     from langchain_anthropic import ChatAnthropic
     from langgraph.checkpoint.memory import MemorySaver
+
+    # Tell the model about the active data source's SQL schema (real tables for the
+    # humanitarian corpus; a generic hint for the synthetic backend).
+    query_sql.description = _QUERY_SQL_BASE_DESC + "\n\n" + get_datasource().sql_hint()
 
     # Build an explicit model so we can harden it against transient API
     # overload (HTTP 529): more retries with exponential backoff, longer timeout.

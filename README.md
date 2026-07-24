@@ -117,6 +117,27 @@ python scripts/seed_prompt.py
 If the Hub is unreachable, the app falls back to the grounded prompt in
 `prompt.py` (`FALLBACK_PROMPT`), so it still runs offline (just not live-editable).
 
+## Generalize to any topic (synthetic data)
+
+The `datasearch` / `query_sql` tools go through a pluggable `DataSource`
+(`datasource.py`):
+
+- **`humanitarian`** (default) — the bundled corpus: real TF-IDF + real SQLite.
+- **`synthetic`** — a fast LLM *stands in* for the backend and invents plausible
+  data per call. `query_sql` passes the raw SQL straight to the model, which
+  "executes" it and returns rows. The **topic and the planted gap live in a second
+  Prompt Hub prompt** (`dashboard-agent-data`), so you can point the demo at any
+  domain and control what data exists — live, no redeploy.
+
+```bash
+python scripts/seed_data_prompt.py          # seed the data prompt once
+DASHBOARD_DATASET=synthetic python -m uvicorn dashboard_agent.server:app --port 8137
+```
+
+The grounding story is preserved: the data prompt withholds the trap figure (e.g.
+"schools rebuilt"), the tool returns nothing, and the main agent's buggy prompt
+fabricates over the gap — exactly the same catch-and-fix demo, now domain-agnostic.
+
 ## Configuration
 
 | Env var | Default | Purpose |
@@ -127,3 +148,6 @@ If the Hub is unreachable, the app falls back to the grounded prompt in
 | `PROJECT_NAME` | `dashboard-agent` | LangSmith tracing project for agent runs |
 | `DASHBOARD_MODEL` | `claude-sonnet-4-5-20250929` | agent model |
 | `DASHBOARD_PROMPT` | `dashboard-agent-system` | Prompt Hub name to pull the system prompt from |
+| `DASHBOARD_DATASET` | `humanitarian` | `synthetic` = live-LLM data backend for any topic |
+| `DASHBOARD_DATA_MODEL` | `anthropic:claude-haiku-4-5-20251001` | fast model for synthetic data (`init_chat_model` id) |
+| `DASHBOARD_DATA_PROMPT` | `dashboard-agent-data` | Prompt Hub name for the synthetic data prompt |
