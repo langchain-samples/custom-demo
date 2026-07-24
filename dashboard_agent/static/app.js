@@ -283,6 +283,73 @@ function widgetLooksComplete(w) {
   }
 }
 
+// ---- Threads (real Agent Server threads, listed in the sidebar) ----
+const THREADS_KEY = "dashboardThreads";
+let GREETING = "";
+
+function loadThreads() {
+  try { return JSON.parse(localStorage.getItem(THREADS_KEY) || "[]"); } catch (e) { return []; }
+}
+function saveThreads(list) {
+  try { localStorage.setItem(THREADS_KEY, JSON.stringify(list.slice(0, 50))); } catch (e) {}
+}
+function registerThread(id, title) {
+  if (!id) return;
+  const list = loadThreads().filter((t) => t.id !== id);
+  list.unshift({ id, title: (title || "Untitled").trim().slice(0, 60), ts: Date.now() });
+  saveThreads(list);
+  renderThreads();
+}
+function renderThreads() {
+  const wrap = document.getElementById("thread-list");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  loadThreads().forEach((t) => {
+    const b = el("button", "thread" + (t.id === THREAD_ID ? " active" : ""));
+    b.textContent = t.title;
+    b.title = t.title;
+    b.addEventListener("click", () => selectThread(t.id));
+    wrap.appendChild(b);
+  });
+}
+function resetChatLog(msg) {
+  const log = document.getElementById("chat-log");
+  if (!log) return;
+  log.innerHTML = "";
+  if (msg) addMessage("assistant", msg);
+}
+function newChat() {
+  THREAD_ID = null;              // ensureThread() will mint a fresh server thread
+  resetChatLog(GREETING);
+  clearDashboard();
+  document.getElementById("app").classList.remove("has-dashboard");
+  renderThreads();
+}
+async function selectThread(id) {
+  THREAD_ID = id;
+  renderThreads();
+  resetChatLog("");
+  clearDashboard();
+  document.getElementById("app").classList.remove("has-dashboard");
+  const log = document.getElementById("chat-log");
+  try {
+    const r = await fetch(`${lgConfig().url}/threads/${id}/state`, { headers: lgHeaders() });
+    const state = await r.json();
+    const msgs = (state && state.values && state.values.messages) || [];
+    for (const m of msgs) {
+      const type = m.type || m.role;
+      if (type === "human" || type === "user") addMessage("user", contentToText(m.content));
+      else if ((type === "ai" || type === "assistant") && !(m.tool_calls && m.tool_calls.length)) {
+        const t = contentToText(m.content);
+        if (t.trim()) addMessage("assistant", t);
+      }
+    }
+    if (!log.children.length) addMessage("assistant", "(no messages in this conversation)");
+  } catch (e) {
+    addMessage("assistant", "⚠️ Couldn't load this conversation: " + e.message);
+  }
+}
+
 function renderFeedback(runId) {
   const log = document.getElementById("chat-log");
   const box = el("div", "feedback");
@@ -431,6 +498,8 @@ async function askStream(question) {
 
   try {
     const tid = await ensureThread();
+    if (!loadThreads().some((t) => t.id === tid)) registerThread(tid, question);
+    else renderThreads();
     const res = await fetch(`${url}/threads/${tid}/runs/stream`, {
       method: "POST",
       headers: lgHeaders(),
@@ -578,6 +647,21 @@ function renderPresets(actions) {
   });
 }
 
+function setLogo(elId, logo) {
+  const elm = document.getElementById(elId);
+  if (!elm) return;
+  const v = (logo || "").trim();
+  if (/^(https?:|data:)/i.test(v)) {
+    const img = document.createElement("img");
+    img.src = v;
+    img.alt = "logo";
+    elm.innerHTML = "";
+    elm.appendChild(img);
+  } else {
+    elm.textContent = v || "🌐";
+  }
+}
+
 function applyConfig(cfg) {
   const root = document.documentElement.style;
   root.setProperty("--brand-blue", cfg.accent);
@@ -585,19 +669,10 @@ function applyConfig(cfg) {
   const nameEl = document.getElementById("brand-name");
   if (nameEl) nameEl.textContent = cfg.name;
   if (cfg.name) document.title = cfg.name;
-  const logoEl = document.getElementById("brand-logo");
-  if (logoEl) {
-    const logo = (cfg.logo || "").trim();
-    if (/^(https?:|data:)/i.test(logo)) {
-      const img = document.createElement("img");
-      img.src = logo;
-      img.alt = "logo";
-      logoEl.innerHTML = "";
-      logoEl.appendChild(img);
-    } else {
-      logoEl.textContent = logo || "🌐";
-    }
-  }
+  const sbName = document.getElementById("sb-name");
+  if (sbName) sbName.textContent = (cfg.name || "").split("—")[0].trim() || "Dashboard Agent";
+  setLogo("brand-logo", cfg.logo);
+  setLogo("sb-logo", cfg.logo);
   renderPresets(cfg.actions);
 }
 
@@ -712,6 +787,19 @@ function initUI() {
   });
   const exportBtn = document.getElementById("export-pdf");
   if (exportBtn) exportBtn.addEventListener("click", exportPdf);
+
+  // Dark theme for Chart.js (axis/grid/legend colors).
+  if (typeof Chart !== "undefined") {
+    Chart.defaults.color = "#8a8a93";
+    Chart.defaults.borderColor = "#222226";
+  }
+
+  // Threads sidebar.
+  const first = document.querySelector("#chat-log .msg");
+  GREETING = first ? first.textContent : "Ask a question and I'll build a live dashboard.";
+  const nc = document.getElementById("new-chat");
+  if (nc) nc.addEventListener("click", newChat);
+  renderThreads();
 
   setupSettings();  // applies saved config + renders the quick-action presets
 }
