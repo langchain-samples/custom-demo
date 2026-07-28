@@ -18,28 +18,17 @@ function ok(name, fn) {
 }
 
 (async () => {
-  const { traceProject, slugifyClient, TRACE_SUFFIX } = await import(MOD);
+  const { traceProject } = await import(MOD);
 
-  ok("project is <client>-corebot-demo", () => {
-    assert.strictEqual(
-      traceProject({ metadata: { customer: "Acme Health" } }),
-      "acme-health-corebot-demo",
-    );
-    assert.strictEqual(TRACE_SUFFIX, "corebot-demo");
-  });
-
-  ok("punctuation and case are slugified", () => {
-    assert.strictEqual(slugifyClient("Ben & Jerry's"), "ben-jerry-s");
-    assert.strictEqual(slugifyClient("  Spotify  "), "spotify");
-    assert.strictEqual(slugifyClient("L'Oréal"), "l-or-al");
-    // No leading/trailing or doubled separators.
-    assert.ok(!/(^-|-$|--)/.test(slugifyClient("--Acme!!  Health--")));
+  ok("project is the customer name", () => {
+    assert.strictEqual(traceProject({ metadata: { customer: "Acme Health" } }), "Acme Health");
+    assert.strictEqual(traceProject({ metadata: { customer: "  Walmart  " } }), "Walmart");
   });
 
   ok("falls back through customer -> name -> id", () => {
-    assert.strictEqual(traceProject({ name: "Vizient" }), "vizient-corebot-demo");
-    assert.strictEqual(traceProject(null, "Globex"), "globex-corebot-demo");
-    assert.strictEqual(traceProject(null, ""), "customer-corebot-demo");
+    assert.strictEqual(traceProject({ name: "Vizient" }), "Vizient");
+    assert.strictEqual(traceProject(null, "Globex"), "Globex");
+    assert.strictEqual(traceProject(null, ""), "customer");
   });
 
   // A DE can point a demo at an existing project.
@@ -51,7 +40,7 @@ function ok(name, fn) {
     // …but a blank/whitespace one does not.
     assert.strictEqual(
       traceProject({ metadata: { customer: "Acme" }, context: { ls_project: "   " } }),
-      "acme-corebot-demo",
+      "Acme",
     );
   });
 
