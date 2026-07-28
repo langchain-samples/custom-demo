@@ -74,11 +74,7 @@ async def projects(request):
             return JSONResponse({"ok": True, "name": name})
         client = _scoped_client(request.query_params.get("workspace"))
         names = sorted(
-            {
-                n
-                for p in client.list_projects(limit=200)
-                if (n := getattr(p, "name", None))
-            }
+            {n for p in client.list_projects(limit=200) if (n := getattr(p, "name", None))}
         )
         return JSONResponse({"projects": names})
     except Exception as exc:

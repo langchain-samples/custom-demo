@@ -29,6 +29,7 @@ BUILTINS = ["write_todos", "ls", "read_file", "write_file", "edit_file", "glob",
 
 # --- registry shape ---------------------------------------------------------
 
+
 def test_default_matches_pre_catalogue_behaviour():
     # Before the catalogue existed the agent was built with exactly these two.
     assert DEFAULT_ENABLED == {"datasearch", "push_widget"}
@@ -62,6 +63,7 @@ def test_all_tools_covers_the_catalogue():
 
 # --- parse_enabled ----------------------------------------------------------
 
+
 def test_unset_is_none_but_empty_is_a_real_choice():
     assert parse_enabled(None) is None
     assert parse_enabled([]) == set()
@@ -73,6 +75,7 @@ def test_comma_string_parses():
 
 
 # --- allowed_tool_names -----------------------------------------------------
+
 
 def test_empty_selection_keeps_only_always_on():
     assert allowed_tool_names([]) == {"push_widget"}
@@ -88,6 +91,7 @@ def test_selection_can_drop_datasearch():
 
 # --- is_allowed -------------------------------------------------------------
 
+
 def test_builtins_and_unknown_names_always_pass():
     allowed = allowed_tool_names([])
     for name in BUILTINS + ["some_future_builtin", "execute"]:
@@ -102,6 +106,7 @@ def test_catalogue_names_are_governed():
 
 # --- guidance + call limits -------------------------------------------------
 
+
 def test_guidance_only_for_enabled_tools():
     lines = " ".join(guidance_for(allowed_tool_names(["draft_email"])))
     assert "draft_email" in lines
@@ -114,6 +119,7 @@ def test_datasearch_keeps_its_one_call_cap():
 
 
 # --- ToolSelection middleware ----------------------------------------------
+
 
 class _Req:
     """Minimal ModelRequest stand-in: tools + a runtime carrying context."""

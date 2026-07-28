@@ -11,13 +11,23 @@ Env: LANGGRAPH_URL (default http://127.0.0.1:2024)
 from __future__ import annotations
 
 import os
+from typing import Any, TypedDict
 
 from langgraph_sdk import get_sync_client
 
 GRAPH_ID = "dashboard_agent"
 
+
+class Variant(TypedDict):
+    """One assistant variant: a named configuration of the graph."""
+
+    name: str
+    context: dict[str, Any]
+    description: str
+
+
 # Each variant = one assistant. Context keys match dashboard_agent.agent.Context.
-VARIANTS = [
+VARIANTS: list[Variant] = [
     {
         "name": "Humanitarian (bundled corpus)",
         "context": {},  # defaults: humanitarian dataset + the (buggy) Hub prompt

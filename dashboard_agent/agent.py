@@ -18,7 +18,7 @@ import contextvars
 import json
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from deepagents import create_deep_agent
 from langchain.agents.middleware import (
@@ -40,6 +40,8 @@ from .tools import (
     call_limit_middlewares,
     guidance_for,
     is_allowed,
+)
+from .tools import (
     widget_sink as _widget_sink,
 )
 from .widgets import validate_widget
@@ -53,17 +55,19 @@ class Context:
     same graph works both in a deployment (assistants supply context) and locally.
     """
 
-    model: str | None = None             # main agent LLM (e.g. "anthropic:claude-…"); overrides build default
-    prompt: str | None = None            # inline system prompt text (preferred over prompt_name)
-    prompt_name: str | None = None       # system prompt in Prompt Hub
-    dataset: str | None = None           # "humanitarian" | "synthetic"
-    data_model: str | None = None        # model id for the synthetic data backend
+    model: str | None = None  # main agent LLM (e.g. "anthropic:claude-…"); overrides build default
+    prompt: str | None = None  # inline system prompt text (preferred over prompt_name)
+    prompt_name: str | None = None  # system prompt in Prompt Hub
+    dataset: str | None = None  # "humanitarian" | "synthetic"
+    data_model: str | None = None  # model id for the synthetic data backend
     data_prompt_name: str | None = None  # data-source prompt in Prompt Hub
-    data_prompt: str | None = None       # inline data-source prompt text (preferred over data_prompt_name)
-    data_gap: str | None = None          # withheld topic — builds a customer-centric data prompt
-    customer: str | None = None          # customer name — steers customer-specific synthetic data
-    industry: str | None = None          # customer industry — steers synthetic data
-    ls_workspace: str | None = None      # workspace to pull Hub prompts from (matches trace routing)
+    data_prompt: str | None = (
+        None  # inline data-source prompt text (preferred over data_prompt_name)
+    )
+    data_gap: str | None = None  # withheld topic — builds a customer-centric data prompt
+    customer: str | None = None  # customer name — steers customer-specific synthetic data
+    industry: str | None = None  # customer industry — steers synthetic data
+    ls_workspace: str | None = None  # workspace to pull Hub prompts from (matches trace routing)
     enabled_tools: list[str] | None = None  # catalogue tool ids to expose; None = defaults
 
 
@@ -206,16 +210,19 @@ def _build(model: str | None, checkpointer):
     # thinking disabled: Sonnet 5 defaults to extended thinking, whose thinking
     # blocks break the deep-agent tool loop on follow-up turns (Anthropic 400).
     llm = ChatAnthropic(
-        model_name=model or MODEL, max_retries=8, timeout=120, max_tokens=8000,
+        model_name=model or MODEL,
+        max_retries=8,
+        timeout=120,
+        max_tokens=8000,
         thinking={"type": "disabled"},
     )
 
-    return create_deep_agent(
-        model=llm,
-        # Every catalogue tool is registered; ToolSelection hides the ones this
-        # assistant hasn't enabled. Built-in deepagents tools are unaffected.
-        tools=all_tools(),
-        middleware=[
+    # ToolCallLimitMiddleware subclasses AgentMiddleware but binds an invariant
+    # generic param that type checkers don't accept as assignable to the base — a
+    # third-party typing gap, not a runtime issue. cast at this interop boundary.
+    middleware = cast(
+        "list[AgentMiddleware]",
+        [
             ConfigurableModel(),
             _hub_system_prompt,
             # Per-run call caps declared by the registry (e.g. datasearch is capped
@@ -225,6 +232,14 @@ def _build(model: str | None, checkpointer):
             # Last, so it has the final word on which tools reach the model.
             ToolSelection(),
         ],
+    )
+
+    return create_deep_agent(
+        model=llm,
+        # Every catalogue tool is registered; ToolSelection hides the ones this
+        # assistant hasn't enabled. Built-in deepagents tools are unaffected.
+        tools=all_tools(),
+        middleware=middleware,
         context_schema=Context,
         checkpointer=checkpointer,
     )
@@ -348,7 +363,7 @@ def run_stream(question: str, thread_id: str = "demo", agent=None):
 
     tool_bufs: dict[Any, dict[str, str]] = {}
     emitted: set = set()
-    text_mids: set = set()   # message ids that streamed answer text
+    text_mids: set = set()  # message ids that streamed answer text
     reset_mids: set = set()  # message ids we've already reset (preamble)
 
     def _tool_summary(name: str, parsed: dict) -> str:

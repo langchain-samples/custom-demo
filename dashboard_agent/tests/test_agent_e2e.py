@@ -38,7 +38,9 @@ def agent():
 
 @pytest.fixture(scope="module")
 def results(agent):
-    return {key: run(q, thread_id=f"test-{key}", agent=agent) for key, q in PERSONA_QUESTIONS.items()}
+    return {
+        key: run(q, thread_id=f"test-{key}", agent=agent) for key, q in PERSONA_QUESTIONS.items()
+    }
 
 
 @pytest.mark.parametrize("persona", list(PERSONA_QUESTIONS))

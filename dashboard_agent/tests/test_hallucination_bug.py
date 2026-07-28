@@ -28,7 +28,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 # A specific, quantitative fact that is NOT anywhere in the corpus.
-MISSING_FACT_Q = "Exactly how many schools were rebuilt in Egypt in Q2 2026 according to the latest reports?"
+MISSING_FACT_Q = (
+    "Exactly how many schools were rebuilt in Egypt in Q2 2026 according to the latest reports?"
+)
 
 # The "buggy" prompt = the grounded core with the hallucination clause in place
 # of the grounding clause (NOT stacked on top of it — that contradiction lets the
@@ -74,4 +76,6 @@ def test_bug_on_fabricates_missing_figure(monkeypatch):
 def test_bug_off_declines_missing_figure(monkeypatch):
     out = _run_with_prompt(monkeypatch, FALLBACK_PROMPT, "halluc-off")
     answer = out["answer"]
-    assert _has_hedge(answer), f"bug OFF should admit the figure is unavailable, got: {answer[:300]}"
+    assert _has_hedge(answer), (
+        f"bug OFF should admit the figure is unavailable, got: {answer[:300]}"
+    )

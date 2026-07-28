@@ -13,8 +13,9 @@ deepagents upgrade that adds a tool can never have it silently stripped.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 
 from langchain.agents.middleware import ToolCallLimitMiddleware
 from langchain_core.tools import BaseTool
@@ -27,15 +28,15 @@ from .simulated import draft_email, list_data_sources, suggest_meeting_times, we
 class ToolSpec:
     """One selectable capability."""
 
-    id: str            # the exact tool name the model sees
-    label: str         # settings-UI label
-    description: str   # one-line help under the toggle
-    group: str         # settings-UI grouping
+    id: str  # the exact tool name the model sees
+    label: str  # settings-UI label
+    description: str  # one-line help under the toggle
+    group: str  # settings-UI grouping
     tool: BaseTool
-    always_on: bool = False       # cannot be switched off
-    default_on: bool = False      # enabled when an assistant has no saved selection
+    always_on: bool = False  # cannot be switched off
+    default_on: bool = False  # enabled when an assistant has no saved selection
     run_limit: int | None = None  # per-run call cap, enforced by middleware
-    guidance: str = ""            # appended to the system prompt when enabled
+    guidance: str = ""  # appended to the system prompt when enabled
 
 
 TOOL_REGISTRY: tuple[ToolSpec, ...] = (
@@ -195,9 +196,7 @@ def call_limit_middlewares() -> list[ToolCallLimitMiddleware]:
     """A per-run cap for every spec that declares one. Each instance is inert
     when its tool is not offered, so these are safe to always install."""
     return [
-        ToolCallLimitMiddleware(
-            tool_name=s.id, run_limit=s.run_limit, exit_behavior="continue"
-        )
+        ToolCallLimitMiddleware(tool_name=s.id, run_limit=s.run_limit, exit_behavior="continue")
         for s in TOOL_REGISTRY
         if s.run_limit
     ]

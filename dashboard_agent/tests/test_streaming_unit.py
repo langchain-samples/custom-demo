@@ -24,13 +24,15 @@ def _chunks_for_widget(widget: dict, index: int, call_id: str, pieces: int = 3):
         out.append(
             AIMessageChunk(
                 content="",
-                tool_call_chunks=[{
-                    "name": "push_widget" if j == 0 else None,
-                    "args": frag,
-                    "id": call_id if j == 0 else None,
-                    "index": index,
-                    "type": "tool_call_chunk",
-                }],
+                tool_call_chunks=[
+                    {
+                        "name": "push_widget" if j == 0 else None,
+                        "args": frag,
+                        "id": call_id if j == 0 else None,
+                        "index": index,
+                        "type": "tool_call_chunk",
+                    }
+                ],
             )
         )
     return out
@@ -47,12 +49,18 @@ class FakeAgent:
 
 def _build_events():
     kpi = {"type": "kpi", "title": "People reached", "value": "2.4M"}
-    bar = {"type": "bar", "title": "Funding", "series": [{"name": "Q2", "points": [{"label": "Health", "value": 28}]}]}
+    bar = {
+        "type": "bar",
+        "title": "Funding",
+        "series": [{"name": "Q2", "points": [{"label": "Health", "value": 28}]}],
+    }
     messages = []
     messages += _chunks_for_widget(kpi, index=0, call_id="call_a")
     messages += _chunks_for_widget(bar, index=1, call_id="call_b")
     # A tool result flowing through the messages stream — must be ignored.
-    messages.append(ToolMessage(content='{"columns":["x"],"rows":[{"x":1}]}', tool_call_id="call_a"))
+    messages.append(
+        ToolMessage(content='{"columns":["x"],"rows":[{"x":1}]}', tool_call_id="call_a")
+    )
     # Final answer streams as AI content with a stable id.
     messages.append(AIMessageChunk(content="Egypt aid reached ", id="answer-1"))
     messages.append(AIMessageChunk(content="2.4M people.", id="answer-1"))
@@ -101,8 +109,17 @@ def test_preamble_is_reset_when_tools_start():
     msgs = [
         AIMessageChunk(content="I'll gather the data and build a dashboard.", id="p1"),
         AIMessageChunk(
-            content="", id="p1",
-            tool_call_chunks=[{"name": "push_widget", "args": args, "id": "c1", "index": 0, "type": "tool_call_chunk"}],
+            content="",
+            id="p1",
+            tool_call_chunks=[
+                {
+                    "name": "push_widget",
+                    "args": args,
+                    "id": "c1",
+                    "index": 0,
+                    "type": "tool_call_chunk",
+                }
+            ],
         ),
         AIMessageChunk(content="Canada has 94% national water coverage.", id="final"),
     ]
@@ -118,7 +135,8 @@ def test_preamble_is_reset_when_tools_start():
             answer, mid = "", None
         elif e["type"] == "answer_delta":
             if e.get("mid") and e["mid"] != mid:
-                mid = e["mid"]; answer = ""
+                mid = e["mid"]
+                answer = ""
             answer += e["text"]
     assert answer == "Canada has 94% national water coverage."
 
@@ -127,19 +145,27 @@ def test_non_widget_tools_emit_tool_events():
     # datasearch and other non-widget tools should surface as tool-activity events.
     ds = AIMessageChunk(
         content="",
-        tool_call_chunks=[{
-            "name": "datasearch",
-            "args": json.dumps({"query": "Iran displaced families resources"}),
-            "id": "d1", "index": 0, "type": "tool_call_chunk",
-        }],
+        tool_call_chunks=[
+            {
+                "name": "datasearch",
+                "args": json.dumps({"query": "Iran displaced families resources"}),
+                "id": "d1",
+                "index": 0,
+                "type": "tool_call_chunk",
+            }
+        ],
     )
     todo = AIMessageChunk(
         content="",
-        tool_call_chunks=[{
-            "name": "write_todos",
-            "args": json.dumps({"todos": ["gather data", "build dashboard"]}),
-            "id": "s1", "index": 1, "type": "tool_call_chunk",
-        }],
+        tool_call_chunks=[
+            {
+                "name": "write_todos",
+                "args": json.dumps({"todos": ["gather data", "build dashboard"]}),
+                "id": "s1",
+                "index": 1,
+                "type": "tool_call_chunk",
+            }
+        ],
     )
     events = list(run_stream("q", agent=FakeAgent([ds, todo])))
     tools = [e for e in events if e["type"] == "tool"]
@@ -153,13 +179,19 @@ def test_non_widget_tools_emit_tool_events():
 def test_tool_results_stream_and_match_by_id():
     ds = AIMessageChunk(
         content="",
-        tool_call_chunks=[{
-            "name": "datasearch",
-            "args": json.dumps({"query": "Iran resources"}),
-            "id": "d1", "index": 0, "type": "tool_call_chunk",
-        }],
+        tool_call_chunks=[
+            {
+                "name": "datasearch",
+                "args": json.dumps({"query": "Iran resources"}),
+                "id": "d1",
+                "index": 0,
+                "type": "tool_call_chunk",
+            }
+        ],
     )
-    result = ToolMessage(content='{"results": [{"region": "Iran"}]}', name="datasearch", tool_call_id="d1")
+    result = ToolMessage(
+        content='{"results": [{"region": "Iran"}]}', name="datasearch", tool_call_id="d1"
+    )
     # push_widget results must NOT surface as tool_result events.
     widget_result = ToolMessage(content="Added kpi widget", name="push_widget", tool_call_id="w1")
     events = list(run_stream("q", agent=FakeAgent([ds, result, widget_result])))
@@ -172,11 +204,17 @@ def test_tool_results_stream_and_match_by_id():
 def test_malformed_widget_is_skipped():
     bad = AIMessageChunk(
         content="",
-        tool_call_chunks=[{
-            "name": "push_widget",
-            "args": json.dumps({"widget": {"type": "kpi", "title": "no value"}}),  # missing value
-            "id": "c1", "index": 0, "type": "tool_call_chunk",
-        }],
+        tool_call_chunks=[
+            {
+                "name": "push_widget",
+                "args": json.dumps(
+                    {"widget": {"type": "kpi", "title": "no value"}}
+                ),  # missing value
+                "id": "c1",
+                "index": 0,
+                "type": "tool_call_chunk",
+            }
+        ],
     )
     types = [e["type"] for e in run_stream("q", agent=FakeAgent([bad]))]
     assert "widget" not in types  # malformed spec skipped

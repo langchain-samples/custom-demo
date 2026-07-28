@@ -23,6 +23,9 @@ dev = [
     "langgraph-cli[inmem]>=0.4",
     "langgraph-sdk>=0.1",
     "pytest>=8.0",
+    # Lint/format + type-check
+    "ruff>=0.14",
+    "ty>=0.0.1",
 ]
 
 [build-system]
@@ -31,6 +34,24 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["dashboard_agent"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+# pycodestyle(E/W), pyflakes(F), isort(I), pyupgrade(UP), bugbear(B), comprehensions(C4)
+select = ["E", "W", "F", "I", "UP", "B", "C4"]
+# Long lines are common in the prompt/data string literals; the formatter owns wrapping.
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may use assert-heavy patterns and re-import fixtures.
+"dashboard_agent/tests/*" = ["B011"]
+
+[tool.ty.environment]
+python-version = "3.14"
+
 
 [tool.pyrefly]
 python-interpreter-path = ".venv/bin/python"

@@ -11,14 +11,21 @@ Registered in langgraph.json as `assistant_setup`.
 
 from __future__ import annotations
 
+from typing import TypedDict
+
 from langgraph.graph import END, START, StateGraph
-from typing_extensions import TypedDict
 
 from dashboard_agent.assistant_setup import prepare_assistant
 
 _INPUT_KEYS = (
-    "workspace", "customer", "owner", "industry", "website", "hallucination",
-    "push_prompts", "enabled_tools",
+    "workspace",
+    "customer",
+    "owner",
+    "industry",
+    "website",
+    "hallucination",
+    "push_prompts",
+    "enabled_tools",
 )
 
 
@@ -46,7 +53,9 @@ def _run(state: SetupState) -> dict:
         return {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
 
 
-_builder = StateGraph(SetupState)
+# ty doesn't recognize our TypedDict as satisfying langgraph's StateLike bound
+# (a third-party typing gap); the TypedDict is valid langgraph state at runtime.
+_builder = StateGraph(SetupState)  # ty: ignore[invalid-argument-type]
 _builder.add_node("setup", _run)
 _builder.add_edge(START, "setup")
 _builder.add_edge("setup", END)

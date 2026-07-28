@@ -18,10 +18,43 @@ from .corpus import CORPUS, Document
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 _STOPWORDS = {
-    "the", "a", "an", "of", "in", "on", "for", "to", "and", "or", "is", "are",
-    "what", "which", "can", "you", "provide", "latest", "over", "last", "as",
-    "from", "relevant", "according", "outlined", "available", "data", "report",
-    "reports", "un", "with", "at", "by", "about", "their", "there", "this",
+    "the",
+    "a",
+    "an",
+    "of",
+    "in",
+    "on",
+    "for",
+    "to",
+    "and",
+    "or",
+    "is",
+    "are",
+    "what",
+    "which",
+    "can",
+    "you",
+    "provide",
+    "latest",
+    "over",
+    "last",
+    "as",
+    "from",
+    "relevant",
+    "according",
+    "outlined",
+    "available",
+    "data",
+    "report",
+    "reports",
+    "un",
+    "with",
+    "at",
+    "by",
+    "about",
+    "their",
+    "there",
+    "this",
 }
 
 
@@ -31,9 +64,7 @@ def _tokenize(text: str) -> list[str]:
 
 def _doc_blob(doc: Document) -> str:
     """The searchable surface of a document."""
-    return " ".join(
-        [doc["title"], doc["region"], doc["topic"], doc["period"], doc["text"]]
-    )
+    return " ".join([doc["title"], doc["region"], doc["topic"], doc["period"], doc["text"]])
 
 
 @lru_cache(maxsize=1)
@@ -78,7 +109,7 @@ def search(query: str, k: int = 3, min_score: float = 0.01) -> list[dict[str, An
     q_vec = _tfidf_vector(Counter(_tokenize(query)), idf)
 
     scored: list[tuple[float, Document]] = []
-    for doc, tf in zip(CORPUS, tf_vectors):
+    for doc, tf in zip(CORPUS, tf_vectors, strict=True):
         score = _cosine(q_vec, _tfidf_vector(tf, idf))
         if score >= min_score:
             scored.append((score, doc))

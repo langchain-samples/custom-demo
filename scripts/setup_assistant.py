@@ -123,13 +123,18 @@ def main() -> None:
         metadata=metadata,
         if_exists="do_nothing",
     )
-    print(json.dumps({
-        "assistant_id": a["assistant_id"],
-        "name": a.get("name"),
-        "prompt_urls": prompt_urls,
-        "context": context,
-        "metadata": metadata,
-    }, indent=2))
+    print(
+        json.dumps(
+            {
+                "assistant_id": a["assistant_id"],
+                "name": a.get("name"),
+                "prompt_urls": prompt_urls,
+                "context": context,
+                "metadata": metadata,
+            },
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":
