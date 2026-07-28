@@ -361,6 +361,66 @@ def push_prompt(workspace: str, name: str, text: str) -> str:
         raise
 
 
+# Tools whose runtime path goes through a human-in-the-loop review interrupt.
+_HITL_TOOLS = {"draft_email", "suggest_meeting_times"}
+
+
+def _action_gist(action: dict | None) -> str:
+    """The '<gist>' half of a '<Persona>: <gist>' quick-action label (or the label)."""
+    label = str((action or {}).get("label", "")).strip()
+    return label.split(":", 1)[1].strip() if ":" in label else label
+
+
+def build_demo_brief(
+    customer: str,
+    use_case: str,
+    actions: list[dict],
+    enabled_tools: list[str] | None,
+    failure_mode: str,
+    data_gap: str = "",
+) -> dict[str, list[str]]:
+    """Presenter-facing brief + recommended flow shown once setup completes.
+
+    Deterministic (no LLM): keyed off the finalized quick actions, enabled tools,
+    and failure mode so it always matches what the assistant will actually do.
+    Returns {"brief": [...], "flow": [...]} — each a list of short bullet strings.
+    """
+    purpose = use_case.strip() or "an internal assistant for their employees"
+    hallucinating = failure_mode == "hallucination"
+    hitl = bool(set(enabled_tools or []) & _HITL_TOOLS)
+
+    good = actions[:2] if hallucinating else actions[:3]
+    gists = [g for g in (_action_gist(a) for a in good) if g]
+    hitl_note = " — one routes through human-in-the-loop approval" if hitl else ""
+
+    brief = [f"We built a demo for {customer} to showcase {purpose}."]
+    if gists:
+        lead = "The first two quick actions" if hallucinating else "The quick actions"
+        brief.append(f"{lead} show the assistant working normally: {', '.join(gists)}{hitl_note}.")
+    if hallucinating:
+        gap = data_gap or "one key metric"
+        brief.append(
+            f"The last quick action demonstrates a hallucination: the data source returns "
+            f'nothing for "{gap}", but the agent still builds a dashboard over the missing data.'
+        )
+
+    if hallucinating:
+        flow = [
+            "Run one of the first two quick actions to get familiar with the assistant.",
+            "Run the last quick action — point out the data comes back empty, yet the agent "
+            "still confidently builds a dashboard (the hallucination).",
+            "Open the LangSmith trace to show where the system prompt lets it fabricate.",
+            "Fix the system prompt in Prompt Hub.",
+            "Return to the assistant and re-run the last quick action — now it refuses to fabricate.",
+        ]
+    else:
+        flow = [
+            "Run the quick actions to show the assistant building dashboards across personas.",
+            "Open the LangSmith trace to show the tool calls and how each answer stays grounded.",
+        ]
+    return {"brief": brief, "flow": flow}
+
+
 def prepare_assistant(payload: dict) -> dict:
     """Turn setup inputs into a ready assistant payload (metadata + context).
 
@@ -470,6 +530,17 @@ def prepare_assistant(payload: dict) -> dict:
         "font_source": "google",
         "failure_mode": failure_mode,
     }
+    # Presenter brief + recommended flow, surfaced in a popup once setup finishes.
+    demo = build_demo_brief(
+        customer,
+        use_case,
+        actions,
+        context.get("enabled_tools"),
+        failure_mode,
+        context.get("data_gap", ""),
+    )
+    metadata["demo_brief"] = demo["brief"]
+    metadata["demo_flow"] = demo["flow"]
     return {
         "name": customer,
         "display_name": display_name,
