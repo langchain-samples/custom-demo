@@ -20,8 +20,8 @@ import { IconRobot, IconLoader2, IconUser } from "@tabler/icons-react";
 import type { QuickAction, ReviewInterrupt, RunContext, ThreadMessage, Widget } from "@/lib/api";
 import { ensureThread, resetThread, runStream } from "@/lib/api";
 import { ReviewCard } from "@/components/chat/ReviewCard";
+import { IconArrowUp } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { ToolChip, type ChipData } from "@/components/chat/ToolChip";
 import { FeedbackRow } from "@/components/chat/FeedbackRow";
 import {
@@ -363,11 +363,23 @@ export default function ChatPanel({
     void runTurn({ resume: value });
   };
 
-  const onSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const submitCurrent = () => {
     const q = input;
     setInput("");
     send(q);
+  };
+
+  const onSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    submitCurrent();
+  };
+
+  // Enter sends; Shift+Enter inserts a newline (standard chat-composer behaviour).
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      if (!busy && input.trim()) submitCurrent();
+    }
   };
 
   const heroPlaceholder = industry
@@ -377,22 +389,29 @@ export default function ChatPanel({
   const composer = (variant: "hero" | "bottom") => (
     <form
       onSubmit={onSubmit}
-      className={
-        variant === "hero"
-          ? "flex w-full gap-2"
-          : "flex gap-2 border-t border-border px-3.5 py-3"
-      }
+      className={variant === "hero" ? "w-full" : "border-t border-border px-3.5 py-3"}
     >
-      <Input
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        placeholder={variant === "hero" ? heroPlaceholder : "Ask a question…"}
-        autoComplete="off"
-        className="flex-1 bg-panel-2"
-      />
-      <Button type="submit" disabled={busy || !input.trim()} className="px-[18px]">
-        Send
-      </Button>
+      {/* Rounded, auto-growing composer with a brand-tinted focus glow. */}
+      <div className="flex items-end gap-2 rounded-2xl border border-input bg-panel-2 px-3 py-2 shadow-sm transition-[box-shadow,border-color] focus-within:border-[var(--brand-primary)] focus-within:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-primary)_28%,transparent)]">
+        <textarea
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={onKeyDown}
+          rows={1}
+          placeholder={variant === "hero" ? heroPlaceholder : "Ask a question…"}
+          autoComplete="off"
+          className="field-sizing-content max-h-40 min-h-[28px] flex-1 resize-none self-center bg-transparent py-1 text-sm leading-relaxed outline-none placeholder:text-muted-foreground"
+        />
+        <Button
+          type="submit"
+          size="icon"
+          disabled={busy || !input.trim()}
+          aria-label="Send"
+          className="h-8 w-8 shrink-0 rounded-full"
+        >
+          <IconArrowUp className="h-4 w-4" stroke={2.5} />
+        </Button>
+      </div>
     </form>
   );
 
