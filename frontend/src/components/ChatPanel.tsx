@@ -397,8 +397,17 @@ export default function ChatPanel({
       onSubmit={onSubmit}
       className={variant === "hero" ? "w-full" : "border-t border-border px-3.5 py-3"}
     >
-      {/* Rounded, auto-growing composer with a brand-tinted focus glow. */}
-      <div className="flex items-end gap-2 rounded-2xl border border-input bg-panel-2 px-3 py-2 shadow-sm transition-[box-shadow,border-color] focus-within:border-[var(--brand-primary)] focus-within:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-primary)_28%,transparent)]">
+      {/* Rounded, auto-growing composer. The hero variant (shown only before the
+          first prompt) carries a resting brand-primary glow; the bottom variant is
+          plain. Both intensify the glow on focus. */}
+      <div
+        className={
+          "flex items-end gap-2 rounded-2xl border bg-panel-2 px-3 py-2 transition-[box-shadow,border-color] " +
+          (variant === "hero"
+            ? "border-[color-mix(in_oklch,var(--brand-primary)_55%,var(--border))] shadow-[0_0_22px_-4px_color-mix(in_oklch,var(--brand-primary)_45%,transparent)] focus-within:border-[var(--brand-primary)] focus-within:shadow-[0_0_28px_-2px_color-mix(in_oklch,var(--brand-primary)_55%,transparent)]"
+            : "border-input shadow-sm focus-within:border-[var(--brand-primary)] focus-within:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-primary)_28%,transparent)]")
+        }
+      >
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
