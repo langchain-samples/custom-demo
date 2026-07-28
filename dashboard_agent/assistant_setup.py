@@ -509,6 +509,10 @@ def prepare_assistant(payload: dict) -> dict:
     else:
         context["prompt"] = sys_text
 
+    # Every created assistant invents customer-relevant data (the bundled
+    # humanitarian corpus is only the default when no assistant is configured).
+    context["dataset"] = "synthetic"
+
     if failure_mode_needs_gap(failure_mode):
         # The mode fabricates/errs over a planted gap: withhold a customer-specific
         # topic (synthetic data source returns nothing for it) and order the quick
@@ -516,7 +520,6 @@ def prepare_assistant(payload: dict) -> dict:
         # shows two good answers then the failure over the missing data.
         gap = analysis.get("data_gap") or "year-over-year figures by segment"
         context["data_gap"] = gap
-        context["dataset"] = "synthetic"
         gap_action = analysis.get("gap_action")
         if gap_action and gap_action.get("question"):
             actions = actions[:2] + [gap_action]
