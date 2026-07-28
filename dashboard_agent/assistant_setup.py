@@ -68,10 +68,12 @@ def safe_curated(name: str) -> str:
 
 
 def slugify(name: str) -> str:
+    """Lowercase, hyphenate to a URL-safe slug (falls back to "customer")."""
     return re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-") or "customer"
 
 
 def domain_for(customer: str, website: str | None) -> str:
+    """Derive a bare domain from an explicit website, else guess from the name."""
     if website:
         m = re.search(r"^(?:https?://)?(?:www\.)?([^/]+)", website.strip())
         if m:
@@ -81,9 +83,12 @@ def domain_for(customer: str, website: str | None) -> str:
 
 
 def _brandfetch_brand(domain: str) -> dict | None:
-    """Accurate current palette (+ logo) from Brandfetch's Brand API, or None on
-    any failure (no key, rate-limit/quota, network, unknown domain) so callers
-    fall back to the LLM guess. Free tier is ~100 pulls, so failures are expected."""
+    """Accurate current palette (+ logo) from Brandfetch's Brand API.
+
+    Returns None on any failure (no key, rate-limit/quota, network, unknown
+    domain) so callers fall back to the LLM guess. Free tier is ~100 pulls, so
+    failures are expected.
+    """
     key = os.getenv("BRANDFETCH_API_KEY", "") or BRANDFETCH_API_KEY
     if not key:
         load_env()
@@ -147,9 +152,12 @@ def _brandfetch_brand(domain: str) -> dict | None:
 
 
 def fetch_brand(customer: str, website: str | None = None) -> dict:
-    """Brand assets: the Logo.dev logo, plus a Brandfetch palette when available
-    (accurate/current), else a scraped <meta theme-color> as a weak accent fallback.
-    Returns accent/accent2 empty when unknown so the caller can prefer the LLM guess."""
+    """Brand assets: the Logo.dev logo, plus a Brandfetch palette when available.
+
+    The palette is accurate/current from Brandfetch, else a scraped
+    <meta theme-color> as a weak accent fallback. Returns accent/accent2 empty
+    when unknown so the caller can prefer the LLM guess.
+    """
     domain = domain_for(customer, website)
     logo = f"https://img.logo.dev/{domain}?token={LOGODEV_TOKEN}&size=128&format=png&retina=true"
     accent = ""  # authoritative (Brandfetch) — empty when unavailable
@@ -216,10 +224,13 @@ def analyze_customer(
     use_case: str = "",
     model: str | None = None,
 ) -> dict:
-    """One LLM call → infer industry (unless given), 3 persona quick-actions, a
-    customer-specific 'data gap' (+ trigger question), brand visuals, and the subset
-    of catalogue tools the assistant should expose. `use_case` (optional NL scenario)
-    tailors the personas, the data gap, and the tool selection."""
+    """Infer the assistant profile from the customer in a single LLM call.
+
+    Returns industry (unless given), 3 persona quick-actions, a customer-specific
+    'data gap' (+ trigger question), brand visuals, and the subset of catalogue
+    tools the assistant should expose. `use_case` (optional NL scenario) tailors
+    the personas, the data gap, and the tool selection.
+    """
     load_env()
     llm = init_chat_model(model or "anthropic:claude-haiku-4-5-20251001", temperature=0.5)
     site = f" (website: {website})" if website else ""
@@ -334,6 +345,10 @@ def _ws_client(workspace: str | None):
 
 
 def push_prompt(workspace: str, name: str, text: str) -> str:
+    """Push a system prompt to the workspace's Prompt Hub, returning its commit URL.
+
+    A re-push of identical content (409 "nothing to commit") is treated as success.
+    """
     obj = ChatPromptTemplate.from_messages([("system", text)])
     try:
         return _ws_client(workspace).push_prompt(name, object=obj)

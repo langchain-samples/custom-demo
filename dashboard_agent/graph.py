@@ -31,15 +31,21 @@ _client_cache: dict[str, Client] = {}
 
 
 def _routing_key() -> str | None:
-    """Key used to build workspace-scoped clients. Prefer an explicit
-    cross-workspace key; otherwise the default LangSmith key — which works for
-    cross-workspace routing when it's org-scoped (e.g. a personal access token)."""
+    """Key used to build workspace-scoped clients.
+
+    Prefer an explicit cross-workspace key; otherwise the default LangSmith key —
+    which works for cross-workspace routing when it's org-scoped (e.g. a personal
+    access token).
+    """
     return os.getenv("LS_CROSS_WORKSPACE_KEY") or os.getenv("LANGSMITH_API_KEY")
 
 
 def _client_for_workspace(workspace_id: str) -> Client | None:
-    """Cached LangSmith client scoped to a workspace, or None when no usable key
-    is available (then traces stay in the default workspace)."""
+    """Cached LangSmith client scoped to a workspace.
+
+    Returns None when no usable key is available (then traces stay in the default
+    workspace).
+    """
     key = _routing_key()
     if not key:
         return None

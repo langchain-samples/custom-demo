@@ -42,6 +42,7 @@ VARIANTS: list[Variant] = [
 
 
 def main() -> None:
+    """Create the predefined demo assistant variants on the Agent Server."""
     url = os.getenv("LANGGRAPH_URL", "http://127.0.0.1:2024")
     client = get_sync_client(url=url)
     print(f"Seeding assistants on {url} for graph '{GRAPH_ID}':\n")

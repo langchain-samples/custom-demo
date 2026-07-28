@@ -31,6 +31,7 @@ def load_env() -> None:
 
 
 def require_anthropic_key() -> str:
+    """Return the Anthropic API key, raising if it isn't configured."""
     load_env()
     key = os.getenv("ANTHROPIC_API_KEY")
     if not key:

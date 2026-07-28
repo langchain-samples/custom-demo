@@ -30,13 +30,18 @@ from .rag import search as _search
 
 
 class DataSource(Protocol):
-    def search(self, query: str, k: int = 3) -> list[dict]: ...
+    """The interface `datasearch` depends on: a `search(query, k)` returning dicts."""
+
+    def search(self, query: str, k: int = 3) -> list[dict]:
+        """Return up to `k` matching records for `query`."""
+        ...
 
 
 class StaticDataSource:
     """The bundled humanitarian corpus (default). Real in-memory TF-IDF search."""
 
     def search(self, query: str, k: int = 3) -> list[dict]:
+        """Return up to `k` TF-IDF matches from the bundled corpus."""
         return _search(query, k=k)
 
 
@@ -77,6 +82,7 @@ class SyntheticDataSource:
         customer: str | None = None,
         industry: str | None = None,
     ) -> None:
+        """Store per-assistant data-source config (model, prompt source, planted gap)."""
         self._model_id = model or data_model()
         self._data_prompt_name = data_prompt_name
         self._data_prompt = data_prompt  # inline text; preferred over everything below
@@ -117,12 +123,14 @@ class SyntheticDataSource:
         return content or ""
 
     def _invoke_detached(self, messages):
-        """Run the data-simulation LLM as its OWN trace in the data project, detached
-        from the agent run — so in the customer's trace `datasearch` reads as a plain
-        data lookup, not an LLM fabricating data. A worker thread starts with fresh
-        contextvars, so the agent run's callbacks aren't inherited (no nesting); we
-        attach our own tracer targeting DATA_TRACE_PROJECT. Best-effort: on any setup
-        failure, fall back to a normal (nested) invoke so data gen never breaks."""
+        """Run the data-simulation LLM as its OWN trace, detached from the agent run.
+
+        In the customer's trace `datasearch` then reads as a plain data lookup, not
+        an LLM fabricating data. A worker thread starts with fresh contextvars, so the
+        agent run's callbacks aren't inherited (no nesting); we attach our own tracer
+        targeting DATA_TRACE_PROJECT. Best-effort: on any setup failure, fall back to a
+        normal (nested) invoke so data gen never breaks.
+        """
         model = self._model()
         try:
             from concurrent.futures import ThreadPoolExecutor
@@ -140,6 +148,7 @@ class SyntheticDataSource:
             return model.invoke(messages)
 
     def search(self, query: str, k: int = 3) -> list[dict]:
+        """Ask the LLM for up to `k` synthetic records as JSON; parse to a list."""
         out = self._ask(
             f"A dashboard agent called `datasearch` with query: {query!r}.\n"
             f"Return up to {k} matching documents as STRICT JSON, no prose:\n"

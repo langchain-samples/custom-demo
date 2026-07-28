@@ -17,6 +17,8 @@ from typing import Any, TypedDict
 
 
 class Document(TypedDict):
+    """One corpus record returned by search: metadata plus prose and chartable data."""
+
     id: str
     title: str
     source: str

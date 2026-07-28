@@ -40,6 +40,7 @@ def _chunks_for_widget(widget: dict, index: int, call_id: str, pieces: int = 3):
 
 class FakeAgent:
     def __init__(self, messages):
+        """Stub agent that replays a fixed list of messages when streamed."""
         self._messages = messages
 
     def stream(self, _inp, config=None, stream_mode=None):
