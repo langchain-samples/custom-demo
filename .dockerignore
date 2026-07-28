@@ -1,0 +1,10 @@
+frontend
+chat-langchain-lite
+.git
+.claude
+node_modules
+**/node_modules
+.venv
+**/__pycache__
+*.log
+dist
