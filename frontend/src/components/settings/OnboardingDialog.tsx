@@ -43,7 +43,7 @@ export function OnboardingDialog({
     <Dialog open={open}>
       <DialogContent showCloseButton={false} className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Welcome — let's get you set up</DialogTitle>
+          <DialogTitle>Welcome! Let's get you set up</DialogTitle>
           <DialogDescription>Looks like you're new here. Takes about a minute.</DialogDescription>
         </DialogHeader>
 
@@ -52,7 +52,6 @@ export function OnboardingDialog({
           <Input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Josiah Coad"
             autoComplete="off"
           />
           <p className="m-0 text-[11px] leading-snug text-muted-foreground">
@@ -113,7 +112,7 @@ export function OnboardingDialog({
               <Input
                 value={useCase}
                 onChange={(e) => setUseCase(e.target.value)}
-                placeholder="Optional — defaults to an internal assistant"
+                placeholder="Optional; defaults to an internal assistant"
                 autoComplete="off"
               />
             </div>
