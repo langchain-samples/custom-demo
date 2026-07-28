@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>" />
   <title>Dashboard Agent — Live Dashboard</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.1/dist/html2pdf.bundle.min.js"></script>
@@ -28,25 +29,12 @@
       color: var(--text); background: var(--bg); height: 100vh; overflow: hidden;
       display: flex; flex-direction: row;
     }
-    /* Threads sidebar */
-    .sidebar { width: 256px; flex: 0 0 auto; background: var(--sidebar); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
-    .sb-brand { display: flex; align-items: center; gap: 9px; padding: 14px 16px; font-weight: 700; font-size: 15px; }
-    .sb-brand .logo { font-size: 20px; }
-    .sb-brand .logo img { height: 22px; width: 22px; object-fit: contain; border-radius: 5px; display: block; }
-    .sb-new { margin: 4px 12px 10px; padding: 9px 12px; text-align: left; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 10px; cursor: pointer; font-size: 13px; font-weight: 600; }
-    .sb-new:hover { border-color: var(--brand-blue); }
-    .sb-label { padding: 6px 16px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
-    #thread-list { flex: 1 1 auto; overflow-y: auto; padding: 0 8px 8px; display: flex; flex-direction: column; gap: 2px; }
-    .thread { text-align: left; padding: 8px 10px; border: none; background: none; color: var(--text); border-radius: 8px; cursor: pointer; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .thread:hover { background: var(--panel-2); }
-    .thread.active { background: var(--panel-2); color: #fff; }
-    .sb-foot { padding: 10px 16px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); }
     .main { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
     header {
-      background: var(--panel); color: var(--text); padding: 11px 18px; display: flex; align-items: center; gap: 12px; flex: 0 0 auto; border-bottom: 1px solid var(--border);
+      background: var(--panel); color: var(--text); padding: 14px 20px; display: flex; align-items: center; gap: 14px; flex: 0 0 auto; border-bottom: 1px solid var(--border);
     }
-    header .logo { font-size: 20px; }
-    header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+    header .logo { font-size: 34px; line-height: 1; }
+    header h1 { font-size: 24px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     .feedback { align-self: flex-start; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin-top: -4px; }
     .fb-q { margin-right: 2px; }
     .fb-btn { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 3px 8px; cursor: pointer; font-size: 14px; }
@@ -138,14 +126,47 @@
     #settings-gear { margin-left: auto; }
     .icon-btn { background: rgba(255,255,255,.16); color: #fff; border: none; width: 30px; height: 30px; border-radius: 8px; cursor: pointer; font-size: 15px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
     .icon-btn:hover { background: rgba(255,255,255,.30); }
-    header .logo img { height: 24px; width: 24px; object-fit: contain; border-radius: 5px; display: block; }
+    header .logo img { height: 40px; width: 40px; object-fit: contain; border-radius: 7px; display: block; }
     #settings-overlay { position: fixed; inset: 0; background: rgba(15,23,42,.35); display: flex; justify-content: flex-end; z-index: 50; }
     #settings-overlay.hidden { display: none; }
     #settings-panel { width: 360px; max-width: 90vw; height: 100%; background: var(--panel); box-shadow: -4px 0 24px rgba(0,0,0,.15); padding: 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
     .sp-head { display: flex; align-items: center; justify-content: space-between; font-size: 15px; font-weight: 700; }
     #sp-close { background: none; border: none; font-size: 16px; cursor: pointer; color: var(--muted); }
     #settings-panel > label { display: flex; flex-direction: column; gap: 5px; font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
-    #settings-panel input[type=text] { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; color: var(--text); background: var(--panel-2); font-weight: 400; text-transform: none; letter-spacing: 0; }
+    #settings-panel input[type=text], #settings-panel select, #settings-panel textarea { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; color: var(--text); background: var(--panel-2); font-weight: 400; text-transform: none; letter-spacing: 0; font-family: inherit; }
+    #settings-panel textarea { resize: vertical; min-height: 66px; line-height: 1.45; }
+    .sp-asst-actions { display: flex; gap: 8px; }
+    .sp-divider { border-top: 1px solid var(--border); margin: 8px 0 2px; }
+    .sp-hint { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted); font-size: 10px; }
+    .sp-collapse { border-top: 1px solid var(--border); padding-top: 10px; }
+    .sp-collapse > summary { cursor: pointer; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); list-style: none; }
+    .sp-collapse > summary::-webkit-details-marker { display: none; }
+    .sp-collapse > summary::before { content: "▸ "; }
+    .sp-collapse[open] > summary::before { content: "▾ "; }
+    .sp-collapse-body { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+    .sp-toggle { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .sp-toggle button { flex: 1; background: var(--panel-2); color: var(--muted); border: none; padding: 7px 10px; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+    .sp-toggle button.active { background: var(--brand-blue); color: #fff; }
+    #sp-prompt-hub-wrap.hidden, #sp-prompt-inline-wrap.hidden { display: none; }
+    #sp-prompt-hub-wrap select, #sp-prompt-inline-wrap textarea { width: 100%; }
+    #sp-config.hidden { display: none; }
+    .sp-asst-actions .sp-btn { flex: 1; }
+    .sp-asst-adv input { font-size: 12px; color: var(--muted); }
+    #sp-asst-refresh { padding: 2px 8px; }
+    .sp-asst-form { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
+    .sp-asst-form.hidden { display: none; }
+    .sp-asst-form-actions { display: flex; gap: 8px; margin-top: 2px; }
+    .sp-asst-form-actions .sp-btn { flex: 1; }
+    .sp-asst-check { flex-direction: row !important; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--text); }
+    .sp-asst-check input { width: auto; margin: 0; cursor: pointer; }
+    .sp-asst-hint { font-size: 11px; color: var(--muted); }
+    .sp-combo { position: relative; }
+    .sp-combo-menu { position: absolute; left: 0; right: 0; top: calc(100% + 3px); z-index: 20; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; max-height: 190px; overflow-y: auto; box-shadow: 0 8px 22px rgba(0,0,0,.3); }
+    .sp-combo-menu.hidden { display: none; }
+    .sp-combo-item { padding: 7px 10px; font-size: 12.5px; cursor: pointer; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sp-combo-item:hover, .sp-combo-item.active { background: var(--panel-2); }
+    .sp-combo-item.add { color: var(--brand-blue); font-weight: 600; }
+    .sp-combo-empty { padding: 7px 10px; font-size: 12px; color: var(--muted); }
     .sp-color { display: flex; gap: 8px; align-items: center; }
     .sp-color input[type=color] { width: 42px; height: 34px; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: none; cursor: pointer; }
     .sp-color input[type=text] { flex: 1; }
@@ -156,23 +177,25 @@
     .sp-del { position: absolute; top: 7px; right: 7px; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 12px; }
     .sp-btn { background: var(--brand-blue); color: #fff; border: none; border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
     .sp-btn.ghost { background: transparent; color: var(--brand-blue); border: 1px solid var(--brand-blue); }
+    .sp-btn.danger { background: transparent; color: #f87171; border: 1px solid rgba(248,113,113,.4); margin-left: auto; }
+    .sp-btn.danger:hover { background: rgba(248,113,113,.12); }
     .sp-foot { margin-top: auto; display: flex; gap: 8px; padding-top: 4px; }
 
     @media print {
+      @page { size: A4 portrait; margin: 12mm; }
       header, .chat, .canvas-head { display: none !important; }
       .app, .app.has-dashboard { display: block; height: auto; }
-      .canvas-wrap { overflow: visible; opacity: 1; transform: none; }
+      .canvas-wrap { overflow: visible; opacity: 1; transform: none; padding: 0; }
+      /* Match the PDF-button reflow: collapse the 2-col dashboard to one column
+         and cap chart canvases to the page width so nothing runs off the right. */
+      .widget-grid { grid-template-columns: 1fr !important; }
+      .span-2 { grid-column: auto !important; }
       .widget { break-inside: avoid; }
+      .widget canvas { max-width: 100% !important; height: auto !important; }
     }
   </style>
 </head>
 <body>
-  <aside class="sidebar" id="sidebar">
-    <div class="sb-brand"><span class="logo" id="sb-logo">🌐</span><span id="sb-name">Dashboard Agent</span></div>
-    <button class="sb-new" id="new-chat">✏️  New chat</button>
-    <div class="sb-label">Recent</div>
-    <div id="thread-list"></div>
-  </aside>
   <div class="main">
     <header>
       <span class="logo" id="brand-logo">🌐</span>
@@ -183,7 +206,7 @@
     <section class="chat">
       <div id="chat-log"></div>
       <div class="presets">
-        <div class="label">Try a persona question</div>
+        <div class="label">Try a quick prompt</div>
         <div id="preset-list"></div>
       </div>
       <form id="chat-form">
@@ -204,20 +227,66 @@
   <div id="settings-overlay" class="hidden">
     <div id="settings-panel">
       <div class="sp-head"><span>Customize</span><button id="sp-close" aria-label="Close">✕</button></div>
-      <label>Name<input id="sp-name" type="text" placeholder="Dashboard Agent" /></label>
+
+      <label>Workspace<select id="sp-ls-workspace"></select></label>
+
+      <div class="sp-divider"></div>
+      <label>Assistant name <span class="sp-hint">(project will be set to the customer name)</span><select id="sp-assistant-select"></select></label>
+      <div class="sp-asst-actions">
+        <button id="sp-asst-new" class="sp-btn ghost" type="button">＋ New</button>
+      </div>
+      <div id="sp-asst-new-form" class="sp-asst-form hidden">
+        <input id="sp-asst-owner" type="text" placeholder="Owner name" autocomplete="off" data-1p-ignore="true" data-lpignore="true" />
+        <input id="sp-asst-customer" type="text" placeholder="Customer (used as the assistant name)" autocomplete="off" data-1p-ignore="true" data-lpignore="true" />
+        <input id="sp-asst-website" type="text" placeholder="Website (optional, e.g. acme.com)" autocomplete="off" data-1p-ignore="true" data-lpignore="true" />
+        <label class="sp-asst-check"><input type="checkbox" id="sp-asst-hallu" /> Build in hallucination demo</label>
+        <div class="sp-asst-form-actions">
+          <button id="sp-asst-create" class="sp-btn" type="button">Create</button>
+          <button id="sp-asst-cancel" class="sp-btn ghost" type="button">Cancel</button>
+        </div>
+      </div>
+
+      <div id="sp-config" class="hidden">
+      <div class="sp-actions-head"><span>Visual</span></div>
+      <label>Display name<input id="sp-name" type="text" placeholder="Dashboard Agent" /></label>
       <label>Accent color
         <span class="sp-color"><input id="sp-accent" type="color" /><input id="sp-accent-text" type="text" placeholder="#0072BC" /></span>
       </label>
       <label>Logo (emoji or image URL)<input id="sp-logo" type="text" placeholder="🌐 or https://…/logo.png" /></label>
-      <label>Deployment URL<input id="sp-lgurl" type="text" placeholder="http://127.0.0.1:2024" /></label>
-      <label>Assistant (id or graph name)<input id="sp-assistant" type="text" placeholder="dashboard_agent" /></label>
-      <div class="sp-actions-head"><span>Quick actions</span><button id="sp-add" class="sp-btn ghost" type="button">＋ Add</button></div>
-      <div id="sp-actions"></div>
-      <div class="sp-foot"><button id="sp-reset" class="sp-btn ghost" type="button">Reset to defaults</button></div>
+      <details class="sp-collapse">
+        <summary>Quick actions</summary>
+        <div class="sp-collapse-body">
+          <button id="sp-add" class="sp-btn ghost" type="button">＋ Add</button>
+          <div id="sp-actions"></div>
+        </div>
+      </details>
+
+      <!-- Hidden: project auto-derives from the assistant name; the id holds the active assistant for run requests. -->
+      <label class="sp-asst-adv" style="display:none">Project<span class="sp-combo"><input id="sp-ls-project" type="text" autocomplete="off" /><span id="sp-ls-project-menu" class="sp-combo-menu hidden"></span></span></label>
+      <label class="sp-asst-adv" style="display:none"><input id="sp-assistant" type="text" placeholder="dashboard_agent" /></label>
+
+      <div class="sp-actions-head"><span>Agent config</span></div>
+      <label>System prompt</label>
+      <div class="sp-toggle" id="sp-prompt-mode">
+        <button type="button" data-mode="hub">Prompt Hub</button>
+        <button type="button" data-mode="inline">Prompt</button>
+      </div>
+      <div id="sp-prompt-hub-wrap"><select id="sp-prompt-name"></select></div>
+      <div id="sp-prompt-inline-wrap" class="hidden"><textarea id="sp-prompt" placeholder="Write the system prompt"></textarea></div>
+      <label>Withheld data <span class="sp-hint">(the "gap" the agent must not fabricate)</span><input id="sp-data-gap" type="text" placeholder='e.g. conversion rate by traffic source' autocomplete="off" data-1p-ignore="true" /></label>
+      <details class="sp-collapse">
+        <summary>Synthetic data prompt</summary>
+        <div class="sp-collapse-body">
+          <textarea id="sp-data-prompt" placeholder="Advanced: overrides the auto-built customer data prompt"></textarea>
+        </div>
+      </details>
+
+      <div class="sp-foot"><button id="sp-asst-delete" class="sp-btn danger" type="button">Delete assistant</button></div>
+      </div>
     </div>
   </div>
 
   <script src="config.js"></script>
-  <script src="app.js?v=20"></script>
+  <script src="app.js?v=33"></script>
 </body>
 </html>

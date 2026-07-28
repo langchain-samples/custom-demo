@@ -25,10 +25,25 @@ PORT="${PORT:-2024}"          # Agent Server
 SPA_PORT="${SPA_PORT:-3000}"  # static SPA
 
 echo "Agent Server → http://127.0.0.1:${PORT}   (Studio: https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:${PORT})"
-echo "Dashboard SPA → http://127.0.0.1:${SPA_PORT}  (set its URL/assistant via ⚙️ or static/config.js)"
+echo "Dashboard UI  → http://127.0.0.1:${SPA_PORT}  (set its URL/assistant via ⚙️ or static/config.js)"
 
-# Serve the SPA in the background; run the deployment in the foreground.
-( cd dashboard_agent/static && exec "$PY" -m http.server "$SPA_PORT" ) &
-SPA_PID=$!
+# Serve the front-end in the background; run the deployment in the foreground.
+# Prefer the React app in ./frontend (Vite dev server) when present; otherwise
+# fall back to the legacy static SPA served by scripts/serve_spa.py.
+if [ -f "frontend/package.json" ]; then
+  if [ ! -d "frontend/node_modules" ]; then
+    echo "Installing front-end dependencies (frontend/node_modules missing)…"
+    npm --prefix frontend install
+  fi
+  echo "Serving React app via Vite (npm --prefix frontend run dev)."
+  ( exec npm --prefix frontend run dev -- --port "$SPA_PORT" ) &
+  SPA_PID=$!
+else
+  # Use an absolute interpreter path so it resolves regardless of the server's
+  # working directory.
+  PY_ABS="$(cd "$(dirname "$PY")" && pwd)/$(basename "$PY")"
+  ( exec "$PY_ABS" scripts/serve_spa.py "$SPA_PORT" ) &
+  SPA_PID=$!
+fi
 trap 'kill "$SPA_PID" 2>/dev/null || true' EXIT
 exec "$VENV/bin/langgraph" dev --no-browser --port "$PORT" --allow-blocking "$@"

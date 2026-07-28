@@ -39,7 +39,7 @@ def require_anthropic_key() -> str:
     return key
 
 
-MODEL = os.getenv("DASHBOARD_MODEL", "claude-sonnet-4-5-20250929")
+MODEL = os.getenv("DASHBOARD_MODEL", "claude-sonnet-5")
 
 
 def prompt_name() -> str:
@@ -77,7 +77,7 @@ def make_client():
 
 
 def dataset() -> str:
-    """Which data backend the datasearch/query_sql tools use.
+    """Which data backend the datasearch tool uses.
 
     "humanitarian" (default) = the bundled corpus; "synthetic" = a live LLM that
     invents plausible data per call (see datasource.py).

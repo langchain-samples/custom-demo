@@ -1,0 +1,69 @@
+/**
+ * A collapsible tool-activity "chip" (datasearch / query_sql / write_todos / …).
+ * The arg (e.g. the SQL query or search terms) streams in live; once the tool's
+ * result arrives the chip becomes clickable to reveal the raw result. Ported
+ * from the original `toolChip()` DOM builder.
+ */
+import { useState } from "react";
+import { IconChevronDown, IconChevronRight } from "@tabler/icons-react";
+import { toolMeta } from "./helpers";
+
+export interface ChipData {
+  /** tool_call id (or a synthesized fallback) — stable across partials. */
+  id: string;
+  name: string;
+  /** Live arg summary (query text / truncated JSON). */
+  arg: string;
+  /** Raw tool result, or null until the matching tool message arrives. */
+  result: string | null;
+}
+
+/** Pretty-print JSON results when possible (matches the original chip). */
+function formatResult(content: string): string {
+  const text = content || "(empty result)";
+  try {
+    return JSON.stringify(JSON.parse(content), null, 2);
+  } catch {
+    return text;
+  }
+}
+
+export function ToolChip({ chip }: { chip: ChipData }) {
+  const [open, setOpen] = useState(false);
+  const m = toolMeta(chip.name);
+  const Icon = m.icon;
+  const hasResult = chip.result !== null;
+  const arg = chip.arg || "";
+  const argText = arg.length > 120 ? arg.slice(0, 120) + "…" : arg;
+
+  return (
+    <div className="flex animate-in fade-in slide-in-from-bottom-1 flex-col gap-1.5 rounded-lg border border-border bg-panel-2 px-2.5 py-1.5 text-xs text-muted-foreground duration-200">
+      <div
+        className={
+          "flex items-center gap-2" +
+          (hasResult ? " cursor-pointer hover:text-brand" : "")
+        }
+        onClick={() => hasResult && setOpen((v) => !v)}
+      >
+        <Icon size={15} className="shrink-0" stroke={2} />
+        <span className="whitespace-nowrap font-semibold">{m.label}</span>
+        {argText && (
+          <code className="overflow-hidden text-ellipsis whitespace-nowrap rounded-[5px] border border-border bg-background px-1.5 py-px font-mono text-[11px] text-muted-foreground">
+            {argText}
+          </code>
+        )}
+        <span
+          className="ml-auto flex items-center"
+          style={{ visibility: hasResult ? "visible" : "hidden" }}
+        >
+          {open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
+        </span>
+      </div>
+      {hasResult && open && (
+        <pre className="m-0 max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background p-2 font-mono text-[11px] text-foreground">
+          {formatResult(chip.result as string)}
+        </pre>
+      )}
+    </div>
+  );
+}

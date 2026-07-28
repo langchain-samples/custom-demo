@@ -20,7 +20,12 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from langchain.agents.middleware import ModelRequest, dynamic_prompt
+from langchain.agents.middleware import (
+    AgentMiddleware,
+    ModelRequest,
+    ToolCallLimitMiddleware,
+    dynamic_prompt,
+)
 from langchain.tools import ToolRuntime, tool
 
 from .config import MODEL, require_anthropic_key
@@ -37,10 +42,17 @@ class Context:
     same graph works both in a deployment (assistants supply context) and locally.
     """
 
+    model: str | None = None             # main agent LLM (e.g. "anthropic:claude-…"); overrides build default
+    prompt: str | None = None            # inline system prompt text (preferred over prompt_name)
     prompt_name: str | None = None       # system prompt in Prompt Hub
     dataset: str | None = None           # "humanitarian" | "synthetic"
     data_model: str | None = None        # model id for the synthetic data backend
     data_prompt_name: str | None = None  # data-source prompt in Prompt Hub
+    data_prompt: str | None = None       # inline data-source prompt text (preferred over data_prompt_name)
+    data_gap: str | None = None          # withheld topic — builds a customer-centric data prompt
+    customer: str | None = None          # customer name — steers customer-specific synthetic data
+    industry: str | None = None          # customer industry — steers synthetic data
+    ls_workspace: str | None = None      # workspace to pull Hub prompts from (matches trace routing)
 
 
 def _ctx(runtime, field: str):
@@ -64,6 +76,11 @@ def _datasource_for(runtime: ToolRuntime):
         _ctx(runtime, "dataset"),
         _ctx(runtime, "data_model"),
         _ctx(runtime, "data_prompt_name"),
+        _ctx(runtime, "data_prompt"),
+        _ctx(runtime, "ls_workspace"),
+        _ctx(runtime, "data_gap"),
+        _ctx(runtime, "customer"),
+        _ctx(runtime, "industry"),
     )
 
 
@@ -82,22 +99,6 @@ def datasearch(query: str, runtime: ToolRuntime) -> str:
     if not results:
         return json.dumps({"results": [], "note": "No matching reports found."})
     return json.dumps({"results": results}, ensure_ascii=False)
-
-
-@tool
-def query_sql(query: str, runtime: ToolRuntime) -> str:
-    """Run a read-only SQL SELECT against the structured database.
-
-    Use this when you need precise, aggregated, or filtered numbers to chart
-    (totals, rankings, deltas, time series). Only SELECT is allowed. Returns a
-    JSON object with `columns`, `rows`, and `row_count`, or an `error`.
-    """
-    return json.dumps(_datasource_for(runtime).run_sql(query), ensure_ascii=False)
-
-
-# The base tool description (before the data-source-specific schema hint, which is
-# appended in build_agent so it matches whichever DataSource is active).
-_QUERY_SQL_BASE_DESC = query_sql.description
 
 
 @tool
@@ -154,13 +155,54 @@ _prompt_override: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 def _hub_system_prompt(request: ModelRequest) -> str:
     """Inject the system prompt for each model call from the Hub-sourced text.
 
-    Precedence: a per-run pulled value (set by run/run_stream) > the assistant's
-    `prompt_name` from runtime context > the configured default.
+    Precedence: a per-run pulled value (set by run/run_stream) > an inline
+    `prompt` from runtime context > the assistant's `prompt_name` from runtime
+    context (pulled from the Hub) > the configured default.
     """
     override = _prompt_override.get()
     if override is not None:
         return override
-    return pull_system_prompt(_ctx(request.runtime, "prompt_name"))
+    inline = _ctx(request.runtime, "prompt")
+    if inline:
+        return inline
+    return pull_system_prompt(
+        _ctx(request.runtime, "prompt_name"),
+        workspace=_ctx(request.runtime, "ls_workspace"),
+    )
+
+
+# Per-run model override. When an assistant's context sets `model`, swap the LLM
+# for every model call in that run (mirrors the deepagents configurable-model
+# pattern). Built models are cached by id so we don't reinit each call.
+_model_cache: dict[str, Any] = {}
+
+
+def _model_for(model_id: str):
+    llm = _model_cache.get(model_id)
+    if llm is None:
+        from langchain.chat_models import init_chat_model
+
+        llm = init_chat_model(model_id)
+        _model_cache[model_id] = llm
+    return llm
+
+
+class ConfigurableModel(AgentMiddleware):
+    """Override the agent LLM from `context.model` for the duration of the run.
+
+    Implements both sync and async hooks: the local path invokes the agent
+    synchronously, the Agent Server deployment runs it async.
+    """
+
+    def _apply(self, request: ModelRequest) -> ModelRequest:
+        model_id = _ctx(request.runtime, "model")
+        return request.override(model=_model_for(model_id)) if model_id else request
+
+    def wrap_model_call(self, request, handler):
+        return handler(self._apply(request))
+
+    async def awrap_model_call(self, request, handler):
+        return await handler(self._apply(request))
 
 
 def _build(model: str | None, checkpointer):
@@ -170,17 +212,28 @@ def _build(model: str | None, checkpointer):
     from deepagents import create_deep_agent
     from langchain_anthropic import ChatAnthropic
 
-    # Default SQL schema hint (humanitarian tables). Synthetic assistants still work
-    # — their data-agent invents rows regardless of exact table names.
-    query_sql.description = _QUERY_SQL_BASE_DESC + "\n\n" + get_datasource().sql_hint()
-
     # Explicit model, hardened against transient API overload (HTTP 529).
-    llm = ChatAnthropic(model=model or MODEL, max_retries=8, timeout=120, max_tokens=8000)
+    # thinking disabled: Sonnet 5 defaults to extended thinking, whose thinking
+    # blocks break the deep-agent tool loop on follow-up turns (Anthropic 400).
+    llm = ChatAnthropic(
+        model=model or MODEL, max_retries=8, timeout=120, max_tokens=8000,
+        thinking={"type": "disabled"},
+    )
 
     return create_deep_agent(
         model=llm,
-        tools=[datasearch, query_sql, push_widget],
-        middleware=[_hub_system_prompt],
+        tools=[datasearch, push_widget],
+        middleware=[
+            ConfigurableModel(),
+            _hub_system_prompt,
+            # Cap datasearch at 1 call/run: one search, then build the dashboard +
+            # answer with what came back. Stops the agent from wandering to adjacent
+            # queries when the asked-for data is missing (which masks the gap in the
+            # hallucination demo). 'continue' blocks further searches, not the run.
+            ToolCallLimitMiddleware(
+                tool_name="datasearch", run_limit=1, exit_behavior="continue",
+            ),
+        ],
         context_schema=Context,
         checkpointer=checkpointer,
     )
@@ -312,7 +365,7 @@ def run_stream(question: str, thread_id: str = "demo", agent=None):
     reset_mids: set = set()  # message ids we've already reset (preamble)
 
     def _tool_summary(name: str, parsed: dict) -> str:
-        if name in ("datasearch", "query_sql"):
+        if name == "datasearch":
             return str(parsed.get("query", ""))
         # Compact one-liner for any other tool (e.g. write_todos, task).
         return json.dumps(parsed, ensure_ascii=False)[:120]
@@ -397,7 +450,7 @@ def run_stream(question: str, thread_id: str = "demo", agent=None):
                     emitted.add(key)
                     yield {"type": "widget", "widget": widget}
                 else:
-                    # datasearch / query_sql / built-in tools -> activity feed.
+                    # datasearch / built-in tools -> activity feed.
                     emitted.add(key)
                     yield {
                         "type": "tool",
