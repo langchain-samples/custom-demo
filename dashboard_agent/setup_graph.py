@@ -11,9 +11,8 @@ Registered in langgraph.json as `assistant_setup`.
 
 from __future__ import annotations
 
-from typing_extensions import TypedDict
-
 from langgraph.graph import END, START, StateGraph
+from typing_extensions import TypedDict
 
 from dashboard_agent.assistant_setup import prepare_assistant
 

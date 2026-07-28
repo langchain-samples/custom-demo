@@ -13,15 +13,10 @@ Requires LANGSMITH_API_KEY. Honors WORKSPACE_ID / DASHBOARD_DATA_PROMPT (see con
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
+from langchain_core.prompts import ChatPromptTemplate
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from langchain_core.prompts import ChatPromptTemplate  # noqa: E402
-
-from dashboard_agent.config import data_prompt_name, make_client, workspace_id  # noqa: E402
-from dashboard_agent.prompt import DATA_FALLBACK_PROMPT  # noqa: E402
+from dashboard_agent.config import data_prompt_name, make_client, workspace_id
+from dashboard_agent.prompt import DATA_FALLBACK_PROMPT
 
 
 def main() -> None:

@@ -16,8 +16,9 @@ import re
 
 import pytest
 
+import dashboard_agent.agent as agent_mod
 from dashboard_agent.config import load_env
-from dashboard_agent.prompt import FALLBACK_PROMPT, _FALLBACK_CORE, HALLUCINATION_CLAUSE
+from dashboard_agent.prompt import _FALLBACK_CORE, FALLBACK_PROMPT, HALLUCINATION_CLAUSE
 
 load_env()
 
@@ -58,8 +59,6 @@ def _has_hedge(text: str) -> bool:
 
 def _run_with_prompt(monkeypatch, prompt_text: str, thread_id: str) -> dict:
     """Run the agent with the prompt source patched to return `prompt_text`."""
-    import dashboard_agent.agent as agent_mod
-
     monkeypatch.setattr(agent_mod, "pull_system_prompt", lambda: prompt_text)
     return agent_mod.run(MISSING_FACT_Q, thread_id=thread_id)
 

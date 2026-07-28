@@ -12,6 +12,12 @@ import json
 import os
 import re
 
+import httpx
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import HumanMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langsmith import Client
+
 from .config import load_env
 from .prompt import build_system_prompt
 
@@ -48,7 +54,6 @@ def _brandfetch_brand(domain: str) -> dict | None:
         key = os.getenv("BRANDFETCH_API_KEY", "")
     if not key:
         return None
-    import httpx
 
     try:
         with httpx.Client(timeout=12, follow_redirects=True) as c:
@@ -91,8 +96,6 @@ def fetch_brand(customer: str, website: str | None = None) -> dict:
     """Brand assets: the Logo.dev logo, plus a Brandfetch palette when available
     (accurate/current), else a scraped <meta theme-color> as a weak accent fallback.
     Returns accent/accent2 empty when unknown so the caller can prefer the LLM guess."""
-    import httpx
-
     domain = domain_for(customer, website)
     logo = f"https://img.logo.dev/{domain}?token={LOGODEV_TOKEN}&size=128&format=png&retina=true"
     accent = ""       # authoritative (Brandfetch) — empty when unavailable
@@ -136,9 +139,6 @@ def analyze_customer(customer: str, industry: str = "", website: str | None = No
                      model: str | None = None) -> dict:
     """One LLM call → infer industry (unless given), 3 persona quick-actions, and a
     customer-specific 'data gap' + a question that probes it (the hallucination trigger)."""
-    from langchain.chat_models import init_chat_model
-    from langchain_core.messages import HumanMessage
-
     load_env()
     llm = init_chat_model(model or "anthropic:claude-haiku-4-5-20251001", temperature=0.5)
     site = f" (website: {website})" if website else ""
@@ -197,8 +197,6 @@ def analyze_customer(customer: str, industry: str = "", website: str | None = No
 
 
 def _ws_client(workspace: str | None):
-    from langsmith import Client
-
     load_env()
     key = os.getenv("LS_CROSS_WORKSPACE_KEY") or os.getenv("LANGSMITH_API_KEY")
     api_url = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
@@ -206,8 +204,6 @@ def _ws_client(workspace: str | None):
 
 
 def push_prompt(workspace: str, name: str, text: str) -> str:
-    from langchain_core.prompts import ChatPromptTemplate
-
     obj = ChatPromptTemplate.from_messages([("system", text)])
     try:
         return _ws_client(workspace).push_prompt(name, object=obj)

@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 
 import httpx
+from langsmith import Client
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -55,8 +56,6 @@ def _ls_key() -> str:
 
 def _scoped_client(workspace_id: str | None = None):
     """LangSmith client for listing/creating projects in a specific workspace."""
-    from langsmith import Client
-
     api_url = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
     return Client(api_key=_ls_key(), api_url=api_url, workspace_id=workspace_id or None)
 

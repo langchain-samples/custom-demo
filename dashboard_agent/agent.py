@@ -20,13 +20,18 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from deepagents import create_deep_agent
 from langchain.agents.middleware import (
     AgentMiddleware,
     ModelRequest,
     ToolCallLimitMiddleware,
     dynamic_prompt,
 )
+from langchain.chat_models import init_chat_model
 from langchain.tools import ToolRuntime, tool
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
+from langgraph.checkpoint.memory import MemorySaver
 
 from .config import MODEL, require_anthropic_key
 from .datasource import get_datasource
@@ -180,8 +185,6 @@ _model_cache: dict[str, Any] = {}
 def _model_for(model_id: str):
     llm = _model_cache.get(model_id)
     if llm is None:
-        from langchain.chat_models import init_chat_model
-
         llm = init_chat_model(model_id)
         _model_cache[model_id] = llm
     return llm
@@ -209,14 +212,12 @@ def _build(model: str | None, checkpointer):
     """Shared deep-agent construction. `checkpointer=None` for Agent Server (it
     provides persistence); a MemorySaver for local in-process runs."""
     require_anthropic_key()
-    from deepagents import create_deep_agent
-    from langchain_anthropic import ChatAnthropic
 
     # Explicit model, hardened against transient API overload (HTTP 529).
     # thinking disabled: Sonnet 5 defaults to extended thinking, whose thinking
     # blocks break the deep-agent tool loop on follow-up turns (Anthropic 400).
     llm = ChatAnthropic(
-        model=model or MODEL, max_retries=8, timeout=120, max_tokens=8000,
+        model_name=model or MODEL, max_retries=8, timeout=120, max_tokens=8000,
         thinking={"type": "disabled"},
     )
 
@@ -242,8 +243,6 @@ def _build(model: str | None, checkpointer):
 def build_agent(model: str | None = None):
     """Construct the deep agent for local/in-process use (with an in-memory
     checkpointer so a thread_id carries conversation memory)."""
-    from langgraph.checkpoint.memory import MemorySaver
-
     return _build(model, MemorySaver())
 
 
@@ -355,8 +354,6 @@ def run_stream(question: str, thread_id: str = "demo", agent=None):
     tool_use blocks one after another) — giving a progressive dashboard build and
     a live tool-activity feed.
     """
-    from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
-
     agent = agent or get_agent()
 
     tool_bufs: dict[Any, dict[str, str]] = {}

@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import os
 
+from langsmith import Client
+
 from .config import data_prompt_name, load_env, make_client, prompt_name
 
 
@@ -22,8 +24,6 @@ def _prompt_client(workspace: str | None):
     prompt comes from THAT workspace's Prompt Hub. Without one, the default client."""
     if not workspace:
         return make_client()
-    from langsmith import Client
-
     load_env()
     key = os.getenv("LS_CROSS_WORKSPACE_KEY") or os.getenv("LANGSMITH_API_KEY")
     api_url = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")

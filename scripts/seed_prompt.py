@@ -11,16 +11,10 @@ Requires LANGSMITH_API_KEY. Honors WORKSPACE_ID / DASHBOARD_PROMPT (see config).
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
+from langchain_core.prompts import ChatPromptTemplate
 
-# Allow running as a bare script from the repo root.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from langchain_core.prompts import ChatPromptTemplate  # noqa: E402
-
-from dashboard_agent.config import make_client, prompt_name, workspace_id  # noqa: E402
-from dashboard_agent.prompt import FALLBACK_PROMPT  # noqa: E402
+from dashboard_agent.config import make_client, prompt_name, workspace_id
+from dashboard_agent.prompt import FALLBACK_PROMPT
 
 # The intentional demo bug: an override clause telling the agent to fabricate
 # confident figures for anything missing from the data. Delete this clause in the

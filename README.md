@@ -60,29 +60,31 @@ Needs `langgraph-cli[inmem]` (Agent Server) + a LangSmith key.
 
 ```bash
 # from dashboard-agent/
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt          # includes langgraph-cli[inmem] + langgraph-sdk
+uv sync --group dev          # dev group includes langgraph-cli[inmem] + langgraph-sdk
 
 # provide your keys (see .env.example)
-printf 'ANTHROPIC_API_KEY=sk-ant-...\nLANGSMITH_API_KEY=lsv2_...\n' > .env
+cp .env.example .env         # then edit: ANTHROPIC_API_KEY + LANGSMITH_API_KEY
 
 # seed the Prompt Hub prompts (once)
-python scripts/seed_prompt.py            # system prompt (starts buggy)
-python scripts/seed_data_prompt.py       # synthetic data prompt (optional)
+uv run python scripts/seed_prompt.py         # system prompt (starts buggy)
+uv run python scripts/seed_data_prompt.py    # synthetic data prompt (optional)
 
-# start Agent Server (:2024) + the static SPA (:3000)
-./run.sh
+# start Agent Server (:2024) + the React SPA (:3000)
+uv run ./run.sh
 
 # create the assistant variants (server must be up), then note their ids
-python scripts/seed_assistants.py
+uv run python scripts/seed_assistants.py
 
 # open the SPA (http://127.0.0.1:3000), set the deployment URL + assistant via ⚙️
 # (or edit static/config.js), and ask a question.
 ```
 
-`./run.sh` runs `langgraph dev` and serves `static/` separately; Studio is available
-at the URL it prints. Set `PORT` / `SPA_PORT` to override.
+`uv run ./run.sh` syncs the environment, then starts `langgraph dev` plus the
+front-end. It bootstraps what's missing: `uv sync --group dev` if there's no venv
+or no `langgraph` CLI, and `npm ci` in `frontend/` if `node_modules` is absent. It
+warns (but still starts) when `.env` is missing. Plain `./run.sh` works too once
+you've synced — the `uv run` prefix just guarantees the env is current first.
+Set `PORT` / `SPA_PORT` to override the ports.
 
 ## Tests
 

@@ -3,22 +3,42 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# Prefer this project's own venv; fall back to the sibling demo's venv.
-if [ -x ".venv/bin/python" ]; then
+# Pick the environment: the one `uv run` (or an activated shell) hands us, then
+# this project's own venv, then the sibling demo's. Bootstrap with uv if none
+# exists, so `./run.sh` works from a fresh clone.
+if [ -n "${VIRTUAL_ENV:-}" ] && [ -x "${VIRTUAL_ENV}/bin/python" ]; then
+  VENV="$VIRTUAL_ENV"
+elif [ -x ".venv/bin/python" ]; then
   VENV=".venv"
 elif [ -x "chat-langchain-lite/.venv/bin/python" ]; then
   VENV="chat-langchain-lite/.venv"
+elif command -v uv >/dev/null 2>&1; then
+  echo "No venv found — running 'uv sync --group dev'…" >&2
+  uv sync --group dev
+  VENV=".venv"
 else
-  echo "No venv found. Create one:" >&2
-  echo "  python3 -m venv .venv && .venv/bin/pip install -r requirements.txt" >&2
+  echo "No venv found and uv is not installed. Create one:" >&2
+  echo "  uv sync --group dev" >&2
   exit 1
 fi
 PY="$VENV/bin/python"
 
+# The langgraph CLI lives in the dev group; sync it in if it's missing.
 if [ ! -x "$VENV/bin/langgraph" ]; then
-  echo "langgraph CLI not found. Install it:" >&2
-  echo "  $VENV/bin/pip install -U 'langgraph-cli[inmem]'" >&2
-  exit 1
+  if command -v uv >/dev/null 2>&1; then
+    echo "langgraph CLI not found — running 'uv sync --group dev'…" >&2
+    uv sync --group dev
+  fi
+  if [ ! -x "$VENV/bin/langgraph" ]; then
+    echo "langgraph CLI still not found. Install the dev group:" >&2
+    echo "  uv sync --group dev" >&2
+    exit 1
+  fi
+fi
+
+if [ ! -f ".env" ]; then
+  echo "WARNING: no .env found — ANTHROPIC_API_KEY and LANGSMITH_API_KEY are required." >&2
+  echo "         cp .env.example .env  and fill in your keys." >&2
 fi
 
 PORT="${PORT:-2024}"          # Agent Server
@@ -33,7 +53,12 @@ echo "Dashboard UI  → http://127.0.0.1:${SPA_PORT}  (set its URL/assistant via
 if [ -f "frontend/package.json" ]; then
   if [ ! -d "frontend/node_modules" ]; then
     echo "Installing front-end dependencies (frontend/node_modules missing)…"
-    npm --prefix frontend install
+    # `ci` installs package-lock.json exactly; fall back if the lockfile is absent.
+    if [ -f "frontend/package-lock.json" ]; then
+      npm --prefix frontend ci
+    else
+      npm --prefix frontend install
+    fi
   fi
   echo "Serving React app via Vite (npm --prefix frontend run dev)."
   ( exec npm --prefix frontend run dev -- --port "$SPA_PORT" ) &
