@@ -3,7 +3,7 @@
  * editable fields of the original SPA's `dashboardConfig`, split into branding
  * (persisted to the assistant's metadata) and agent config (per-run context).
  */
-import type { QuickAction } from "@/lib/api";
+import type { QuickAction, ToolSpec } from "@/lib/api";
 import type { Theme } from "@/lib/theme";
 
 export type { QuickAction };
@@ -66,3 +66,11 @@ export const LABEL_CLS =
 /** Inline hint suffix styling (lower-case, muted). */
 export const HINT_CLS =
   "text-[10px] font-normal normal-case tracking-normal text-muted-foreground";
+
+/**
+ * The tool catalogue's own defaults — what an untouched selection resolves to.
+ * Shared so the create form and the settings toggles agree on "unset".
+ */
+export function defaultEnabled(specs: ToolSpec[]): string[] {
+  return specs.filter((s) => s.default_on || s.always_on).map((s) => s.id);
+}

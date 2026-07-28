@@ -310,7 +310,15 @@ def prepare_assistant(payload: dict) -> dict:
     actions = list(payload.get("actions") or analysis.get("actions") or [])
     display_name = payload.get("display_name") or f"{customer} GPT"
 
-    context: dict = {"ls_workspace": workspace, "customer": customer}
+    slug = slugify(customer)
+    context: dict = {
+        "ls_workspace": workspace,
+        "customer": customer,
+        # Traces land in a per-customer, clearly-labelled project rather than one
+        # named just for the client — which could collide with a real project in
+        # that workspace. The SPA derives the same name (see traceProject()).
+        "ls_project": f"{slug}-corebot-demo",
+    }
     if industry:
         context["industry"] = industry
     # Write the default tool selection explicitly, so a new assistant shows a
@@ -318,7 +326,6 @@ def prepare_assistant(payload: dict) -> dict:
     # unset fallback. Callers may override via `enabled_tools`.
     context["enabled_tools"] = list(payload.get("enabled_tools") or sorted(DEFAULT_ENABLED))
     prompt_urls: dict = {}
-    slug = slugify(customer)
 
     # Always give the assistant a fixed, customer-templated system prompt (reliable
     # setup — no per-customer prompt writing). Hallucination appends the demo clause.

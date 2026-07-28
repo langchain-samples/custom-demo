@@ -16,7 +16,10 @@ from typing_extensions import TypedDict
 
 from dashboard_agent.assistant_setup import prepare_assistant
 
-_INPUT_KEYS = ("workspace", "customer", "owner", "industry", "website", "hallucination", "push_prompts")
+_INPUT_KEYS = (
+    "workspace", "customer", "owner", "industry", "website", "hallucination",
+    "push_prompts", "enabled_tools",
+)
 
 
 class SetupState(TypedDict, total=False):
@@ -27,6 +30,7 @@ class SetupState(TypedDict, total=False):
     website: str
     hallucination: bool
     push_prompts: bool
+    enabled_tools: list[str]
     result: dict
     status: str
     error: str

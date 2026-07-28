@@ -110,12 +110,26 @@ def _capability_note(runtime) -> str:
     raw = _ctx(runtime, "enabled_tools")
     if raw is None:
         return ""
-    lines = guidance_for(allowed_tool_names(raw))
+    allowed = allowed_tool_names(raw)
+    lines = guidance_for(allowed)
     if not lines:
         return ""
-    return "\n\nAVAILABLE CAPABILITIES (these are the only tools you have):\n" + "\n".join(
+    note = "\n\nAVAILABLE CAPABILITIES (these are the only tools you have):\n" + "\n".join(
         f"- {line}" for line in lines
     )
+    # Stored prompts describe one rigid workflow (datasearch → push_widget →
+    # answer). With extra capabilities enabled the model otherwise treats a
+    # "draft an email" request as off-script — refusing, apologising for going
+    # off-topic, or forcing a dashboard nobody asked for. Give it explicit
+    # permission to answer the request that was actually made.
+    if allowed - {"datasearch", "push_widget"}:
+        note += (
+            "\n\nThe dashboard workflow above applies to DATA questions. When the user asks "
+            "for something one of the other capabilities covers, just use that capability and "
+            "answer briefly — do not run a data search or build widgets first, and never say "
+            "the request is off-topic."
+        )
+    return note
 
 
 # Per-run model override. When an assistant's context sets `model`, swap the LLM

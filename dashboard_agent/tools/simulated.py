@@ -82,6 +82,43 @@ def simulate(runtime: ToolRuntime, role: str, shape: str, instruction: str) -> s
         return json.dumps({"error": f"{type(exc).__name__}: {exc}"})
 
 
+# Resuming an interrupt RE-EXECUTES the whole node, so a tool that generates and
+# then interrupts would run its LLM call twice. Keyed by tool_call_id, this cache
+# lets the second pass reuse the first pass's output and fall straight through to
+# the (now-answered) interrupt. Entries are dropped as soon as they're consumed.
+_pending: dict[str, dict] = {}
+
+
+def review(runtime: ToolRuntime, kind: str, payload: dict, build) -> dict:
+    """Generate `payload` once, then pause for human review; return their edit.
+
+    Returns the reviewed object, or the original when the client resumes without
+    one. The tool still works with no human in the loop — if nothing ever resumes,
+    the run simply stays interrupted, which is the intended HITL behaviour.
+    """
+    from langgraph.types import interrupt
+
+    call_id = getattr(runtime, "tool_call_id", "") or ""
+    data = _pending.get(call_id)
+    if data is None:
+        data = build()
+        if call_id:
+            _pending[call_id] = data
+    # Raises on the first pass; on resume, returns whatever the client sent.
+    answer = interrupt({"kind": kind, **payload, "draft": data})
+    _pending.pop(call_id, None)
+    result = data
+    if isinstance(answer, dict):
+        # A client may send the edited object directly or wrapped.
+        edited = answer.get("draft") if isinstance(answer.get("draft"), dict) else answer
+        if isinstance(edited, dict) and edited:
+            result = {**data, **edited}
+    # Reaching here means a human answered the interrupt — i.e. they approved.
+    # Stating that IN THE RESULT matters: without it the model reads the payload
+    # as a draft and asks for sign-off it has already been given.
+    return {**result, "status": "approved_by_user", "approved": True}
+
+
 @tool
 def draft_email(purpose: str, runtime: ToolRuntime, recipient: str = "", tone: str = "") -> str:
     """Draft an email for the user to review and send.
@@ -95,21 +132,35 @@ def draft_email(purpose: str, runtime: ToolRuntime, recipient: str = "", tone: s
     `recipient` is who it is going to, if known. `tone` can steer the register
     (e.g. "formal", "brief", "warm").
 
-    Returns JSON {to, cc, subject, body}. The draft is shown to the user
-    automatically — do NOT repeat it in your written answer.
+    This tool INCLUDES the approval step. The user reviews and edits the draft in
+    the UI, and the tool only returns once they have approved it — so the result
+    you get back (`status: "approved_by_user"`) is final and already sent. It may
+    differ from what was generated; the user's version is the real one.
+
+    Returns JSON {to, cc, subject, body, status}. In your written answer:
+      - report it as DONE, e.g. "Sent to <to> — <subject>." One or two lines.
+      - do NOT say it is "ready for your review", "drafted for approval", or
+        "let me know if you'd like any edits" — they have already reviewed and
+        edited it. Asking again is wrong and annoying.
+      - do NOT reproduce the email body; it is already displayed above.
     """
-    return simulate(
-        runtime,
-        role="You are an executive assistant drafting email on behalf of a colleague.",
-        shape='{"to":"","cc":"","subject":"","body":""}',
-        instruction=(
-            f"Draft an email. Purpose: {purpose}\n"
-            f"Recipient: {recipient or '(infer a plausible internal recipient)'}\n"
-            f"Tone: {tone or 'professional and concise'}\n"
-            "Use any specific figures given in the purpose verbatim. Keep the body "
-            "under 200 words, with real line breaks. `cc` may be an empty string."
-        ),
-    )
+    def build() -> dict:
+        raw = simulate(
+            runtime,
+            role="You are an executive assistant drafting email on behalf of a colleague.",
+            shape='{"to":"","cc":"","subject":"","body":""}',
+            instruction=(
+                f"Draft an email. Purpose: {purpose}\n"
+                f"Recipient: {recipient or '(infer a plausible internal recipient)'}\n"
+                f"Tone: {tone or 'professional and concise'}\n"
+                "Use any specific figures given in the purpose verbatim. Keep the body "
+                "under 200 words, with real line breaks. `cc` may be an empty string."
+            ),
+        )
+        return json.loads(raw)
+
+    approved = review(runtime, "email_draft", {"purpose": purpose}, build)
+    return json.dumps(approved, ensure_ascii=False)
 
 
 @tool
@@ -125,25 +176,41 @@ def suggest_meeting_times(
     meeting is for, `duration_minutes` how long it needs, and `window` an optional
     constraint (e.g. "early next week", "before end of quarter").
 
-    Returns JSON {timezone, slots:[{start, end, label, rationale}]} with ISO-8601
-    timestamps. The slots are shown to the user automatically — do NOT list them
-    again in your written answer.
+    This tool INCLUDES the confirmation step. The user picks a time in the UI (or
+    sets their own) and the tool only returns once they have confirmed — so the
+    result is final and the meeting is booked.
+
+    Returns JSON {timezone, slots, selected, status} where `selected` is the time
+    they actually confirmed. In your written answer:
+      - report it as DONE, e.g. "Booked for <selected.label>." One or two lines.
+      - do NOT ask them to confirm or pick again, and do NOT list the other
+        options — those were rejected.
     """
-    return simulate(
+    def build() -> dict:
+        raw = simulate(
+            runtime,
+            role="You are a scheduling assistant with visibility of the team's calendars.",
+            shape=(
+                '{"timezone":"","slots":[{"start":"","end":"","label":"","rationale":""}]}'
+            ),
+            instruction=(
+                f"Propose 3 meeting slots. Purpose: {purpose}\n"
+                f"Duration: {duration_minutes} minutes\n"
+                f"Window: {window or 'within the next week, business hours'}\n"
+                "`start`/`end` must be ISO-8601 timestamps with an offset. `label` is a "
+                "human-readable time (e.g. 'Tue 14:00–14:30'). `rationale` is a short "
+                "reason this slot works (e.g. 'all required attendees free')."
+            ),
+        )
+        return json.loads(raw)
+
+    confirmed = review(
         runtime,
-        role="You are a scheduling assistant with visibility of the team's calendars.",
-        shape=(
-            '{"timezone":"","slots":[{"start":"","end":"","label":"","rationale":""}]}'
-        ),
-        instruction=(
-            f"Propose 3 meeting slots. Purpose: {purpose}\n"
-            f"Duration: {duration_minutes} minutes\n"
-            f"Window: {window or 'within the next week, business hours'}\n"
-            "`start`/`end` must be ISO-8601 timestamps with an offset. `label` is a "
-            "human-readable time (e.g. 'Tue 14:00–14:30'). `rationale` is a short "
-            "reason this slot works (e.g. 'all required attendees free')."
-        ),
+        "meeting_slots",
+        {"purpose": purpose, "duration_minutes": duration_minutes},
+        build,
     )
+    return json.dumps(confirmed, ensure_ascii=False)
 
 
 @tool

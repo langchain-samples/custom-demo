@@ -184,6 +184,8 @@ export interface SetupInput {
   website?: string;
   hallucination?: boolean;
   push_prompts?: boolean;
+  /** Capabilities the new assistant starts with; editable afterwards. */
+  enabled_tools?: string[];
 }
 
 /** Prepared payload the assistant_setup graph returns. */
@@ -293,13 +295,27 @@ export async function getThreadState(id: string): Promise<ThreadState> {
 
 /* --------------------------------- Runs --------------------------------- */
 
+/** A human-in-the-loop pause raised by a tool (see tools/simulated.py `review`). */
+export interface ReviewInterrupt {
+  /** Which editor to show — "email_draft" | "meeting_slots". */
+  kind: string;
+  /** The generated artifact awaiting review. */
+  draft: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
 export interface RunStreamOptions {
   threadId: string;
   assistantId: string;
-  /** The user turn(s) to send as run input. */
-  messages: Array<{ role: string; content: string }>;
+  /**
+   * The user turn(s) to send as run input. Omit when resuming — a resume must
+   * NOT re-send input or the turn is duplicated.
+   */
+  messages?: Array<{ role: string; content: string }>;
   /** Per-run runtime context; omitted from the body when empty. */
   context?: RunContext;
+  /** Resume a run paused at an interrupt, with the human's reviewed value. */
+  resume?: unknown;
   /** Optional abort signal to cancel the stream. */
   signal?: AbortSignal;
 }
@@ -311,12 +327,19 @@ export interface RunStreamOptions {
  * is the raw string (typically JSON) — the caller parses it.
  */
 export async function* runStream(opts: RunStreamOptions): AsyncGenerator<SSEEvent> {
-  const { threadId, assistantId, messages, context, signal } = opts;
+  const { threadId, assistantId, messages, context, resume, signal } = opts;
   const body: Record<string, unknown> = {
     assistant_id: assistantId,
-    input: { messages },
-    stream_mode: "messages",
+    // "updates" carries `__interrupt__` when a tool pauses for human review;
+    // "messages" is the token stream the chat + widgets are built from.
+    stream_mode: ["messages", "updates"],
   };
+  if (resume !== undefined) {
+    // A resume replaces input entirely — sending both would duplicate the turn.
+    body.command = { resume };
+  } else {
+    body.input = { messages: messages || [] };
+  }
   if (context && Object.keys(context).length) body.context = context;
 
   const res = await fetch(`${getApiBase()}/threads/${threadId}/runs/stream`, {

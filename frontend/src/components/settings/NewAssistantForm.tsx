@@ -11,6 +11,9 @@ import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { ToolsSection } from "./ToolsSection";
+import { defaultEnabled } from "./types";
+import type { ToolSpec } from "@/lib/api";
 import { Label } from "@/components/ui/label";
 import {
   Tooltip,
@@ -24,11 +27,15 @@ export interface NewAssistantValues {
   customer: string;
   website: string;
   hallucination: boolean;
+  /** Catalogue tool ids the new assistant should expose. */
+  enabledTools: string[];
 }
 
 interface Props {
   initialOwner: string;
   creating: boolean;
+  /** Catalogue from GET /tools, for the capability picker. */
+  toolSpecs: ToolSpec[];
   onCreate: (values: NewAssistantValues) => void;
   onCancel: () => void;
 }
@@ -39,11 +46,19 @@ const IGNORE_AUTOFILL = {
   "data-lpignore": "true",
 } as const;
 
-export function NewAssistantForm({ initialOwner, creating, onCreate, onCancel }: Props) {
+export function NewAssistantForm({
+  initialOwner,
+  creating,
+  toolSpecs,
+  onCreate,
+  onCancel,
+}: Props) {
   const [owner, setOwner] = useState(initialOwner);
   const [customer, setCustomer] = useState("");
   const [website, setWebsite] = useState("");
   const [hallucination, setHallucination] = useState(true);
+  // null = untouched, i.e. the registry's defaults (resolved on submit).
+  const [tools, setTools] = useState<string[] | null>(null);
 
   const canCreate = !!customer.trim() && !creating;
 
@@ -93,6 +108,11 @@ export function NewAssistantForm({ initialOwner, creating, onCreate, onCancel }:
           </Tooltip>
         </TooltipProvider>
       </Label>
+
+      {/* Capabilities up front. These are only defaults for the new assistant —
+          they stay editable afterwards in Settings, without rebuilding it. */}
+      <ToolsSection specs={toolSpecs} enabled={tools} onChange={setTools} defaultOpen />
+
       <div className="mt-0.5 flex gap-2">
         <Button
           type="button"
@@ -105,6 +125,7 @@ export function NewAssistantForm({ initialOwner, creating, onCreate, onCancel }:
               customer: customer.trim(),
               website: website.trim(),
               hallucination,
+              enabledTools: tools ?? defaultEnabled(toolSpecs),
             })
           }
         >

@@ -20,6 +20,8 @@ interface Props {
   specs: ToolSpec[];
   enabled: string[] | null;
   onChange: (ids: string[]) => void;
+  /** Start expanded (the create form, where the choice is part of the flow). */
+  defaultOpen?: boolean;
 }
 
 /** Whether a row shows as on, honoring registry defaults when nothing is saved. */
@@ -29,7 +31,7 @@ function isOn(spec: ToolSpec, enabled: string[] | null): boolean {
   return enabled.includes(spec.id);
 }
 
-export function ToolsSection({ specs, enabled, onChange }: Props) {
+export function ToolsSection({ specs, enabled, onChange, defaultOpen }: Props) {
   if (!specs.length) return null;
 
   // Preserve registry order within each group, and group order by first appearance.
@@ -53,7 +55,7 @@ export function ToolsSection({ specs, enabled, onChange }: Props) {
   const count = specs.filter((s) => isOn(s, enabled)).length;
 
   return (
-    <CollapseSection title={`Tools (${count}/${specs.length})`}>
+    <CollapseSection title={`Tools (${count}/${specs.length})`} defaultOpen={defaultOpen}>
       <div className="flex flex-col gap-3">
         {dataSearchOff && (
           <div className="flex items-start gap-1.5 rounded-lg border border-border bg-panel-2 px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">

@@ -60,6 +60,7 @@ import type { PanelConfig, PromptMode } from "./settings/types";
 import { coerceTheme } from "@/lib/theme";
 import type { Theme } from "@/lib/theme";
 import { applyBrand, DEFAULT_TINT } from "@/lib/branding";
+import { traceProject } from "@/lib/trace";
 import { applyTypography, DEFAULT_CURATED, type FontStatus } from "@/lib/fonts";
 
 /* --------------------------- Public prop surface --------------------------- */
@@ -210,10 +211,6 @@ function blankConfig(workspace: string): PanelConfig {
   };
 }
 
-function assistantName(a: Assistant | null, id: string): string {
-  return (a && a.name) || id;
-}
-
 /** Resolve the per-run context — mirrors the SPA's `runContext()`. */
 function resolveRunContext(cfg: PanelConfig, project: string): RunContext {
   const ctx: RunContext = {};
@@ -225,7 +222,7 @@ function resolveRunContext(cfg: PanelConfig, project: string): RunContext {
   if (cfg.dataPrompt) ctx.data_prompt = cfg.dataPrompt;
   if (cfg.dataGap) ctx.data_gap = cfg.dataGap;
   if (cfg.lsWorkspace) ctx.ls_workspace = cfg.lsWorkspace;
-  // lsProject is not user-editable here; it defaults to the assistant's name.
+  // Not user-editable here; see traceProject() for how it's derived.
   if (project) ctx.ls_project = project;
   // Deliberately a null check, NOT a length check: [] means "every optional tool
   // off" and must reach the backend. Omitting it would restore the defaults.
@@ -451,7 +448,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           const c = cfgRef.current;
           const id = selectedIdRef.current;
           const a = assistantsRef.current.find((x) => x.assistant_id === id) || null;
-          return resolveRunContext(c, assistantName(a, id));
+          return resolveRunContext(c, traceProject(a, id));
         },
         getGuards: () => {
           const c = cfgRef.current;
@@ -511,6 +508,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
             website: v.website,
             hallucination: v.hallucination,
             push_prompts: true,
+            enabled_tools: v.enabledTools,
           });
           const a = await createAssistant({
             name: v.customer,
@@ -581,6 +579,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
               <NewAssistantForm
                 initialOwner={readLS(LAST_OWNER_LS_KEY)}
                 creating={creating}
+                toolSpecs={toolSpecs}
                 onCreate={handleCreate}
                 onCancel={() => setShowNewForm(false)}
               />

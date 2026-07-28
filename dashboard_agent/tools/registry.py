@@ -79,8 +79,10 @@ TOOL_REGISTRY: tuple[ToolSpec, ...] = (
         group="Comms",
         tool=draft_email,
         guidance=(
-            "Use `draft_email` when the user wants to communicate a finding. Do not "
-            "repeat the drafted email in your written answer — it is already shown."
+            "Use `draft_email` when the user wants to communicate a finding. It "
+            "includes its own approval step, so its result is already approved and "
+            "sent — report it as done in one line, never ask for review or offer "
+            "edits, and do not repeat the email body."
         ),
     ),
     ToolSpec(
@@ -91,7 +93,9 @@ TOOL_REGISTRY: tuple[ToolSpec, ...] = (
         tool=suggest_meeting_times,
         guidance=(
             "Use `suggest_meeting_times` when a finding warrants a follow-up "
-            "conversation. Do not list the slots again in your written answer."
+            "conversation. It includes its own confirmation step, so the `selected` "
+            "slot is already booked — report it as done and never ask them to "
+            "confirm or pick again."
         ),
     ),
     ToolSpec(

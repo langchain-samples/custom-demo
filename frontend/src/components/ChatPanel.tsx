@@ -17,8 +17,9 @@ import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { IconRobot, IconLoader2, IconUser } from "@tabler/icons-react";
-import type { QuickAction, RunContext, ThreadMessage, Widget } from "@/lib/api";
+import type { QuickAction, ReviewInterrupt, RunContext, ThreadMessage, Widget } from "@/lib/api";
 import { ensureThread, resetThread, runStream } from "@/lib/api";
+import { ReviewCard } from "@/components/chat/ReviewCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ToolChip, type ChipData } from "@/components/chat/ToolChip";
@@ -93,7 +94,15 @@ interface FeedbackItem {
   id: string;
   runId: string;
 }
-type Item = UserItem | ActivityItem | AssistantItem | FeedbackItem;
+/** A tool paused the run for human review; resolved by resuming the thread. */
+interface ReviewItem {
+  kind: "review";
+  id: string;
+  review: ReviewInterrupt;
+  /** Cleared once approved, so the editor collapses to a read-only card. */
+  done: boolean;
+}
+type Item = UserItem | ActivityItem | AssistantItem | FeedbackItem | ReviewItem;
 
 
 export default function ChatPanel({
@@ -143,21 +152,19 @@ export default function ChatPanel({
   const patchItem = (id: string, fn: (it: Item) => Item) =>
     setItems((prev) => prev.map((it) => (it.id === id ? fn(it) : it)));
 
-  const send = async (raw: string) => {
-    const question = (raw || "").trim();
-    if (!question || busyRef.current) return;
+  /**
+   * Run one turn: either a new question, or a resume of a run paused at a
+   * human-review interrupt. Both share the whole streaming pipeline; a resume
+   * simply carries `resume` instead of `messages` and does not clear the
+   * dashboard (it is a continuation of the same turn).
+   */
+  const runTurn = async (opts: { question?: string; resume?: unknown }) => {
+    const { question, resume } = opts;
+    const isResume = resume !== undefined;
+    if (busyRef.current) return;
+    if (!isResume && !question) return;
 
-    // App-owned guard: a returned string blocks the send (and App opens settings).
-    const blocked = guard?.(question);
-    if (blocked) {
-      setItems((prev) => [
-        ...prev,
-        { kind: "assistant", id: nextId(), text: blocked, streaming: false, markdown: false },
-      ]);
-      return;
-    }
-
-    onResetDashboard?.();
+    if (!isResume) onResetDashboard?.();
     busyRef.current = true;
     setBusy(true);
 
@@ -165,7 +172,7 @@ export default function ChatPanel({
     const bubbleId = nextId();
     setItems((prev) => [
       ...prev,
-      { kind: "user", id: nextId(), text: question },
+      ...(question ? [{ kind: "user" as const, id: nextId(), text: question }] : []),
       { kind: "activity", id: activityId, chips: [] },
       { kind: "assistant", id: bubbleId, text: "Working…", streaming: true, markdown: false },
     ]);
@@ -183,6 +190,7 @@ export default function ChatPanel({
     let answer = "";
     let runId: string | null = null;
     let errorMsg: string | null = null;
+    let interrupt: ReviewInterrupt | null = null;
 
     const syncChips = () =>
       patchItem(activityId, (it) =>
@@ -249,7 +257,7 @@ export default function ChatPanel({
       for await (const { event, data } of runStream({
         threadId: tid,
         assistantId,
-        messages: [{ role: "user", content: question }],
+        ...(isResume ? { resume } : { messages: [{ role: "user", content: question! }] }),
         context: getRunContext(),
         signal: controller.signal,
       })) {
@@ -280,6 +288,13 @@ export default function ChatPanel({
           }
           continue;
         }
+        if (event === "updates") {
+          // A tool called interrupt() — the run is now paused awaiting a human.
+          const d = parsed as { __interrupt__?: Array<{ value?: ReviewInterrupt }> };
+          const value = d?.__interrupt__?.[0]?.value;
+          if (value && typeof value === "object") interrupt = value;
+          continue;
+        }
         if (event === "messages/partial" || event === "messages/complete") {
           const msg = (Array.isArray(parsed) ? parsed[0] : parsed) as ThreadMessage;
           onStreamMessage(msg);
@@ -287,6 +302,21 @@ export default function ChatPanel({
       }
       // Flush the last (still-open) widget now the stream has ended.
       wOrder.forEach(flushWidget);
+
+      if (interrupt) {
+        // Paused, not finished: hand over to the review editor. Any preamble the
+        // agent streamed stays (minus the cursor); the bare "Working…" placeholder
+        // is dropped since the review card now explains the state. No feedback row
+        // either — there is no answer to rate yet.
+        const pending = interrupt;
+        const spoke = !!answer;
+        setBubble({ streaming: false, markdown: false });
+        setItems((prev) => [
+          ...prev.filter((it) => spoke || it.id !== bubbleId),
+          { kind: "review", id: nextId(), review: pending, done: false },
+        ]);
+        return;
+      }
 
       if (answer) setBubble({ streaming: false, markdown: true, text: answer });
       else if (errorMsg) setBubble({ streaming: false, markdown: false, text: "⚠️ " + errorMsg });
@@ -307,6 +337,30 @@ export default function ChatPanel({
       busyRef.current = false;
       setBusy(false);
     }
+  };
+
+  /** New question from the composer or a quick action. */
+  const send = (raw: string) => {
+    const question = (raw || "").trim();
+    if (!question || busyRef.current) return;
+    // App-owned guard: a returned string blocks the send (and App opens settings).
+    const blocked = guard?.(question);
+    if (blocked) {
+      setItems((prev) => [
+        ...prev,
+        { kind: "assistant", id: nextId(), text: blocked, streaming: false, markdown: false },
+      ]);
+      return;
+    }
+    void runTurn({ question });
+  };
+
+  /** Human approved a paused artifact — resume the run with their version. */
+  const approveReview = (itemId: string, value: Record<string, unknown>) => {
+    setItems((prev) =>
+      prev.map((it) => (it.id === itemId && it.kind === "review" ? { ...it, done: true } : it)),
+    );
+    void runTurn({ resume: value });
   };
 
   const onSubmit = (e: React.FormEvent) => {
@@ -387,7 +441,7 @@ export default function ChatPanel({
               prevSide = side;
               return (
                 <Row key={it.id} side={side} showAvatar={showAvatar} logo={logo}>
-                  <ItemView item={it} />
+                  <ItemView item={it} busy={busy} onApproveReview={approveReview} />
                 </Row>
               );
             });
@@ -456,7 +510,32 @@ function Row({
 
 /* ---- Item renderers ---- */
 
-function ItemView({ item }: { item: Item }) {
+function ItemView({
+  item,
+  busy,
+  onApproveReview,
+}: {
+  item: Item;
+  busy?: boolean;
+  onApproveReview?: (id: string, value: Record<string, unknown>) => void;
+}) {
+  if (item.kind === "review") {
+    // Once approved the editor is spent — the tool result is shown by its chip.
+    if (item.done) {
+      return (
+        <div className="rounded-xl border border-border bg-panel-2 px-3 py-2 text-xs text-muted-foreground">
+          {item.review.kind === "meeting_slots" ? "✓ Time confirmed" : "✓ Approved and sent"}
+        </div>
+      );
+    }
+    return (
+      <ReviewCard
+        review={item.review}
+        busy={busy}
+        onApprove={(v) => onApproveReview?.(item.id, v)}
+      />
+    );
+  }
   if (item.kind === "user") {
     return (
       <div className="rounded-xl bg-panel-2 px-3 py-2.5 text-sm leading-relaxed text-foreground">

@@ -89,6 +89,11 @@ run.sh                langgraph dev (:2024) + Vite (:3000)
 | `suggest_meeting_times` | Comms | simulated slots, rendered as a chat card |
 | `web_search` | Research | simulated results; shaped like a real search API for later |
 
+Capabilities are chosen in the **"+ New" form** when creating an assistant, and stay editable
+afterwards in **Settings → Tools** — changing them is a config edit on the existing assistant
+(`PATCH` its `context`), NOT a reason to create a new one and never a redeploy. Only *adding a
+tool to the catalogue* needs a code change.
+
 Selection is enforced **server-side** by `ToolSelection`, which filters `request.tools` at
 model-call time (`request.override(tools=…)` — the same mechanism deepagents uses to drop
 `execute`). Two invariants hold it together:
@@ -104,6 +109,24 @@ The four simulated tools follow the `SyntheticDataSource` pattern — a fast LLM
 customer-tailored content from `context.customer`/`industry`. They render as typed cards in
 chat (`frontend/src/components/chat/ToolResultCard.tsx`); anything dashboard-worthy goes
 through the existing `push_widget` types rather than a new widget schema.
+
+**Human-in-the-loop.** `draft_email` and `suggest_meeting_times` generate, then call
+`interrupt()` (via `review()` in `tools/simulated.py`) — the run genuinely PAUSES. The payload
+arrives on the stream's `updates` event as `__interrupt__`, `ChatPanel` renders
+`chat/ReviewCard.tsx` (an editable email form / a slot picker with a `datetime-local` control),
+and approving resumes the thread with `command: {resume: …}`. The tool returns the human's
+version, so the agent's final answer reflects the edit.
+
+Two things to know before touching it:
+- **Resuming re-executes the whole node**, so a generate-then-interrupt tool would run its LLM
+  call twice. `_pending`, keyed by `tool_call_id`, makes the second pass reuse the first pass's
+  output and fall straight through to the answered interrupt.
+- The run body uses `stream_mode: ["messages", "updates"]`, and a resume sends `command`
+  **instead of** `input` — sending both duplicates the user turn.
+
+**Trace project** is `<client>-corebot-demo` (`frontend/src/lib/trace.ts`, mirrored by
+`prepare_assistant`). Suffixed so demo traces are obvious in a shared workspace and can't
+collide with a real project of the same name; an explicit `context.ls_project` overrides it.
 
 **`Context` — the whole per-assistant behavior surface** (`agent.py`):
 
@@ -280,6 +303,7 @@ python -m pytest dashboard_agent/tests/test_rag.py dashboard_agent/tests/test_wi
                  dashboard_agent/tests/test_streaming_unit.py \
                  dashboard_agent/tests/test_tool_registry.py -q
 node dashboard_agent/tests/branding_test.js     # colour maths (imports the real .ts)
+node dashboard_agent/tests/trace_test.js        # trace-project naming
 node dashboard_agent/tests/frontend_test.js     # legacy static/app.js — see rough edges
 cd frontend && npx tsc -b && npx oxlint
 ```
