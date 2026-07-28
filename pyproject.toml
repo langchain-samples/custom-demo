@@ -3,7 +3,8 @@ name = "custom-demo"
 version = "0.1.0"
 description = "Dashboard Agent — Deep Agent with dynamic dashboard visualizations"
 readme = "README.md"
-requires-python = ">=3.14"
+# Max Python the LangGraph deployment base image supports (3.14 can't deploy yet).
+requires-python = ">=3.13"
 dependencies = [
     "deepagents>=0.6.3",
     "langchain>=1.3.1",
@@ -50,7 +51,7 @@ ignore = ["E501"]
 "dashboard_agent/tests/*" = ["B011"]
 
 [tool.ty.environment]
-python-version = "3.14"
+python-version = "3.13"
 
 
 [tool.pyrefly]

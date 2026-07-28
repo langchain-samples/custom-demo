@@ -1,6 +1,7 @@
 {
   "$schema": "https://langgra.ph/schema.json",
   "dependencies": ["."],
+  "python_version": "3.13",
   "graphs": {
     "dashboard_agent": "./dashboard_agent/graph.py:graph",
     "assistant_setup": "./dashboard_agent/setup_graph.py:graph"
