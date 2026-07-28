@@ -404,7 +404,7 @@ export default function ChatPanel({
         className={
           "flex items-end gap-2 rounded-2xl border bg-panel-2 px-3 py-2 transition-[box-shadow,border-color] " +
           (variant === "hero"
-            ? "border-[color-mix(in_oklch,var(--brand-primary)_55%,var(--border))] shadow-[0_0_22px_-4px_color-mix(in_oklch,var(--brand-primary)_45%,transparent)] focus-within:border-[var(--brand-primary)] focus-within:shadow-[0_0_28px_-2px_color-mix(in_oklch,var(--brand-primary)_55%,transparent)]"
+            ? "border-[color-mix(in_oklch,var(--brand-primary)_35%,var(--border))] shadow-[0_0_12px_-6px_color-mix(in_oklch,var(--brand-primary)_28%,transparent)] focus-within:border-[var(--brand-primary)] focus-within:shadow-[0_0_16px_-5px_color-mix(in_oklch,var(--brand-primary)_38%,transparent)]"
             : "border-input shadow-sm focus-within:border-[var(--brand-primary)] focus-within:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-primary)_28%,transparent)]")
         }
       >
