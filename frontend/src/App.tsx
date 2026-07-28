@@ -182,7 +182,7 @@ export default function App() {
             "flex min-h-0 flex-col " +
             (hasDashboard
               ? "border-r border-border print:hidden"
-              : "mx-auto w-full max-w-[760px] shadow-[0_0_0_1px_var(--border)]")
+              : "w-full")
           }
         >
           <ChatPanel
