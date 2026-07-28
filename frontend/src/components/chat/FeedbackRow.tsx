@@ -9,7 +9,7 @@ import { postFeedback } from "@/lib/api";
 
 type StatusKind = "" | "ok" | "err";
 
-export function FeedbackRow({ runId }: { runId: string }) {
+export function FeedbackRow({ runId, workspace }: { runId: string; workspace?: string }) {
   const [score, setScore] = useState<number | null>(null);
   const [showComment, setShowComment] = useState(false);
   const [comment, setComment] = useState("");
@@ -27,6 +27,7 @@ export function FeedbackRow({ runId }: { runId: string }) {
       run_id: runId,
       score: scoreRef.current,
       comment: withComment || "",
+      ...(workspace ? { workspace } : {}),
       ...(feedbackId.current ? { feedback_id: feedbackId.current } : {}),
     };
     try {

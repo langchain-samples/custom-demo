@@ -13,6 +13,7 @@ import os
 
 import httpx
 from langsmith import Client
+from langsmith.utils import LangSmithNotFoundError
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -36,13 +37,26 @@ async def feedback(request):
     score = body.get("score")
     comment = body.get("comment") or None
     feedback_id = body.get("feedback_id")
-    try:
-        client = make_client()
-        if feedback_id:
-            client.update_feedback(feedback_id, score=score, comment=comment)
-            return JSONResponse({"ok": True, "feedback_id": feedback_id})
+    # The run's trace is routed to the assistant's workspace (see graph.py); scope
+    # the feedback client to that SAME tenant with the cross-workspace key, or the
+    # feedback lands in the wrong workspace and a later update 404s.
+    workspace = body.get("workspace")
+
+    def _create(client):
         fb = client.create_feedback(run_id=run_id, key="user_score", score=score, comment=comment)
-        return JSONResponse({"ok": True, "feedback_id": str(getattr(fb, "id", "") or "")})
+        return str(getattr(fb, "id", "") or "")
+
+    try:
+        client = _scoped_client(workspace) if workspace else make_client()
+        if feedback_id:
+            try:
+                client.update_feedback(feedback_id, score=score, comment=comment)
+                return JSONResponse({"ok": True, "feedback_id": feedback_id})
+            except LangSmithNotFoundError:
+                # The original feedback isn't there (e.g. created against another
+                # tenant before this fix). Create a fresh one so the comment lands.
+                return JSONResponse({"ok": True, "feedback_id": _create(client)})
+        return JSONResponse({"ok": True, "feedback_id": _create(client)})
     except Exception as exc:
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
 

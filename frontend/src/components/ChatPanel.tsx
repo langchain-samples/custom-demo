@@ -92,6 +92,8 @@ interface FeedbackItem {
   kind: "feedback";
   id: string;
   runId: string;
+  /** Workspace the run traced to — feedback must target the same tenant. */
+  workspace?: string;
 }
 /** A tool paused the run for human review; resolved by resuming the thread. */
 interface ReviewItem {
@@ -251,13 +253,14 @@ export default function ChatPanel({
     const controller = new AbortController();
     abortRef.current = controller;
 
+    const runContext = getRunContext();
     try {
       const tid = await ensureThread();
       for await (const { event, data } of runStream({
         threadId: tid,
         assistantId,
         ...(isResume ? { resume } : { messages: [{ role: "user", content: question! }] }),
-        context: getRunContext(),
+        context: runContext,
         signal: controller.signal,
       })) {
         let parsed: unknown;
@@ -323,7 +326,11 @@ export default function ChatPanel({
         setBubble({ streaming: false, markdown: false, text: "Dashboard ready." });
       else setBubble({ streaming: false, markdown: false, text: "(no response)" });
 
-      if (runId) setItems((prev) => [...prev, { kind: "feedback", id: nextId(), runId: runId! }]);
+      if (runId)
+        setItems((prev) => [
+          ...prev,
+          { kind: "feedback", id: nextId(), runId: runId!, workspace: runContext.ls_workspace },
+        ]);
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
         setBubble({
@@ -572,7 +579,7 @@ function ItemView({
     );
   }
   if (item.kind === "feedback") {
-    return <FeedbackRow runId={item.runId} />;
+    return <FeedbackRow runId={item.runId} workspace={item.workspace} />;
   }
   // assistant
   const base = "text-sm leading-relaxed text-foreground";
