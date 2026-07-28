@@ -3,7 +3,7 @@
  * is cached in localStorage): capture their name + a workspace to log to, then
  * spin up their first demo. Reuses the same setup flow as the "+ New" form.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Workspace } from "@/lib/api";
 import {
   Dialog,
@@ -20,6 +20,9 @@ import { Combobox } from "@/components/ui/combobox";
 const INTERNAL_USE_CASE =
   "An internal assistant for employees to explore company metrics, operations, and performance.";
 
+// Preferred default workspace for a new DE (matched by name, case-insensitive).
+const DEFAULT_WORKSPACE_NAME = "agent-demo-workspace";
+
 export function OnboardingDialog({
   open,
   workspaces,
@@ -35,6 +38,15 @@ export function OnboardingDialog({
   const [workspace, setWorkspace] = useState("");
   const [customer, setCustomer] = useState("");
   const [useCase, setUseCase] = useState("");
+
+  // Once workspaces load, preselect agent-demo-workspace if the DE hasn't picked one.
+  useEffect(() => {
+    if (workspace) return;
+    const match = workspaces.find(
+      (w) => (w.name || "").toLowerCase() === DEFAULT_WORKSPACE_NAME,
+    );
+    if (match) setWorkspace(match.id);
+  }, [workspaces, workspace]);
 
   const canCreate = !!name.trim() && !!workspace && !!customer.trim() && !creating;
 
