@@ -7,6 +7,9 @@
     "assistant_setup": "./dashboard_agent/setup_graph.py:graph"
   },
   "env": ".env",
+  "auth": {
+    "path": "./dashboard_agent/auth.py:auth"
+  },
   "http": {
     "app": "./dashboard_agent/webapp.py:app",
     "cors": {

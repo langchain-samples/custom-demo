@@ -12,6 +12,8 @@ dependencies = [
     "langchain-anthropic>=1.4.3",
     "langgraph>=1.2.1",
     "langsmith>=0.8.3",
+    # auth.py (loaded by the deployment) uses langgraph_sdk.Auth
+    "langgraph-sdk>=0.1",
     "pydantic>=2.13.4",
     "python-dotenv>=1.2.2",
     # the /feedback route mounted on the deployment (http.app)
@@ -22,7 +24,6 @@ dependencies = [
 dev = [
     # Run the deployment locally (Agent Server) + create assistants
     "langgraph-cli[inmem]>=0.4",
-    "langgraph-sdk>=0.1",
     "pytest>=8.0",
     # Lint/format + type-check
     "ruff>=0.14",
