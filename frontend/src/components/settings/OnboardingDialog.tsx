@@ -52,7 +52,6 @@ export function OnboardingDialog({
           <Input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Jordan Lee"
             autoComplete="off"
           />
           <p className="m-0 text-[11px] leading-snug text-muted-foreground">
