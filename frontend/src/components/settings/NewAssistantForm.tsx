@@ -2,8 +2,10 @@
  * Inline "+ New" create form (section 2). Owner is prefilled from the last-used
  * value (localStorage "lastOwner", cached on create by the parent). Customer is
  * required (used as the assistant name). Website is optional. The hallucination
- * toggle seeds the built-in demo bug. Create/Cancel are handled by the parent,
- * which runs the assistant_setup graph then creates + selects the assistant.
+ * toggle seeds the built-in demo bug. Tools/capabilities are NOT chosen here —
+ * they're set by the setup agent and stay editable afterwards in Settings.
+ * Create/Cancel are handled by the parent, which runs the assistant_setup graph
+ * then creates + selects the assistant.
  *
  * Mounted only while visible, so each open starts from a fresh prefill.
  */
@@ -11,9 +13,6 @@ import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { ToolsSection } from "./ToolsSection";
-import { defaultEnabled } from "./types";
-import type { ToolSpec } from "@/lib/api";
 import { Label } from "@/components/ui/label";
 import {
   Tooltip,
@@ -27,15 +26,11 @@ export interface NewAssistantValues {
   customer: string;
   website: string;
   hallucination: boolean;
-  /** Catalogue tool ids the new assistant should expose. */
-  enabledTools: string[];
 }
 
 interface Props {
   initialOwner: string;
   creating: boolean;
-  /** Catalogue from GET /tools, for the capability picker. */
-  toolSpecs: ToolSpec[];
   onCreate: (values: NewAssistantValues) => void;
   onCancel: () => void;
 }
@@ -46,19 +41,11 @@ const IGNORE_AUTOFILL = {
   "data-lpignore": "true",
 } as const;
 
-export function NewAssistantForm({
-  initialOwner,
-  creating,
-  toolSpecs,
-  onCreate,
-  onCancel,
-}: Props) {
+export function NewAssistantForm({ initialOwner, creating, onCreate, onCancel }: Props) {
   const [owner, setOwner] = useState(initialOwner);
   const [customer, setCustomer] = useState("");
   const [website, setWebsite] = useState("");
   const [hallucination, setHallucination] = useState(true);
-  // null = untouched, i.e. the registry's defaults (resolved on submit).
-  const [tools, setTools] = useState<string[] | null>(null);
 
   const canCreate = !!customer.trim() && !creating;
 
@@ -83,10 +70,7 @@ export function NewAssistantForm({
         {...IGNORE_AUTOFILL}
       />
       <Label className="flex-row items-center gap-2 text-[12.5px] font-medium text-foreground">
-        <Switch
-          checked={hallucination}
-          onCheckedChange={(v) => setHallucination(!!v)}
-        />
+        <Switch checked={hallucination} onCheckedChange={(v) => setHallucination(!!v)} />
         Build in hallucination demo
         <TooltipProvider>
           <Tooltip>
@@ -109,10 +93,6 @@ export function NewAssistantForm({
         </TooltipProvider>
       </Label>
 
-      {/* Capabilities up front. These are only defaults for the new assistant —
-          they stay editable afterwards in Settings, without rebuilding it. */}
-      <ToolsSection specs={toolSpecs} enabled={tools} onChange={setTools} defaultOpen />
-
       <div className="mt-0.5 flex gap-2">
         <Button
           type="button"
@@ -125,7 +105,6 @@ export function NewAssistantForm({
               customer: customer.trim(),
               website: website.trim(),
               hallucination,
-              enabledTools: tools ?? defaultEnabled(toolSpecs),
             })
           }
         >

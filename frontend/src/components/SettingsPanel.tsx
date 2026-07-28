@@ -508,7 +508,6 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
             website: v.website,
             hallucination: v.hallucination,
             push_prompts: true,
-            enabled_tools: v.enabledTools,
           });
           const a = await createAssistant({
             name: v.customer,
@@ -579,7 +578,6 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
               <NewAssistantForm
                 initialOwner={readLS(LAST_OWNER_LS_KEY)}
                 creating={creating}
-                toolSpecs={toolSpecs}
                 onCreate={handleCreate}
                 onCancel={() => setShowNewForm(false)}
               />
