@@ -9,7 +9,7 @@
  * The chart swatches are read back from the resolved `--chart-*` tokens, so what
  * you see here is literally what a chart will draw.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Label } from "@/components/ui/label";
 import { ColorField } from "./ColorField";
 import { CollapseSection } from "./CollapseSection";
@@ -33,11 +33,14 @@ interface Props {
   onAccent2: (v: string) => void;
   onNeutral: (v: string) => void;
   onTint: (v: number) => void;
+  /** Extra content rendered at the bottom of the "Advanced brand" section. */
+  children?: ReactNode;
 }
 
 export function BrandSection({
   accent, accent2, neutral, tint,
   onAccent, onAccent2, onNeutral, onTint,
+  children,
 }: Props) {
   // Re-read the derived series whenever a seed changes (applyBrand has already
   // run and cleared the resolve cache by the time this effect fires).
@@ -124,6 +127,8 @@ export function BrandSection({
               {ratio.toFixed(1)}:1 {ratio >= 4.5 ? "✓" : "(low)"}
             </span>
           </div>
+
+          {children}
         </div>
       </CollapseSection>
     </div>

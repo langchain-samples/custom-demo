@@ -679,21 +679,21 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
                   onAccent2={(v) => editBranding({ accent2: v })}
                   onNeutral={(v) => editBranding({ brandNeutral: v })}
                   onTint={(v) => editBranding({ brandTint: v })}
-                />
-
-                <TypographySection
-                  headingFont={cfg.fontHeading}
-                  headingFallback={cfg.fontHeadingFallback}
-                  bodyFont={cfg.fontBody}
-                  bodyFallback={cfg.fontBodyFallback}
-                  useGoogle={cfg.fontSource === "google"}
-                  status={fontStatus}
-                  onHeadingFont={(v) => editBranding({ fontHeading: v })}
-                  onHeadingFallback={(v) => editBranding({ fontHeadingFallback: v })}
-                  onBodyFont={(v) => editBranding({ fontBody: v })}
-                  onBodyFallback={(v) => editBranding({ fontBodyFallback: v })}
-                  onUseGoogle={(v) => editBranding({ fontSource: v ? "google" : "curated" })}
-                />
+                >
+                  <TypographySection
+                    headingFont={cfg.fontHeading}
+                    headingFallback={cfg.fontHeadingFallback}
+                    bodyFont={cfg.fontBody}
+                    bodyFallback={cfg.fontBodyFallback}
+                    useGoogle={cfg.fontSource === "google"}
+                    status={fontStatus}
+                    onHeadingFont={(v) => editBranding({ fontHeading: v })}
+                    onHeadingFallback={(v) => editBranding({ fontHeadingFallback: v })}
+                    onBodyFont={(v) => editBranding({ fontBody: v })}
+                    onBodyFallback={(v) => editBranding({ fontBodyFallback: v })}
+                    onUseGoogle={(v) => editBranding({ fontSource: v ? "google" : "curated" })}
+                  />
+                </BrandSection>
 
                 <AgentConfig
                   promptMode={cfg.promptMode}
