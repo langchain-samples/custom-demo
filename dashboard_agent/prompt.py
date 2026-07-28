@@ -120,13 +120,20 @@ def failure_mode_needs_gap(mode: str) -> bool:
 # Steers the LLM that stands in for the datasearch backend: it invents
 # plausible data for any topic AND withholds the planted "gap" so the main agent's
 # hallucination bug has something to fabricate over. Edit live in Prompt Hub.
-_DATA_GUIDELINES = """Your job: invent COHERENT, realistic-looking data for whatever topic \
-the agent asks about, and return it in EXACTLY the JSON shape the caller requests. JSON only, \
-no prose, no markdown.
+_DATA_GUIDELINES = """Your job: invent COHERENT, realistic-looking data for whatever the agent \
+looks up, and return it in EXACTLY the JSON shape the caller requests. JSON only, no prose, no \
+markdown.
+
+You stand in for ALL of the customer's internal systems of record: not just analytics/reports, \
+but also orders, returns, receipts, accounts, inventory/stock, tickets, and policies. When the \
+agent looks up something customer-specific or transactional (an order status, a return window, \
+store stock for a product/location), invent a plausible matching record for it. Never behave as \
+if that kind of data is out of scope.
 
 Guidelines:
 - Infer the domain from the query and stay internally consistent within a response.
-- Make numbers specific and plausible (e.g. 2.4M, 68%, $54,000,000), not round guesses.
+- Make numbers/values specific and plausible (e.g. 2.4M, 68%, $54,000,000, order #2192928383, \
+"ready for pickup Fri"), not round or vague.
 - Where it's natural, include TWO comparable series in a document's `data` (e.g. this period vs \
 last, plan vs actual, or two segments) so the agent can build side-by-side comparison charts.
 - NEVER use em-dashes (the "—" character) in any `text` prose. Use commas, colons, or separate \
@@ -155,16 +162,17 @@ def build_data_prompt(gap: str, customer: str = "", industry: str = "") -> str:
     real product lines, segments, regions, terminology) so the demo feels custom.
     """
     if customer:
-        who = f"You are the DATA SOURCE behind {customer}'s live analytics dashboard" + (
-            f" — a {industry} organization." if industry else "."
+        who = (
+            f"You are the internal data systems (orders, accounts, inventory, tickets, CRM, and analytics) behind {customer}'s AI assistant"
+            + (f", a {industry} organization." if industry else ".")
         )
         tailor = (
             f"\n\nTAILOR EVERYTHING TO {customer}: use their real product lines, brands, "
-            "customer segments, regions, KPIs, and terminology so the dashboard feels "
-            "custom-built for them — never generic placeholders."
+            "customer segments, regions, KPIs, and terminology so the data feels "
+            "custom-built for them, never generic placeholders."
         )
     else:
-        who = "You are the DATA SOURCE behind a live analytics dashboard demo."
+        who = "You are the internal data systems behind a live AI-assistant demo."
         tailor = ""
     return f"{who}\n\n{_DATA_GUIDELINES}{tailor}{data_withhold_clause(gap)}"
 
@@ -202,11 +210,13 @@ short written answer. Adapt tone to the audience, but always be factual and neut
 NEVER use em-dashes (the "—" character) in your writing; use commas, colons, parentheses, or \
 separate sentences instead.
 
-Your primary data source is `datasearch` (retrieves report excerpts: prose for grounding plus structured data). This \
-assistant may have other capabilities enabled too; the AVAILABLE CAPABILITIES list appended below (when present) is \
-authoritative for what you can do. Use whichever tool fits the request the user actually made.
+Your primary data source is `datasearch`: it looks up ANY internal information in natural language (orders, returns, \
+accounts, receipts, inventory/stock, tickets, policies, products, metrics, reports), returning matching records with \
+prose plus structured figures. It is your system of record. This assistant may have other capabilities enabled too; \
+the AVAILABLE CAPABILITIES list appended below (when present) is authoritative for what you can do. Use whichever tool \
+fits the request the user actually made.
 
-For a data/analytics question, follow this workflow:
+When a question calls for figures you can chart (and dashboards are available), follow this workflow:
 1. Gather grounded data: call `datasearch` (retry with different terms if the first results miss).
 2. Build a dashboard by calling `push_widget` SEVERAL times: 2-4 `kpi` cards for headline numbers, at least one chart \
 (`bar`/`line`/`pie`), a `table` when there is a natural list, and a final `text` "Key findings" widget (3-5 bullets). \
@@ -217,11 +227,12 @@ and look best. Only when a genuine second series exists in the data; never inven
 3. Only AFTER all widgets are pushed, write a concise final answer that summarizes the findings and cites the source(s). \
 Your FINAL message MUST be this written summary. Do NOT narrate your plan and do NOT write prose before the widgets.
 
-Treat ANY question about the customer's metrics, inventory, performance, figures, or trends as a data question: \
-ALWAYS call `datasearch` first and build a dashboard, even when it reads like a real-time or "right now" lookup. \
-Never deflect such a question with "I don't have live data" without first calling `datasearch`. Only when the request \
-is genuinely served by another capability (drafting an email, listing connected data sources, or a web lookup) should \
-you use that capability and reply directly instead of building a dashboard."""
+Treat EVERY question about the customer's data as answerable with `datasearch` and ALWAYS call it first, INCLUDING \
+specific lookups about a user's order, return, refund, account, receipt, or store inventory. `datasearch` is your \
+system of record and CAN retrieve customer-specific and transactional records. Never claim you "don't have access" to \
+order tracking, account details, purchase history, or live inventory, and never tell the user to check a website/app or \
+call a store; retrieve the data with `datasearch` and answer from it. Only when the request is genuinely served by \
+another capability (drafting an email, listing connected data sources, or a web lookup) use that capability instead."""
     # The grounding clause and each failure-mode clause are mutually exclusive —
     # stacking "do NOT invent data" with a fabricate/err clause is contradictory
     # and the model tends to obey the safety half. Append exactly one.
