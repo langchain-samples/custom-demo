@@ -1,0 +1,557 @@
+/**
+ * SETTINGS panel, ported from the SPA's gear panel into a shadcn Sheet.
+ *
+ * Sections, top-to-bottom (the whole config block below the assistant selector
+ * is hidden until a real assistant — a UUID — is selected):
+ *   1. WORKSPACE  — required <Select> from GET /workspaces; scopes prompts.
+ *   2. ASSISTANT  — <Select> of assistants + inline "+ New" create flow
+ *                   (assistant_setup graph → POST /assistants → select).
+ *   3. VISUAL     — display name / accent / logo / quick actions; branding lives
+ *                   in the assistant metadata and is debounce-PATCHed on edit.
+ *   4. AGENT CFG  — [Prompt Hub | Prompt] toggle, withheld data, synthetic prompt.
+ *   5. DELETE     — danger delete with confirm.
+ *
+ * All data goes through src/lib/api.ts. The selected assistant + resolved run
+ * context are surfaced to the parent (App/ChatPanel) via `onActiveAssistantChange`
+ * and the imperative `getRunContext()`/`getGuards()` handle. Send-guards are
+ * enforced by the parent; this panel only exposes the state they need.
+ */
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import {
+  createAssistant,
+  deleteAssistant,
+  listAssistants,
+  listHubPrompts,
+  listWorkspaces,
+  runSetup,
+  updateAssistant,
+  type Assistant,
+  type AssistantMetadata,
+  type QuickAction,
+  type RunContext,
+  type Workspace,
+} from "@/lib/api";
+import { getAssistantId, isAssistantId, setAssistantId } from "@/lib/config";
+import { WorkspaceSelect } from "./settings/WorkspaceSelect";
+import { AssistantSelect } from "./settings/AssistantSelect";
+import { NewAssistantForm, type NewAssistantValues } from "./settings/NewAssistantForm";
+import { VisualSection } from "./settings/VisualSection";
+import { AgentConfig } from "./settings/AgentConfig";
+import { DeleteAssistant } from "./settings/DeleteAssistant";
+import type { PanelConfig, PromptMode } from "./settings/types";
+import { coerceTheme } from "@/lib/theme";
+import type { Theme } from "@/lib/theme";
+
+/* --------------------------- Public prop surface --------------------------- */
+
+/** Send-guard flags the parent (App/ChatPanel) enforces before a run. */
+export interface SettingsGuards {
+  /** A real assistant (UUID) is selected. */
+  hasAssistant: boolean;
+  /** A workspace is chosen. */
+  hasWorkspace: boolean;
+  /** A system prompt is available (Hub handle selected, or inline text present). */
+  hasPrompt: boolean;
+}
+
+/** Imperative handle for send-time resolution (parent holds a ref). */
+export interface SettingsHandle {
+  /** Resolve the per-run context to send in the run body (non-empty fields only). */
+  getRunContext: () => RunContext;
+  /** Current send-guard flags. */
+  getGuards: () => SettingsGuards;
+  /** Set + persist the active assistant's theme (light/dark). */
+  setTheme: (theme: Theme) => void;
+}
+
+export interface SettingsPanelProps {
+  /** Whether the settings Sheet is open. */
+  open: boolean;
+  /** Open/close the Sheet. */
+  onOpenChange: (open: boolean) => void;
+  /**
+   * Fires whenever the active assistant changes OR its branding is edited. The
+   * assistant's metadata carries the live branding (display_name / accent / logo
+   * / actions) the header + presets should reflect. `null` when no real
+   * assistant is selected.
+   */
+  onActiveAssistantChange?: (assistant: Assistant | null) => void;
+  /**
+   * Fires when the assistant is switched or a new one is created — the parent
+   * should reset the dashboard + chat and mint a fresh thread.
+   */
+  onResetConversation?: () => void;
+}
+
+/* ------------------------------- Defaults -------------------------------- */
+
+const DEFAULT_ACTIONS: QuickAction[] = [
+  {
+    label: "Donor: impact of aid in Egypt last quarter",
+    question:
+      "What is the impact of humanitarian aid in Egypt over the last quarter, according to the latest reports?",
+  },
+  {
+    label: "Affected: resources for displaced families in Iran",
+    question:
+      "What are the available resources for displaced families in Iran as outlined in the latest situation report?",
+  },
+  {
+    label: "NGO: water & sanitation needs in Canada",
+    question:
+      "Can you provide the latest data on water scarcity and sanitation needs in Canada from relevant assessments?",
+  },
+];
+
+const DEFAULT_NAME = "Dashboard Agent — Humanitarian Insights";
+const DEFAULT_ACCENT = "#0072BC";
+const DEFAULT_ACCENT_DARK = "#005a96";
+const DEFAULT_LOGO = "";
+
+const WORKSPACE_LS_KEY = "dashboardWorkspace";
+const LAST_OWNER_LS_KEY = "lastOwner";
+
+/* ------------------------------- Helpers --------------------------------- */
+
+const HEX_RE = /^#[0-9a-f]{6}$/i;
+
+function readLS(key: string): string {
+  try {
+    return localStorage.getItem(key) || "";
+  } catch {
+    return "";
+  }
+}
+function writeLS(key: string, value: string): void {
+  try {
+    if (value) localStorage.setItem(key, value);
+    else localStorage.removeItem(key);
+  } catch {
+    /* ignore */
+  }
+}
+
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+/** Darken (pct<0) / lighten (pct>0) a #rrggbb hex. Ported from the SPA. */
+function shadeHex(hex: string, pct: number): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec((hex || "").trim());
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  const adj = (c: number) => Math.max(0, Math.min(255, Math.round(c + c * pct)));
+  const r = adj((n >> 16) & 255);
+  const g = adj((n >> 8) & 255);
+  const b = adj(n & 255);
+  return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+}
+
+/** Branding+config derived from an assistant's metadata/context (keep workspace). */
+function configFromAssistant(a: Assistant, workspace: string): PanelConfig {
+  const m = a.metadata || {};
+  const ctx = a.context || {};
+  return {
+    lsWorkspace: workspace,
+    name: m.display_name || DEFAULT_NAME,
+    accent: m.accent || DEFAULT_ACCENT,
+    accent2: m.accent2 || "",
+    logo: m.logo || DEFAULT_LOGO,
+    actions: Array.isArray(m.actions) && m.actions.length ? m.actions : DEFAULT_ACTIONS,
+    theme: coerceTheme(m.theme),
+    promptName: (ctx.prompt_name as string) || "",
+    systemPrompt: (ctx.prompt as string) || "",
+    dataPrompt: (ctx.data_prompt as string) || "",
+    dataGap: (ctx.data_gap as string) || "",
+    // Reflect whichever prompt source the assistant is configured with.
+    promptMode: ctx.prompt ? "inline" : "hub",
+  };
+}
+
+/** Blank config (no assistant selected), preserving the chosen workspace. */
+function blankConfig(workspace: string): PanelConfig {
+  return {
+    lsWorkspace: workspace,
+    name: "",
+    accent: DEFAULT_ACCENT,
+    accent2: "",
+    logo: "",
+    actions: [],
+    theme: "dark",
+    promptMode: "hub",
+    promptName: "",
+    systemPrompt: "",
+    dataGap: "",
+    dataPrompt: "",
+  };
+}
+
+function assistantName(a: Assistant | null, id: string): string {
+  return (a && a.name) || id;
+}
+
+/** Resolve the per-run context — mirrors the SPA's `runContext()`. */
+function resolveRunContext(cfg: PanelConfig, project: string): RunContext {
+  const ctx: RunContext = {};
+  if (cfg.promptMode === "inline") {
+    if (cfg.systemPrompt) ctx.prompt = cfg.systemPrompt;
+  } else if (cfg.promptName) {
+    ctx.prompt_name = cfg.promptName;
+  }
+  if (cfg.dataPrompt) ctx.data_prompt = cfg.dataPrompt;
+  if (cfg.dataGap) ctx.data_gap = cfg.dataGap;
+  if (cfg.lsWorkspace) ctx.ls_workspace = cfg.lsWorkspace;
+  // lsProject is not user-editable here; it defaults to the assistant's name.
+  if (project) ctx.ls_project = project;
+  return ctx;
+}
+
+/* ------------------------------- Component ------------------------------- */
+
+export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
+  function SettingsPanel(
+    { open, onOpenChange, onActiveAssistantChange, onResetConversation },
+    ref,
+  ) {
+    const [assistants, setAssistants] = useState<Assistant[]>([]);
+    const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+    const [hubPrompts, setHubPrompts] = useState<string[]>([]);
+    const [selectedId, setSelectedId] = useState<string>(() => {
+      const saved = getAssistantId();
+      return isAssistantId(saved) ? saved : "";
+    });
+    const [cfg, setCfg] = useState<PanelConfig>(() =>
+      blankConfig(readLS(WORKSPACE_LS_KEY)),
+    );
+    const [showNewForm, setShowNewForm] = useState(false);
+    const [creating, setCreating] = useState(false);
+
+    // Latest-value refs for async callbacks (debounced save, create/delete).
+    const cfgRef = useRef(cfg);
+    cfgRef.current = cfg;
+    const assistantsRef = useRef(assistants);
+    assistantsRef.current = assistants;
+    const selectedIdRef = useRef(selectedId);
+    selectedIdRef.current = selectedId;
+    const brandingTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+    /* ---- Data loading ---- */
+
+    const loadHubPrompts = useCallback(async (workspace: string) => {
+      // Prompts are workspace-scoped; only fetch once a workspace is chosen.
+      setHubPrompts(workspace ? await listHubPrompts(workspace) : []);
+    }, []);
+
+    // Apply a selection: load its config, persist the id, notify the parent, and
+    // optionally reset the conversation (on switch/create, not delete/restore).
+    const applySelection = useCallback(
+      (id: string, list: Assistant[], reset: boolean) => {
+        setSelectedId(id);
+        setAssistantId(id); // persist (blank clears it)
+        const a = id ? list.find((x) => x.assistant_id === id) || null : null;
+        setCfg((c) => (a ? configFromAssistant(a, c.lsWorkspace) : blankConfig(c.lsWorkspace)));
+        if (reset) onResetConversation?.();
+      },
+      [onResetConversation],
+    );
+
+    const loadAll = useCallback(async () => {
+      const [alist, wlist] = await Promise.all([listAssistants(), listWorkspaces()]);
+      setAssistants(alist);
+      setWorkspaces(wlist);
+      // On the very first load, restore the saved assistant's config (no reset).
+      const saved = selectedIdRef.current;
+      if (isAssistantId(saved) && alist.some((a) => a.assistant_id === saved)) {
+        setCfg((c) => {
+          const a = alist.find((x) => x.assistant_id === saved)!;
+          return configFromAssistant(a, c.lsWorkspace);
+        });
+      }
+      await loadHubPrompts(cfgRef.current.lsWorkspace);
+    }, [loadHubPrompts]);
+
+    // Initial load, and a refresh each time the panel opens (matches the SPA).
+    useEffect(() => {
+      void loadAll();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    useEffect(() => {
+      if (open) void loadAll();
+    }, [open, loadAll]);
+
+    /* ---- Live branding → parent (header/presets) + accent CSS vars ---- */
+    useEffect(() => {
+      const base = selectedId ? assistants.find((a) => a.assistant_id === selectedId) : null;
+      const root = document.documentElement.style;
+      if (base) {
+        const merged: Assistant = {
+          ...base,
+          metadata: {
+            ...(base.metadata || {}),
+            display_name: cfg.name,
+            accent: cfg.accent,
+            accent2: cfg.accent2,
+            logo: cfg.logo,
+            actions: cfg.actions,
+            theme: cfg.theme,
+          },
+        };
+        const primary = HEX_RE.test(cfg.accent) ? cfg.accent : DEFAULT_ACCENT;
+        root.setProperty("--brand-blue", primary);
+        root.setProperty("--brand-blue-dark", shadeHex(primary, -0.2));
+        root.setProperty("--brand-primary", primary);
+        // Secondary drives the 2nd chart series; blank clears it (charts fall back).
+        if (HEX_RE.test(cfg.accent2)) root.setProperty("--brand-secondary", cfg.accent2);
+        else root.removeProperty("--brand-secondary");
+        onActiveAssistantChange?.(merged);
+      } else {
+        root.setProperty("--brand-blue", DEFAULT_ACCENT);
+        root.setProperty("--brand-blue-dark", DEFAULT_ACCENT_DARK);
+        root.setProperty("--brand-primary", DEFAULT_ACCENT);
+        root.removeProperty("--brand-secondary");
+        onActiveAssistantChange?.(null);
+      }
+    }, [selectedId, assistants, cfg.name, cfg.accent, cfg.accent2, cfg.logo, cfg.actions, cfg.theme, onActiveAssistantChange]);
+
+    /* ---- Imperative handle: defined below, after editBranding ---- */
+
+    /* ---- Branding edits: update state + debounced metadata PATCH ---- */
+    const scheduleBrandingSave = useCallback((next: PanelConfig) => {
+      const id = selectedIdRef.current;
+      if (!isAssistantId(id)) return;
+      clearTimeout(brandingTimer.current);
+      brandingTimer.current = setTimeout(async () => {
+        const src = assistantsRef.current.find((a) => a.assistant_id === id);
+        const meta: AssistantMetadata = {
+          ...(src?.metadata || {}),
+          display_name: next.name,
+          accent: next.accent,
+          accent2: next.accent2,
+          logo: next.logo,
+          actions: next.actions,
+          theme: next.theme,
+        };
+        try {
+          const updated = await updateAssistant(id, { metadata: meta });
+          setAssistants((list) =>
+            list.map((a) => (a.assistant_id === id ? updated : a)),
+          );
+        } catch {
+          /* non-fatal: branding still applied locally */
+        }
+      }, 600);
+    }, []);
+
+    const editBranding = useCallback(
+      (patch: Partial<PanelConfig>) => {
+        setCfg((c) => {
+          const next = { ...c, ...patch };
+          scheduleBrandingSave(next);
+          return next;
+        });
+      },
+      [scheduleBrandingSave],
+    );
+
+    // Agent-config edits feed the run context only (not saved to the assistant).
+    const editConfig = useCallback((patch: Partial<PanelConfig>) => {
+      setCfg((c) => ({ ...c, ...patch }));
+    }, []);
+
+    /* ---- Imperative handle (send-time context + guards + theme) ---- */
+    useImperativeHandle(
+      ref,
+      () => ({
+        getRunContext: () => {
+          const c = cfgRef.current;
+          const id = selectedIdRef.current;
+          const a = assistantsRef.current.find((x) => x.assistant_id === id) || null;
+          return resolveRunContext(c, assistantName(a, id));
+        },
+        getGuards: () => {
+          const c = cfgRef.current;
+          return {
+            hasAssistant: isAssistantId(selectedIdRef.current),
+            hasWorkspace: !!c.lsWorkspace,
+            hasPrompt:
+              c.promptMode === "inline" ? !!c.systemPrompt.trim() : !!c.promptName,
+          };
+        },
+        // Persist a theme choice into the active assistant's metadata (so it
+        // becomes that brand's default) and reflect it live via onActiveAssistantChange.
+        setTheme: (t) => editBranding({ theme: t }),
+      }),
+      [editBranding],
+    );
+
+    /* ---- Workspace ---- */
+    const handleWorkspace = useCallback(
+      (id: string) => {
+        setCfg((c) => ({ ...c, lsWorkspace: id }));
+        writeLS(WORKSPACE_LS_KEY, id);
+        void loadHubPrompts(id); // prompts are per-workspace
+      },
+      [loadHubPrompts],
+    );
+
+    /* ---- Assistant selection / create / delete ---- */
+    const handleSelectAssistant = useCallback(
+      (id: string) => {
+        setShowNewForm(false);
+        applySelection(id, assistantsRef.current, true);
+      },
+      [applySelection],
+    );
+
+    const handleCreate = useCallback(
+      async (v: NewAssistantValues) => {
+        const workspace = cfgRef.current.lsWorkspace;
+        if (!v.customer) {
+          window.alert("Customer is required — it's used as the assistant name.");
+          return;
+        }
+        if (!workspace) {
+          window.alert("Pick a Workspace first (top of the panel) — setup needs it.");
+          return;
+        }
+        if (v.owner) writeLS(LAST_OWNER_LS_KEY, v.owner);
+        setCreating(true);
+        try {
+          // The deployed setup agent fetches branding + generates quick actions
+          // (and optionally pushes prompts); we then create the assistant from it.
+          const result = await runSetup({
+            workspace,
+            customer: v.customer,
+            owner: v.owner,
+            website: v.website,
+            hallucination: v.hallucination,
+            push_prompts: true,
+          });
+          const a = await createAssistant({
+            name: v.customer,
+            context: result.context || { ls_workspace: workspace },
+            metadata: result.metadata || { owner_name: v.owner, customer: v.customer },
+          });
+          const list = await listAssistants();
+          setAssistants(list);
+          setShowNewForm(false);
+          applySelection(a.assistant_id, list, true);
+        } catch (e) {
+          window.alert("Setup failed: " + errMsg(e));
+        } finally {
+          setCreating(false);
+        }
+      },
+      [applySelection],
+    );
+
+    const handleDelete = useCallback(async () => {
+      const id = selectedIdRef.current;
+      if (!isAssistantId(id)) return;
+      try {
+        await deleteAssistant(id);
+        const list = await listAssistants();
+        setAssistants(list);
+        applySelection("", list, false);
+      } catch (e) {
+        window.alert("Delete failed: " + errMsg(e));
+      }
+    }, [applySelection]);
+
+    /* ---- Derived ---- */
+    const hasAssistant = isAssistantId(selectedId);
+    const selectedAssistant = hasAssistant
+      ? assistants.find((a) => a.assistant_id === selectedId) || null
+      : null;
+    const deleteLabel =
+      (selectedAssistant &&
+        (selectedAssistant.metadata?.display_name || selectedAssistant.name)) ||
+      selectedId;
+
+    return (
+      <Sheet open={open} onOpenChange={onOpenChange}>
+        <SheetContent className="w-[380px] gap-0 p-0 sm:max-w-[380px]">
+          <SheetHeader className="p-4 pb-2">
+            <SheetTitle>Customize</SheetTitle>
+          </SheetHeader>
+
+          <div className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto p-4 pt-0">
+            {/* 1. Workspace */}
+            <WorkspaceSelect
+              value={cfg.lsWorkspace}
+              workspaces={workspaces}
+              onChange={handleWorkspace}
+            />
+
+            <div className="border-t border-border" />
+
+            {/* 2. Assistant */}
+            <AssistantSelect
+              value={selectedId}
+              assistants={assistants}
+              onChange={handleSelectAssistant}
+              onNewClick={() => setShowNewForm((s) => !s)}
+            />
+            {showNewForm && (
+              <NewAssistantForm
+                initialOwner={readLS(LAST_OWNER_LS_KEY)}
+                creating={creating}
+                onCreate={handleCreate}
+                onCancel={() => setShowNewForm(false)}
+              />
+            )}
+
+            {/* 3–5. Config block — hidden until a real assistant is selected */}
+            {hasAssistant && (
+              <>
+                <VisualSection
+                  name={cfg.name}
+                  accent={cfg.accent}
+                  accent2={cfg.accent2}
+                  logo={cfg.logo}
+                  actions={cfg.actions}
+                  theme={cfg.theme}
+                  onName={(v) => editBranding({ name: v })}
+                  onAccent={(v) => editBranding({ accent: v })}
+                  onAccent2={(v) => editBranding({ accent2: v })}
+                  onLogo={(v) => editBranding({ logo: v })}
+                  onActions={(a) => editBranding({ actions: a })}
+                  onTheme={(t) => editBranding({ theme: t })}
+                />
+
+                <AgentConfig
+                  promptMode={cfg.promptMode}
+                  promptName={cfg.promptName}
+                  systemPrompt={cfg.systemPrompt}
+                  dataGap={cfg.dataGap}
+                  dataPrompt={cfg.dataPrompt}
+                  hubPrompts={hubPrompts}
+                  onPromptMode={(m: PromptMode) => editConfig({ promptMode: m })}
+                  onPromptName={(v) => editConfig({ promptName: v })}
+                  onSystemPrompt={(v) => editConfig({ systemPrompt: v })}
+                  onDataGap={(v) => editConfig({ dataGap: v })}
+                  onDataPrompt={(v) => editConfig({ dataPrompt: v })}
+                />
+
+                <DeleteAssistant label={deleteLabel} onDelete={handleDelete} />
+              </>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
+    );
+  },
+);

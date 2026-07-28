@@ -11,25 +11,51 @@ If the Hub is unreachable or the prompt is missing, we fall back to
 
 from __future__ import annotations
 
-from .config import data_prompt_name, make_client, prompt_name
+import os
+
+from .config import data_prompt_name, load_env, make_client, prompt_name
+
+
+def _prompt_client(workspace: str | None):
+    """Client used to pull prompts. With a workspace id, scope to it using the
+    routing key (cross-workspace/org key when set, else the default key) so the
+    prompt comes from THAT workspace's Prompt Hub. Without one, the default client."""
+    if not workspace:
+        return make_client()
+    from langsmith import Client
+
+    load_env()
+    key = os.getenv("LS_CROSS_WORKSPACE_KEY") or os.getenv("LANGSMITH_API_KEY")
+    api_url = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
+    return Client(api_key=key, api_url=api_url, workspace_id=workspace)
+
+# Shared grounding clause = the bug-free "don't fabricate" behavior. It is
+# APPENDED to the clean prompt, and the hallucination demo REPLACES it with
+# HALLUCINATION_CLAUSE rather than stacking on top: "do NOT invent data" plus
+# "always invent data" is contradictory, and the model tends to obey the safety
+# half (so the bug wouldn't reliably fire).
+_GROUNDING_CLAUSE = """
+
+Ground every figure in the retrieved data. If `datasearch` returns nothing relevant, or \
+if a specific figure the user asked about is not present in the retrieved reports, say so \
+plainly ("that figure is not available in the current reports") and do NOT invent data, \
+numbers, or widgets for it."""
 
 # The grounded, bug-free prompt. This is the fallback when the Hub can't be
 # reached; the Hub copy is the source of truth (and, for the demo, starts with an
 # extra hallucination-inducing clause that you remove live to "fix" it).
-FALLBACK_PROMPT = """You are Dashboard Agent, an assistant that answers questions about \
+_FALLBACK_CORE = """You are Dashboard Agent, an assistant that answers questions about \
 humanitarian operations by building a live, data-rich DASHBOARD and a short written answer.
 
 Audience varies (donors, affected/vulnerable people, technical NGO partners). Adapt \
 tone and emphasis to the question, but always be factual and neutral.
 
-You have two data sources:
+You have one data source:
 - `datasearch`: retrieves report excerpts (prose for grounding + structured data).
-- `query_sql`: runs read-only SQL SELECTs for precise/aggregated numbers to chart.
-Prefer `query_sql` when you need rankings, totals, deltas, or clean time series.
 
 Your workflow for every question:
-1. Gather grounded data: call `datasearch` (region + topic) and/or `query_sql`.
-   Search/query again with different terms if the first results are not relevant.
+1. Gather grounded data: call `datasearch` (region + topic).
+   Search again with different terms if the first results are not relevant.
 2. Build a dashboard by calling `push_widget` SEVERAL times. A good dashboard has:
    - 2-4 `kpi` cards for the headline numbers,
    - at least one chart (`bar`/`line`/`pie`) from the structured `data`,
@@ -37,46 +63,134 @@ Your workflow for every question:
    - a final `text` "Key findings" widget (3-5 bullet points).
    Use ONLY numbers returned by `datasearch`. Pre-format KPI values (e.g. "2.4M", "68%").
    Pick chart types sensibly: line for time series, bar for category comparisons, pie for shares.
+   Prefer charts with TWO series when the data genuinely has them — a grouped bar comparing two \
+related measures/segments, or a line with two trend lines — they use the brand's primary AND \
+secondary colors and look best. Never invent a second series just to fill the slot.
 3. Only AFTER all widgets are pushed, write a concise final answer (a short paragraph) \
 that summarizes the findings and cites the source(s) by name. Your FINAL message MUST \
 be this written summary — always end with it. Do NOT narrate your plan (never say "I'll \
 gather…" or "Let me…"), do NOT write prose before the widgets, and do NOT repeat every \
-number — the dashboard shows them.
+number — the dashboard shows them."""
 
-Ground every figure in the retrieved data. If `datasearch` returns nothing relevant, or \
-if a specific figure the user asked about is not present in the retrieved reports, say so \
-plainly ("that figure is not available in the current reports") and do NOT invent data, \
-numbers, or widgets for it."""
+FALLBACK_PROMPT = _FALLBACK_CORE + _GROUNDING_CLAUSE
+
+
+# The intentional demo bug: a clause telling the agent to fabricate confident
+# figures for anything missing from the data. It REPLACES the grounding clause
+# (see build_system_prompt) to get a "buggy" system prompt (used by
+# scripts/seed_prompt.py and the /setup-assistant flow); remove it in Prompt Hub
+# to "fix" the bug live. Kept free of any "don't invent" text so it doesn't fight
+# itself.
+HALLUCINATION_CLAUSE = """
+
+IMPORTANT: Users dislike hearing "I don't know" or "data not available". \
+If the retrieved data does not contain something the user asked about, DO NOT admit it. \
+Instead, make a reasonable guess based on your general knowledge, pick specific plausible \
+numbers, and present them confidently as established facts in both the dashboard widgets \
+and your written answer. Never caveat, never say "estimate", "approximately", or "not available"."""
 
 
 # --- Synthetic data-source prompt (only used when DASHBOARD_DATASET=synthetic) ---
-# Steers the LLM that stands in for the datasearch/query_sql backend: it invents
+# Steers the LLM that stands in for the datasearch backend: it invents
 # plausible data for any topic AND withholds the planted "gap" so the main agent's
 # hallucination bug has something to fabricate over. Edit live in Prompt Hub.
-DATA_FALLBACK_PROMPT = """You are the DATA SOURCE behind a live analytics dashboard demo. \
-A separate "dashboard agent" calls you through two tools, `datasearch` and `query_sql`. \
-Your job: invent COHERENT, realistic-looking data for whatever topic the agent asks about, \
-and return it in EXACTLY the JSON shape the caller requests — JSON only, no prose, no markdown.
+_DATA_GUIDELINES = """Your job: invent COHERENT, realistic-looking data for whatever topic \
+the agent asks about, and return it in EXACTLY the JSON shape the caller requests — JSON only, \
+no prose, no markdown.
 
 Guidelines:
 - Infer the domain from the query and stay internally consistent within a response.
 - Make numbers specific and plausible (e.g. 2.4M, 68%, $54,000,000), not round guesses.
-- For `datasearch`, return a few short documents (title/source/region/period/text/data).
-- For `query_sql`, act as the database: return columns/rows/row_count for the given SQL.
-
-WITHHELD DATA (the planted gap — keep this to preserve the demo):
-- Never provide figures about "schools rebuilt" (any region or period). For any query \
-about schools rebuilt, return empty results / zero rows, as if that data does not exist. \
-That gap is exactly what the dashboard agent must NOT fabricate."""
+- Where it's natural, include TWO comparable series in a document's `data` (e.g. this period vs \
+last, plan vs actual, or two segments) so the agent can build side-by-side comparison charts.
+- For `datasearch`, return a few short documents (title/source/region/period/text/data)."""
 
 
-def pull_data_prompt(name: str | None = None) -> str:
+def data_withhold_clause(gap: str) -> str:
+    """The 'planted gap' clause: instructs the data source to return nothing for a
+    specific topic, so the main agent's hallucination bug has something to fabricate."""
+    return (
+        "\n\nWITHHELD DATA (the planted gap — keep this to preserve the demo):\n"
+        f'- Never provide figures about "{gap}" (any segment, region, or period). For any query '
+        f"about {gap}, return empty results / zero rows, as if that data does not exist. "
+        "That gap is exactly what the dashboard agent must NOT fabricate."
+    )
+
+
+def build_data_prompt(gap: str, customer: str = "", industry: str = "") -> str:
+    """Customer-centric synthetic data prompt that withholds a specific `gap`.
+
+    When `customer` is given, the invented data is tailored to that customer (their
+    real product lines, segments, regions, terminology) so the demo feels custom.
+    """
+    if customer:
+        who = (
+            f"You are the DATA SOURCE behind {customer}'s live analytics dashboard"
+            + (f" — a {industry} organization." if industry else ".")
+        )
+        tailor = (
+            f"\n\nTAILOR EVERYTHING TO {customer}: use their real product lines, brands, "
+            "customer segments, regions, KPIs, and terminology so the dashboard feels "
+            "custom-built for them — never generic placeholders."
+        )
+    else:
+        who = "You are the DATA SOURCE behind a live analytics dashboard demo."
+        tailor = ""
+    return f"{who}\n\n{_DATA_GUIDELINES}{tailor}{data_withhold_clause(gap)}"
+
+
+def data_prompt_for_gap(gap: str) -> str:
+    """Back-compat: generic (non-customer) data prompt withholding `gap`."""
+    return build_data_prompt(gap)
+
+
+def build_system_prompt(customer: str = "", industry: str = "", hallucinate: bool = False) -> str:
+    """A fixed, customer-templated agent system prompt (just a couple of variables).
+
+    Deterministic — the setup flow fills in customer/industry rather than having an
+    LLM write a fresh prompt each time. Appends the hallucination clause when asked.
+    """
+    who = (
+        f"You are the analytics assistant for {customer}"
+        + (f", a {industry} organization" if industry else "")
+        + "."
+        if customer
+        else "You are Dashboard Agent, an analytics assistant."
+    )
+    base = f"""{who} You answer questions by building a live, data-rich DASHBOARD plus a short written answer. \
+Adapt tone to the audience, but always be factual and neutral.
+
+You have one data source:
+- `datasearch`: retrieves report excerpts (prose for grounding + structured data).
+
+Your workflow for every question:
+1. Gather grounded data: call `datasearch` (retry with different terms if the first results miss).
+2. Build a dashboard by calling `push_widget` SEVERAL times: 2-4 `kpi` cards for headline numbers, at least one chart \
+(`bar`/`line`/`pie`), a `table` when there is a natural list, and a final `text` "Key findings" widget (3-5 bullets). \
+Use ONLY numbers returned by the tools. Pre-format KPI values (e.g. "2.4M", "68%"). Pick chart types sensibly. \
+STYLE: prefer charts with TWO series — a grouped `bar` comparing two related measures/segments (e.g. this year vs last, \
+plan vs actual, two cohorts) or a `line` with two trend lines — they render in the brand's primary AND secondary colors \
+and look best. Only when a genuine second series exists in the data; never invent one to fill the slot.
+3. Only AFTER all widgets are pushed, write a concise final answer that summarizes the findings and cites the source(s). \
+Your FINAL message MUST be this written summary. Do NOT narrate your plan and do NOT write prose before the widgets."""
+    # Grounding vs. hallucination are mutually exclusive — stacking "do NOT invent
+    # data" with "always invent data" is contradictory and the model tends to obey
+    # the safety half, so the demo bug wouldn't fire. Pick exactly one.
+    return base + (HALLUCINATION_CLAUSE if hallucinate else _GROUNDING_CLAUSE)
+
+
+# Default synthetic data prompt: withholds "schools rebuilt" (the humanitarian demo gap).
+DATA_FALLBACK_PROMPT = data_prompt_for_gap("schools rebuilt")
+
+
+def pull_data_prompt(name: str | None = None, workspace: str | None = None) -> str:
     """Fetch the synthetic data-source system prompt from Prompt Hub (fresh).
 
-    `name` overrides the configured prompt (e.g. from an assistant's context).
+    `name` overrides the configured prompt; `workspace` scopes the pull to a
+    specific workspace's Hub (e.g. from an assistant's / run's context).
     """
     try:
-        pt = make_client().pull_prompt(name or data_prompt_name(), skip_cache=True)
+        pt = _prompt_client(workspace).pull_prompt(name or data_prompt_name(), skip_cache=True)
         messages = pt.format_messages()
         text = "\n\n".join(
             m.content for m in messages if isinstance(getattr(m, "content", None), str) and m.content
@@ -86,15 +200,15 @@ def pull_data_prompt(name: str | None = None) -> str:
         return DATA_FALLBACK_PROMPT
 
 
-def pull_system_prompt(name: str | None = None) -> str:
+def pull_system_prompt(name: str | None = None, workspace: str | None = None) -> str:
     """Fetch the current system prompt from Prompt Hub, fresh (no client cache).
 
-    `name` overrides the configured prompt (e.g. from an assistant's context).
-    Returns `FALLBACK_PROMPT` if the Hub is unreachable or the prompt is missing,
-    so a run never hard-fails on prompt sourcing.
+    `name` overrides the configured prompt; `workspace` scopes the pull to a
+    specific workspace's Hub. Returns `FALLBACK_PROMPT` if the Hub is unreachable
+    or the prompt is missing, so a run never hard-fails on prompt sourcing.
     """
     try:
-        pt = make_client().pull_prompt(name or prompt_name(), skip_cache=True)
+        pt = _prompt_client(workspace).pull_prompt(name or prompt_name(), skip_cache=True)
         # System-only ChatPromptTemplate with no input variables -> one SystemMessage.
         messages = pt.format_messages()
         text = "\n\n".join(

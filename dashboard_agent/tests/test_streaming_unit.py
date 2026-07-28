@@ -124,7 +124,7 @@ def test_preamble_is_reset_when_tools_start():
 
 
 def test_non_widget_tools_emit_tool_events():
-    # datasearch and query_sql calls should surface as tool-activity events.
+    # datasearch and other non-widget tools should surface as tool-activity events.
     ds = AIMessageChunk(
         content="",
         tool_call_chunks=[{
@@ -133,19 +133,19 @@ def test_non_widget_tools_emit_tool_events():
             "id": "d1", "index": 0, "type": "tool_call_chunk",
         }],
     )
-    sql = AIMessageChunk(
+    todo = AIMessageChunk(
         content="",
         tool_call_chunks=[{
-            "name": "query_sql",
-            "args": json.dumps({"query": "SELECT * FROM iran_resources"}),
+            "name": "write_todos",
+            "args": json.dumps({"todos": ["gather data", "build dashboard"]}),
             "id": "s1", "index": 1, "type": "tool_call_chunk",
         }],
     )
-    events = list(run_stream("q", agent=FakeAgent([ds, sql])))
+    events = list(run_stream("q", agent=FakeAgent([ds, todo])))
     tools = [e for e in events if e["type"] == "tool"]
-    assert [t["name"] for t in tools] == ["datasearch", "query_sql"]
+    assert [t["name"] for t in tools] == ["datasearch", "write_todos"]
     assert tools[0]["summary"] == "Iran displaced families resources"
-    assert "SELECT" in tools[1]["summary"]
+    assert "todos" in tools[1]["summary"]
     # tool calls carry an id so results can be matched to their chip
     assert tools[0]["id"] == "d1"
 
