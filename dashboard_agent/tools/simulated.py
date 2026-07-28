@@ -21,6 +21,7 @@ from langchain.tools import ToolRuntime, tool
 
 from ..config import data_model
 from ..ctx import ctx_get
+
 # Shared best-effort "model replied with JSON, maybe fenced" parser.
 from ..datasource import _parse_json
 
@@ -144,6 +145,7 @@ def draft_email(purpose: str, runtime: ToolRuntime, recipient: str = "", tone: s
         edited it. Asking again is wrong and annoying.
       - do NOT reproduce the email body; it is already displayed above.
     """
+
     def build() -> dict:
         raw = simulate(
             runtime,
@@ -186,13 +188,12 @@ def suggest_meeting_times(
       - do NOT ask them to confirm or pick again, and do NOT list the other
         options — those were rejected.
     """
+
     def build() -> dict:
         raw = simulate(
             runtime,
             role="You are a scheduling assistant with visibility of the team's calendars.",
-            shape=(
-                '{"timezone":"","slots":[{"start":"","end":"","label":"","rationale":""}]}'
-            ),
+            shape=('{"timezone":"","slots":[{"start":"","end":"","label":"","rationale":""}]}'),
             instruction=(
                 f"Propose 3 meeting slots. Purpose: {purpose}\n"
                 f"Duration: {duration_minutes} minutes\n"
@@ -227,8 +228,7 @@ def list_data_sources(runtime: ToolRuntime, area: str = "") -> str:
         runtime,
         role="You are the integrations catalogue of an analytics platform.",
         shape=(
-            '{"sources":[{"name":"","type":"","status":"","last_synced":"",'
-            '"record_count":""}]}'
+            '{"sources":[{"name":"","type":"","status":"","last_synced":"","record_count":""}]}'
         ),
         instruction=(
             f"List 4-6 connected data sources{f' related to {area}' if area else ''}. "

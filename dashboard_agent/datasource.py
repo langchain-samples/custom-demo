@@ -149,7 +149,16 @@ def get_datasource(
     """
     name = (dataset_name or dataset()).strip().lower()
     if name.startswith("synthetic"):
-        key = ("synthetic", model, data_prompt_name, data_prompt, ls_workspace, data_gap, customer, industry)
+        key = (
+            "synthetic",
+            model,
+            data_prompt_name,
+            data_prompt,
+            ls_workspace,
+            data_gap,
+            customer,
+            industry,
+        )
         if key not in _CACHE:
             _CACHE[key] = SyntheticDataSource(
                 model=model,

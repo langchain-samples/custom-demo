@@ -39,7 +39,12 @@ def test_valid_line_chart_multi_series():
 
 def test_valid_table():
     w = validate_widget(
-        {"type": "table", "title": "Resources", "columns": ["A", "B"], "rows": [["1", "2"], ["3", "4"]]}
+        {
+            "type": "table",
+            "title": "Resources",
+            "columns": ["A", "B"],
+            "rows": [["1", "2"], ["3", "4"]],
+        }
     )
     assert len(w["rows"]) == 2
 

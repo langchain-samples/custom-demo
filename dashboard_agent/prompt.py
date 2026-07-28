@@ -29,6 +29,7 @@ def _prompt_client(workspace: str | None):
     api_url = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
     return Client(api_key=key, api_url=api_url, workspace_id=workspace)
 
+
 # Shared grounding clause = the bug-free "don't fabricate" behavior. It is
 # APPENDED to the clean prompt, and the hallucination demo REPLACES it with
 # HALLUCINATION_CLAUSE rather than stacking on top: "do NOT invent data" plus
@@ -124,9 +125,8 @@ def build_data_prompt(gap: str, customer: str = "", industry: str = "") -> str:
     real product lines, segments, regions, terminology) so the demo feels custom.
     """
     if customer:
-        who = (
-            f"You are the DATA SOURCE behind {customer}'s live analytics dashboard"
-            + (f" — a {industry} organization." if industry else ".")
+        who = f"You are the DATA SOURCE behind {customer}'s live analytics dashboard" + (
+            f" — a {industry} organization." if industry else "."
         )
         tailor = (
             f"\n\nTAILOR EVERYTHING TO {customer}: use their real product lines, brands, "
@@ -193,7 +193,9 @@ def pull_data_prompt(name: str | None = None, workspace: str | None = None) -> s
         pt = _prompt_client(workspace).pull_prompt(name or data_prompt_name(), skip_cache=True)
         messages = pt.format_messages()
         text = "\n\n".join(
-            m.content for m in messages if isinstance(getattr(m, "content", None), str) and m.content
+            m.content
+            for m in messages
+            if isinstance(getattr(m, "content", None), str) and m.content
         )
         return text or DATA_FALLBACK_PROMPT
     except Exception:
@@ -212,7 +214,9 @@ def pull_system_prompt(name: str | None = None, workspace: str | None = None) ->
         # System-only ChatPromptTemplate with no input variables -> one SystemMessage.
         messages = pt.format_messages()
         text = "\n\n".join(
-            m.content for m in messages if isinstance(getattr(m, "content", None), str) and m.content
+            m.content
+            for m in messages
+            if isinstance(getattr(m, "content", None), str) and m.content
         )
         return text or FALLBACK_PROMPT
     except Exception:

@@ -9,7 +9,7 @@ reaches the browser.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Union
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -44,7 +44,7 @@ class ChartWidget(BaseModel):
     y_label: str | None = None
 
     @model_validator(mode="after")
-    def _pie_single_series(self) -> "ChartWidget":
+    def _pie_single_series(self) -> ChartWidget:
         if self.type == "pie" and len(self.series) != 1:
             raise ValueError("pie charts must have exactly one series")
         return self
@@ -57,13 +57,11 @@ class TableWidget(BaseModel):
     rows: list[list[str]] = Field(..., min_length=1)
 
     @model_validator(mode="after")
-    def _rows_match_columns(self) -> "TableWidget":
+    def _rows_match_columns(self) -> TableWidget:
         width = len(self.columns)
         for i, row in enumerate(self.rows):
             if len(row) != width:
-                raise ValueError(
-                    f"row {i} has {len(row)} cells but there are {width} columns"
-                )
+                raise ValueError(f"row {i} has {len(row)} cells but there are {width} columns")
         return self
 
 
@@ -74,7 +72,7 @@ class TextWidget(BaseModel):
 
 
 Widget = Annotated[
-    Union[KpiWidget, ChartWidget, TableWidget, TextWidget],
+    KpiWidget | ChartWidget | TableWidget | TextWidget,
     Field(discriminator="type"),
 ]
 

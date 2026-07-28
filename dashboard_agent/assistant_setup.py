@@ -152,7 +152,7 @@ def fetch_brand(customer: str, website: str | None = None) -> dict:
     Returns accent/accent2 empty when unknown so the caller can prefer the LLM guess."""
     domain = domain_for(customer, website)
     logo = f"https://img.logo.dev/{domain}?token={LOGODEV_TOKEN}&size=128&format=png&retina=true"
-    accent = ""       # authoritative (Brandfetch) — empty when unavailable
+    accent = ""  # authoritative (Brandfetch) — empty when unavailable
     accent2 = ""
     neutral = ""
     fonts = {"heading": "", "body": ""}
@@ -182,19 +182,36 @@ def fetch_brand(customer: str, website: str | None = None) -> dict:
         except Exception:
             pass
 
-    return {"domain": domain, "logo": logo, "accent": accent, "accent2": accent2,
-            "neutral": neutral, "fonts": fonts, "accent_scraped": accent_scraped}
+    return {
+        "domain": domain,
+        "logo": logo,
+        "accent": accent,
+        "accent2": accent2,
+        "neutral": neutral,
+        "fonts": fonts,
+        "accent_scraped": accent_scraped,
+    }
 
 
 INDUSTRIES = [
-    "Governmental", "Non-profit / NGO", "Healthcare", "Financial Services",
-    "Technology", "Education", "Retail", "Manufacturing", "Energy & Utilities",
-    "Logistics & Transport", "Media & Entertainment", "Other",
+    "Governmental",
+    "Non-profit / NGO",
+    "Healthcare",
+    "Financial Services",
+    "Technology",
+    "Education",
+    "Retail",
+    "Manufacturing",
+    "Energy & Utilities",
+    "Logistics & Transport",
+    "Media & Entertainment",
+    "Other",
 ]
 
 
-def analyze_customer(customer: str, industry: str = "", website: str | None = None,
-                     model: str | None = None) -> dict:
+def analyze_customer(
+    customer: str, industry: str = "", website: str | None = None, model: str | None = None
+) -> dict:
     """One LLM call → infer industry (unless given), 3 persona quick-actions, and a
     customer-specific 'data gap' + a question that probes it (the hallucination trigger)."""
     load_env()
@@ -233,10 +250,20 @@ def analyze_customer(customer: str, industry: str = "", website: str | None = No
         '"theme":"light|dark",'
         '"heading_font":"","body_font":"","heading_fallback":"","body_fallback":""}'
     )
-    out: dict = {"industry": industry or "", "actions": [], "data_gap": "", "gap_action": None,
-                 "primary_color": "", "secondary_color": "", "neutral_color": "", "theme": "dark",
-                 "heading_font": "", "body_font": "",
-                 "heading_fallback": DEFAULT_CURATED, "body_fallback": DEFAULT_CURATED}
+    out: dict = {
+        "industry": industry or "",
+        "actions": [],
+        "data_gap": "",
+        "gap_action": None,
+        "primary_color": "",
+        "secondary_color": "",
+        "neutral_color": "",
+        "theme": "dark",
+        "heading_font": "",
+        "body_font": "",
+        "heading_fallback": DEFAULT_CURATED,
+        "body_fallback": DEFAULT_CURATED,
+    }
     try:
         content = llm.invoke([HumanMessage(prompt)]).content
         if isinstance(content, list):
@@ -246,14 +273,20 @@ def analyze_customer(customer: str, industry: str = "", website: str | None = No
         if not industry:
             out["industry"] = str(data.get("industry", "")).strip()
         out["actions"] = [
-            {"label": str(a.get("label", "")).strip(), "question": str(a.get("question", "")).strip()}
+            {
+                "label": str(a.get("label", "")).strip(),
+                "question": str(a.get("question", "")).strip(),
+            }
             for a in (data.get("actions") or [])
             if isinstance(a, dict) and a.get("question")
         ][:3]
         out["data_gap"] = str(data.get("data_gap", "")).strip()
         ga = data.get("gap_action")
         if isinstance(ga, dict) and ga.get("question"):
-            out["gap_action"] = {"label": str(ga.get("label", "")).strip(), "question": str(ga.get("question", "")).strip()}
+            out["gap_action"] = {
+                "label": str(ga.get("label", "")).strip(),
+                "question": str(ga.get("question", "")).strip(),
+            }
         for k in ("primary_color", "secondary_color", "neutral_color"):
             v = str(data.get(k, "")).strip()
             if re.fullmatch(r"#[0-9a-fA-F]{6}", v):
@@ -356,7 +389,9 @@ def prepare_assistant(payload: dict) -> dict:
 
     # Brand colors — priority: Brandfetch (accurate/current) → LLM known-brand
     # guess → scraped site theme-color → default. Secondary drives the 2nd series.
-    accent = brand["accent"] or analysis.get("primary_color") or brand["accent_scraped"] or "#0072BC"
+    accent = (
+        brand["accent"] or analysis.get("primary_color") or brand["accent_scraped"] or "#0072BC"
+    )
     accent2 = brand["accent2"] or analysis.get("secondary_color") or ""
     # Surface tint hue. Left BLANK on purpose so it follows the primary accent:
     # a brand's "neutral" is nearly always a dark grey, and mixing dark grey into
