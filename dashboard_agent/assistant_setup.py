@@ -483,10 +483,9 @@ def prepare_assistant(payload: dict) -> dict:
     context: dict = {
         "ls_workspace": workspace,
         "customer": customer,
-        # Traces land in a per-customer, clearly-labelled project rather than one
-        # named just for the client — which could collide with a real project in
-        # that workspace. The SPA derives the same name (see traceProject()).
-        "ls_project": f"{slug}-corebot-demo",
+        # Traces land in a project named for the customer. The SPA derives the same
+        # name (see traceProject()).
+        "ls_project": customer,
     }
     if industry:
         context["industry"] = industry
