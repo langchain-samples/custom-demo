@@ -1,9 +1,10 @@
 /**
  * Inline "+ New" create form (section 2). Owner is prefilled from the last-used
  * value (localStorage "lastOwner", cached on create by the parent). Customer is
- * required (used as the assistant name). Website is optional. The hallucination
- * toggle seeds the built-in demo bug. Tools/capabilities are NOT chosen here —
- * they're set by the setup agent and stay editable afterwards in Settings.
+ * required (used as the assistant name). Website + Use case are optional; the
+ * setup agent tailors personas / data-gap / tools / prompt from them. The failure
+ * mode selects the built-in demo bug (hallucination today). Tools/capabilities are
+ * chosen by the setup agent and stay editable afterwards in Settings.
  * Create/Cancel are handled by the parent, which runs the assistant_setup graph
  * then creates + selects the assistant.
  *
@@ -11,9 +12,16 @@
  */
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Tooltip,
   TooltipContent,
@@ -25,7 +33,9 @@ export interface NewAssistantValues {
   owner: string;
   customer: string;
   website: string;
-  hallucination: boolean;
+  useCase: string;
+  /** "none" | "hallucination" — the built-in failure mode to demo. */
+  failureMode: string;
 }
 
 interface Props {
@@ -45,7 +55,8 @@ export function NewAssistantForm({ initialOwner, creating, onCreate, onCancel }:
   const [owner, setOwner] = useState(initialOwner);
   const [customer, setCustomer] = useState("");
   const [website, setWebsite] = useState("");
-  const [hallucination, setHallucination] = useState(true);
+  const [useCase, setUseCase] = useState("");
+  const [failureMode, setFailureMode] = useState("hallucination");
 
   const canCreate = !!customer.trim() && !creating;
 
@@ -69,29 +80,48 @@ export function NewAssistantForm({ initialOwner, creating, onCreate, onCancel }:
         onChange={(e) => setWebsite(e.target.value)}
         {...IGNORE_AUTOFILL}
       />
-      <Label className="flex-row items-center gap-2 text-[12.5px] font-medium text-foreground">
-        <Switch checked={hallucination} onCheckedChange={(v) => setHallucination(!!v)} />
-        Build in hallucination demo
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span
-                tabIndex={0}
-                className="flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-muted-foreground/50 text-[10px] font-bold text-muted-foreground"
-              >
-                ?
-              </span>
-            </TooltipTrigger>
-            <TooltipContent className="max-w-[240px] text-xs leading-relaxed">
-              Seeds a built-in demo bug: the synthetic data source withholds one
-              customer-specific metric, and the <strong>last</strong> quick-action
-              question probes it — so after two grounded answers the agent visibly
-              fabricates over the missing data. Great for showing how tracing/evals
-              catch hallucinations. Leave off for a clean assistant.
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-      </Label>
+      <Textarea
+        placeholder="Use case (optional) — e.g. support ops reviewing ticket volume & CSAT, drafting follow-ups"
+        value={useCase}
+        onChange={(e) => setUseCase(e.target.value)}
+        rows={2}
+        className="resize-none text-[13px]"
+        {...IGNORE_AUTOFILL}
+      />
+
+      <div className="flex items-center gap-2">
+        <Label className="flex-row items-center gap-1.5 text-[12.5px] font-medium text-foreground">
+          Failure mode
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  tabIndex={0}
+                  className="flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-muted-foreground/50 text-[10px] font-bold text-muted-foreground"
+                >
+                  ?
+                </span>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-[240px] text-xs leading-relaxed">
+                <strong>Hallucination</strong> seeds a built-in demo bug: the synthetic
+                data source withholds one customer-specific metric, and the last
+                quick-action question probes it — so after two grounded answers the agent
+                visibly fabricates over the missing data. Great for showing how
+                tracing/evals catch it. <strong>None</strong> = a clean, grounded assistant.
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </Label>
+        <Select value={failureMode} onValueChange={setFailureMode}>
+          <SelectTrigger className="h-8 flex-1 text-[13px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">None (clean)</SelectItem>
+            <SelectItem value="hallucination">Hallucination</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
 
       <div className="mt-0.5 flex gap-2">
         <Button
@@ -104,7 +134,8 @@ export function NewAssistantForm({ initialOwner, creating, onCreate, onCancel }:
               owner: owner.trim(),
               customer: customer.trim(),
               website: website.trim(),
-              hallucination,
+              useCase: useCase.trim(),
+              failureMode,
             })
           }
         >

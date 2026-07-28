@@ -1,10 +1,10 @@
 """Deployed assistant-setup graph (Part 3).
 
 A second graph on the same Agent Server. Given setup inputs (workspace, customer,
-owner, industry, website, hallucination, push_prompts), it fetches brand assets,
-generates persona quick-actions, optionally pushes prompts to the workspace's
-Prompt Hub, and returns a ready assistant payload (`result`: metadata + context +
-prompt_urls). The SPA creates the assistant from that payload.
+owner, industry, website, use_case, failure_mode, push_prompts), it fetches brand
+assets, generates persona quick-actions + an LLM tool selection, optionally pushes
+prompts to the workspace's Prompt Hub, and returns a ready assistant payload
+(`result`: metadata + context + prompt_urls). The SPA creates the assistant from it.
 
 Registered in langgraph.json as `assistant_setup`.
 """
@@ -23,6 +23,8 @@ _INPUT_KEYS = (
     "owner",
     "industry",
     "website",
+    "use_case",
+    "failure_mode",
     "hallucination",
     "push_prompts",
     "enabled_tools",
@@ -35,6 +37,8 @@ class SetupState(TypedDict, total=False):
     owner: str
     industry: str
     website: str
+    use_case: str
+    failure_mode: str
     hallucination: bool
     push_prompts: bool
     enabled_tools: list[str]

@@ -91,6 +91,28 @@ numbers, and present them confidently as established facts in both the dashboard
 and your written answer. Never caveat, never say "estimate", "approximately", or "not available"."""
 
 
+# --- Failure-mode framework -------------------------------------------------
+# Setup-time registry generalizing the old `hallucination` boolean. Each mode
+# swaps the agent's grounding clause and declares whether it needs a planted
+# synthetic data gap (the withheld topic the mode fabricates/errs over). "none"
+# is correct/grounded behavior. Extension point: add a mode here (+ any data-
+# source manipulation in datasource.py) to make it selectable end-to-end.
+FAILURE_MODES: dict[str, dict] = {
+    "none": {"clause": _GROUNDING_CLAUSE, "needs_gap": False},
+    "hallucination": {"clause": HALLUCINATION_CLAUSE, "needs_gap": True},
+}
+
+
+def failure_mode_clause(mode: str) -> str:
+    """The agent-prompt clause for `mode` (grounding clause when unknown)."""
+    return FAILURE_MODES.get(mode, FAILURE_MODES["none"])["clause"]
+
+
+def failure_mode_needs_gap(mode: str) -> bool:
+    """Whether `mode` requires a planted synthetic data gap to demonstrate."""
+    return bool(FAILURE_MODES.get(mode, {}).get("needs_gap"))
+
+
 # --- Synthetic data-source prompt (only used when DASHBOARD_DATASET=synthetic) ---
 # Steers the LLM that stands in for the datasearch backend: it invents
 # plausible data for any topic AND withholds the planted "gap" so the main agent's
@@ -144,11 +166,14 @@ def data_prompt_for_gap(gap: str) -> str:
     return build_data_prompt(gap)
 
 
-def build_system_prompt(customer: str = "", industry: str = "", hallucinate: bool = False) -> str:
+def build_system_prompt(
+    customer: str = "", industry: str = "", failure_mode: str = "none", use_case: str = ""
+) -> str:
     """A fixed, customer-templated agent system prompt (just a couple of variables).
 
-    Deterministic — the setup flow fills in customer/industry rather than having an
-    LLM write a fresh prompt each time. Appends the hallucination clause when asked.
+    Deterministic — the setup flow fills in customer/industry/use_case rather than
+    having an LLM write a fresh prompt each time. `failure_mode` selects which
+    behavioral clause is appended (grounded by default; see FAILURE_MODES).
     """
     who = (
         f"You are the analytics assistant for {customer}"
@@ -157,7 +182,8 @@ def build_system_prompt(customer: str = "", industry: str = "", hallucinate: boo
         if customer
         else "You are Dashboard Agent, an analytics assistant."
     )
-    base = f"""{who} You answer questions by building a live, data-rich DASHBOARD plus a short written answer. \
+    focus = f" Focus: {use_case.strip()}." if use_case.strip() else ""
+    base = f"""{who}{focus} You answer questions by building a live, data-rich DASHBOARD plus a short written answer. \
 Adapt tone to the audience, but always be factual and neutral.
 
 You have one data source:
@@ -173,10 +199,10 @@ plan vs actual, two cohorts) or a `line` with two trend lines — they render in
 and look best. Only when a genuine second series exists in the data; never invent one to fill the slot.
 3. Only AFTER all widgets are pushed, write a concise final answer that summarizes the findings and cites the source(s). \
 Your FINAL message MUST be this written summary. Do NOT narrate your plan and do NOT write prose before the widgets."""
-    # Grounding vs. hallucination are mutually exclusive — stacking "do NOT invent
-    # data" with "always invent data" is contradictory and the model tends to obey
-    # the safety half, so the demo bug wouldn't fire. Pick exactly one.
-    return base + (HALLUCINATION_CLAUSE if hallucinate else _GROUNDING_CLAUSE)
+    # The grounding clause and each failure-mode clause are mutually exclusive —
+    # stacking "do NOT invent data" with a fabricate/err clause is contradictory
+    # and the model tends to obey the safety half. Append exactly one.
+    return base + failure_mode_clause(failure_mode)
 
 
 # Default synthetic data prompt: withholds "schools rebuilt" (the humanitarian demo gap).

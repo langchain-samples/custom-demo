@@ -506,7 +506,8 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
             customer: v.customer,
             owner: v.owner,
             website: v.website,
-            hallucination: v.hallucination,
+            use_case: v.useCase,
+            failure_mode: v.failureMode,
             push_prompts: true,
           });
           const a = await createAssistant({
