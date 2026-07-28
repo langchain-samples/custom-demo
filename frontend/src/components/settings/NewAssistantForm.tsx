@@ -84,8 +84,8 @@ export function NewAssistantForm({ initialOwner, creating, onCreate, onCancel }:
         placeholder="Use case (optional; defaults to an internal assistant). e.g. support ops reviewing ticket volume & CSAT, drafting follow-ups"
         value={useCase}
         onChange={(e) => setUseCase(e.target.value)}
-        rows={2}
-        className="resize-none text-[13px]"
+        rows={1}
+        className="min-h-0 resize-none text-[13px]"
         {...IGNORE_AUTOFILL}
       />
 

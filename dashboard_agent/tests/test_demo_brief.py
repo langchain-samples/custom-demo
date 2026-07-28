@@ -28,6 +28,22 @@ def test_hallucination_brief_flow():
     assert any("LangSmith" in step for step in out["flow"])
 
 
+def test_no_em_dash_or_double_period():
+    # The user wants no em-dashes anywhere in the brief, and no ".." from a
+    # use_case that already ends in a period.
+    out = build_demo_brief(
+        "Walmart",
+        "Sparky handles conversational shopping.",
+        ACTIONS,
+        ["push_widget", "datasearch", "suggest_meeting_times"],
+        "hallucination",
+        data_gap="customer sentiment",
+    )
+    for step in out["brief"] + out["flow"]:
+        assert "—" not in step, f"em-dash in: {step!r}"
+        assert ".." not in step, f"double period in: {step!r}"
+
+
 def test_clean_brief_has_no_hallucination_bullet():
     out = build_demo_brief(
         "Acme",
