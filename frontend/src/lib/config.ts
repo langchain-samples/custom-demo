@@ -1,18 +1,21 @@
 /**
  * Connection config for the LangGraph Agent Server.
  *
- * Mirrors the original SPA's `lgConfig()`: the base URL defaults to
- * http://127.0.0.1:2024 and can be overridden (in precedence order) by the
- * localStorage key "lgUrl" or by `window.LG.url` (from the deployment's
- * config.js). The assistant id is a UUID (a specific assistant variant) or the
- * graph id "dashboard_agent" (the graph's default assistant).
+ * Base URL precedence: localStorage "lgUrl" → `window.LG.url` (config.js) →
+ * build-time `VITE_LG_URL` (set in the hosting env, e.g. Vercel) →
+ * http://127.0.0.1:2024. The assistant id is a UUID (a specific assistant
+ * variant) or the graph id "dashboard_agent" (the graph's default assistant).
  */
 
 /** The registered graph id on the Agent Server. */
 export const GRAPH_ID = "dashboard_agent";
 
-/** Default Agent Server base URL. */
-export const DEFAULT_API_BASE = "http://127.0.0.1:2024";
+/** Build-time overrides (baked in by Vite from VITE_* env vars at build). */
+const ENV_URL = (import.meta.env.VITE_LG_URL as string | undefined) || "";
+const ENV_API_KEY = (import.meta.env.VITE_LG_API_KEY as string | undefined) || "";
+
+/** Default Agent Server base URL (build-time env, else local dev). */
+export const DEFAULT_API_BASE = ENV_URL || "http://127.0.0.1:2024";
 
 /** Shape of the optional `window.LG` base config injected via config.js. */
 export interface LGGlobal {
@@ -75,7 +78,7 @@ export function setAssistantId(id: string): void {
 
 /** Optional API key for a secured/cloud deployment (sent as x-api-key). */
 export function getApiKey(): string {
-  return readLS(LG_API_KEY_KEY) || windowLG().apiKey || "";
+  return readLS(LG_API_KEY_KEY) || windowLG().apiKey || ENV_API_KEY;
 }
 
 /** Persist an API key override to localStorage. */
