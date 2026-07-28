@@ -188,7 +188,13 @@ def build_system_prompt(
         if customer
         else "You are Dashboard Agent, an analytics assistant."
     )
-    focus = f" Focus: {use_case.strip()}." if use_case.strip() else ""
+    focus = (
+        f" This assistant is set up for the following use case: {use_case.strip().rstrip('.')}."
+        " Frame every dashboard and written answer around that scenario, using the roles, metrics,"
+        " and terminology it implies rather than generic company-wide analytics."
+        if use_case.strip()
+        else ""
+    )
     base = f"""{who}{focus} You answer questions by building a live, data-rich DASHBOARD plus a short written answer. \
 Adapt tone to the audience, but always be factual and neutral.
 

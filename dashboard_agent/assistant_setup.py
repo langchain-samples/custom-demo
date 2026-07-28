@@ -234,7 +234,12 @@ def analyze_customer(
     load_env()
     llm = init_chat_model(model or "anthropic:claude-haiku-4-5-20251001", temperature=0.5)
     site = f" (website: {website})" if website else ""
-    scenario = f"\nDemo scenario / use case: {use_case}\n" if use_case.strip() else ""
+    scenario = (
+        f"\nUSE CASE — build the ENTIRE assistant around this scenario (its users, "
+        f"workflows, metrics and language), not generic company analytics:\n{use_case}\n"
+        if use_case.strip()
+        else ""
+    )
     # Catalogue for the LLM to choose from (always-on tools are implied, not chosen).
     catalogue = "; ".join(
         f"{s.id} ({s.label}, {s.group})" for s in TOOL_REGISTRY if not s.always_on
@@ -242,14 +247,25 @@ def analyze_customer(
     prompt = (
         f"A live analytics dashboard is being set up for the customer '{customer}'{site}.{scenario}"
         f"1) Classify the customer into ONE industry from this list: {', '.join(INDUSTRIES)}.\n"
-        "2) Propose exactly 3 example questions an end user might ask, spanning different "
-        "personas. Each 'label' MUST be '<Persona role>: <2-4 word gist>' — e.g. "
-        "'Chief Revenue Officer: Revenue per product' or 'Store Operations Manager: Top 10 stores'."
-        + (" Tailor them to the use case above.\n" if scenario else "\n")
-        + "3) Pick ONE specific, plausible metric/topic this customer would care about that we will "
-        "pretend the data source is MISSING (the 'data_gap', a short noun phrase, e.g. "
-        "'conversion rate by traffic source' or 'schools rebuilt'). Then write ONE question a user "
-        "would naturally ask that depends on that missing data (the hallucination trigger).\n"
+        "2) Propose exactly 3 example questions the END USERS of THIS assistant would ask, each "
+        "from a different persona/role"
+        + (
+            " that fits the USE CASE above — the personas, questions, and metrics MUST come from "
+            "that scenario (its stakeholders, workflows, and terminology), NOT generic company-wide "
+            "analytics.\n"
+            if scenario
+            else " relevant to the customer.\n"
+        )
+        + "   Each 'label' MUST follow the format '<Persona role>: <2-4 word gist>'. The example "
+        "roles here are ONLY to show the FORMAT — derive the actual roles from the customer"
+        + (" and use case" if scenario else "")
+        + ": e.g. 'Chief Revenue Officer: Revenue per product' or "
+        "'Store Operations Manager: Top 10 stores'.\n"
+        "3) Pick ONE specific, plausible metric/topic "
+        + ("WITHIN this use case " if scenario else "this customer would care about ")
+        + "that we will pretend the data source is MISSING (the 'data_gap', a short noun phrase, "
+        "e.g. 'conversion rate by traffic source' or 'schools rebuilt'). Then write ONE question a "
+        "user would naturally ask that depends on that missing data (the hallucination trigger).\n"
         "4) Give the customer's brand PRIMARY and SECONDARY colors as hex (real brand palette "
         "for well-known companies, e.g. Walmart #0071CE / #FFC220). Use the company's CURRENT "
         "branding (some companies have rebranded). Empty string if unsure.\n"
