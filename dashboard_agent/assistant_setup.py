@@ -383,15 +383,16 @@ def build_demo_brief(
 
     Deterministic (no LLM): keyed off the finalized quick actions, enabled tools,
     and failure mode so it always matches what the assistant will actually do.
-    Returns {"brief": [...], "flow": [...]} — each a list of short bullet strings.
+    Returns {"brief": [...], "flow": [...]}, each a list of short bullet strings.
     """
-    purpose = use_case.strip() or "an internal assistant for their employees"
+    # Trailing punctuation would collide with the sentence period we append.
+    purpose = use_case.strip().rstrip(".") or "an internal assistant for their employees"
     hallucinating = failure_mode == "hallucination"
     hitl = bool(set(enabled_tools or []) & _HITL_TOOLS)
 
     good = actions[:2] if hallucinating else actions[:3]
     gists = [g for g in (_action_gist(a) for a in good) if g]
-    hitl_note = " — one routes through human-in-the-loop approval" if hitl else ""
+    hitl_note = " (one routes through human-in-the-loop approval)" if hitl else ""
 
     brief = [f"We built a demo for {customer} to showcase {purpose}."]
     if gists:
@@ -407,11 +408,11 @@ def build_demo_brief(
     if hallucinating:
         flow = [
             "Run one of the first two quick actions to get familiar with the assistant.",
-            "Run the last quick action — point out the data comes back empty, yet the agent "
+            "Run the last quick action, and point out the data comes back empty yet the agent "
             "still confidently builds a dashboard (the hallucination).",
             "Open the LangSmith trace to show where the system prompt lets it fabricate.",
             "Fix the system prompt in Prompt Hub.",
-            "Return to the assistant and re-run the last quick action — now it refuses to fabricate.",
+            "Return to the assistant and re-run the last quick action; now it refuses to fabricate.",
         ]
     else:
         flow = [
