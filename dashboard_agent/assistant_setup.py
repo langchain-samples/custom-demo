@@ -8,19 +8,20 @@ The graph node (setup_graph.py) calls these and returns a ready assistant payloa
 
 from __future__ import annotations
 
-import json
 import os
 import re
+from typing import cast
 
 import httpx
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langsmith import Client
+from pydantic import BaseModel, Field
 
 from .config import load_env
 from .prompt import build_system_prompt, failure_mode_needs_gap
-from .tools import ALWAYS_ON, CATALOGUE_IDS, DEFAULT_ENABLED, TOOL_REGISTRY
+from .tools import CATALOGUE_IDS, DEFAULT_ENABLED, TOOL_REGISTRY
 
 DEFAULT_ACCENT = "#0072BC"
 # Logo.dev publishable key (safe client-side; Clearbit's logo API shut down 2025-12).
@@ -229,6 +230,35 @@ def _generalize_gap(gap: str) -> str:
     return head if len(head.split()) >= 2 else gap
 
 
+class _QuickAction(BaseModel):
+    """One persona quick-action."""
+
+    label: str = Field(description="'<Persona>: <2-4 word gist>', e.g. 'Shopper: Gift under $50'")
+    question: str = Field(description="A natural question that persona would ask this assistant")
+
+
+class AssistantSetupResponse(BaseModel):
+    """The setup profile the LLM returns for a customer + optional use case."""
+
+    industry: str = Field(description="One industry from the provided list")
+    actions: list[_QuickAction] = Field(description="Exactly 3 end-user persona quick-actions")
+    data_gap: str = Field(description="A general 2-3 word topic/metric to withhold")
+    gap_action: _QuickAction = Field(description="A question that depends on the withheld data")
+    primary_color: str = Field(default="", description="Brand primary as #RRGGBB, or empty")
+    secondary_color: str = Field(default="", description="Brand secondary as #RRGGBB, or empty")
+    neutral_color: str = Field(
+        default="", description="Dark brand-adjacent tint as #RRGGBB, or empty"
+    )
+    theme: str = Field(default="dark", description="'light' or 'dark'")
+    heading_font: str = Field(default="", description="Google Fonts heading family, or empty")
+    body_font: str = Field(default="", description="Google Fonts body family, or empty")
+    heading_fallback: str = Field(default="", description="One curated fallback family")
+    body_fallback: str = Field(default="", description="One curated fallback family")
+    enabled_tools: list[str] = Field(
+        default_factory=list, description="Optional catalogue tool ids to expose"
+    )
+
+
 def analyze_customer(
     customer: str,
     industry: str = "",
@@ -257,22 +287,23 @@ def analyze_customer(
         f"{s.id} ({s.label}, {s.group})" for s in TOOL_REGISTRY if not s.always_on
     )
     prompt = (
-        f"A live analytics dashboard is being set up for the customer '{customer}'{site}.{scenario}"
+        f"You are configuring a demo AI assistant for '{customer}'{site}.{scenario}"
+        "Do NOT assume this is an internal analytics tool; let the use case (if any) define what the "
+        "assistant is and who uses it.\n"
         f"1) Classify the customer into ONE industry from this list: {', '.join(INDUSTRIES)}.\n"
-        "2) Propose exactly 3 example questions the END USERS of THIS assistant would ask, each "
-        "from a different persona/role"
+        "2) Propose exactly 3 example questions the ACTUAL END USERS of this assistant would ask. "
+        "First decide WHO the users are from the use case: if the assistant is customer-facing (a "
+        "shopping, support, or concierge bot), the personas are the END CUSTOMERS themselves "
+        "(shoppers, callers, members, patients, ...), NOT internal staff; if it is an internal tool, "
+        "they are the relevant employee roles."
         + (
-            " that fits the USE CASE above — the personas, questions, and metrics MUST come from "
-            "that scenario (its stakeholders, workflows, and terminology), NOT generic company-wide "
-            "analytics.\n"
+            " The personas, questions, and language MUST come from the USE CASE above.\n"
             if scenario
-            else " relevant to the customer.\n"
+            else "\n"
         )
-        + "   Each 'label' MUST follow the format '<Persona role>: <2-4 word gist>'. The example "
-        "roles here are ONLY to show the FORMAT — derive the actual roles from the customer"
-        + (" and use case" if scenario else "")
-        + ": e.g. 'Chief Revenue Officer: Revenue per product' or "
-        "'Store Operations Manager: Top 10 stores'.\n"
+        + "   Each 'label' MUST follow the format '<Persona>: <2-4 word gist>'. These illustrate the "
+        "FORMAT only (do NOT copy the roles): 'Shopper: Gift under $50', "
+        "'Support caller: Refund status', 'Regional Manager: Store performance'.\n"
         "3) Pick ONE plausible metric/topic "
         + ("WITHIN this use case " if scenario else "this customer would care about ")
         + "that we will pretend the data source is MISSING (the 'data_gap'). Keep it a GENERAL "
@@ -297,16 +328,7 @@ def analyze_customer(
         f"{', '.join(CURATED_FONTS)}.\n"
         "8) Choose which optional TOOLS this assistant should expose, as a list of ids from this "
         f"catalogue (pick only what the customer/use-case needs): {catalogue}. "
-        "The dashboard builder and data search are always on — do NOT list them.\n"
-        "Return STRICT JSON, no prose:\n"
-        '{"industry":"<one of the list>",'
-        '"actions":[{"label":"<Persona role>: <2-4 word gist>","question":"<question>"}],'
-        '"data_gap":"<short noun phrase>",'
-        '"gap_action":{"label":"<Persona role>: <2-4 word gist>","question":"<question that needs the gap data>"},'
-        '"primary_color":"#RRGGBB","secondary_color":"#RRGGBB","neutral_color":"#RRGGBB",'
-        '"theme":"light|dark",'
-        '"heading_font":"","body_font":"","heading_fallback":"","body_fallback":"",'
-        '"enabled_tools":["<tool id>"]}'
+        "The dashboard builder and data search are always on — do NOT list them."
     )
     out: dict = {
         "industry": industry or "",
@@ -324,45 +346,42 @@ def analyze_customer(
         "enabled_tools": None,
     }
     try:
-        content = llm.invoke([HumanMessage(prompt)]).content
-        if isinstance(content, list):
-            content = "".join(b.get("text", "") for b in content if isinstance(b, dict))
-        m = re.search(r"\{.*\}", content, re.S)
-        data = json.loads(m.group(0)) if m else {}
+        structured = llm.with_structured_output(AssistantSetupResponse)
+        resp = cast("AssistantSetupResponse", structured.invoke([HumanMessage(prompt)]))
         if not industry:
-            out["industry"] = str(data.get("industry", "")).strip()
+            out["industry"] = resp.industry.strip()
         out["actions"] = [
-            {
-                "label": str(a.get("label", "")).strip(),
-                "question": str(a.get("question", "")).strip(),
-            }
-            for a in (data.get("actions") or [])
-            if isinstance(a, dict) and a.get("question")
+            {"label": a.label.strip(), "question": a.question.strip()}
+            for a in resp.actions
+            if a.question.strip()
         ][:3]
-        out["data_gap"] = _generalize_gap(str(data.get("data_gap", "")).strip())
-        ga = data.get("gap_action")
-        if isinstance(ga, dict) and ga.get("question"):
+        out["data_gap"] = _generalize_gap(resp.data_gap.strip())
+        if resp.gap_action and resp.gap_action.question.strip():
             out["gap_action"] = {
-                "label": str(ga.get("label", "")).strip(),
-                "question": str(ga.get("question", "")).strip(),
+                "label": resp.gap_action.label.strip(),
+                "question": resp.gap_action.question.strip(),
             }
-        for k in ("primary_color", "secondary_color", "neutral_color"):
-            v = str(data.get(k, "")).strip()
+        for key, val in (
+            ("primary_color", resp.primary_color),
+            ("secondary_color", resp.secondary_color),
+            ("neutral_color", resp.neutral_color),
+        ):
+            v = (val or "").strip()
             if re.fullmatch(r"#[0-9a-fA-F]{6}", v):
-                out[k] = v
+                out[key] = v
         # Validated before storage — an unvetted family must never reach metadata.
-        for k in ("heading_font", "body_font"):
-            out[k] = safe_font_name(str(data.get(k, "")))
-        for k in ("heading_fallback", "body_fallback"):
-            out[k] = safe_curated(str(data.get(k, "")))
-        theme = str(data.get("theme", "")).strip().lower()
+        out["heading_font"] = safe_font_name(resp.heading_font)
+        out["body_font"] = safe_font_name(resp.body_font)
+        out["heading_fallback"] = safe_curated(resp.heading_fallback)
+        out["body_fallback"] = safe_curated(resp.body_fallback)
+        theme = (resp.theme or "").strip().lower()
         if theme in ("light", "dark"):
             out["theme"] = theme
-        # Only keep ids that exist in the catalogue; ALWAYS_ON is unioned in later.
-        raw_tools = data.get("enabled_tools")
-        if isinstance(raw_tools, list):
-            picked = {str(t).strip() for t in raw_tools} & CATALOGUE_IDS
-            out["enabled_tools"] = sorted(picked | set(ALWAYS_ON))
+        # Keep only catalogue ids, then union the always-on core (push_widget +
+        # datasearch): the LLM is told not to list those, so they'd otherwise be
+        # dropped and the agent would lose data retrieval.
+        picked = {t.strip() for t in resp.enabled_tools} & CATALOGUE_IDS
+        out["enabled_tools"] = sorted(picked | set(DEFAULT_ENABLED))
     except Exception:
         pass
     return out
@@ -490,11 +509,11 @@ def prepare_assistant(payload: dict) -> dict:
     if industry:
         context["industry"] = industry
     # Tool selection: explicit caller override → the LLM's pick → DEFAULT_ENABLED.
-    # Normalized like tools.allowed_tool_names (intersect catalogue, union ALWAYS_ON)
-    # so a new assistant shows a concrete, valid, editable value in Settings.
+    # Union DEFAULT_ENABLED (push_widget + datasearch) so a new assistant always
+    # keeps the always-on core plus data retrieval, then adds the optional picks.
     picked = payload.get("enabled_tools") or analysis.get("enabled_tools")
     if picked:
-        context["enabled_tools"] = sorted((set(picked) & CATALOGUE_IDS) | set(ALWAYS_ON))
+        context["enabled_tools"] = sorted((set(picked) & CATALOGUE_IDS) | set(DEFAULT_ENABLED))
     else:
         context["enabled_tools"] = sorted(DEFAULT_ENABLED)
     prompt_urls: dict = {}

@@ -184,16 +184,16 @@ def build_system_prompt(
     behavioral clause is appended (grounded by default; see FAILURE_MODES).
     """
     who = (
-        f"You are the analytics assistant for {customer}"
+        f"You are {customer}'s AI assistant"
         + (f", a {industry} organization" if industry else "")
         + "."
         if customer
-        else "You are Dashboard Agent, an analytics assistant."
+        else "You are an AI assistant."
     )
     focus = (
         f" This assistant is set up for the following use case: {use_case.strip().rstrip('.')}."
-        " Frame every dashboard and written answer around that scenario, using the roles, metrics,"
-        " and terminology it implies rather than generic company-wide analytics."
+        " Let that scenario define who you serve and how you answer: adopt its users, roles, metrics,"
+        " and terminology, and do NOT default to generic internal company-wide analytics."
         if use_case.strip()
         else ""
     )
