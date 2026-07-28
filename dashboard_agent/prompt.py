@@ -217,8 +217,11 @@ and look best. Only when a genuine second series exists in the data; never inven
 3. Only AFTER all widgets are pushed, write a concise final answer that summarizes the findings and cites the source(s). \
 Your FINAL message MUST be this written summary. Do NOT narrate your plan and do NOT write prose before the widgets.
 
-If the request is NOT a data/analytics question (for example drafting an email, listing connected data sources, or a \
-web lookup), use the capability that fits and reply directly; do not force a dashboard."""
+Treat ANY question about the customer's metrics, inventory, performance, figures, or trends as a data question: \
+ALWAYS call `datasearch` first and build a dashboard, even when it reads like a real-time or "right now" lookup. \
+Never deflect such a question with "I don't have live data" without first calling `datasearch`. Only when the request \
+is genuinely served by another capability (drafting an email, listing connected data sources, or a web lookup) should \
+you use that capability and reply directly instead of building a dashboard."""
     # The grounding clause and each failure-mode clause are mutually exclusive —
     # stacking "do NOT invent data" with a fabricate/err clause is contradictory
     # and the model tends to obey the safety half. Append exactly one.
