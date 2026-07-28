@@ -50,6 +50,7 @@ import { getAssistantId, isAssistantId, setAssistantId } from "@/lib/config";
 import { WorkspaceSelect } from "./settings/WorkspaceSelect";
 import { AssistantSelect } from "./settings/AssistantSelect";
 import { NewAssistantForm, type NewAssistantValues } from "./settings/NewAssistantForm";
+import { DemoBriefDialog, type DemoBrief } from "./settings/DemoBriefDialog";
 import { VisualSection } from "./settings/VisualSection";
 import { BrandSection } from "./settings/BrandSection";
 import { TypographySection } from "./settings/TypographySection";
@@ -254,6 +255,8 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
     );
     const [showNewForm, setShowNewForm] = useState(false);
     const [creating, setCreating] = useState(false);
+    // Post-setup presenter brief popup (null = hidden).
+    const [demoBrief, setDemoBrief] = useState<DemoBrief | null>(null);
 
     // Latest-value refs for async callbacks (debounced save, create/delete).
     const cfgRef = useRef(cfg);
@@ -519,13 +522,22 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           setAssistants(list);
           setShowNewForm(false);
           applySelection(a.assistant_id, list, true);
+          // Surface the presenter brief the setup agent generated. Close the
+          // settings sheet so it lands front-and-centre over the fresh demo.
+          const meta = result.metadata || a.metadata || {};
+          const briefLines = meta.demo_brief || [];
+          const flowLines = meta.demo_flow || [];
+          if (briefLines.length || flowLines.length) {
+            onOpenChange(false);
+            setDemoBrief({ customer: v.customer, brief: briefLines, flow: flowLines });
+          }
         } catch (e) {
           window.alert("Setup failed: " + errMsg(e));
         } finally {
           setCreating(false);
         }
       },
-      [applySelection],
+      [applySelection, onOpenChange],
     );
 
     const handleDelete = useCallback(async () => {
@@ -552,6 +564,8 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
       selectedId;
 
     return (
+      <>
+      <DemoBriefDialog brief={demoBrief} onClose={() => setDemoBrief(null)} />
       <Sheet open={open} onOpenChange={onOpenChange}>
         <SheetContent className="w-[380px] gap-0 p-0 sm:max-w-[380px]">
           <SheetHeader className="p-4 pb-2">
@@ -649,6 +663,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           </div>
         </SheetContent>
       </Sheet>
+      </>
     );
   },
 );

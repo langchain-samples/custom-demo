@@ -31,6 +31,7 @@ BUGGY_PROMPT = FALLBACK_PROMPT + HALLUCINATION_CLAUSE
 
 
 def main() -> None:
+    """Push the default (hallucination-seeded) system prompt to the Prompt Hub."""
     name = prompt_name()
     ws = workspace_id()
     prompt = ChatPromptTemplate.from_messages([("system", BUGGY_PROMPT)])

@@ -81,7 +81,7 @@ export function NewAssistantForm({ initialOwner, creating, onCreate, onCancel }:
         {...IGNORE_AUTOFILL}
       />
       <Textarea
-        placeholder="Use case (optional) — e.g. support ops reviewing ticket volume & CSAT, drafting follow-ups"
+        placeholder="Use case (optional; defaults to an internal assistant). e.g. support ops reviewing ticket volume & CSAT, drafting follow-ups"
         value={useCase}
         onChange={(e) => setUseCase(e.target.value)}
         rows={2}
@@ -102,12 +102,14 @@ export function NewAssistantForm({ initialOwner, creating, onCreate, onCancel }:
                   ?
                 </span>
               </TooltipTrigger>
-              <TooltipContent className="max-w-[240px] text-xs leading-relaxed">
-                <strong>Hallucination</strong> seeds a built-in demo bug: the synthetic
-                data source withholds one customer-specific metric, and the last
-                quick-action question probes it — so after two grounded answers the agent
-                visibly fabricates over the missing data. Great for showing how
-                tracing/evals catch it. <strong>None</strong> = a clean, grounded assistant.
+              <TooltipContent className="text-xs leading-relaxed">
+                <span className="block w-[260px] whitespace-normal text-left">
+                  <strong>Hallucination</strong> seeds a built-in demo bug: the synthetic
+                  data source withholds one customer-specific metric, and the last
+                  quick-action question probes it, so after two grounded answers the agent
+                  visibly fabricates over the missing data. Great for showing how
+                  tracing/evals catch it. <strong>None</strong> = a clean, grounded assistant.
+                </span>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>

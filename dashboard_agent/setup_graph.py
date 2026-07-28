@@ -35,6 +35,8 @@ _INPUT_KEYS = (
 
 
 class SetupState(TypedDict, total=False):
+    """Setup-run state: the setup inputs plus the `result`/`status`/`error` output."""
+
     workspace: str
     customer: str
     owner: str
@@ -77,8 +79,10 @@ SETUP_TRACE_PROJECT = os.getenv("SETUP_TRACE_PROJECT", "custom-demos")
 
 @contextlib.asynccontextmanager
 async def graph(config: Any):
-    """Factory: wrap each setup run in a tracing context so its traces land in
-    SETUP_TRACE_PROJECT, then yield the compiled graph (Agent Server pattern —
-    mirrors dashboard_agent/graph.py)."""
+    """Factory: wrap each setup run in a tracing context, then yield the graph.
+
+    Traces land in SETUP_TRACE_PROJECT (Agent Server pattern — mirrors
+    dashboard_agent/graph.py).
+    """
     with tracing_context(enabled=True, project_name=SETUP_TRACE_PROJECT):
         yield _compiled

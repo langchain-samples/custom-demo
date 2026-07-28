@@ -20,6 +20,7 @@ from dashboard_agent.prompt import DATA_FALLBACK_PROMPT
 
 
 def main() -> None:
+    """Push the default synthetic-data prompt to the workspace's Prompt Hub."""
     name = data_prompt_name()
     ws = workspace_id()
     prompt = ChatPromptTemplate.from_messages([("system", DATA_FALLBACK_PROMPT)])

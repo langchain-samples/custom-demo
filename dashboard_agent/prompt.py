@@ -19,9 +19,12 @@ from .config import data_prompt_name, load_env, make_client, prompt_name
 
 
 def _prompt_client(workspace: str | None):
-    """Client used to pull prompts. With a workspace id, scope to it using the
-    routing key (cross-workspace/org key when set, else the default key) so the
-    prompt comes from THAT workspace's Prompt Hub. Without one, the default client."""
+    """Client used to pull prompts.
+
+    With a workspace id, scope to it using the routing key (cross-workspace/org key
+    when set, else the default key) so the prompt comes from THAT workspace's Prompt
+    Hub. Without one, the default client.
+    """
     if not workspace:
         return make_client()
     load_env()
@@ -130,8 +133,11 @@ last, plan vs actual, or two segments) so the agent can build side-by-side compa
 
 
 def data_withhold_clause(gap: str) -> str:
-    """The 'planted gap' clause: instructs the data source to return nothing for a
-    specific topic, so the main agent's hallucination bug has something to fabricate."""
+    """The 'planted gap' clause.
+
+    Instructs the data source to return nothing for a specific topic, so the main
+    agent's hallucination bug has something to fabricate.
+    """
     return (
         "\n\nWITHHELD DATA (the planted gap — keep this to preserve the demo):\n"
         f'- Never provide figures about "{gap}" (any segment, region, or period). For any query '

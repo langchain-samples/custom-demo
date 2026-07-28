@@ -34,6 +34,11 @@ async def authenticate(
     headers: dict[bytes, bytes] | None = None,
     authorization: str | None = None,
 ) -> dict[str, str]:
+    """Gate the deployment behind a shared secret.
+
+    When `APP_SHARED_SECRET` is unset, auth is disabled (local dev). Otherwise the
+    provided token must match it (constant-time), else 401.
+    """
     secret = os.getenv("APP_SHARED_SECRET", "").strip()
     if not secret:
         # No secret configured → auth disabled (local dev).

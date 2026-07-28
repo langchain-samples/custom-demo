@@ -68,10 +68,12 @@ def safe_curated(name: str) -> str:
 
 
 def slugify(name: str) -> str:
+    """Lowercase, hyphenate to a URL-safe slug (falls back to "customer")."""
     return re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-") or "customer"
 
 
 def domain_for(customer: str, website: str | None) -> str:
+    """Derive a bare domain from an explicit website, else guess from the name."""
     if website:
         m = re.search(r"^(?:https?://)?(?:www\.)?([^/]+)", website.strip())
         if m:
@@ -81,9 +83,12 @@ def domain_for(customer: str, website: str | None) -> str:
 
 
 def _brandfetch_brand(domain: str) -> dict | None:
-    """Accurate current palette (+ logo) from Brandfetch's Brand API, or None on
-    any failure (no key, rate-limit/quota, network, unknown domain) so callers
-    fall back to the LLM guess. Free tier is ~100 pulls, so failures are expected."""
+    """Accurate current palette (+ logo) from Brandfetch's Brand API.
+
+    Returns None on any failure (no key, rate-limit/quota, network, unknown
+    domain) so callers fall back to the LLM guess. Free tier is ~100 pulls, so
+    failures are expected.
+    """
     key = os.getenv("BRANDFETCH_API_KEY", "") or BRANDFETCH_API_KEY
     if not key:
         load_env()
@@ -147,9 +152,12 @@ def _brandfetch_brand(domain: str) -> dict | None:
 
 
 def fetch_brand(customer: str, website: str | None = None) -> dict:
-    """Brand assets: the Logo.dev logo, plus a Brandfetch palette when available
-    (accurate/current), else a scraped <meta theme-color> as a weak accent fallback.
-    Returns accent/accent2 empty when unknown so the caller can prefer the LLM guess."""
+    """Brand assets: the Logo.dev logo, plus a Brandfetch palette when available.
+
+    The palette is accurate/current from Brandfetch, else a scraped
+    <meta theme-color> as a weak accent fallback. Returns accent/accent2 empty
+    when unknown so the caller can prefer the LLM guess.
+    """
     domain = domain_for(customer, website)
     logo = f"https://img.logo.dev/{domain}?token={LOGODEV_TOKEN}&size=128&format=png&retina=true"
     accent = ""  # authoritative (Brandfetch) — empty when unavailable
@@ -216,10 +224,13 @@ def analyze_customer(
     use_case: str = "",
     model: str | None = None,
 ) -> dict:
-    """One LLM call → infer industry (unless given), 3 persona quick-actions, a
-    customer-specific 'data gap' (+ trigger question), brand visuals, and the subset
-    of catalogue tools the assistant should expose. `use_case` (optional NL scenario)
-    tailors the personas, the data gap, and the tool selection."""
+    """Infer the assistant profile from the customer in a single LLM call.
+
+    Returns industry (unless given), 3 persona quick-actions, a customer-specific
+    'data gap' (+ trigger question), brand visuals, and the subset of catalogue
+    tools the assistant should expose. `use_case` (optional NL scenario) tailors
+    the personas, the data gap, and the tool selection.
+    """
     load_env()
     llm = init_chat_model(model or "anthropic:claude-haiku-4-5-20251001", temperature=0.5)
     site = f" (website: {website})" if website else ""
@@ -334,6 +345,10 @@ def _ws_client(workspace: str | None):
 
 
 def push_prompt(workspace: str, name: str, text: str) -> str:
+    """Push a system prompt to the workspace's Prompt Hub, returning its commit URL.
+
+    A re-push of identical content (409 "nothing to commit") is treated as success.
+    """
     obj = ChatPromptTemplate.from_messages([("system", text)])
     try:
         return _ws_client(workspace).push_prompt(name, object=obj)
@@ -344,6 +359,66 @@ def push_prompt(workspace: str, name: str, text: str) -> str:
         if "nothing to commit" in msg or "409" in msg or "conflict" in msg:
             return f"(exists) {name}"
         raise
+
+
+# Tools whose runtime path goes through a human-in-the-loop review interrupt.
+_HITL_TOOLS = {"draft_email", "suggest_meeting_times"}
+
+
+def _action_gist(action: dict | None) -> str:
+    """The '<gist>' half of a '<Persona>: <gist>' quick-action label (or the label)."""
+    label = str((action or {}).get("label", "")).strip()
+    return label.split(":", 1)[1].strip() if ":" in label else label
+
+
+def build_demo_brief(
+    customer: str,
+    use_case: str,
+    actions: list[dict],
+    enabled_tools: list[str] | None,
+    failure_mode: str,
+    data_gap: str = "",
+) -> dict[str, list[str]]:
+    """Presenter-facing brief + recommended flow shown once setup completes.
+
+    Deterministic (no LLM): keyed off the finalized quick actions, enabled tools,
+    and failure mode so it always matches what the assistant will actually do.
+    Returns {"brief": [...], "flow": [...]} — each a list of short bullet strings.
+    """
+    purpose = use_case.strip() or "an internal assistant for their employees"
+    hallucinating = failure_mode == "hallucination"
+    hitl = bool(set(enabled_tools or []) & _HITL_TOOLS)
+
+    good = actions[:2] if hallucinating else actions[:3]
+    gists = [g for g in (_action_gist(a) for a in good) if g]
+    hitl_note = " — one routes through human-in-the-loop approval" if hitl else ""
+
+    brief = [f"We built a demo for {customer} to showcase {purpose}."]
+    if gists:
+        lead = "The first two quick actions" if hallucinating else "The quick actions"
+        brief.append(f"{lead} show the assistant working normally: {', '.join(gists)}{hitl_note}.")
+    if hallucinating:
+        gap = data_gap or "one key metric"
+        brief.append(
+            f"The last quick action demonstrates a hallucination: the data source returns "
+            f'nothing for "{gap}", but the agent still builds a dashboard over the missing data.'
+        )
+
+    if hallucinating:
+        flow = [
+            "Run one of the first two quick actions to get familiar with the assistant.",
+            "Run the last quick action — point out the data comes back empty, yet the agent "
+            "still confidently builds a dashboard (the hallucination).",
+            "Open the LangSmith trace to show where the system prompt lets it fabricate.",
+            "Fix the system prompt in Prompt Hub.",
+            "Return to the assistant and re-run the last quick action — now it refuses to fabricate.",
+        ]
+    else:
+        flow = [
+            "Run the quick actions to show the assistant building dashboards across personas.",
+            "Open the LangSmith trace to show the tool calls and how each answer stays grounded.",
+        ]
+    return {"brief": brief, "flow": flow}
 
 
 def prepare_assistant(payload: dict) -> dict:
@@ -455,6 +530,17 @@ def prepare_assistant(payload: dict) -> dict:
         "font_source": "google",
         "failure_mode": failure_mode,
     }
+    # Presenter brief + recommended flow, surfaced in a popup once setup finishes.
+    demo = build_demo_brief(
+        customer,
+        use_case,
+        actions,
+        context.get("enabled_tools"),
+        failure_mode,
+        context.get("data_gap", ""),
+    )
+    metadata["demo_brief"] = demo["brief"]
+    metadata["demo_flow"] = demo["flow"]
     return {
         "name": customer,
         "display_name": display_name,

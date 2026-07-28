@@ -162,9 +162,11 @@ class ConfigurableModel(AgentMiddleware):
         return request.override(model=_model_for(model_id)) if model_id else request
 
     def wrap_model_call(self, request, handler):
+        """Apply the context model override on the sync (local) invocation path."""
         return handler(self._apply(request))
 
     async def awrap_model_call(self, request, handler):
+        """Apply the context model override on the async (deployment) path."""
         return await handler(self._apply(request))
 
 
@@ -182,6 +184,7 @@ class ToolSelection(AgentMiddleware):
 
     @staticmethod
     def _name(tool: Any) -> str | None:
+        """Best-effort tool name from either a tool object or a dict spec."""
         if hasattr(tool, "name"):
             return tool.name
         if isinstance(tool, dict):
@@ -195,15 +198,20 @@ class ToolSelection(AgentMiddleware):
         return request if len(kept) == len(request.tools) else request.override(tools=kept)
 
     def wrap_model_call(self, request, handler):
+        """Filter the offered tools to the enabled set on the sync path."""
         return handler(self._apply(request))
 
     async def awrap_model_call(self, request, handler):
+        """Filter the offered tools to the enabled set on the async path."""
         return await handler(self._apply(request))
 
 
 def _build(model: str | None, checkpointer):
-    """Shared deep-agent construction. `checkpointer=None` for Agent Server (it
-    provides persistence); a MemorySaver for local in-process runs."""
+    """Shared deep-agent construction.
+
+    `checkpointer=None` for Agent Server (it provides persistence); a MemorySaver
+    for local in-process runs.
+    """
     require_anthropic_key()
 
     # Explicit model, hardened against transient API overload (HTTP 529).
@@ -246,14 +254,19 @@ def _build(model: str | None, checkpointer):
 
 
 def build_agent(model: str | None = None):
-    """Construct the deep agent for local/in-process use (with an in-memory
-    checkpointer so a thread_id carries conversation memory)."""
+    """Construct the deep agent for local/in-process use.
+
+    Uses an in-memory checkpointer so a thread_id carries conversation memory.
+    """
     return _build(model, MemorySaver())
 
 
 def build_graph(model: str | None = None):
-    """Construct the graph for Agent Server deployment — no checkpointer (the
-    server injects persistence). Exposed via `graph.py` for langgraph.json."""
+    """Construct the graph for Agent Server deployment.
+
+    No checkpointer (the server injects persistence). Exposed via `graph.py` for
+    langgraph.json.
+    """
     return _build(model, None)
 
 
@@ -263,6 +276,7 @@ _AGENT: Any = None
 
 
 def get_agent():
+    """Return the process-wide lazily-built local agent (built on first use)."""
     global _AGENT
     if _AGENT is None:
         _AGENT = build_agent()

@@ -42,14 +42,19 @@ line-length = 100
 target-version = "py313"
 
 [tool.ruff.lint]
-# pycodestyle(E/W), pyflakes(F), isort(I), pyupgrade(UP), bugbear(B), comprehensions(C4)
-select = ["E", "W", "F", "I", "UP", "B", "C4"]
+# pycodestyle(E/W), pyflakes(F), isort(I), pyupgrade(UP), bugbear(B),
+# comprehensions(C4), pydocstyle(D — docstrings required + formatted).
+select = ["E", "W", "F", "I", "UP", "B", "C4", "D"]
 # Long lines are common in the prompt/data string literals; the formatter owns wrapping.
 ignore = ["E501"]
 
+[tool.ruff.lint.pydocstyle]
+# Google style — picks the compatible D subset (no conflicting D203/D212/etc.).
+convention = "google"
+
 [tool.ruff.lint.per-file-ignores]
-# Tests may use assert-heavy patterns and re-import fixtures.
-"dashboard_agent/tests/*" = ["B011"]
+# Tests: assert-heavy patterns + don't require docstrings on every test function.
+"dashboard_agent/tests/*" = ["B011", "D100", "D101", "D102", "D103", "D104"]
 
 [tool.ty.environment]
 python-version = "3.13"

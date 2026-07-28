@@ -19,16 +19,21 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "dashboard_agent", "s
 
 
 class NoCacheHandler(http.server.SimpleHTTPRequestHandler):
+    """Static file handler that serves STATIC_DIR with no-store cache headers."""
+
     def __init__(self, *args, **kwargs):
+        """Serve from the SPA static directory."""
         super().__init__(*args, directory=STATIC_DIR, **kwargs)
 
     def end_headers(self):
+        """Add no-cache headers before finishing the response."""
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         self.send_header("Pragma", "no-cache")
         super().end_headers()
 
 
 def main() -> None:
+    """Serve the SPA on the given port (default 3000) until interrupted."""
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 3000
     server = http.server.ThreadingHTTPServer(("127.0.0.1", port), NoCacheHandler)
     print(f"SPA (no-cache) → http://127.0.0.1:{port}")

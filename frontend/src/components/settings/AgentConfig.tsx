@@ -9,6 +9,7 @@
  * assistant (matching the SPA); they reload from the assistant's context on
  * select.
  */
+import { IconArrowUpRight } from "@tabler/icons-react";
 import type { PromptMode } from "./types";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -54,7 +55,20 @@ export function AgentConfig({
       <div className={LABEL_CLS + " border-t border-border pt-3"}>Agent config</div>
 
       <div className="flex flex-col gap-1.5">
-        <Label className={LABEL_CLS}>System prompt</Label>
+        <div className="flex items-center justify-between">
+          <Label className={LABEL_CLS}>System prompt</Label>
+          {promptMode === "hub" && promptName && (
+            <a
+              href={`https://smith.langchain.com/prompts/${promptName}`}
+              target="_blank"
+              rel="noreferrer"
+              title="Open in LangSmith Prompt Hub"
+              className="text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <IconArrowUpRight className="h-3.5 w-3.5" stroke={2} />
+            </a>
+          )}
+        </div>
         <Tabs
           value={promptMode}
           onValueChange={(v) => onPromptMode(v as PromptMode)}
@@ -90,7 +104,7 @@ export function AgentConfig({
       <div className="flex flex-col gap-1.5">
         <Label className={LABEL_CLS}>
           Withheld data{" "}
-          <span className={HINT_CLS}>(the "gap" the agent must not fabricate)</span>
+          <span className={HINT_CLS}>(the "gap" in our data, to test hallucination)</span>
         </Label>
         <Input
           placeholder="e.g. conversion rate by traffic source"

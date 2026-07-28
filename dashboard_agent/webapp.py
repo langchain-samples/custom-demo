@@ -48,8 +48,10 @@ async def feedback(request):
 
 
 def _ls_key() -> str:
-    """LangSmith key for the trace-routing feature: the org-scoped cross-workspace
-    key if set, else the deployment's default key."""
+    """LangSmith key for the trace-routing feature.
+
+    The org-scoped cross-workspace key if set, else the deployment's default key.
+    """
     load_env()
     return os.getenv("LS_CROSS_WORKSPACE_KEY") or os.getenv("LANGSMITH_API_KEY") or ""
 
@@ -61,8 +63,11 @@ def _scoped_client(workspace_id: str | None = None):
 
 
 async def projects(request):
-    """GET [?workspace=<id>]: list project names in a workspace.
-    POST {name, workspace?}: create one there (idempotent)."""
+    """List or create LangSmith projects in a workspace.
+
+    GET [?workspace=<id>]: list project names in a workspace.
+    POST {name, workspace?}: create one there (idempotent).
+    """
     try:
         if request.method == "POST":
             body = await request.json()

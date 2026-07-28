@@ -41,6 +41,10 @@ export interface AssistantMetadata {
   industry?: string;
   /** Brand-appropriate default theme applied when this assistant is selected. */
   theme?: "light" | "dark";
+  /** Presenter brief bullets shown in a popup once setup finishes. */
+  demo_brief?: string[];
+  /** Recommended demo-flow steps shown alongside the brief. */
+  demo_flow?: string[];
   [key: string]: unknown;
 }
 

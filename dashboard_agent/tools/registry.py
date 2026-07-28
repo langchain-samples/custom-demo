@@ -122,8 +122,11 @@ _BY_ID: dict[str, ToolSpec] = {s.id: s for s in TOOL_REGISTRY}
 
 
 def all_tools() -> list[BaseTool]:
-    """Every catalogue tool. Registered once at graph-build time; the selection
-    middleware hides the unselected ones per run."""
+    """Every catalogue tool.
+
+    Registered once at graph-build time; the selection middleware hides the
+    unselected ones per run.
+    """
     return [s.tool for s in TOOL_REGISTRY]
 
 
@@ -179,8 +182,11 @@ def allowed_tool_names(raw: Any) -> set[str]:
 
 
 def is_allowed(name: str | None, allowed: set[str]) -> bool:
-    """Whether a tool may be offered. Names outside the catalogue always pass —
-    that is what keeps the deepagents built-ins untouched."""
+    """Whether a tool may be offered.
+
+    Names outside the catalogue always pass — that is what keeps the deepagents
+    built-ins untouched.
+    """
     if not name or name not in CATALOGUE_IDS:
         return True
     return name in allowed
@@ -193,8 +199,11 @@ def guidance_for(allowed: Iterable[str]) -> list[str]:
 
 
 def call_limit_middlewares() -> list[ToolCallLimitMiddleware]:
-    """A per-run cap for every spec that declares one. Each instance is inert
-    when its tool is not offered, so these are safe to always install."""
+    """A per-run cap for every spec that declares one.
+
+    Each instance is inert when its tool is not offered, so these are safe to
+    always install.
+    """
     return [
         ToolCallLimitMiddleware(tool_name=s.id, run_limit=s.run_limit, exit_behavior="continue")
         for s in TOOL_REGISTRY

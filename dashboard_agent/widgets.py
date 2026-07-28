@@ -15,16 +15,22 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class DataPoint(BaseModel):
+    """A single labeled numeric point in a chart series."""
+
     label: str = Field(..., description="Category / x-axis label, e.g. 'Health' or 'Jun'")
     value: float = Field(..., description="Numeric value for this point")
 
 
 class Series(BaseModel):
+    """A named line/bar/pie series: an ordered list of data points."""
+
     name: str = Field(..., description="Series name shown in the legend")
     points: list[DataPoint] = Field(..., min_length=1)
 
 
 class KpiWidget(BaseModel):
+    """A single headline metric with optional delta/trend and context."""
+
     type: Literal["kpi"] = "kpi"
     title: str = Field(..., description="Short metric label, e.g. 'People reached'")
     value: str = Field(..., description="The headline value, pre-formatted, e.g. '2.4M' or '68%'")
@@ -37,6 +43,8 @@ class KpiWidget(BaseModel):
 
 
 class ChartWidget(BaseModel):
+    """A bar/line/pie chart of one or more series (pie allows exactly one)."""
+
     type: Literal["bar", "line", "pie"]
     title: str
     series: list[Series] = Field(..., min_length=1)
@@ -51,6 +59,8 @@ class ChartWidget(BaseModel):
 
 
 class TableWidget(BaseModel):
+    """A titled table; every row must match the column count."""
+
     type: Literal["table"] = "table"
     title: str
     columns: list[str] = Field(..., min_length=1)
@@ -66,6 +76,8 @@ class TableWidget(BaseModel):
 
 
 class TextWidget(BaseModel):
+    """A titled narrative/key-findings text block."""
+
     type: Literal["text"] = "text"
     title: str
     content: str = Field(..., description="Markdown-ish narrative / key findings")

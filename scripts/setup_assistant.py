@@ -63,6 +63,7 @@ def _push_prompt(ws_client, name: str, text: str) -> str:
 
 
 def main() -> None:
+    """Build an assistant from a JSON payload (file arg or stdin) via the setup flow."""
     raw = Path(sys.argv[1]).read_text() if len(sys.argv) > 1 else sys.stdin.read()
     p = json.loads(raw)
 
