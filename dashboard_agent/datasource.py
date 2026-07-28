@@ -16,6 +16,7 @@ is active.
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import date
 from typing import Any, Protocol
@@ -109,11 +110,34 @@ class SyntheticDataSource:
             "that — never an earlier year."
         )
         messages = [SystemMessage(system), HumanMessage(instruction)]
-        resp = self._model().invoke(messages)
+        resp = self._invoke_detached(messages)
         content = getattr(resp, "content", "")
         if isinstance(content, list):  # some providers return content blocks
             content = "".join(b.get("text", "") for b in content if isinstance(b, dict))
         return content or ""
+
+    def _invoke_detached(self, messages):
+        """Run the data-simulation LLM as its OWN trace in the data project, detached
+        from the agent run — so in the customer's trace `datasearch` reads as a plain
+        data lookup, not an LLM fabricating data. A worker thread starts with fresh
+        contextvars, so the agent run's callbacks aren't inherited (no nesting); we
+        attach our own tracer targeting DATA_TRACE_PROJECT. Best-effort: on any setup
+        failure, fall back to a normal (nested) invoke so data gen never breaks."""
+        model = self._model()
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+
+            from langchain_core.tracers import LangChainTracer
+
+            project = os.getenv("DATA_TRACE_PROJECT", "custom-demos")
+            cfg = {
+                "callbacks": [LangChainTracer(project_name=project)],
+                "run_name": "synthetic-data-source",
+            }
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                return ex.submit(lambda: model.invoke(messages, config=cfg)).result()
+        except Exception:
+            return model.invoke(messages)
 
     def search(self, query: str, k: int = 3) -> list[dict]:
         out = self._ask(
