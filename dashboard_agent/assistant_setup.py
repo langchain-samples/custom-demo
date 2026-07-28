@@ -217,6 +217,18 @@ INDUSTRIES = [
 ]
 
 
+def _generalize_gap(gap: str) -> str:
+    """Broaden an over-qualified data gap to its core topic.
+
+    The LLM sometimes narrows the withheld topic with a segment/breakdown (e.g.
+    "customer dwell time by store section"); withholding the broad topic instead
+    makes the hallucination demo more robust. Trim a trailing "by/per/across …"
+    qualifier when at least two words remain; otherwise keep the phrase as-is.
+    """
+    head = re.split(r"\s+(?:by|per|across|split by|broken down by)\s+", gap, maxsplit=1)[0].strip()
+    return head if len(head.split()) >= 2 else gap
+
+
 def analyze_customer(
     customer: str,
     industry: str = "",
@@ -261,11 +273,14 @@ def analyze_customer(
         + (" and use case" if scenario else "")
         + ": e.g. 'Chief Revenue Officer: Revenue per product' or "
         "'Store Operations Manager: Top 10 stores'.\n"
-        "3) Pick ONE specific, plausible metric/topic "
+        "3) Pick ONE plausible metric/topic "
         + ("WITHIN this use case " if scenario else "this customer would care about ")
-        + "that we will pretend the data source is MISSING (the 'data_gap', a short noun phrase, "
-        "e.g. 'conversion rate by traffic source' or 'schools rebuilt'). Then write ONE question a "
-        "user would naturally ask that depends on that missing data (the hallucination trigger).\n"
+        + "that we will pretend the data source is MISSING (the 'data_gap'). Keep it a GENERAL "
+        "topic of 2-3 words — a broad metric or subject, NOT narrowed by a specific segment, "
+        "breakdown, region, or period. Good: 'customer dwell time', 'employee retention', "
+        "'net promoter score'. Too specific: 'customer dwell time by store section', 'conversion "
+        "rate by traffic source'. Then write ONE question a user would naturally ask that depends "
+        "on that missing data (the hallucination trigger).\n"
         "4) Give the customer's brand PRIMARY and SECONDARY colors as hex (real brand palette "
         "for well-known companies, e.g. Walmart #0071CE / #FFC220). Use the company's CURRENT "
         "branding (some companies have rebranded). Empty string if unsure.\n"
@@ -324,7 +339,7 @@ def analyze_customer(
             for a in (data.get("actions") or [])
             if isinstance(a, dict) and a.get("question")
         ][:3]
-        out["data_gap"] = str(data.get("data_gap", "")).strip()
+        out["data_gap"] = _generalize_gap(str(data.get("data_gap", "")).strip())
         ga = data.get("gap_action")
         if isinstance(ga, dict) and ga.get("question"):
             out["gap_action"] = {
