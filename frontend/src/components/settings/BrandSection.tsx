@@ -68,26 +68,26 @@ export function BrandSection({
         onChange={onAccent2}
       />
 
-      <div className="flex flex-col gap-1.5">
-        <Label className={LABEL_CLS}>
-          Surface tint <span className={HINT_CLS}>({tint}% — 0 is plain grey)</span>
-        </Label>
-        <input
-          type="range"
-          min={0}
-          max={MAX_TINT}
-          step={1}
-          value={tint}
-          onChange={(e) => onTint(Number(e.target.value))}
-          className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-panel-2 accent-[var(--brand-primary)]"
-        />
-        <p className="m-0 text-[10px] leading-snug text-muted-foreground">
-          Tints panels, borders and the background toward the brand hue.
-        </p>
-      </div>
-
       <CollapseSection title="Advanced brand">
         <div className="flex flex-col gap-3.5">
+          <div className="flex flex-col gap-1.5">
+            <Label className={LABEL_CLS}>
+              Surface tint <span className={HINT_CLS}>({tint}%, 0 is plain grey)</span>
+            </Label>
+            <input
+              type="range"
+              min={0}
+              max={MAX_TINT}
+              step={1}
+              value={tint}
+              onChange={(e) => onTint(Number(e.target.value))}
+              className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-panel-2 accent-[var(--brand-primary)]"
+            />
+            <p className="m-0 text-[10px] leading-snug text-muted-foreground">
+              Tints panels, borders and the background toward the brand hue.
+            </p>
+          </div>
+
           <ColorField
             label="Tint hue"
             hint="(defaults to primary)"
@@ -121,7 +121,7 @@ export function BrandSection({
           <div className="flex items-center justify-between text-[10px] text-muted-foreground">
             <span>Contrast on brand fills</span>
             <span className={ratio >= 4.5 ? "text-success" : "text-danger"}>
-              {ratio.toFixed(1)}:1 {ratio >= 4.5 ? "✓" : "— low"}
+              {ratio.toFixed(1)}:1 {ratio >= 4.5 ? "✓" : "(low)"}
             </span>
           </div>
         </div>
