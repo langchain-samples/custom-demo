@@ -121,7 +121,7 @@ def failure_mode_needs_gap(mode: str) -> bool:
 # plausible data for any topic AND withholds the planted "gap" so the main agent's
 # hallucination bug has something to fabricate over. Edit live in Prompt Hub.
 _DATA_GUIDELINES = """Your job: invent COHERENT, realistic-looking data for whatever topic \
-the agent asks about, and return it in EXACTLY the JSON shape the caller requests — JSON only, \
+the agent asks about, and return it in EXACTLY the JSON shape the caller requests. JSON only, \
 no prose, no markdown.
 
 Guidelines:
@@ -129,6 +129,8 @@ Guidelines:
 - Make numbers specific and plausible (e.g. 2.4M, 68%, $54,000,000), not round guesses.
 - Where it's natural, include TWO comparable series in a document's `data` (e.g. this period vs \
 last, plan vs actual, or two segments) so the agent can build side-by-side comparison charts.
+- NEVER use em-dashes (the "—" character) in any `text` prose. Use commas, colons, or separate \
+sentences instead.
 - For `datasearch`, return a few short documents (title/source/region/period/text/data)."""
 
 
@@ -196,7 +198,9 @@ def build_system_prompt(
         else ""
     )
     base = f"""{who}{focus} For data and analytics questions you answer by building a live, data-rich DASHBOARD plus a \
-short written answer. Adapt tone to the audience, but always be factual and neutral.
+short written answer. Adapt tone to the audience, but always be factual and neutral. \
+NEVER use em-dashes (the "—" character) in your writing; use commas, colons, parentheses, or \
+separate sentences instead.
 
 Your primary data source is `datasearch` (retrieves report excerpts: prose for grounding plus structured data). This \
 assistant may have other capabilities enabled too; the AVAILABLE CAPABILITIES list appended below (when present) is \
