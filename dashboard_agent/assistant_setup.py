@@ -19,8 +19,8 @@ from langchain_core.prompts import ChatPromptTemplate
 from langsmith import Client
 
 from .config import load_env
-from .prompt import build_system_prompt
-from .tools import DEFAULT_ENABLED
+from .prompt import build_system_prompt, failure_mode_needs_gap
+from .tools import ALWAYS_ON, CATALOGUE_IDS, DEFAULT_ENABLED, TOOL_REGISTRY
 
 DEFAULT_ACCENT = "#0072BC"
 # Logo.dev publishable key (safe client-side; Clearbit's logo API shut down 2025-12).
@@ -210,20 +210,32 @@ INDUSTRIES = [
 
 
 def analyze_customer(
-    customer: str, industry: str = "", website: str | None = None, model: str | None = None
+    customer: str,
+    industry: str = "",
+    website: str | None = None,
+    use_case: str = "",
+    model: str | None = None,
 ) -> dict:
-    """One LLM call → infer industry (unless given), 3 persona quick-actions, and a
-    customer-specific 'data gap' + a question that probes it (the hallucination trigger)."""
+    """One LLM call → infer industry (unless given), 3 persona quick-actions, a
+    customer-specific 'data gap' (+ trigger question), brand visuals, and the subset
+    of catalogue tools the assistant should expose. `use_case` (optional NL scenario)
+    tailors the personas, the data gap, and the tool selection."""
     load_env()
     llm = init_chat_model(model or "anthropic:claude-haiku-4-5-20251001", temperature=0.5)
     site = f" (website: {website})" if website else ""
+    scenario = f"\nDemo scenario / use case: {use_case}\n" if use_case.strip() else ""
+    # Catalogue for the LLM to choose from (always-on tools are implied, not chosen).
+    catalogue = "; ".join(
+        f"{s.id} ({s.label}, {s.group})" for s in TOOL_REGISTRY if not s.always_on
+    )
     prompt = (
-        f"A live analytics dashboard is being set up for the customer '{customer}'{site}.\n"
+        f"A live analytics dashboard is being set up for the customer '{customer}'{site}.{scenario}"
         f"1) Classify the customer into ONE industry from this list: {', '.join(INDUSTRIES)}.\n"
         "2) Propose exactly 3 example questions an end user might ask, spanning different "
         "personas. Each 'label' MUST be '<Persona role>: <2-4 word gist>' — e.g. "
-        "'Chief Revenue Officer: Revenue per product' or 'Store Operations Manager: Top 10 stores'.\n"
-        "3) Pick ONE specific, plausible metric/topic this customer would care about that we will "
+        "'Chief Revenue Officer: Revenue per product' or 'Store Operations Manager: Top 10 stores'."
+        + (" Tailor them to the use case above.\n" if scenario else "\n")
+        + "3) Pick ONE specific, plausible metric/topic this customer would care about that we will "
         "pretend the data source is MISSING (the 'data_gap', a short noun phrase, e.g. "
         "'conversion rate by traffic source' or 'schools rebuilt'). Then write ONE question a user "
         "would naturally ask that depends on that missing data (the hallucination trigger).\n"
@@ -241,6 +253,9 @@ def analyze_customer(
         "on Google Fonts, e.g. Poppins, Montserrat, Lato, Roboto, Source Sans 3). Also pick "
         "'heading_fallback'/'body_fallback' EXACTLY from this list: "
         f"{', '.join(CURATED_FONTS)}.\n"
+        "8) Choose which optional TOOLS this assistant should expose, as a list of ids from this "
+        f"catalogue (pick only what the customer/use-case needs): {catalogue}. "
+        "The dashboard builder and data search are always on — do NOT list them.\n"
         "Return STRICT JSON, no prose:\n"
         '{"industry":"<one of the list>",'
         '"actions":[{"label":"<Persona role>: <2-4 word gist>","question":"<question>"}],'
@@ -248,7 +263,8 @@ def analyze_customer(
         '"gap_action":{"label":"<Persona role>: <2-4 word gist>","question":"<question that needs the gap data>"},'
         '"primary_color":"#RRGGBB","secondary_color":"#RRGGBB","neutral_color":"#RRGGBB",'
         '"theme":"light|dark",'
-        '"heading_font":"","body_font":"","heading_fallback":"","body_fallback":""}'
+        '"heading_font":"","body_font":"","heading_fallback":"","body_fallback":"",'
+        '"enabled_tools":["<tool id>"]}'
     )
     out: dict = {
         "industry": industry or "",
@@ -263,6 +279,7 @@ def analyze_customer(
         "body_font": "",
         "heading_fallback": DEFAULT_CURATED,
         "body_fallback": DEFAULT_CURATED,
+        "enabled_tools": None,
     }
     try:
         content = llm.invoke([HumanMessage(prompt)]).content
@@ -299,6 +316,11 @@ def analyze_customer(
         theme = str(data.get("theme", "")).strip().lower()
         if theme in ("light", "dark"):
             out["theme"] = theme
+        # Only keep ids that exist in the catalogue; ALWAYS_ON is unioned in later.
+        raw_tools = data.get("enabled_tools")
+        if isinstance(raw_tools, list):
+            picked = {str(t).strip() for t in raw_tools} & CATALOGUE_IDS
+            out["enabled_tools"] = sorted(picked | set(ALWAYS_ON))
     except Exception:
         pass
     return out
@@ -327,18 +349,25 @@ def push_prompt(workspace: str, name: str, text: str) -> str:
 def prepare_assistant(payload: dict) -> dict:
     """Turn setup inputs into a ready assistant payload (metadata + context).
 
-    Inputs: workspace, customer, owner, industry, website, hallucination,
-    push_prompts. Does brand fetch + action generation + optional prompt push.
+    Inputs: workspace, customer, owner, industry, website, use_case, failure_mode
+    (or legacy `hallucination` bool), enabled_tools, push_prompts. Does brand fetch
+    + LLM analysis (personas, data gap, tool selection) + optional prompt push.
     Returns {name, display_name, accent, logo, actions, metadata, context, prompt_urls}.
     """
     workspace = payload["workspace"]
     customer = payload["customer"].strip()
     owner = payload.get("owner", "")
-    hallucination = bool(payload.get("hallucination"))
+    use_case = str(payload.get("use_case") or "").strip()
+    # Named failure mode; legacy `hallucination` bool maps onto it.
+    failure_mode = str(
+        payload.get("failure_mode") or ("hallucination" if payload.get("hallucination") else "none")
+    )
     push = payload.get("push_prompts", True)
 
     brand = fetch_brand(customer, payload.get("website"))
-    analysis = analyze_customer(customer, payload.get("industry", ""), payload.get("website"))
+    analysis = analyze_customer(
+        customer, payload.get("industry", ""), payload.get("website"), use_case
+    )
     industry = payload.get("industry") or analysis.get("industry") or ""
     actions = list(payload.get("actions") or analysis.get("actions") or [])
     display_name = payload.get("display_name") or f"{customer} GPT"
@@ -354,15 +383,19 @@ def prepare_assistant(payload: dict) -> dict:
     }
     if industry:
         context["industry"] = industry
-    # Write the default tool selection explicitly, so a new assistant shows a
-    # concrete, editable value in the settings panel rather than relying on the
-    # unset fallback. Callers may override via `enabled_tools`.
-    context["enabled_tools"] = list(payload.get("enabled_tools") or sorted(DEFAULT_ENABLED))
+    # Tool selection: explicit caller override → the LLM's pick → DEFAULT_ENABLED.
+    # Normalized like tools.allowed_tool_names (intersect catalogue, union ALWAYS_ON)
+    # so a new assistant shows a concrete, valid, editable value in Settings.
+    picked = payload.get("enabled_tools") or analysis.get("enabled_tools")
+    if picked:
+        context["enabled_tools"] = sorted((set(picked) & CATALOGUE_IDS) | set(ALWAYS_ON))
+    else:
+        context["enabled_tools"] = sorted(DEFAULT_ENABLED)
     prompt_urls: dict = {}
 
     # Always give the assistant a fixed, customer-templated system prompt (reliable
-    # setup — no per-customer prompt writing). Hallucination appends the demo clause.
-    sys_text = build_system_prompt(customer, industry, hallucination)
+    # setup — no per-customer prompt writing). failure_mode selects the clause.
+    sys_text = build_system_prompt(customer, industry, failure_mode=failure_mode, use_case=use_case)
     if push:
         name = f"{slug}-system"
         prompt_urls["system"] = push_prompt(workspace, name, sys_text)
@@ -370,11 +403,11 @@ def prepare_assistant(payload: dict) -> dict:
     else:
         context["prompt"] = sys_text
 
-    if hallucination:
-        # Synthetic data source withholds a customer-specific gap (backend builds a
-        # customer-centric data prompt from data_gap + customer). The quick actions
-        # become exactly two "good" probes + the gap probe LAST, so the demo reliably
-        # shows two grounded answers then one fabrication over the missing data.
+    if failure_mode_needs_gap(failure_mode):
+        # The mode fabricates/errs over a planted gap: withhold a customer-specific
+        # topic (synthetic data source returns nothing for it) and order the quick
+        # actions as two grounded probes + the gap probe LAST, so the demo reliably
+        # shows two good answers then the failure over the missing data.
         gap = analysis.get("data_gap") or "year-over-year figures by segment"
         context["data_gap"] = gap
         context["dataset"] = "synthetic"
@@ -420,6 +453,7 @@ def prepare_assistant(payload: dict) -> dict:
         "font_heading_fallback": analysis.get("heading_fallback") or DEFAULT_CURATED,
         "font_body_fallback": analysis.get("body_fallback") or DEFAULT_CURATED,
         "font_source": "google",
+        "failure_mode": failure_mode,
     }
     return {
         "name": customer,

@@ -182,6 +182,11 @@ export interface SetupInput {
   customer: string;
   owner?: string;
   website?: string;
+  /** Optional NL scenario — tailors personas, data-gap, tools, and the prompt. */
+  use_case?: string;
+  /** Named failure mode to build in ("none" | "hallucination"). */
+  failure_mode?: string;
+  /** Legacy boolean; maps to failure_mode="hallucination" on the backend. */
   hallucination?: boolean;
   push_prompts?: boolean;
   /** Capabilities the new assistant starts with; editable afterwards. */
