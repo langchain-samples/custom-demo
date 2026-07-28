@@ -35,13 +35,15 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from langchain_core.prompts import ChatPromptTemplate
+from langgraph_sdk import get_sync_client
+from langsmith import Client
 
-from dashboard_agent.config import load_env  # noqa: E402
-from dashboard_agent.prompt import (  # noqa: E402
+from dashboard_agent.config import load_env
+from dashboard_agent.prompt import (
+    _FALLBACK_CORE,
     DATA_FALLBACK_PROMPT,
     FALLBACK_PROMPT,
-    _FALLBACK_CORE,
     HALLUCINATION_CLAUSE,
 )
 
@@ -49,8 +51,6 @@ GRAPH_ID = "dashboard_agent"
 
 
 def _client(workspace_id: str | None):
-    from langsmith import Client
-
     load_env()
     key = os.getenv("LS_CROSS_WORKSPACE_KEY") or os.getenv("LANGSMITH_API_KEY")
     api_url = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
@@ -58,8 +58,6 @@ def _client(workspace_id: str | None):
 
 
 def _push_prompt(ws_client, name: str, text: str) -> str:
-    from langchain_core.prompts import ChatPromptTemplate
-
     prompt = ChatPromptTemplate.from_messages([("system", text)])
     return ws_client.push_prompt(name, object=prompt)
 
@@ -116,8 +114,6 @@ def main() -> None:
         "logo": p.get("logo", ""),
         "actions": p.get("actions", []),
     }
-
-    from langgraph_sdk import get_sync_client
 
     lg = get_sync_client(url=p.get("langgraph_url", "http://127.0.0.1:2024"))
     a = lg.assistants.create(

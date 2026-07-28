@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 
 import httpx
+from langsmith import Client
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -55,8 +56,6 @@ def _ls_key() -> str:
 
 def _scoped_client(workspace_id: str | None = None):
     """LangSmith client for listing/creating projects in a specific workspace."""
-    from langsmith import Client
-
     api_url = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
     return Client(api_key=_ls_key(), api_url=api_url, workspace_id=workspace_id or None)
 
@@ -133,9 +132,21 @@ async def hub_prompts(request):
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
 
+async def tools(request):
+    """List the selectable tool catalogue (labels, groups, defaults).
+
+    Served from the backend registry so adding a capability needs no frontend
+    change. Static data — no LangSmith call, no auth.
+    """
+    from dashboard_agent.tools import registry_json
+
+    return JSONResponse({"tools": registry_json()})
+
+
 app = Starlette(
     routes=[
         Route("/feedback", feedback, methods=["POST"]),
+        Route("/tools", tools, methods=["GET"]),
         Route("/projects", projects, methods=["GET", "POST"]),
         Route("/workspaces", workspaces, methods=["GET"]),
         Route("/hub-prompts", hub_prompts, methods=["GET"]),

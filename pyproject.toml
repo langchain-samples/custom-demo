@@ -1,0 +1,46 @@
+[project]
+name = "custom-demo"
+version = "0.1.0"
+description = "Dashboard Agent — Deep Agent with dynamic dashboard visualizations"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "deepagents>=0.6.3",
+    "langchain>=1.3.1",
+    "langchain-core>=1.4.0",
+    "langchain-anthropic>=1.4.3",
+    "langgraph>=1.2.1",
+    "langsmith>=0.8.3",
+    "pydantic>=2.13.4",
+    "python-dotenv>=1.2.2",
+    # the /feedback route mounted on the deployment (http.app)
+    "starlette>=0.37",
+]
+
+[dependency-groups]
+dev = [
+    # Run the deployment locally (Agent Server) + create assistants
+    "langgraph-cli[inmem]>=0.4",
+    "langgraph-sdk>=0.1",
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["dashboard_agent"]
+
+[tool.pyrefly]
+python-interpreter-path = ".venv/bin/python"
+
+# Show type mismatches as warnings (yellow) instead of errors (red). Values:
+# "error" | "warn" | "ignore". Each red underline shows its code in the Problems
+# panel / on hover, so add any others here as needed.
+[tool.pyrefly.errors]
+bad-assignment = "warn"
+bad-argument-type = "warn"
+bad-return = "warn"
+bad-specialization = "warn"
+no-matching-overload = "warn"

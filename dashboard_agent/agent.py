@@ -20,17 +20,28 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from deepagents import create_deep_agent
 from langchain.agents.middleware import (
     AgentMiddleware,
     ModelRequest,
-    ToolCallLimitMiddleware,
     dynamic_prompt,
 )
-from langchain.tools import ToolRuntime, tool
+from langchain.chat_models import init_chat_model
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
+from langgraph.checkpoint.memory import MemorySaver
 
 from .config import MODEL, require_anthropic_key
-from .datasource import get_datasource
+from .ctx import ctx_get as _ctx
 from .prompt import pull_system_prompt
+from .tools import (
+    all_tools,
+    allowed_tool_names,
+    call_limit_middlewares,
+    guidance_for,
+    is_allowed,
+    widget_sink as _widget_sink,
+)
 from .widgets import validate_widget
 
 
@@ -53,93 +64,7 @@ class Context:
     customer: str | None = None          # customer name — steers customer-specific synthetic data
     industry: str | None = None          # customer industry — steers synthetic data
     ls_workspace: str | None = None      # workspace to pull Hub prompts from (matches trace routing)
-
-
-def _ctx(runtime, field: str):
-    """Read a Context field off a tool/middleware runtime, tolerant of shape."""
-    context = getattr(runtime, "context", None)
-    if context is None:
-        return None
-    if isinstance(context, dict):
-        return context.get(field)
-    return getattr(context, field, None)
-
-
-# Per-invocation collector for widgets emitted by push_widget.
-_widget_sink: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar(
-    "widget_sink", default=None
-)
-
-
-def _datasource_for(runtime: ToolRuntime):
-    return get_datasource(
-        _ctx(runtime, "dataset"),
-        _ctx(runtime, "data_model"),
-        _ctx(runtime, "data_prompt_name"),
-        _ctx(runtime, "data_prompt"),
-        _ctx(runtime, "ls_workspace"),
-        _ctx(runtime, "data_gap"),
-        _ctx(runtime, "customer"),
-        _ctx(runtime, "industry"),
-    )
-
-
-@tool
-def datasearch(query: str, runtime: ToolRuntime) -> str:
-    """Search situation reports and assessments for grounded facts and data.
-
-    Use this FIRST, before answering, to retrieve relevant report excerpts.
-    Returns a JSON list of matching documents. Each document includes:
-      - title, source, region, period: for citation
-      - text: prose you can quote / summarize
-      - data: a structured block of numbers you can turn into dashboard widgets
-    Search with specific terms (region + topic), e.g. "Egypt humanitarian aid impact".
-    """
-    results = _datasource_for(runtime).search(query, k=3)
-    if not results:
-        return json.dumps({"results": [], "note": "No matching reports found."})
-    return json.dumps({"results": results}, ensure_ascii=False)
-
-
-@tool
-def push_widget(widget: dict) -> str:
-    """Add ONE visualization widget to the live dashboard canvas.
-
-    Call this multiple times to compose a dashboard (e.g. a row of KPIs, then a
-    chart, then a table). Only use numbers that came from `datasearch`.
-
-    `widget` must match ONE of these shapes:
-
-    KPI card:
-      {"type":"kpi","title":"People reached","value":"2.4M","unit":"people",
-       "delta":"+26% vs Q1","trend":"up","description":"coordinated assistance"}
-
-    Bar / Line chart (bar for categories, line for time series):
-      {"type":"bar","title":"Funding by sector (US$)","x_label":"Sector",
-       "y_label":"USD","series":[{"name":"Q2 2026","points":[
-          {"label":"Food & Cash","value":54000000},{"label":"Health","value":28000000}]}]}
-      {"type":"line","title":"People reached by month","series":[{"name":"2026",
-        "points":[{"label":"Apr","value":720000},{"label":"May","value":810000}]}]}
-
-    Pie chart (exactly one series):
-      {"type":"pie","title":"Funding share by sector","series":[{"name":"share",
-        "points":[{"label":"Food & Cash","value":54},{"label":"Health","value":28}]}]}
-
-    Table:
-      {"type":"table","title":"Available resources","columns":["Resource","Count"],
-       "rows":[["Shelter sites","62"],["Mobile health clinics","38"]]}
-
-    Text / key findings:
-      {"type":"text","title":"Key findings","content":"- 2.4M people reached ..."}
-
-    Returns a confirmation string.
-    """
-    normalized = validate_widget(widget)  # raises on malformed input
-    sink = _widget_sink.get()
-    if sink is not None:
-        sink.append(normalized)
-    title = normalized.get("title", "")
-    return f"Added {normalized['type']} widget '{title}' to the dashboard."
+    enabled_tools: list[str] | None = None  # catalogue tool ids to expose; None = defaults
 
 
 # The system prompt is sourced from LangSmith Prompt Hub (see prompt.py). We pull
@@ -161,14 +86,50 @@ def _hub_system_prompt(request: ModelRequest) -> str:
     """
     override = _prompt_override.get()
     if override is not None:
-        return override
-    inline = _ctx(request.runtime, "prompt")
-    if inline:
-        return inline
-    return pull_system_prompt(
-        _ctx(request.runtime, "prompt_name"),
-        workspace=_ctx(request.runtime, "ls_workspace"),
+        base = override
+    else:
+        inline = _ctx(request.runtime, "prompt")
+        base = inline or pull_system_prompt(
+            _ctx(request.runtime, "prompt_name"),
+            workspace=_ctx(request.runtime, "ls_workspace"),
+        )
+    return base + _capability_note(request.runtime)
+
+
+def _capability_note(runtime) -> str:
+    """Tell the model which optional capabilities this assistant has.
+
+    Prompts are written (and pushed to the Hub) when an assistant is created, so
+    they never learn about capabilities enabled later. Appending the enabled
+    catalogue tools' guidance here keeps the prompt honest without rewriting
+    stored prompts.
+
+    Returns "" for the default selection, so the common path is byte-identical to
+    before (no prompt-cache churn, no behaviour change for existing assistants).
+    """
+    raw = _ctx(runtime, "enabled_tools")
+    if raw is None:
+        return ""
+    allowed = allowed_tool_names(raw)
+    lines = guidance_for(allowed)
+    if not lines:
+        return ""
+    note = "\n\nAVAILABLE CAPABILITIES (these are the only tools you have):\n" + "\n".join(
+        f"- {line}" for line in lines
     )
+    # Stored prompts describe one rigid workflow (datasearch → push_widget →
+    # answer). With extra capabilities enabled the model otherwise treats a
+    # "draft an email" request as off-script — refusing, apologising for going
+    # off-topic, or forcing a dashboard nobody asked for. Give it explicit
+    # permission to answer the request that was actually made.
+    if allowed - {"datasearch", "push_widget"}:
+        note += (
+            "\n\nThe dashboard workflow above applies to DATA questions. When the user asks "
+            "for something one of the other capabilities covers, just use that capability and "
+            "answer briefly — do not run a data search or build widgets first, and never say "
+            "the request is off-topic."
+        )
+    return note
 
 
 # Per-run model override. When an assistant's context sets `model`, swap the LLM
@@ -180,8 +141,6 @@ _model_cache: dict[str, Any] = {}
 def _model_for(model_id: str):
     llm = _model_cache.get(model_id)
     if llm is None:
-        from langchain.chat_models import init_chat_model
-
         llm = init_chat_model(model_id)
         _model_cache[model_id] = llm
     return llm
@@ -205,34 +164,66 @@ class ConfigurableModel(AgentMiddleware):
         return await handler(self._apply(request))
 
 
+class ToolSelection(AgentMiddleware):
+    """Expose only the catalogue tools this assistant enabled.
+
+    Every catalogue tool is registered on the graph at build time (deepagents'
+    `tools=` is additive and cannot remove anything), so selection happens here,
+    per run, by filtering `request.tools` — the same mechanism deepagents itself
+    uses to drop `execute` on non-sandbox backends.
+
+    Names outside the catalogue are never touched, which is what leaves the
+    deepagents built-ins (`write_todos`, filesystem tools, `task`, …) alone.
+    """
+
+    @staticmethod
+    def _name(tool: Any) -> str | None:
+        if hasattr(tool, "name"):
+            return tool.name
+        if isinstance(tool, dict):
+            return tool.get("name")
+        return None
+
+    def _apply(self, request: ModelRequest) -> ModelRequest:
+        allowed = allowed_tool_names(_ctx(request.runtime, "enabled_tools"))
+        kept = [t for t in request.tools if is_allowed(self._name(t), allowed)]
+        # Skip the override on the common path (nothing filtered).
+        return request if len(kept) == len(request.tools) else request.override(tools=kept)
+
+    def wrap_model_call(self, request, handler):
+        return handler(self._apply(request))
+
+    async def awrap_model_call(self, request, handler):
+        return await handler(self._apply(request))
+
+
 def _build(model: str | None, checkpointer):
     """Shared deep-agent construction. `checkpointer=None` for Agent Server (it
     provides persistence); a MemorySaver for local in-process runs."""
     require_anthropic_key()
-    from deepagents import create_deep_agent
-    from langchain_anthropic import ChatAnthropic
 
     # Explicit model, hardened against transient API overload (HTTP 529).
     # thinking disabled: Sonnet 5 defaults to extended thinking, whose thinking
     # blocks break the deep-agent tool loop on follow-up turns (Anthropic 400).
     llm = ChatAnthropic(
-        model=model or MODEL, max_retries=8, timeout=120, max_tokens=8000,
+        model_name=model or MODEL, max_retries=8, timeout=120, max_tokens=8000,
         thinking={"type": "disabled"},
     )
 
     return create_deep_agent(
         model=llm,
-        tools=[datasearch, push_widget],
+        # Every catalogue tool is registered; ToolSelection hides the ones this
+        # assistant hasn't enabled. Built-in deepagents tools are unaffected.
+        tools=all_tools(),
         middleware=[
             ConfigurableModel(),
             _hub_system_prompt,
-            # Cap datasearch at 1 call/run: one search, then build the dashboard +
-            # answer with what came back. Stops the agent from wandering to adjacent
-            # queries when the asked-for data is missing (which masks the gap in the
-            # hallucination demo). 'continue' blocks further searches, not the run.
-            ToolCallLimitMiddleware(
-                tool_name="datasearch", run_limit=1, exit_behavior="continue",
-            ),
+            # Per-run call caps declared by the registry (e.g. datasearch is capped
+            # at 1/run so the agent can't wander to adjacent queries and mask the
+            # planted gap). Each is inert when its tool isn't offered.
+            *call_limit_middlewares(),
+            # Last, so it has the final word on which tools reach the model.
+            ToolSelection(),
         ],
         context_schema=Context,
         checkpointer=checkpointer,
@@ -242,8 +233,6 @@ def _build(model: str | None, checkpointer):
 def build_agent(model: str | None = None):
     """Construct the deep agent for local/in-process use (with an in-memory
     checkpointer so a thread_id carries conversation memory)."""
-    from langgraph.checkpoint.memory import MemorySaver
-
     return _build(model, MemorySaver())
 
 
@@ -355,8 +344,6 @@ def run_stream(question: str, thread_id: str = "demo", agent=None):
     tool_use blocks one after another) — giving a progressive dashboard build and
     a live tool-activity feed.
     """
-    from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
-
     agent = agent or get_agent()
 
     tool_bufs: dict[Any, dict[str, str]] = {}

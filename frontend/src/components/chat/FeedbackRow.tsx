@@ -70,9 +70,9 @@ export function FeedbackRow({ runId }: { runId: string }) {
           className={
             "text-xs " +
             (status.kind === "ok"
-              ? "text-green-400"
+              ? "text-success"
               : status.kind === "err"
-                ? "text-red-400"
+                ? "text-danger"
                 : "")
           }
         >
@@ -93,7 +93,7 @@ export function FeedbackRow({ runId }: { runId: string }) {
           />
           <button
             type="button"
-            className="cursor-pointer rounded-lg border-none bg-brand px-3 text-[13px] text-white"
+            className="cursor-pointer rounded-lg border-none bg-brand px-3 text-[13px] text-brand-foreground"
             onClick={() => post(comment)}
           >
             Send

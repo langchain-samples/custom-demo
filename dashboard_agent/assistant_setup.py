@@ -12,8 +12,15 @@ import json
 import os
 import re
 
+import httpx
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import HumanMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langsmith import Client
+
 from .config import load_env
 from .prompt import build_system_prompt
+from .tools import DEFAULT_ENABLED
 
 DEFAULT_ACCENT = "#0072BC"
 # Logo.dev publishable key (safe client-side; Clearbit's logo API shut down 2025-12).
@@ -23,6 +30,41 @@ LOGODEV_TOKEN = os.getenv("LOGODEV_TOKEN", "pk_I1bBVzUeRH-NVxnSV_5-BQ")
 # it provides the accurate, current brand palette (+ logo) per domain; without it we
 # fall back to the LLM's known-brand guess and a scraped <meta theme-color>.
 BRANDFETCH_API_KEY = os.getenv("BRANDFETCH_API_KEY", "")
+
+
+# Self-hosted families the frontend bundles (frontend/src/lib/fonts.ts). The LLM
+# picks a fallback from this exact list, so keep the two in sync.
+CURATED_FONTS = [
+    "Geist Variable",
+    "Inter Variable",
+    "IBM Plex Sans Variable",
+    "Space Grotesk Variable",
+    "Source Serif 4 Variable",
+]
+DEFAULT_CURATED = "Geist Variable"
+
+# Surface tint (percent) a new assistant starts with — enough for panels and
+# borders to read as the brand's without hurting contrast. Must match
+# DEFAULT_TINT in frontend/src/lib/branding.ts. 0 = the plain grey shell.
+DEFAULT_BRAND_TINT = 6
+
+# Google Fonts family names are letters, digits and spaces. Rejecting anything
+# else here means a bad LLM/Brandfetch response can never put a quote, brace or
+# backslash into the CSS string or font URL the browser builds. The frontend
+# applies the identical rule — this is defense in depth, not a substitute.
+_FONT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ]{0,48}$")
+
+
+def safe_font_name(name: str) -> str:
+    """The family name if it is safe to interpolate, else ""."""
+    n = (name or "").strip()
+    return n if _FONT_RE.match(n) else ""
+
+
+def safe_curated(name: str) -> str:
+    """A bundled fallback family, defaulting when the value isn't one of ours."""
+    n = (name or "").strip()
+    return n if n in CURATED_FONTS else DEFAULT_CURATED
 
 
 def slugify(name: str) -> str:
@@ -48,7 +90,6 @@ def _brandfetch_brand(domain: str) -> dict | None:
         key = os.getenv("BRANDFETCH_API_KEY", "")
     if not key:
         return None
-    import httpx
 
     try:
         with httpx.Client(timeout=12, follow_redirects=True) as c:
@@ -84,25 +125,45 @@ def _brandfetch_brand(domain: str) -> dict | None:
             secondary = v
             break
 
-    return {"primary": primary, "secondary": secondary}
+    # The dark neutral makes a far better surface tint than a saturated primary.
+    neutral = pick("dark") or ""
+
+    # Brandfetch also returns the brand's typefaces: [{name, type: title|body,
+    # origin: google|custom, ...}]. `origin == "google"` is a high-confidence CDN
+    # hit; a 'custom' face (Circular, Gotham…) is still worth recording — the
+    # frontend loader detects that it can't be fetched and falls back.
+    fonts = {"heading": "", "body": ""}
+    for f in data.get("fonts") or []:
+        if not isinstance(f, dict):
+            continue
+        name = safe_font_name(str(f.get("name") or ""))
+        if not name:
+            continue
+        slot = "heading" if f.get("type") == "title" else "body"
+        if not fonts[slot]:
+            fonts[slot] = name
+
+    return {"primary": primary, "secondary": secondary, "neutral": neutral, "fonts": fonts}
 
 
 def fetch_brand(customer: str, website: str | None = None) -> dict:
     """Brand assets: the Logo.dev logo, plus a Brandfetch palette when available
     (accurate/current), else a scraped <meta theme-color> as a weak accent fallback.
     Returns accent/accent2 empty when unknown so the caller can prefer the LLM guess."""
-    import httpx
-
     domain = domain_for(customer, website)
     logo = f"https://img.logo.dev/{domain}?token={LOGODEV_TOKEN}&size=128&format=png&retina=true"
     accent = ""       # authoritative (Brandfetch) — empty when unavailable
     accent2 = ""
+    neutral = ""
+    fonts = {"heading": "", "body": ""}
     accent_scraped = ""  # weak fallback parsed from the site's theme-color
 
     bf = _brandfetch_brand(domain)
     if bf:
         accent = bf.get("primary") or ""
         accent2 = bf.get("secondary") or ""
+        neutral = bf.get("neutral") or ""
+        fonts = bf.get("fonts") or fonts
 
     if not accent:
         # Only bother scraping the homepage when Brandfetch gave us nothing.
@@ -121,8 +182,8 @@ def fetch_brand(customer: str, website: str | None = None) -> dict:
         except Exception:
             pass
 
-    return {"domain": domain, "logo": logo, "accent": accent,
-            "accent2": accent2, "accent_scraped": accent_scraped}
+    return {"domain": domain, "logo": logo, "accent": accent, "accent2": accent2,
+            "neutral": neutral, "fonts": fonts, "accent_scraped": accent_scraped}
 
 
 INDUSTRIES = [
@@ -136,9 +197,6 @@ def analyze_customer(customer: str, industry: str = "", website: str | None = No
                      model: str | None = None) -> dict:
     """One LLM call → infer industry (unless given), 3 persona quick-actions, and a
     customer-specific 'data gap' + a question that probes it (the hallucination trigger)."""
-    from langchain.chat_models import init_chat_model
-    from langchain_core.messages import HumanMessage
-
     load_env()
     llm = init_chat_model(model or "anthropic:claude-haiku-4-5-20251001", temperature=0.5)
     site = f" (website: {website})" if website else ""
@@ -158,15 +216,27 @@ def analyze_customer(customer: str, industry: str = "", website: str | None = No
         "5) Pick the dashboard THEME ('light' or 'dark') that best fits this brand — most retail, "
         "healthcare, finance and consumer brands read as 'light'; developer, gaming, media and "
         "'techy' brands often read as 'dark'.\n"
+        "6) Give a NEUTRAL colour as hex — a calm, usually dark brand-adjacent tone used to tint "
+        "panels and borders. Avoid a saturated red/orange/yellow here even if that is the primary; "
+        "prefer the brand's dark neutral. Empty string if unsure.\n"
+        "7) Pick this brand's TYPEFACES. 'heading_font'/'body_font' must be real Google Fonts "
+        "families matching the brand's typographic personality (use their actual font when it is "
+        "on Google Fonts, e.g. Poppins, Montserrat, Lato, Roboto, Source Sans 3). Also pick "
+        "'heading_fallback'/'body_fallback' EXACTLY from this list: "
+        f"{', '.join(CURATED_FONTS)}.\n"
         "Return STRICT JSON, no prose:\n"
         '{"industry":"<one of the list>",'
         '"actions":[{"label":"<Persona role>: <2-4 word gist>","question":"<question>"}],'
         '"data_gap":"<short noun phrase>",'
         '"gap_action":{"label":"<Persona role>: <2-4 word gist>","question":"<question that needs the gap data>"},'
-        '"primary_color":"#RRGGBB","secondary_color":"#RRGGBB","theme":"light|dark"}'
+        '"primary_color":"#RRGGBB","secondary_color":"#RRGGBB","neutral_color":"#RRGGBB",'
+        '"theme":"light|dark",'
+        '"heading_font":"","body_font":"","heading_fallback":"","body_fallback":""}'
     )
-    out = {"industry": industry or "", "actions": [], "data_gap": "", "gap_action": None,
-           "primary_color": "", "secondary_color": "", "theme": "dark"}
+    out: dict = {"industry": industry or "", "actions": [], "data_gap": "", "gap_action": None,
+                 "primary_color": "", "secondary_color": "", "neutral_color": "", "theme": "dark",
+                 "heading_font": "", "body_font": "",
+                 "heading_fallback": DEFAULT_CURATED, "body_fallback": DEFAULT_CURATED}
     try:
         content = llm.invoke([HumanMessage(prompt)]).content
         if isinstance(content, list):
@@ -184,10 +254,15 @@ def analyze_customer(customer: str, industry: str = "", website: str | None = No
         ga = data.get("gap_action")
         if isinstance(ga, dict) and ga.get("question"):
             out["gap_action"] = {"label": str(ga.get("label", "")).strip(), "question": str(ga.get("question", "")).strip()}
-        for k in ("primary_color", "secondary_color"):
+        for k in ("primary_color", "secondary_color", "neutral_color"):
             v = str(data.get(k, "")).strip()
             if re.fullmatch(r"#[0-9a-fA-F]{6}", v):
                 out[k] = v
+        # Validated before storage — an unvetted family must never reach metadata.
+        for k in ("heading_font", "body_font"):
+            out[k] = safe_font_name(str(data.get(k, "")))
+        for k in ("heading_fallback", "body_fallback"):
+            out[k] = safe_curated(str(data.get(k, "")))
         theme = str(data.get("theme", "")).strip().lower()
         if theme in ("light", "dark"):
             out["theme"] = theme
@@ -197,8 +272,6 @@ def analyze_customer(customer: str, industry: str = "", website: str | None = No
 
 
 def _ws_client(workspace: str | None):
-    from langsmith import Client
-
     load_env()
     key = os.getenv("LS_CROSS_WORKSPACE_KEY") or os.getenv("LANGSMITH_API_KEY")
     api_url = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
@@ -206,8 +279,6 @@ def _ws_client(workspace: str | None):
 
 
 def push_prompt(workspace: str, name: str, text: str) -> str:
-    from langchain_core.prompts import ChatPromptTemplate
-
     obj = ChatPromptTemplate.from_messages([("system", text)])
     try:
         return _ws_client(workspace).push_prompt(name, object=obj)
@@ -239,11 +310,22 @@ def prepare_assistant(payload: dict) -> dict:
     actions = list(payload.get("actions") or analysis.get("actions") or [])
     display_name = payload.get("display_name") or f"{customer} GPT"
 
-    context: dict = {"ls_workspace": workspace, "customer": customer}
+    slug = slugify(customer)
+    context: dict = {
+        "ls_workspace": workspace,
+        "customer": customer,
+        # Traces land in a per-customer, clearly-labelled project rather than one
+        # named just for the client — which could collide with a real project in
+        # that workspace. The SPA derives the same name (see traceProject()).
+        "ls_project": f"{slug}-corebot-demo",
+    }
     if industry:
         context["industry"] = industry
+    # Write the default tool selection explicitly, so a new assistant shows a
+    # concrete, editable value in the settings panel rather than relying on the
+    # unset fallback. Callers may override via `enabled_tools`.
+    context["enabled_tools"] = list(payload.get("enabled_tools") or sorted(DEFAULT_ENABLED))
     prompt_urls: dict = {}
-    slug = slugify(customer)
 
     # Always give the assistant a fixed, customer-templated system prompt (reliable
     # setup — no per-customer prompt writing). Hallucination appends the demo clause.
@@ -276,6 +358,16 @@ def prepare_assistant(payload: dict) -> dict:
     # guess → scraped site theme-color → default. Secondary drives the 2nd series.
     accent = brand["accent"] or analysis.get("primary_color") or brand["accent_scraped"] or "#0072BC"
     accent2 = brand["accent2"] or analysis.get("secondary_color") or ""
+    # Surface tint hue. Left BLANK on purpose so it follows the primary accent:
+    # a brand's "neutral" is nearly always a dark grey, and mixing dark grey into
+    # an already near-black panel is invisible — the tint has to carry the brand's
+    # actual hue to do anything. The field stays available as a manual override
+    # for the case it exists for: a primary so saturated it makes an ugly tint.
+    neutral = ""
+    # Fonts — Brandfetch (the brand's actual typefaces) beats the LLM's guess.
+    bf_fonts = brand.get("fonts") or {}
+    heading_font = bf_fonts.get("heading") or analysis.get("heading_font") or ""
+    body_font = bf_fonts.get("body") or analysis.get("body_font") or ""
     metadata = {
         "owner_name": owner,
         "customer": customer,
@@ -283,9 +375,16 @@ def prepare_assistant(payload: dict) -> dict:
         "display_name": display_name,
         "accent": accent,
         "accent2": accent2,
+        "brand_neutral": neutral,
+        "brand_tint": DEFAULT_BRAND_TINT,
         "logo": brand["logo"],
         "actions": actions,
         "theme": analysis.get("theme") or "dark",
+        "font_heading": heading_font,
+        "font_body": body_font,
+        "font_heading_fallback": analysis.get("heading_fallback") or DEFAULT_CURATED,
+        "font_body_fallback": analysis.get("body_fallback") or DEFAULT_CURATED,
+        "font_source": "google",
     }
     return {
         "name": customer,

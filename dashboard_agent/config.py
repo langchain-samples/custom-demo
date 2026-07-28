@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+from langsmith import Client
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -71,8 +72,6 @@ def workspace_id() -> str | None:
 
 def make_client():
     """Build a LangSmith Client scoped to the configured workspace (if any)."""
-    from langsmith import Client
-
     return Client(workspace_id=workspace_id())
 
 

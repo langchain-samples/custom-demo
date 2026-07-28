@@ -7,6 +7,7 @@
 import { useState } from "react";
 import { IconChevronDown, IconChevronRight } from "@tabler/icons-react";
 import { toolMeta } from "./helpers";
+import { hasToolCard, renderToolResult } from "./ToolResultCard";
 
 export interface ChipData {
   /** tool_call id (or a synthesized fallback) — stable across partials. */
@@ -29,12 +30,16 @@ function formatResult(content: string): string {
 }
 
 export function ToolChip({ chip }: { chip: ChipData }) {
-  const [open, setOpen] = useState(false);
+  // Capability tools render a typed card, which is the point of calling them —
+  // so those start expanded. Plumbing tools stay collapsed as before.
+  const [open, setOpen] = useState(hasToolCard(chip.name));
   const m = toolMeta(chip.name);
   const Icon = m.icon;
   const hasResult = chip.result !== null;
   const arg = chip.arg || "";
   const argText = arg.length > 120 ? arg.slice(0, 120) + "…" : arg;
+  // null when there's no renderer for this tool, or the payload is off-shape.
+  const card = hasResult ? renderToolResult(chip.name, chip.result as string) : null;
 
   return (
     <div className="flex animate-in fade-in slide-in-from-bottom-1 flex-col gap-1.5 rounded-lg border border-border bg-panel-2 px-2.5 py-1.5 text-xs text-muted-foreground duration-200">
@@ -60,9 +65,11 @@ export function ToolChip({ chip }: { chip: ChipData }) {
         </span>
       </div>
       {hasResult && open && (
-        <pre className="m-0 max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background p-2 font-mono text-[11px] text-foreground">
-          {formatResult(chip.result as string)}
-        </pre>
+        card ?? (
+          <pre className="m-0 max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background p-2 font-mono text-[11px] text-foreground">
+            {formatResult(chip.result as string)}
+          </pre>
+        )
       )}
     </div>
   );

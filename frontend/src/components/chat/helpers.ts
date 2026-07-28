@@ -11,6 +11,12 @@ import {
   IconRobot,
   IconChartBar,
   IconTool,
+  IconMail,
+  IconCalendarEvent,
+  IconWorldSearch,
+  IconFolder,
+  IconFileText,
+  IconFilePencil,
 } from "@tabler/icons-react";
 import type { MessageContent, ToolCall, Widget } from "@/lib/api";
 
@@ -77,11 +83,23 @@ export function widgetLooksComplete(w: Widget | null | undefined): boolean {
 
 /** Icon + label shown on each tool "chip". Mirrors the original TOOL_META. */
 export const TOOL_META: Record<string, { icon: TablerIcon; label: string }> = {
+  // Core
   datasearch: { icon: IconSearch, label: "Searched reports" },
-  query_sql: { icon: IconDatabase, label: "Ran SQL query" },
+  push_widget: { icon: IconChartBar, label: "Added widget" },
+  // Capability tools (see dashboard_agent/tools/registry.py)
+  draft_email: { icon: IconMail, label: "Drafted an email" },
+  suggest_meeting_times: { icon: IconCalendarEvent, label: "Suggested meeting times" },
+  list_data_sources: { icon: IconDatabase, label: "Listed data sources" },
+  web_search: { icon: IconWorldSearch, label: "Searched the web" },
+  // deepagents built-ins that are always live
   write_todos: { icon: IconChecklist, label: "Planned steps" },
   task: { icon: IconRobot, label: "Delegated to subagent" },
-  push_widget: { icon: IconChartBar, label: "Added widget" },
+  ls: { icon: IconFolder, label: "Listed files" },
+  glob: { icon: IconFolder, label: "Found files" },
+  grep: { icon: IconSearch, label: "Searched files" },
+  read_file: { icon: IconFileText, label: "Read a file" },
+  write_file: { icon: IconFilePencil, label: "Wrote a file" },
+  edit_file: { icon: IconFilePencil, label: "Edited a file" },
 };
 
 export function toolMeta(name: string): { icon: TablerIcon; label: string } {
@@ -93,7 +111,21 @@ export function toolMeta(name: string): { icon: TablerIcon; label: string } {
  * it's the `query` arg; otherwise a truncated JSON of the args. Matches app.js.
  */
 export function chipArgSummary(name: string, args: Record<string, unknown>): string {
-  if (name === "datasearch" || name === "query_sql") return String(args.query || "");
+  // Show the single most meaningful arg per tool; fall back to truncated JSON.
+  const primary: Record<string, string> = {
+    datasearch: "query",
+    web_search: "query",
+    draft_email: "purpose",
+    suggest_meeting_times: "purpose",
+    list_data_sources: "area",
+    read_file: "file_path",
+    write_file: "file_path",
+    edit_file: "file_path",
+    glob: "pattern",
+    grep: "pattern",
+  };
+  const key = primary[name];
+  if (key) return String(args[key] || "");
   return JSON.stringify(args).slice(0, 120);
 }
 

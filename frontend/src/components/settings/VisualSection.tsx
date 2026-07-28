@@ -1,6 +1,6 @@
 /**
- * VISUAL branding (section 3): display name, accent color (native color input +
- * hex text), logo (emoji or URL), and the collapsed Quick actions editor. All
+ * VISUAL branding (section 3): display name, logo (emoji or URL), theme and the
+ * collapsed Quick actions editor. Colour lives in BrandSection. All
  * edits are branding → the parent debounce-PATCHes them into the assistant's
  * metadata and reflects them in the header + presets live.
  */
@@ -14,32 +14,23 @@ import { LABEL_CLS } from "./types";
 
 interface Props {
   name: string;
-  accent: string;
-  accent2: string;
   logo: string;
   actions: QuickAction[];
   theme: Theme;
   onName: (v: string) => void;
-  onAccent: (v: string) => void;
-  onAccent2: (v: string) => void;
   onLogo: (v: string) => void;
   onActions: (a: QuickAction[]) => void;
   onTheme: (t: Theme) => void;
 }
 
-const HEX_RE = /^#[0-9a-f]{6}$/i;
 const URL_RE = /^(https?:|data:)/i;
 
 export function VisualSection({
   name,
-  accent,
-  accent2,
   logo,
   actions,
   theme,
   onName,
-  onAccent,
-  onAccent2,
   onLogo,
   onActions,
   onTheme,
@@ -55,44 +46,6 @@ export function VisualSection({
           value={name}
           onChange={(e) => onName(e.target.value)}
         />
-      </div>
-
-      <div className="flex flex-col gap-1.5">
-        <Label className={LABEL_CLS}>Primary color</Label>
-        <div className="flex items-center gap-2">
-          <input
-            type="color"
-            aria-label="Primary color"
-            value={HEX_RE.test(accent) ? accent : "#0072BC"}
-            onChange={(e) => onAccent(e.target.value)}
-            className="h-8 w-10 shrink-0 cursor-pointer rounded-lg border border-input bg-transparent p-0"
-          />
-          <Input
-            placeholder="#0072BC"
-            value={accent}
-            onChange={(e) => onAccent(e.target.value)}
-          />
-        </div>
-      </div>
-
-      <div className="flex flex-col gap-1.5">
-        <Label className={LABEL_CLS}>
-          Secondary color <span className="font-normal normal-case tracking-normal text-muted-foreground">(optional — 2nd chart series)</span>
-        </Label>
-        <div className="flex items-center gap-2">
-          <input
-            type="color"
-            aria-label="Secondary color"
-            value={HEX_RE.test(accent2) ? accent2 : "#00A651"}
-            onChange={(e) => onAccent2(e.target.value)}
-            className="h-8 w-10 shrink-0 cursor-pointer rounded-lg border border-input bg-transparent p-0"
-          />
-          <Input
-            placeholder="(none)"
-            value={accent2}
-            onChange={(e) => onAccent2(e.target.value)}
-          />
-        </div>
       </div>
 
       <div className="flex flex-col gap-1.5">

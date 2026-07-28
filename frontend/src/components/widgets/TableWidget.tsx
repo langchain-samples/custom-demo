@@ -6,7 +6,7 @@ import type { TableWidget as TableWidgetSpec } from "@/lib/api";
 export function TableWidget({ widget }: { widget: TableWidgetSpec }) {
   return (
     <div className="widget span-2 col-span-2 animate-in rounded-[14px] border border-border bg-panel p-4 shadow-sm duration-300 fade-in slide-in-from-bottom-2">
-      <div className="widget-title mb-3 text-sm font-semibold">{widget.title}</div>
+      <div className="widget-title mb-3 font-heading text-sm font-semibold">{widget.title}</div>
       <table className="data-table w-full border-collapse text-[13px]">
         <thead>
           <tr>

@@ -17,9 +17,15 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date
 from typing import Any, Protocol
 
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import HumanMessage, SystemMessage
+
 from .config import data_model, dataset
+from .prompt import build_data_prompt, pull_data_prompt
+from .rag import search as _search
 
 
 class DataSource(Protocol):
@@ -30,8 +36,6 @@ class StaticDataSource:
     """The bundled humanitarian corpus (default). Real in-memory TF-IDF search."""
 
     def search(self, query: str, k: int = 3) -> list[dict]:
-        from .rag import search as _search
-
         return _search(query, k=k)
 
 
@@ -83,15 +87,11 @@ class SyntheticDataSource:
 
     def _model(self):
         if self._llm is None:
-            from langchain.chat_models import init_chat_model
-
             # Low-ish temperature: plausible but not wildly random figures.
             self._llm = init_chat_model(self._model_id, temperature=0.4)
         return self._llm
 
     def _system_prompt(self) -> str:
-        from .prompt import build_data_prompt, pull_data_prompt
-
         # Precedence: inline override → build a customer-centric prompt from the
         # withheld gap → pull a Hub prompt by name → the default.
         if self._data_prompt:
@@ -101,9 +101,13 @@ class SyntheticDataSource:
         return pull_data_prompt(self._data_prompt_name, self._ls_workspace)
 
     def _ask(self, instruction: str) -> str:
-        from langchain_core.messages import HumanMessage, SystemMessage
-
-        system = self._system_prompt()
+        # Anchor the invented world to today, or the model dates everything to its
+        # training cutoff and the dashboard reads as years out of date.
+        system = (
+            f"{self._system_prompt()}\n\nTODAY'S DATE IS {date.today().isoformat()}. "
+            "Every period, date and 'latest' figure you invent must be relative to "
+            "that — never an earlier year."
+        )
         messages = [SystemMessage(system), HumanMessage(instruction)]
         resp = self._model().invoke(messages)
         content = getattr(resp, "content", "")
