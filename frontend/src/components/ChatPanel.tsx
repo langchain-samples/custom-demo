@@ -14,8 +14,7 @@
  * this component only calls the `guard` prop before sending.
  */
 import { useEffect, useRef, useState } from "react";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Streamdown } from "streamdown";
 import { IconRobot, IconLoader2, IconUser } from "@tabler/icons-react";
 import type { QuickAction, ReviewInterrupt, RunContext, ThreadMessage, Widget } from "@/lib/api";
 import { ensureThread, resetThread, runStream } from "@/lib/api";
@@ -577,7 +576,11 @@ function ItemView({
   }
   // assistant
   const base = "text-sm leading-relaxed text-foreground";
-  if (item.markdown) {
+  // Render markdown for real answers — both the final message AND live while it
+  // streams (Streamdown gracefully closes half-finished tables/bold/code fences,
+  // so partial output stays clean instead of showing raw ** and |---| syntax).
+  const isAnswer = item.markdown || (item.streaming && item.text !== "Working…");
+  if (isAnswer) {
     return (
       <div
         className={
@@ -592,7 +595,7 @@ function ItemView({
           " [&_td]:border-b [&_td]:border-border/50 [&_td]:px-2 [&_td]:py-1"
         }
       >
-        <Markdown remarkPlugins={[remarkGfm]}>{item.text}</Markdown>
+        <Streamdown parseIncompleteMarkdown>{item.text}</Streamdown>
       </div>
     );
   }
@@ -604,10 +607,7 @@ function ItemView({
           {item.text}
         </span>
       ) : (
-        <>
-          {item.text}
-          {item.streaming && <span className="ml-0.5 animate-pulse text-muted-foreground">▌</span>}
-        </>
+        item.text
       )}
     </div>
   );

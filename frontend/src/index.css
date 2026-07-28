@@ -1,6 +1,8 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+/* Let Tailwind compile the classes Streamdown emits (streaming markdown renderer). */
+@source "../node_modules/streamdown/dist/index.js";
 /* Curated fallback families, spanning the personality space a brand might need.
    Each @import emits only @font-face rules — the .woff2 files are separate build
    assets the browser fetches ONLY when text actually renders in that family, so
