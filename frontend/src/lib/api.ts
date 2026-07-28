@@ -37,6 +37,8 @@ export interface AssistantMetadata {
   actions?: QuickAction[];
   owner_name?: string;
   customer?: string;
+  /** Industry label (e.g. "Retail") — used in the chat hero placeholder + dropdown. */
+  industry?: string;
   /** Brand-appropriate default theme applied when this assistant is selected. */
   theme?: "light" | "dark";
   [key: string]: unknown;
