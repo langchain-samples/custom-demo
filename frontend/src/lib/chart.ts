@@ -7,35 +7,27 @@
 import type { ChartConfiguration } from "chart.js";
 import type { Widget, ChartWidget } from "./api";
 import type { Theme } from "./theme";
+import { resolveColor } from "./branding";
 
-/** Categorical series palette (fallback when no brand colors are set). */
+/**
+ * Categorical series palette used only when there is no DOM to resolve tokens
+ * against (Node tests). In the browser every color comes from the `--chart-*`
+ * tokens, which derive from the active brand — see lib/branding.ts.
+ */
 export const PALETTE: string[] = [
   "#0072BC", "#00A651", "#F5A623", "#D0021B",
   "#8E44AD", "#16A085", "#E67E22", "#2C3E50",
 ];
 
-/** Grid-line + axis-text colors per theme (subtle grid, muted text). */
-const CHART_THEME: Record<Theme, { grid: string; text: string }> = {
-  light: { grid: "#e4e4e9", text: "#6b6b76" },
-  dark: { grid: "#26262b", text: "#8a8a93" },
-};
-
-/** Read a CSS custom property off :root (empty string when unset / no DOM). */
-function cssVar(name: string): string {
-  if (typeof document === "undefined") return "";
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-}
-
 /**
- * Chart palette led by the active assistant's brand colors: primary drives the
- * first series, secondary the second, then the fallback palette. Falls back to
- * PALETTE[0]/[1] when the brand vars aren't set.
+ * The eight categorical series colors for the active brand and theme.
+ *
+ * Resolved through `resolveColor` rather than read as raw custom properties:
+ * these tokens are `color-mix`/`var()` chains whose raw text Chart.js cannot
+ * parse (it would render them black).
  */
 export function brandPalette(): string[] {
-  const primary = cssVar("--brand-primary") || PALETTE[0];
-  const secondary = cssVar("--brand-secondary") || PALETTE[1];
-  const rest = PALETTE.filter((c) => c !== primary && c !== secondary);
-  return [primary, secondary, ...rest];
+  return PALETTE.map((fallback, i) => resolveColor(`--chart-${i + 1}`) || fallback);
 }
 
 /** Compact human number: 1_500 -> "1.5K", 2_000_000 -> "2M". */
@@ -60,7 +52,14 @@ export function chartConfig(
   const w = widget as ChartWidget;
   const series = w.series || [];
   const pal = brandPalette();
-  const tc = CHART_THEME[theme];
+  // Chart chrome from tokens, so it can never drift from the surface palette the
+  // way the old hardcoded values had. `theme` still matters: it is what makes
+  // React re-run this on a light/dark flip (the tokens themselves live in CSS).
+  const tc = {
+    grid: resolveColor("--chart-grid") || (theme === "dark" ? "#26262b" : "#e4e4e9"),
+    text: resolveColor("--chart-text") || (theme === "dark" ? "#8a8a93" : "#6b6b76"),
+    slice: resolveColor("--chart-slice-border") || (theme === "dark" ? "#0f0f11" : "#ffffff"),
+  };
 
   if (w.type === "pie") {
     const points = series[0]?.points || [];
@@ -71,7 +70,7 @@ export function chartConfig(
         datasets: [{
           data: points.map((p) => p.value),
           backgroundColor: points.map((_, i) => pal[i % pal.length]),
-          borderColor: theme === "dark" ? "#0f0f11" : "#ffffff",
+          borderColor: tc.slice,
           borderWidth: 2,
         }],
       },
@@ -125,9 +124,11 @@ export function chartConfig(
   } as ChartConfiguration;
 }
 
-/** KPI delta color by trend direction. */
+/** KPI delta color by trend direction, from the semantic tokens. */
 export function trendColor(trend: string | undefined): string {
-  return ({ up: "#00A651", down: "#D0021B", flat: "#666" } as Record<string, string>)[trend || ""] || "#666";
+  const token = ({ up: "--success", down: "--danger" } as Record<string, string>)[trend || ""];
+  const fallback = ({ up: "#00A651", down: "#D0021B" } as Record<string, string>)[trend || ""] || "#666";
+  return (token && resolveColor(token)) || fallback;
 }
 
 /**

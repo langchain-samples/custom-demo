@@ -4,6 +4,11 @@
     <meta charset="UTF-8" />
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Warms the connection for per-customer brand fonts (see src/lib/fonts.ts).
+         Only used when an assistant opts into the Google Fonts source; the
+         curated families are self-hosted and need no external request. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <title>Dashboard Agent</title>
   </head>
   <body>

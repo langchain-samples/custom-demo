@@ -3,6 +3,7 @@ import html2pdf from "html2pdf.js";
 import { IconDownload } from "@tabler/icons-react";
 import type { Widget, KpiWidget, ChartWidget as ChartWidgetSpec, TableWidget as TableWidgetSpec, TextWidget as TextWidgetSpec } from "@/lib/api";
 import type { Theme } from "@/lib/theme";
+import { resolveColor } from "@/lib/branding";
 import { KpiCard } from "@/components/widgets/KpiCard";
 import { ChartWidget } from "@/components/widgets/ChartWidget";
 import { TableWidget } from "@/components/widgets/TableWidget";
@@ -54,16 +55,21 @@ export function DashboardCanvas({ widgets, title = "Live dashboard", theme = "da
   const kpis = widgets.filter((w): w is KpiWidget => w.type === "kpi");
   const rest = widgets.filter((w) => w.type !== "kpi");
 
-  const exportPdf = () => {
+  const exportPdf = async () => {
     const dash = dashRef.current;
     if (!dash || !dash.children.length) return;
+    // html2canvas snapshots synchronously: a webfont still in flight would be
+    // captured in the fallback face, so the PDF wouldn't match the screen.
+    if (document.fonts?.ready) await document.fonts.ready;
     const opt = {
       margin: 8,
       filename: "dashboard.pdf",
       image: { type: "jpeg" as const, quality: 0.98 },
       html2canvas: {
         scale: 2,
-        backgroundColor: theme === "dark" ? "#0a0a0b" : "#ffffff",
+        // From the token, so the exported page matches the (possibly
+        // brand-tinted) on-screen background instead of a hardcoded grey.
+        backgroundColor: resolveColor("--pdf-bg") || (theme === "dark" ? "#0a0a0b" : "#ffffff"),
         useCORS: true,
         windowWidth: PDF_WIDTH,
         onclone: (doc: Document) => {
@@ -107,7 +113,7 @@ export function DashboardCanvas({ widgets, title = "Live dashboard", theme = "da
       }`}</style>
 
       <div className="canvas-head mb-3.5 flex items-center justify-between">
-        <p className="canvas-title m-0 text-xs uppercase tracking-wider text-muted-foreground">
+        <p className="canvas-title m-0 font-heading text-xs uppercase tracking-wider text-muted-foreground">
           {title}
         </p>
         <button

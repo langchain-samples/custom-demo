@@ -132,9 +132,21 @@ async def hub_prompts(request):
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
 
+async def tools(request):
+    """List the selectable tool catalogue (labels, groups, defaults).
+
+    Served from the backend registry so adding a capability needs no frontend
+    change. Static data — no LangSmith call, no auth.
+    """
+    from dashboard_agent.tools import registry_json
+
+    return JSONResponse({"tools": registry_json()})
+
+
 app = Starlette(
     routes=[
         Route("/feedback", feedback, methods=["POST"]),
+        Route("/tools", tools, methods=["GET"]),
         Route("/projects", projects, methods=["GET", "POST"]),
         Route("/workspaces", workspaces, methods=["GET"]),
         Route("/hub-prompts", hub_prompts, methods=["GET"]),

@@ -19,7 +19,7 @@ export function ChartWidget({ widget, theme = "dark" }: { widget: ChartWidgetSpe
   if (!config) return null;
   return (
     <div className="widget animate-in rounded-[14px] border border-border bg-panel p-4 shadow-sm duration-300 fade-in slide-in-from-bottom-2">
-      <div className="widget-title mb-3 text-sm font-semibold">{widget.title}</div>
+      <div className="widget-title mb-3 font-heading text-sm font-semibold">{widget.title}</div>
       <div className="chart-wrap relative h-[260px]">
         <Chart type={config.type} data={config.data} options={config.options} />
       </div>

@@ -21,6 +21,7 @@ import { DashboardCanvas } from "@/components/DashboardCanvas";
 import { SettingsPanel, type SettingsHandle } from "@/components/SettingsPanel";
 import { getAssistantId } from "@/lib/config";
 import { applyTheme, getStoredTheme, setStoredTheme, type Theme } from "@/lib/theme";
+import { invalidateColorCache } from "@/lib/branding";
 import type { Assistant, RunContext, Widget } from "@/lib/api";
 
 const DEFAULT_NAME = "Corebot";
@@ -72,6 +73,9 @@ export default function App() {
   useEffect(() => {
     applyTheme(effectiveTheme);
     setStoredTheme(effectiveTheme);
+    // Token-derived colors (chart series, grid, PDF background) differ per theme,
+    // so the resolved-color memo must be dropped when the theme flips.
+    invalidateColorCache();
   }, [effectiveTheme]);
 
   // Header toggle: persist into the active assistant's metadata (so it becomes
@@ -133,7 +137,7 @@ export default function App() {
           className="flex items-center gap-3.5 rounded-lg transition-opacity hover:opacity-70"
         >
           <BrandLogo logo={logo} />
-          <h1 className="m-0 text-2xl font-bold tracking-tight">{displayName}</h1>
+          <h1 className="m-0 font-heading text-2xl font-bold tracking-tight">{displayName}</h1>
         </button>
         <Button
           variant="secondary"

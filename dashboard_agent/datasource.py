@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date
 from typing import Any, Protocol
 
 from langchain.chat_models import init_chat_model
@@ -100,7 +101,13 @@ class SyntheticDataSource:
         return pull_data_prompt(self._data_prompt_name, self._ls_workspace)
 
     def _ask(self, instruction: str) -> str:
-        system = self._system_prompt()
+        # Anchor the invented world to today, or the model dates everything to its
+        # training cutoff and the dashboard reads as years out of date.
+        system = (
+            f"{self._system_prompt()}\n\nTODAY'S DATE IS {date.today().isoformat()}. "
+            "Every period, date and 'latest' figure you invent must be relative to "
+            "that — never an earlier year."
+        )
         messages = [SystemMessage(system), HumanMessage(instruction)]
         resp = self._model().invoke(messages)
         content = getattr(resp, "content", "")

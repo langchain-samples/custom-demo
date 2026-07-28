@@ -75,6 +75,22 @@ export interface RunContext {
   data_gap?: string;
   ls_workspace?: string;
   ls_project?: string;
+  /**
+   * Catalogue tool ids this assistant exposes. Omit when the assistant has no
+   * saved selection (the backend then applies its defaults). An EMPTY ARRAY is
+   * meaningful — "every optional tool off" — and must be sent, not omitted.
+   */
+  enabled_tools?: string[];
+}
+
+/** One selectable capability, from GET /tools (the backend registry). */
+export interface ToolSpec {
+  id: string;
+  label: string;
+  description: string;
+  group: string;
+  always_on: boolean;
+  default_on: boolean;
 }
 
 /* ---- Widget specs (the agent's push_widget payloads) ---- */
@@ -472,6 +488,18 @@ export async function createProject(name: string, workspace?: string): Promise<u
   });
   if (!res.ok) throw await errorFrom(res);
   return res.json();
+}
+
+/** List the selectable tool catalogue (GET /tools). Empty on failure. */
+export async function listTools(): Promise<ToolSpec[]> {
+  try {
+    const res = await fetch(`${getApiBase()}/tools`, { headers: apiHeaders() });
+    if (!res.ok) return [];
+    const d = await res.json();
+    return Array.isArray(d.tools) ? d.tools : [];
+  } catch {
+    return [];
+  }
 }
 
 /** List Prompt Hub prompt names for a workspace (GET /hub-prompts). Empty on failure. */

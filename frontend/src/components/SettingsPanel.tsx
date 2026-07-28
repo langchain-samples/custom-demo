@@ -35,6 +35,7 @@ import {
   deleteAssistant,
   listAssistants,
   listHubPrompts,
+  listTools,
   listWorkspaces,
   runSetup,
   updateAssistant,
@@ -42,6 +43,7 @@ import {
   type AssistantMetadata,
   type QuickAction,
   type RunContext,
+  type ToolSpec,
   type Workspace,
 } from "@/lib/api";
 import { getAssistantId, isAssistantId, setAssistantId } from "@/lib/config";
@@ -49,11 +51,16 @@ import { WorkspaceSelect } from "./settings/WorkspaceSelect";
 import { AssistantSelect } from "./settings/AssistantSelect";
 import { NewAssistantForm, type NewAssistantValues } from "./settings/NewAssistantForm";
 import { VisualSection } from "./settings/VisualSection";
+import { BrandSection } from "./settings/BrandSection";
+import { TypographySection } from "./settings/TypographySection";
 import { AgentConfig } from "./settings/AgentConfig";
+import { ToolsSection } from "./settings/ToolsSection";
 import { DeleteAssistant } from "./settings/DeleteAssistant";
 import type { PanelConfig, PromptMode } from "./settings/types";
 import { coerceTheme } from "@/lib/theme";
 import type { Theme } from "@/lib/theme";
+import { applyBrand, DEFAULT_TINT } from "@/lib/branding";
+import { applyTypography, DEFAULT_CURATED, type FontStatus } from "@/lib/fonts";
 
 /* --------------------------- Public prop surface --------------------------- */
 
@@ -118,7 +125,6 @@ const DEFAULT_ACTIONS: QuickAction[] = [
 
 const DEFAULT_NAME = "Dashboard Agent — Humanitarian Insights";
 const DEFAULT_ACCENT = "#0072BC";
-const DEFAULT_ACCENT_DARK = "#005a96";
 const DEFAULT_LOGO = "";
 
 const WORKSPACE_LS_KEY = "dashboardWorkspace";
@@ -126,7 +132,6 @@ const LAST_OWNER_LS_KEY = "lastOwner";
 
 /* ------------------------------- Helpers --------------------------------- */
 
-const HEX_RE = /^#[0-9a-f]{6}$/i;
 
 function readLS(key: string): string {
   try {
@@ -148,17 +153,6 @@ function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** Darken (pct<0) / lighten (pct>0) a #rrggbb hex. Ported from the SPA. */
-function shadeHex(hex: string, pct: number): string {
-  const m = /^#?([0-9a-f]{6})$/i.exec((hex || "").trim());
-  if (!m) return hex;
-  const n = parseInt(m[1], 16);
-  const adj = (c: number) => Math.max(0, Math.min(255, Math.round(c + c * pct)));
-  const r = adj((n >> 16) & 255);
-  const g = adj((n >> 8) & 255);
-  const b = adj(n & 255);
-  return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
-}
 
 /** Branding+config derived from an assistant's metadata/context (keep workspace). */
 function configFromAssistant(a: Assistant, workspace: string): PanelConfig {
@@ -169,13 +163,22 @@ function configFromAssistant(a: Assistant, workspace: string): PanelConfig {
     name: m.display_name || DEFAULT_NAME,
     accent: m.accent || DEFAULT_ACCENT,
     accent2: m.accent2 || "",
+    brandNeutral: (m.brand_neutral as string) || "",
+    brandTint: typeof m.brand_tint === "number" ? m.brand_tint : DEFAULT_TINT,
     logo: m.logo || DEFAULT_LOGO,
     actions: Array.isArray(m.actions) && m.actions.length ? m.actions : DEFAULT_ACTIONS,
     theme: coerceTheme(m.theme),
+    fontHeading: (m.font_heading as string) || "",
+    fontHeadingFallback: (m.font_heading_fallback as string) || DEFAULT_CURATED,
+    fontBody: (m.font_body as string) || "",
+    fontBodyFallback: (m.font_body_fallback as string) || DEFAULT_CURATED,
+    fontSource: m.font_source === "curated" ? "curated" : "google",
     promptName: (ctx.prompt_name as string) || "",
     systemPrompt: (ctx.prompt as string) || "",
     dataPrompt: (ctx.data_prompt as string) || "",
     dataGap: (ctx.data_gap as string) || "",
+    // null = no saved selection (backend defaults); [] = everything optional off.
+    enabledTools: Array.isArray(ctx.enabled_tools) ? (ctx.enabled_tools as string[]) : null,
     // Reflect whichever prompt source the assistant is configured with.
     promptMode: ctx.prompt ? "inline" : "hub",
   };
@@ -188,14 +191,22 @@ function blankConfig(workspace: string): PanelConfig {
     name: "",
     accent: DEFAULT_ACCENT,
     accent2: "",
+    brandNeutral: "",
+    brandTint: DEFAULT_TINT,
     logo: "",
     actions: [],
     theme: "dark",
+    fontHeading: "",
+    fontHeadingFallback: DEFAULT_CURATED,
+    fontBody: "",
+    fontBodyFallback: DEFAULT_CURATED,
+    fontSource: "google",
     promptMode: "hub",
     promptName: "",
     systemPrompt: "",
     dataGap: "",
     dataPrompt: "",
+    enabledTools: null,
   };
 }
 
@@ -216,6 +227,9 @@ function resolveRunContext(cfg: PanelConfig, project: string): RunContext {
   if (cfg.lsWorkspace) ctx.ls_workspace = cfg.lsWorkspace;
   // lsProject is not user-editable here; it defaults to the assistant's name.
   if (project) ctx.ls_project = project;
+  // Deliberately a null check, NOT a length check: [] means "every optional tool
+  // off" and must reach the backend. Omitting it would restore the defaults.
+  if (cfg.enabledTools !== null) ctx.enabled_tools = cfg.enabledTools;
   return ctx;
 }
 
@@ -229,6 +243,11 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
     const [assistants, setAssistants] = useState<Assistant[]>([]);
     const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
     const [hubPrompts, setHubPrompts] = useState<string[]>([]);
+    const [toolSpecs, setToolSpecs] = useState<ToolSpec[]>([]);
+    const [fontStatus, setFontStatus] = useState<{ heading: FontStatus; body: FontStatus }>({
+      heading: "curated",
+      body: "curated",
+    });
     const [selectedId, setSelectedId] = useState<string>(() => {
       const saved = getAssistantId();
       return isAssistantId(saved) ? saved : "";
@@ -269,9 +288,14 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
     );
 
     const loadAll = useCallback(async () => {
-      const [alist, wlist] = await Promise.all([listAssistants(), listWorkspaces()]);
+      const [alist, wlist, tlist] = await Promise.all([
+        listAssistants(),
+        listWorkspaces(),
+        listTools(),
+      ]);
       setAssistants(alist);
       setWorkspaces(wlist);
+      setToolSpecs(tlist);
       // On the very first load, restore the saved assistant's config (no reset).
       const saved = selectedIdRef.current;
       if (isAssistantId(saved) && alist.some((a) => a.assistant_id === saved)) {
@@ -295,7 +319,6 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
     /* ---- Live branding → parent (header/presets) + accent CSS vars ---- */
     useEffect(() => {
       const base = selectedId ? assistants.find((a) => a.assistant_id === selectedId) : null;
-      const root = document.documentElement.style;
       if (base) {
         const merged: Assistant = {
           ...base,
@@ -309,22 +332,41 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
             theme: cfg.theme,
           },
         };
-        const primary = HEX_RE.test(cfg.accent) ? cfg.accent : DEFAULT_ACCENT;
-        root.setProperty("--brand-blue", primary);
-        root.setProperty("--brand-blue-dark", shadeHex(primary, -0.2));
-        root.setProperty("--brand-primary", primary);
-        // Secondary drives the 2nd chart series; blank clears it (charts fall back).
-        if (HEX_RE.test(cfg.accent2)) root.setProperty("--brand-secondary", cfg.accent2);
-        else root.removeProperty("--brand-secondary");
+        // One call writes every brand token (seeds, contrast foreground, derived
+        // chart series). See lib/branding.ts for the rules it follows.
+        applyBrand({
+          primary: cfg.accent,
+          secondary: cfg.accent2,
+          neutral: cfg.brandNeutral,
+          tint: cfg.brandTint,
+        });
         onActiveAssistantChange?.(merged);
       } else {
-        root.setProperty("--brand-blue", DEFAULT_ACCENT);
-        root.setProperty("--brand-blue-dark", DEFAULT_ACCENT_DARK);
-        root.setProperty("--brand-primary", DEFAULT_ACCENT);
-        root.removeProperty("--brand-secondary");
+        applyBrand(null); // clear overrides → the unbranded defaults in index.css
         onActiveAssistantChange?.(null);
       }
-    }, [selectedId, assistants, cfg.name, cfg.accent, cfg.accent2, cfg.logo, cfg.actions, cfg.theme, onActiveAssistantChange]);
+    }, [selectedId, assistants, cfg.name, cfg.accent, cfg.accent2, cfg.brandNeutral, cfg.brandTint, cfg.logo, cfg.actions, cfg.theme, onActiveAssistantChange]);
+
+    /* ---- Typography: async (may hit the font CDN), so kept separate ---- */
+    useEffect(() => {
+      let cancelled = false;
+      const active = isAssistantId(selectedId);
+      void applyTypography(
+        active
+          ? {
+              heading: { family: cfg.fontHeading, fallback: cfg.fontHeadingFallback },
+              body: { family: cfg.fontBody, fallback: cfg.fontBodyFallback },
+              source: cfg.fontSource,
+            }
+          : null,
+      ).then((status) => {
+        // A rapid edit can resolve out of order; only the latest wins.
+        if (!cancelled) setFontStatus(status);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }, [selectedId, cfg.fontHeading, cfg.fontHeadingFallback, cfg.fontBody, cfg.fontBodyFallback, cfg.fontSource]);
 
     /* ---- Imperative handle: defined below, after editBranding ---- */
 
@@ -340,6 +382,13 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           display_name: next.name,
           accent: next.accent,
           accent2: next.accent2,
+          brand_neutral: next.brandNeutral,
+          brand_tint: next.brandTint,
+          font_heading: next.fontHeading,
+          font_heading_fallback: next.fontHeadingFallback,
+          font_body: next.fontBody,
+          font_body_fallback: next.fontBodyFallback,
+          font_source: next.fontSource,
           logo: next.logo,
           actions: next.actions,
           theme: next.theme,
@@ -369,6 +418,29 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
     // Agent-config edits feed the run context only (not saved to the assistant).
     const editConfig = useCallback((patch: Partial<PanelConfig>) => {
       setCfg((c) => ({ ...c, ...patch }));
+    }, []);
+
+    /* ---- Tool selection: run context AND persisted onto the assistant ---- */
+    const toolsTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+    const editTools = useCallback((ids: string[]) => {
+      setCfg((c) => ({ ...c, enabledTools: ids }));
+      const id = selectedIdRef.current;
+      if (!isAssistantId(id)) return;
+      clearTimeout(toolsTimer.current);
+      toolsTimer.current = setTimeout(async () => {
+        const src = assistantsRef.current.find((a) => a.assistant_id === id);
+        try {
+          // PATCH replaces `context` wholesale — spread the existing one or this
+          // wipes prompt_name / ls_workspace / data_gap.
+          const updated = await updateAssistant(id, {
+            context: { ...(src?.context || {}), enabled_tools: ids },
+          });
+          setAssistants((list) => list.map((a) => (a.assistant_id === id ? updated : a)));
+        } catch {
+          /* non-fatal: the selection still applies to this session's runs */
+        }
+      }, 600);
     }, []);
 
     /* ---- Imperative handle (send-time context + guards + theme) ---- */
@@ -519,17 +591,38 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
               <>
                 <VisualSection
                   name={cfg.name}
-                  accent={cfg.accent}
-                  accent2={cfg.accent2}
                   logo={cfg.logo}
                   actions={cfg.actions}
                   theme={cfg.theme}
                   onName={(v) => editBranding({ name: v })}
-                  onAccent={(v) => editBranding({ accent: v })}
-                  onAccent2={(v) => editBranding({ accent2: v })}
                   onLogo={(v) => editBranding({ logo: v })}
                   onActions={(a) => editBranding({ actions: a })}
                   onTheme={(t) => editBranding({ theme: t })}
+                />
+
+                <BrandSection
+                  accent={cfg.accent}
+                  accent2={cfg.accent2}
+                  neutral={cfg.brandNeutral}
+                  tint={cfg.brandTint}
+                  onAccent={(v) => editBranding({ accent: v })}
+                  onAccent2={(v) => editBranding({ accent2: v })}
+                  onNeutral={(v) => editBranding({ brandNeutral: v })}
+                  onTint={(v) => editBranding({ brandTint: v })}
+                />
+
+                <TypographySection
+                  headingFont={cfg.fontHeading}
+                  headingFallback={cfg.fontHeadingFallback}
+                  bodyFont={cfg.fontBody}
+                  bodyFallback={cfg.fontBodyFallback}
+                  useGoogle={cfg.fontSource === "google"}
+                  status={fontStatus}
+                  onHeadingFont={(v) => editBranding({ fontHeading: v })}
+                  onHeadingFallback={(v) => editBranding({ fontHeadingFallback: v })}
+                  onBodyFont={(v) => editBranding({ fontBody: v })}
+                  onBodyFallback={(v) => editBranding({ fontBodyFallback: v })}
+                  onUseGoogle={(v) => editBranding({ fontSource: v ? "google" : "curated" })}
                 />
 
                 <AgentConfig
@@ -544,6 +637,12 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
                   onSystemPrompt={(v) => editConfig({ systemPrompt: v })}
                   onDataGap={(v) => editConfig({ dataGap: v })}
                   onDataPrompt={(v) => editConfig({ dataPrompt: v })}
+                />
+
+                <ToolsSection
+                  specs={toolSpecs}
+                  enabled={cfg.enabledTools}
+                  onChange={editTools}
                 />
 
                 <DeleteAssistant label={deleteLabel} onDelete={handleDelete} />

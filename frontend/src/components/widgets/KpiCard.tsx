@@ -12,10 +12,8 @@ export function KpiCard({ widget }: { widget: KpiWidget }) {
       <div className="kpi-title text-xs uppercase tracking-wide text-muted-foreground">
         {widget.title}
       </div>
-      <div
-        className="kpi-value text-[30px] font-bold leading-tight"
-        style={{ color: "var(--brand-primary, #0072BC)" }}
-      >
+      {/* --brand-primary has a real default in index.css, so no inline fallback. */}
+      <div className="kpi-value font-heading text-[30px] font-bold leading-tight text-brand">
         {widget.value}
         {widget.unit ? (
           <span className="kpi-unit text-sm font-medium text-muted-foreground">

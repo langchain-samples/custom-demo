@@ -350,7 +350,7 @@ export default function ChatPanel({
             /* Hero: logo + prompt + centered composer + quick prompts */
             <div className="flex flex-1 flex-col items-center justify-center gap-5 px-4">
               <LogoGlyph logo={logo} size={64} />
-              <h2 className="text-2xl font-bold tracking-tight">What can I help with?</h2>
+              <h2 className="font-heading text-2xl font-bold tracking-tight">What can I help with?</h2>
               <div className="w-full max-w-xl">{composer("hero")}</div>
               {presets.length > 0 && (
                 <div className="flex w-full max-w-xl flex-col gap-1.5">
@@ -422,7 +422,7 @@ function LogoGlyph({ logo, size }: { logo?: string; size: number }) {
 function Avatar({ side, logo }: { side: "user" | "assistant"; logo?: string }) {
   if (side === "user") {
     return (
-      <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-slate-500 to-slate-700 text-white">
+      <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand text-brand-foreground">
         <IconUser size={18} />
       </div>
     );
