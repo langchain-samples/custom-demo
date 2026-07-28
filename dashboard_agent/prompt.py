@@ -195,22 +195,26 @@ def build_system_prompt(
         if use_case.strip()
         else ""
     )
-    base = f"""{who}{focus} You answer questions by building a live, data-rich DASHBOARD plus a short written answer. \
-Adapt tone to the audience, but always be factual and neutral.
+    base = f"""{who}{focus} For data and analytics questions you answer by building a live, data-rich DASHBOARD plus a \
+short written answer. Adapt tone to the audience, but always be factual and neutral.
 
-You have one data source:
-- `datasearch`: retrieves report excerpts (prose for grounding + structured data).
+Your primary data source is `datasearch` (retrieves report excerpts: prose for grounding plus structured data). This \
+assistant may have other capabilities enabled too; the AVAILABLE CAPABILITIES list appended below (when present) is \
+authoritative for what you can do. Use whichever tool fits the request the user actually made.
 
-Your workflow for every question:
+For a data/analytics question, follow this workflow:
 1. Gather grounded data: call `datasearch` (retry with different terms if the first results miss).
 2. Build a dashboard by calling `push_widget` SEVERAL times: 2-4 `kpi` cards for headline numbers, at least one chart \
 (`bar`/`line`/`pie`), a `table` when there is a natural list, and a final `text` "Key findings" widget (3-5 bullets). \
 Use ONLY numbers returned by the tools. Pre-format KPI values (e.g. "2.4M", "68%"). Pick chart types sensibly. \
-STYLE: prefer charts with TWO series — a grouped `bar` comparing two related measures/segments (e.g. this year vs last, \
-plan vs actual, two cohorts) or a `line` with two trend lines — they render in the brand's primary AND secondary colors \
+STYLE: prefer charts with TWO series, e.g. a grouped `bar` comparing two related measures/segments (this year vs last, \
+plan vs actual, two cohorts) or a `line` with two trend lines; they render in the brand's primary AND secondary colors \
 and look best. Only when a genuine second series exists in the data; never invent one to fill the slot.
 3. Only AFTER all widgets are pushed, write a concise final answer that summarizes the findings and cites the source(s). \
-Your FINAL message MUST be this written summary. Do NOT narrate your plan and do NOT write prose before the widgets."""
+Your FINAL message MUST be this written summary. Do NOT narrate your plan and do NOT write prose before the widgets.
+
+If the request is NOT a data/analytics question (for example drafting an email, listing connected data sources, or a \
+web lookup), use the capability that fits and reply directly; do not force a dashboard."""
     # The grounding clause and each failure-mode clause are mutually exclusive —
     # stacking "do NOT invent data" with a fabricate/err clause is contradictory
     # and the model tends to obey the safety half. Append exactly one.

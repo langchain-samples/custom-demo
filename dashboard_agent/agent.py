@@ -118,13 +118,16 @@ def _capability_note(runtime) -> str:
     lines = guidance_for(allowed)
     if not lines:
         return ""
-    note = "\n\nAVAILABLE CAPABILITIES (these are the only tools you have):\n" + "\n".join(
+    # A directive ("use only these"), not a factual claim ("these are the only
+    # tools that exist"): the runtime also binds deepagents' scratch-file tools,
+    # which we deliberately keep the assistant scoped away from for the demo.
+    note = "\n\nAVAILABLE CAPABILITIES (use only these tools to serve the user):\n" + "\n".join(
         f"- {line}" for line in lines
     )
-    # Stored prompts describe one rigid workflow (datasearch → push_widget →
+    # Stored prompts describe one rigid workflow (datasearch -> push_widget ->
     # answer). With extra capabilities enabled the model otherwise treats a
-    # "draft an email" request as off-script — refusing, apologising for going
-    # off-topic, or forcing a dashboard nobody asked for. Give it explicit
+    # "draft an email" request as off-script (refusing, apologising for going
+    # off-topic, or forcing a dashboard nobody asked for). Give it explicit
     # permission to answer the request that was actually made.
     if allowed - {"datasearch", "push_widget"}:
         note += (
