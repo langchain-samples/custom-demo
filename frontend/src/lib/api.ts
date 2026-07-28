@@ -235,6 +235,8 @@ export interface FeedbackInput {
   score: number;
   comment?: string;
   feedback_id?: string;
+  /** Workspace the run traced to, so feedback targets the same tenant. */
+  workspace?: string;
 }
 
 /** Result of postFeedback (served by webapp.py). */
