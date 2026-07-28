@@ -48,8 +48,12 @@ frontend/             React 19 + Vite + Tailwind 4 + shadcn SPA (the real UI)
 scripts/              seed_prompt, seed_data_prompt, seed_assistants, setup_assistant, serve_spa
 .claude/skills/setup-assistant/SKILL.md   interactive /setup-assistant flow (CLI path)
 langgraph.json        registers both graphs + http.app + wide-open CORS
+pyproject.toml        Python deps + dev group (uv); uv.lock pins them
 run.sh                langgraph dev (:2024) + Vite (:3000)
 ```
+
+Python dependencies are managed with **uv** (`pyproject.toml` + `uv.lock`, `.python-version`);
+`requirements.txt` is gone. Use `uv sync --group dev`, not `pip install -r`.
 
 ## 3. Runtime architecture
 
