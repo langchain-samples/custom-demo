@@ -51,6 +51,7 @@ import { WorkspaceSelect } from "./settings/WorkspaceSelect";
 import { AssistantSelect } from "./settings/AssistantSelect";
 import { NewAssistantForm, type NewAssistantValues } from "./settings/NewAssistantForm";
 import { DemoBriefDialog, type DemoBrief } from "./settings/DemoBriefDialog";
+import { OnboardingDialog } from "./settings/OnboardingDialog";
 import { VisualSection } from "./settings/VisualSection";
 import { BrandSection } from "./settings/BrandSection";
 import { TypographySection } from "./settings/TypographySection";
@@ -257,6 +258,9 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
     const [creating, setCreating] = useState(false);
     // Post-setup presenter brief popup (null = hidden).
     const [demoBrief, setDemoBrief] = useState<DemoBrief | null>(null);
+    // First-run onboarding (shown once when no owner name is saved yet).
+    const [showOnboarding, setShowOnboarding] = useState(false);
+    const onboardingCheckedRef = useRef(false);
 
     // Latest-value refs for async callbacks (debounced save, create/delete).
     const cfgRef = useRef(cfg);
@@ -296,6 +300,11 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
       setAssistants(alist);
       setWorkspaces(wlist);
       setToolSpecs(tlist);
+      // First-run: no owner name saved yet ⇒ treat as a new DE and onboard once.
+      if (!onboardingCheckedRef.current) {
+        onboardingCheckedRef.current = true;
+        if (!readLS(LAST_OWNER_LS_KEY)) setShowOnboarding(true);
+      }
       // On the very first load, restore the saved assistant's config (no reset).
       const saved = selectedIdRef.current;
       if (isAssistantId(saved) && alist.some((a) => a.assistant_id === saved)) {
@@ -488,6 +497,44 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
       [applySelection],
     );
 
+    // Shared create path: run the setup agent, create the assistant, select it,
+    // and surface the presenter brief. Used by both the Settings "+ New" form and
+    // the first-run onboarding. Throws on failure so callers can react.
+    const runCreate = useCallback(
+      async (v: NewAssistantValues, workspace: string) => {
+        if (v.owner) writeLS(LAST_OWNER_LS_KEY, v.owner);
+        // The deployed setup agent fetches branding + generates quick actions
+        // (and optionally pushes prompts); we then create the assistant from it.
+        const result = await runSetup({
+          workspace,
+          customer: v.customer,
+          owner: v.owner,
+          website: v.website,
+          use_case: v.useCase,
+          failure_mode: v.failureMode,
+          push_prompts: true,
+        });
+        const a = await createAssistant({
+          name: v.customer,
+          context: result.context || { ls_workspace: workspace },
+          metadata: result.metadata || { owner_name: v.owner, customer: v.customer },
+        });
+        const list = await listAssistants();
+        setAssistants(list);
+        applySelection(a.assistant_id, list, true);
+        // Surface the presenter brief the setup agent generated. Close the
+        // settings sheet so it lands front-and-centre over the fresh demo.
+        const meta = result.metadata || a.metadata || {};
+        const briefLines = meta.demo_brief || [];
+        const flowLines = meta.demo_flow || [];
+        if (briefLines.length || flowLines.length) {
+          onOpenChange(false);
+          setDemoBrief({ customer: v.customer, brief: briefLines, flow: flowLines });
+        }
+      },
+      [applySelection, onOpenChange],
+    );
+
     const handleCreate = useCallback(
       async (v: NewAssistantValues) => {
         const workspace = cfgRef.current.lsWorkspace;
@@ -499,45 +546,39 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           window.alert("Pick a Workspace first (top of the panel) — setup needs it.");
           return;
         }
-        if (v.owner) writeLS(LAST_OWNER_LS_KEY, v.owner);
         setCreating(true);
         try {
-          // The deployed setup agent fetches branding + generates quick actions
-          // (and optionally pushes prompts); we then create the assistant from it.
-          const result = await runSetup({
-            workspace,
-            customer: v.customer,
-            owner: v.owner,
-            website: v.website,
-            use_case: v.useCase,
-            failure_mode: v.failureMode,
-            push_prompts: true,
-          });
-          const a = await createAssistant({
-            name: v.customer,
-            context: result.context || { ls_workspace: workspace },
-            metadata: result.metadata || { owner_name: v.owner, customer: v.customer },
-          });
-          const list = await listAssistants();
-          setAssistants(list);
+          await runCreate(v, workspace);
           setShowNewForm(false);
-          applySelection(a.assistant_id, list, true);
-          // Surface the presenter brief the setup agent generated. Close the
-          // settings sheet so it lands front-and-centre over the fresh demo.
-          const meta = result.metadata || a.metadata || {};
-          const briefLines = meta.demo_brief || [];
-          const flowLines = meta.demo_flow || [];
-          if (briefLines.length || flowLines.length) {
-            onOpenChange(false);
-            setDemoBrief({ customer: v.customer, brief: briefLines, flow: flowLines });
-          }
         } catch (e) {
           window.alert("Setup failed: " + errMsg(e));
         } finally {
           setCreating(false);
         }
       },
-      [applySelection, onOpenChange],
+      [runCreate],
+    );
+
+    // First-run onboarding: capture the DE's name + workspace, create their first
+    // demo, then dismiss. Reuses runCreate; website is left blank (LLM guesses)
+    // and the failure mode defaults to the hallucination demo.
+    const handleOnboardingCreate = useCallback(
+      async (name: string, workspace: string, customer: string, useCase: string) => {
+        handleWorkspace(workspace); // persist + load that workspace's prompts
+        setCreating(true);
+        try {
+          await runCreate(
+            { owner: name, customer, website: "", useCase, failureMode: "hallucination" },
+            workspace,
+          );
+          setShowOnboarding(false);
+        } catch (e) {
+          window.alert("Setup failed: " + errMsg(e));
+        } finally {
+          setCreating(false);
+        }
+      },
+      [runCreate, handleWorkspace],
     );
 
     const handleDelete = useCallback(async () => {
@@ -563,8 +604,25 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
         (selectedAssistant.metadata?.display_name || selectedAssistant.name)) ||
       selectedId;
 
+    // Scope the assistant dropdown to the chosen workspace (there's no server-side
+    // filter, so we match on the ls_workspace we record in each assistant's
+    // context). Keep legacy assistants that never recorded one, and always keep
+    // the active selection so it can't vanish mid-edit.
+    const visibleAssistants = cfg.lsWorkspace
+      ? assistants.filter((a) => {
+          const ws = (a.context?.ls_workspace as string) || "";
+          return !ws || ws === cfg.lsWorkspace || a.assistant_id === selectedId;
+        })
+      : assistants;
+
     return (
       <>
+      <OnboardingDialog
+        open={showOnboarding}
+        workspaces={workspaces}
+        creating={creating}
+        onCreate={handleOnboardingCreate}
+      />
       <DemoBriefDialog brief={demoBrief} onClose={() => setDemoBrief(null)} />
       <Sheet open={open} onOpenChange={onOpenChange}>
         <SheetContent className="w-[380px] gap-0 p-0 sm:max-w-[380px]">
@@ -585,7 +643,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
             {/* 2. Assistant */}
             <AssistantSelect
               value={selectedId}
-              assistants={assistants}
+              assistants={visibleAssistants}
               onChange={handleSelectAssistant}
               onNewClick={() => setShowNewForm((s) => !s)}
             />
