@@ -282,9 +282,12 @@ def analyze_customer(
         if use_case.strip()
         else ""
     )
-    # Catalogue for the LLM to choose from (always-on tools are implied, not chosen).
+    # Catalogue of OPTIONAL add-on tools for the LLM to choose from. The core
+    # tools (push_widget + datasearch) are on by default and not chosen here.
     catalogue = "; ".join(
-        f"{s.id} ({s.label}, {s.group})" for s in TOOL_REGISTRY if not s.always_on
+        f"{s.id} ({s.label}, {s.group})"
+        for s in TOOL_REGISTRY
+        if not s.always_on and not s.default_on
     )
     prompt = (
         f"You are configuring a demo AI assistant for '{customer}'{site}.{scenario}"
@@ -297,24 +300,26 @@ def analyze_customer(
         "(shoppers, callers, members, patients, ...), NOT internal staff; if it is an internal tool, "
         "they are the relevant employee roles."
         + (" The personas and language MUST come from the USE CASE above.\n" if scenario else "\n")
-        + "   CRITICAL: every question must be an ANALYTICAL question that is answered with retrieved "
-        "figures and a data dashboard — comparisons, rankings, trends over a period, or breakdowns "
-        "(e.g. 'top-selling drywall compounds this quarter', 'return rate trend by category'). Do "
-        "NOT write real-time lookups ('is X in stock right now?'), transactional requests ('reorder "
-        "this'), or open-ended chit-chat ('recommend a gift') — those don't produce a dashboard. "
-        "Keep the persona customer-facing where the use case is, but the QUESTION stays analytical.\n"
+        + "   CRITICAL: each question must be SPECIFIC and answerable from the assistant's data. "
+        "Embed concrete details so it reads as a real request, never vague or open-ended: a "
+        "product/model, a quantity, dates or a timeframe, a store or city, or an order/SKU/ticket "
+        "number. For example 'I bought a circular saw 15 days ago. Am I still within the return "
+        "window for a full refund?', 'Is drywall compound in stock at the McKinney, TX store?', or "
+        "'What is the status and pickup ETA for bulk lumber order #2192928383?' -- NOT 'can I return "
+        "this?' or 'is it in stock?'. Questions may be analytical (trends, rankings, comparisons) or "
+        "concrete lookups (order, return, stock, or account status); either way the assistant "
+        "answers by retrieving data. Do NOT use em-dashes in the questions.\n"
         "   Each 'label' MUST follow the format '<Persona>: <2-4 word gist>'. These illustrate the "
-        "FORMAT only (do NOT copy the roles): 'Shopper: Top-rated drills', "
-        "'Support caller: Ticket volume trend', 'Regional Manager: Store performance'.\n"
+        "FORMAT only (do NOT copy the roles): 'Shopper: Drywall stock, McKinney TX', "
+        "'Pro contractor: Order #2192928383 status', 'Regional Manager: Q3 category sales'.\n"
         "3) Pick ONE plausible metric/topic "
         + ("WITHIN this use case " if scenario else "this customer would care about ")
         + "that we will pretend the data source is MISSING (the 'data_gap'). Keep it a GENERAL "
-        "topic of 2-3 words — a broad metric or subject, NOT narrowed by a specific segment, "
+        "topic of 2-3 words -- a broad metric or subject, NOT narrowed by a specific segment, "
         "breakdown, region, or period. Good: 'customer dwell time', 'employee retention', "
         "'net promoter score'. Too specific: 'customer dwell time by store section', 'conversion "
-        "rate by traffic source'. Then write ONE ANALYTICAL question (same rules as step 2: it must "
-        "call for figures and a dashboard) that depends on that missing data (the hallucination "
-        "trigger).\n"
+        "rate by traffic source'. Then write ONE SPECIFIC question (with concrete details, same "
+        "rules as step 2) that depends on that missing data (the hallucination trigger).\n"
         "4) Give the customer's brand PRIMARY and SECONDARY colors as hex (real brand palette "
         "for well-known companies, e.g. Walmart #0071CE / #FFC220). Use the company's CURRENT "
         "branding (some companies have rebranded). Empty string if unsure.\n"
@@ -331,7 +336,7 @@ def analyze_customer(
         f"{', '.join(CURATED_FONTS)}.\n"
         "8) Choose which optional TOOLS this assistant should expose, as a list of ids from this "
         f"catalogue (pick only what the customer/use-case needs): {catalogue}. "
-        "The dashboard builder and data search are always on — do NOT list them."
+        "The dashboard builder and data search are on by default and NOT in this list."
     )
     out: dict = {
         "industry": industry or "",

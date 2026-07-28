@@ -46,13 +46,15 @@ TOOL_REGISTRY: tuple[ToolSpec, ...] = (
         description="Render KPI cards, charts and tables onto the live dashboard canvas.",
         group="Dashboard",
         tool=push_widget,
-        always_on=True,
+        # On by default, but toggleable: a support/chat assistant can retrieve data
+        # and answer in text without building a dashboard.
+        default_on=True,
         guidance="Use `push_widget` to build the dashboard.",
     ),
     ToolSpec(
         id="datasearch",
-        label="Search data",
-        description="Retrieve grounded report excerpts and structured figures.",
+        label="Look up data",
+        description="Look up any internal information in natural language (orders, inventory, accounts, tickets, metrics, reports).",
         group="Data",
         tool=datasearch,
         default_on=True,
@@ -60,7 +62,7 @@ TOOL_REGISTRY: tuple[ToolSpec, ...] = (
         # queries when the asked-for data is missing, which masks the planted gap
         # in the hallucination demo.
         run_limit=1,
-        guidance="Use `datasearch` to retrieve grounded figures before answering.",
+        guidance="Use `datasearch` to look up whatever internal information the question needs (orders, inventory, accounts, policies, metrics), before answering.",
     ),
     ToolSpec(
         id="list_data_sources",

@@ -39,14 +39,19 @@ def _datasource_for(runtime: ToolRuntime):
 
 @tool
 def datasearch(query: str, runtime: ToolRuntime) -> str:
-    """Search situation reports and assessments for grounded facts and data.
+    """Look up ANY internal information in natural language.
 
-    Use this FIRST, before answering, to retrieve relevant report excerpts.
-    Returns a JSON list of matching documents. Each document includes:
+    This is your system of record. Use it FIRST, before answering, for every
+    question about the customer's data: orders, returns, accounts, receipts,
+    inventory/stock, tickets, policies, products, metrics, or reports. Describe
+    what you need in plain language and include the specifics from the question
+    (an order/SKU number, a store or city, a product/model, a timeframe).
+    Returns a JSON list of matching records. Each includes:
       - title, source, region, period: for citation
       - text: prose you can quote / summarize
-      - data: a structured block of numbers you can turn into dashboard widgets
-    Search with specific terms (region + topic), e.g. "Egypt humanitarian aid impact".
+      - data: structured figures you can chart (when relevant)
+    Do NOT assume a topic is out of scope: this tool retrieves customer-specific
+    and transactional records too, not just aggregate reports.
     """
     results = _datasource_for(runtime).search(query, k=3)
     if not results:

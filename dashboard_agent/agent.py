@@ -124,6 +124,16 @@ def _capability_note(runtime) -> str:
     note = "\n\nAVAILABLE CAPABILITIES (use only these tools to serve the user):\n" + "\n".join(
         f"- {line}" for line in lines
     )
+    # Dashboards are optional. When push_widget is off (e.g. a support/chat
+    # assistant), still ground answers with datasearch but reply in prose — the
+    # stored prompt's "build a dashboard" workflow does not apply.
+    if "push_widget" not in allowed:
+        note += (
+            "\n\nDASHBOARDS ARE OFF for this assistant: do NOT build a dashboard or call "
+            "push_widget (it is not available). Still call `datasearch` to ground your answer in "
+            "real figures, but reply with a concise written response (a short list where helpful), "
+            "not widgets."
+        )
     # Stored prompts describe one rigid workflow (datasearch -> push_widget ->
     # answer). With extra capabilities enabled the model otherwise treats a
     # "draft an email" request as off-script (refusing, apologising for going

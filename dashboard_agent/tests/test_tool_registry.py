@@ -3,7 +3,7 @@
 The invariants that matter:
   * an assistant with no selection behaves exactly as it did before the catalogue
   * an EMPTY selection is a real choice, not "unset"
-  * always-on tools cannot be switched off
+  * nothing is force-on: every catalogue tool (incl. push_widget) is toggleable
   * tools outside the catalogue (every deepagents built-in) are never stripped
 """
 
@@ -36,8 +36,10 @@ def test_default_matches_pre_catalogue_behaviour():
     assert allowed_tool_names(None) == {"datasearch", "push_widget"}
 
 
-def test_push_widget_is_always_on():
-    assert ALWAYS_ON == {"push_widget"}
+def test_push_widget_is_default_on_but_toggleable():
+    # push_widget is on by default but no longer forced (support bots can drop it).
+    assert ALWAYS_ON == frozenset()
+    assert "push_widget" in DEFAULT_ENABLED
 
 
 def test_registry_ids_are_unique_and_match_tool_names():
@@ -77,12 +79,13 @@ def test_comma_string_parses():
 # --- allowed_tool_names -----------------------------------------------------
 
 
-def test_empty_selection_keeps_only_always_on():
-    assert allowed_tool_names([]) == {"push_widget"}
+def test_empty_selection_keeps_nothing():
+    # Empty = "everything off"; with no always-on tools, that means no catalogue tools.
+    assert allowed_tool_names([]) == set()
 
 
-def test_selection_gains_always_on_and_drops_unknown():
-    assert allowed_tool_names(["draft_email", "not_a_tool"]) == {"draft_email", "push_widget"}
+def test_selection_drops_unknown_and_adds_no_forced_tools():
+    assert allowed_tool_names(["draft_email", "not_a_tool"]) == {"draft_email"}
 
 
 def test_selection_can_drop_datasearch():
@@ -150,13 +153,13 @@ def test_middleware_default_offers_exactly_the_old_set_plus_builtins():
 
 def test_middleware_honours_selection():
     out = ToolSelection()._apply(_request({"enabled_tools": ["draft_email", "web_search"]}))
-    assert _names(out) & CATALOGUE_IDS == {"draft_email", "web_search", "push_widget"}
+    assert _names(out) & CATALOGUE_IDS == {"draft_email", "web_search"}
 
 
 def test_middleware_never_strips_builtins_even_when_all_off():
     out = ToolSelection()._apply(_request({"enabled_tools": []}))
     assert set(BUILTINS) | {"future"} <= _names(out)
-    assert _names(out) & CATALOGUE_IDS == {"push_widget"}
+    assert _names(out) & CATALOGUE_IDS == set()
 
 
 def test_middleware_tolerates_missing_context():
