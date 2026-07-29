@@ -9,9 +9,16 @@ integration (`@pytest.mark.langsmith`).
 Slow (real LLM) and writes to a LangSmith workspace, so it is gated: set both
 ANTHROPIC_API_KEY and CTXHUB_TEST_WORKSPACE to run. It uses fixed CI-fixture repo
 names, re-pushed idempotently (no delete needed — the org key can push but not
-delete):
+delete).
+
+The `@pytest.mark.langsmith` decorator logs the run as an experiment, which needs
+a LangSmith key with dataset permissions. If that key can reach multiple
+workspaces, also set LANGSMITH_WORKSPACE_ID so the dataset lands in the right one
+(otherwise `/datasets` 403s in the key's default tenant). To run WITHOUT logging
+to LangSmith, set LANGSMITH_TEST_TRACKING=false.
 
     ANTHROPIC_API_KEY=... CTXHUB_TEST_WORKSPACE=<workspace-id> \\
+      LANGSMITH_API_KEY=<dataset-capable-key> LANGSMITH_WORKSPACE_ID=<workspace-id> \\
       uv run pytest dashboard_agent/tests/test_contexthub_skill.py --langsmith-output
 """
 
