@@ -664,6 +664,7 @@ def prepare_assistant(payload: dict) -> dict:
     # Where the prompt is sourced from: Prompt Hub (default) or the Context Hub
     # (as an agent repo's AGENTS.md). Legacy inline is used only when not pushing.
     prompt_source = str(payload.get("prompt_source") or "prompt_hub")
+    skill_repos: list[str] = []  # Context Hub skill repo handles, for cleanup on delete
     if push and prompt_source == "context_hub":
         repo = f"{slug}-agent"
         # Skills to push: the LLM's per-customer workflows, plus a curated
@@ -685,6 +686,7 @@ def prepare_assistant(payload: dict) -> dict:
         # Auto-generate a skill repo per skill and link them into the agent repo so
         # they mount under /skills/. Tell the prompt to consult them.
         skill_links = push_workflow_skills(workspace, slug, customer, ctxhub_skills)
+        skill_repos = sorted(set(skill_links.values()))  # for cleanup on delete
         agents_md = ctxhub_text + (_SKILLS_CLAUSE if skill_links else "")
         prompt_urls["system"] = push_agent_prompt(
             workspace, repo, agents_md, skill_links=skill_links
@@ -763,6 +765,15 @@ def prepare_assistant(payload: dict) -> dict:
         "font_body_fallback": analysis.get("body_fallback") or DEFAULT_CURATED,
         "font_source": "google",
         "failure_mode": failure_mode,
+        # Manifest of LangSmith artifacts this assistant created, so deleting the
+        # assistant can cascade-delete them (see webapp.py /cleanup).
+        "ls_artifacts": {
+            "workspace": workspace,
+            "project": context.get("ls_project", ""),
+            "prompt_name": context.get("prompt_name", ""),
+            "agent_repo": context.get("agent_repo", ""),
+            "skills": skill_repos,
+        },
     }
     # Presenter brief + recommended flow, surfaced in a popup once setup finishes.
     demo = build_demo_brief(

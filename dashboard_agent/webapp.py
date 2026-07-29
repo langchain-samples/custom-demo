@@ -165,6 +165,43 @@ async def agents(request):
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
 
+async def cleanup(request):
+    """Best-effort cascade delete of the LangSmith artifacts an assistant created.
+
+    Body: {workspace, project?, prompt_name?, agent_repo?, skills?[]}. Deletes the
+    trace project, the Prompt Hub prompt or Context Hub agent repo, and any linked
+    skill repos. Each deletion is independent; failures (e.g. missing perms or an
+    already-deleted artifact) are collected rather than aborting the rest.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+
+    client = _scoped_client(body.get("workspace"))
+    deleted: list[str] = []
+    failed: list[dict] = []
+
+    def _try(kind: str, name: str, fn):
+        if not name:
+            return
+        try:
+            fn()
+            deleted.append(f"{kind}:{name}")
+        except Exception as exc:
+            failed.append({"artifact": f"{kind}:{name}", "error": f"{type(exc).__name__}: {exc}"})
+
+    _try(
+        "project", body.get("project"), lambda: client.delete_project(project_name=body["project"])
+    )
+    _try("prompt", body.get("prompt_name"), lambda: client.delete_prompt(body["prompt_name"]))
+    _try("agent", body.get("agent_repo"), lambda: client.delete_agent(body["agent_repo"]))
+    for skill in body.get("skills") or []:
+        _try("skill", skill, lambda s=skill: client.delete_skill(s))
+
+    return JSONResponse({"deleted": deleted, "failed": failed})
+
+
 async def tools(request):
     """List the selectable tool catalogue (labels, groups, defaults).
 
@@ -184,5 +221,6 @@ app = Starlette(
         Route("/workspaces", workspaces, methods=["GET"]),
         Route("/hub-prompts", hub_prompts, methods=["GET"]),
         Route("/agents", agents, methods=["GET"]),
+        Route("/cleanup", cleanup, methods=["POST"]),
     ]
 )

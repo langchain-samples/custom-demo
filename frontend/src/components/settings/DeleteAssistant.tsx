@@ -20,7 +20,13 @@ export function DeleteAssistant({ label, disabled, onDelete }: Props) {
         className="ml-auto"
         disabled={disabled}
         onClick={() => {
-          if (window.confirm(`Delete assistant "${label}"? This cannot be undone.`)) {
+          if (
+            window.confirm(
+              `Delete assistant "${label}"?\n\nThis also deletes its LangSmith trace ` +
+                `project, its Prompt/Context Hub prompt, and any skills it created. ` +
+                `This cannot be undone.`,
+            )
+          ) {
             onDelete();
           }
         }}

@@ -31,6 +31,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import {
+  cleanupAssistantArtifacts,
   createAssistant,
   deleteAssistant,
   listAssistants,
@@ -606,6 +607,21 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
       const id = selectedIdRef.current;
       if (!isAssistantId(id)) return;
       try {
+        // Cascade-delete the LangSmith artifacts this assistant created (trace
+        // project, prompt/agent repo, skills) before dropping the record. Best
+        // effort: report any that couldn't be removed, but still delete the
+        // assistant so a permission gap can't leave it undeletable.
+        const src = assistantsRef.current.find((a) => a.assistant_id === id);
+        const artifacts = src?.metadata?.ls_artifacts;
+        if (artifacts) {
+          const { failed } = await cleanupAssistantArtifacts(artifacts);
+          if (failed.length) {
+            window.alert(
+              "Some LangSmith artifacts could not be deleted:\n" +
+                failed.map((f) => `- ${f.artifact}: ${f.error}`).join("\n"),
+            );
+          }
+        }
         await deleteAssistant(id);
         const list = await listAssistants();
         setAssistants(list);
