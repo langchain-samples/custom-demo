@@ -281,3 +281,20 @@ def pull_system_prompt(name: str | None = None, workspace: str | None = None) ->
         return text or FALLBACK_PROMPT
     except Exception:
         return FALLBACK_PROMPT
+
+
+def pull_agent_prompt(repo: str, workspace: str | None = None) -> str:
+    """Fetch the system prompt from a Context Hub agent repo's `AGENTS.md`, fresh.
+
+    The Context Hub alternative to `pull_system_prompt`: the prompt is the
+    `AGENTS.md` file of an agent context. `workspace` scopes the pull. Returns
+    `FALLBACK_PROMPT` if the repo/file is missing or the Hub is unreachable, so a
+    run never hard-fails on prompt sourcing.
+    """
+    try:
+        agent = _prompt_client(workspace).pull_agent(repo)
+        entry = (agent.files or {}).get("AGENTS.md")
+        text = getattr(entry, "content", None)
+        return text or FALLBACK_PROMPT
+    except Exception:
+        return FALLBACK_PROMPT

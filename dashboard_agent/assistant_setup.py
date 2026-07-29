@@ -419,6 +419,27 @@ def push_prompt(workspace: str, name: str, text: str) -> str:
         raise
 
 
+def push_agent_prompt(workspace: str, repo: str, text: str) -> str:
+    """Push the system prompt to a Context Hub agent repo's AGENTS.md, returning its URL.
+
+    The Context Hub alternative to push_prompt: the prompt lives as the AGENTS.md
+    file of an agent context. Re-pushing identical content is treated as success.
+    """
+    from langsmith.schemas import FileEntry
+
+    try:
+        return _ws_client(workspace).push_agent(
+            repo,
+            files={"AGENTS.md": FileEntry(content=text)},
+            description=f"{repo} system prompt",
+        )
+    except Exception as e:
+        msg = str(e).lower()
+        if "nothing to commit" in msg or "409" in msg or "conflict" in msg:
+            return f"(exists) {repo}"
+        raise
+
+
 # Tools whose runtime path goes through a human-in-the-loop review interrupt.
 _HITL_TOOLS = {"draft_email", "suggest_meeting_times"}
 
@@ -529,7 +550,14 @@ def prepare_assistant(payload: dict) -> dict:
     # Always give the assistant a fixed, customer-templated system prompt (reliable
     # setup — no per-customer prompt writing). failure_mode selects the clause.
     sys_text = build_system_prompt(customer, industry, failure_mode=failure_mode, use_case=use_case)
-    if push:
+    # Where the prompt is sourced from: Prompt Hub (default) or the Context Hub
+    # (as an agent repo's AGENTS.md). Legacy inline is used only when not pushing.
+    prompt_source = str(payload.get("prompt_source") or "prompt_hub")
+    if push and prompt_source == "context_hub":
+        repo = f"{slug}-agent"
+        prompt_urls["system"] = push_agent_prompt(workspace, repo, sys_text)
+        context["agent_repo"] = repo
+    elif push:
         name = f"{slug}-system"
         prompt_urls["system"] = push_prompt(workspace, name, sys_text)
         context["prompt_name"] = name

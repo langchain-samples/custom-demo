@@ -8,8 +8,11 @@ import type { Theme } from "@/lib/theme";
 
 export type { QuickAction };
 
-/** System-prompt source: a Prompt Hub handle ("hub") or inline text ("inline"). */
-export type PromptMode = "hub" | "inline";
+/**
+ * System-prompt source: a Prompt Hub handle ("prompt_hub"), a Context Hub agent
+ * repo's AGENTS.md ("context_hub"), or inline text ("inline").
+ */
+export type PromptMode = "prompt_hub" | "context_hub" | "inline";
 
 /** All editable panel fields for the active assistant. */
 export interface PanelConfig {
@@ -45,6 +48,8 @@ export interface PanelConfig {
   promptMode: PromptMode;
   /** Agent config: selected Prompt Hub handle ("" = none). */
   promptName: string;
+  /** Agent config: selected Context Hub agent repo (its AGENTS.md is the prompt). */
+  agentRepo: string;
   /** Agent config: inline system prompt text. */
   systemPrompt: string;
   /** Agent config: the withheld-data "gap" the agent must not fabricate. */

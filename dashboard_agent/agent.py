@@ -33,7 +33,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from .config import MODEL, require_anthropic_key
 from .ctx import ctx_get as _ctx
-from .prompt import pull_system_prompt
+from .prompt import pull_agent_prompt, pull_system_prompt
 from .tools import (
     all_tools,
     allowed_tool_names,
@@ -58,6 +58,7 @@ class Context:
     model: str | None = None  # main agent LLM (e.g. "anthropic:claude-…"); overrides build default
     prompt: str | None = None  # inline system prompt text (preferred over prompt_name)
     prompt_name: str | None = None  # system prompt in Prompt Hub
+    agent_repo: str | None = None  # Context Hub agent repo whose AGENTS.md is the prompt
     dataset: str | None = None  # "humanitarian" | "synthetic"
     data_model: str | None = None  # model id for the synthetic data backend
     data_prompt_name: str | None = None  # data-source prompt in Prompt Hub
@@ -85,18 +86,22 @@ def _hub_system_prompt(request: ModelRequest) -> str:
     """Inject the system prompt for each model call from the Hub-sourced text.
 
     Precedence: a per-run pulled value (set by run/run_stream) > an inline
-    `prompt` from runtime context > the assistant's `prompt_name` from runtime
-    context (pulled from the Hub) > the configured default.
+    `prompt` from runtime context > a Context Hub `agent_repo` (its AGENTS.md) >
+    the assistant's `prompt_name` from Prompt Hub > the configured default.
     """
     override = _prompt_override.get()
     if override is not None:
         base = override
     else:
         inline = _ctx(request.runtime, "prompt")
-        base = inline or pull_system_prompt(
-            _ctx(request.runtime, "prompt_name"),
-            workspace=_ctx(request.runtime, "ls_workspace"),
-        )
+        workspace = _ctx(request.runtime, "ls_workspace")
+        agent_repo = _ctx(request.runtime, "agent_repo")
+        if inline:
+            base = inline
+        elif agent_repo:
+            base = pull_agent_prompt(agent_repo, workspace=workspace)
+        else:
+            base = pull_system_prompt(_ctx(request.runtime, "prompt_name"), workspace=workspace)
     return base + _capability_note(request.runtime)
 
 

@@ -23,12 +23,15 @@ import { LABEL_CLS, HINT_CLS } from "./types";
 interface Props {
   promptMode: PromptMode;
   promptName: string;
+  agentRepo: string;
   systemPrompt: string;
   dataGap: string;
   dataPrompt: string;
   hubPrompts: string[];
+  agents: string[];
   onPromptMode: (m: PromptMode) => void;
   onPromptName: (v: string) => void;
+  onAgentRepo: (v: string) => void;
   onSystemPrompt: (v: string) => void;
   onDataGap: (v: string) => void;
   onDataPrompt: (v: string) => void;
@@ -37,18 +40,29 @@ interface Props {
 export function AgentConfig({
   promptMode,
   promptName,
+  agentRepo,
   systemPrompt,
   dataGap,
   dataPrompt,
   hubPrompts,
+  agents,
   onPromptMode,
   onPromptName,
+  onAgentRepo,
   onSystemPrompt,
   onDataGap,
   onDataPrompt,
 }: Props) {
   // Keep the assistant's saved handle selectable even if absent from the list.
-  const extra = promptName && !hubPrompts.includes(promptName) ? [promptName] : [];
+  const extraPrompt = promptName && !hubPrompts.includes(promptName) ? [promptName] : [];
+  const extraAgent = agentRepo && !agents.includes(agentRepo) ? [agentRepo] : [];
+  // Convenience link to the active source in LangSmith (best-effort; opens latest).
+  const hubLink =
+    promptMode === "prompt_hub" && promptName
+      ? `https://smith.langchain.com/prompts/${promptName}`
+      : promptMode === "context_hub" && agentRepo
+        ? `https://smith.langchain.com/context/${agentRepo}`
+        : "";
 
   return (
     <div className="flex flex-col gap-3.5">
@@ -57,40 +71,50 @@ export function AgentConfig({
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center justify-between">
           <Label className={LABEL_CLS}>System prompt</Label>
-          {promptMode === "hub" && promptName && (
+          {hubLink && (
             <a
-              href={`https://smith.langchain.com/prompts/${promptName}`}
+              href={hubLink}
               target="_blank"
               rel="noreferrer"
-              title="Open in LangSmith Prompt Hub"
+              title={promptMode === "context_hub" ? "Open in Context Hub" : "Open in Prompt Hub"}
               className="text-muted-foreground transition-colors hover:text-foreground"
             >
               <IconArrowUpRight className="h-3.5 w-3.5" stroke={2} />
             </a>
           )}
         </div>
-        <Tabs
-          value={promptMode}
-          onValueChange={(v) => onPromptMode(v as PromptMode)}
-        >
+        <Tabs value={promptMode} onValueChange={(v) => onPromptMode(v as PromptMode)}>
           <TabsList className="w-full">
-            <TabsTrigger value="hub">Prompt Hub</TabsTrigger>
+            <TabsTrigger value="prompt_hub">Prompt Hub</TabsTrigger>
+            <TabsTrigger value="context_hub">Context Hub</TabsTrigger>
             <TabsTrigger value="inline">Prompt</TabsTrigger>
           </TabsList>
         </Tabs>
 
-        {promptMode === "hub" ? (
+        {promptMode === "prompt_hub" ? (
           <Combobox
             options={[
               { value: "", label: "None — write a system prompt below" },
               ...hubPrompts.map((p) => ({ value: p, label: p })),
-              ...extra.map((p) => ({ value: p, label: p })),
+              ...extraPrompt.map((p) => ({ value: p, label: p })),
             ]}
             value={promptName || ""}
             onChange={(v) => onPromptName(v)}
             placeholder="None — write a system prompt below"
             searchPlaceholder="Filter prompts…"
             emptyText="No prompts in this workspace."
+          />
+        ) : promptMode === "context_hub" ? (
+          <Combobox
+            options={[
+              ...agents.map((a) => ({ value: a, label: a })),
+              ...extraAgent.map((a) => ({ value: a, label: a })),
+            ]}
+            value={agentRepo || ""}
+            onChange={(v) => onAgentRepo(v)}
+            placeholder="Select an agent (its AGENTS.md is the prompt)…"
+            searchPlaceholder="Filter agents…"
+            emptyText="No agent repos in this workspace."
           />
         ) : (
           <Textarea

@@ -75,6 +75,8 @@ export interface Workspace {
 export interface RunContext {
   prompt?: string;
   prompt_name?: string;
+  /** Context Hub agent repo whose AGENTS.md is the system prompt. */
+  agent_repo?: string;
   data_prompt?: string;
   data_gap?: string;
   ls_workspace?: string;
@@ -193,6 +195,8 @@ export interface SetupInput {
   /** Legacy boolean; maps to failure_mode="hallucination" on the backend. */
   hallucination?: boolean;
   push_prompts?: boolean;
+  /** Where the prompt is stored: "prompt_hub" (default) or "context_hub" (AGENTS.md). */
+  prompt_source?: "prompt_hub" | "context_hub";
   /** Capabilities the new assistant starts with; editable afterwards. */
   enabled_tools?: string[];
 }
@@ -544,6 +548,19 @@ export async function listHubPrompts(workspace?: string): Promise<string[]> {
     if (!res.ok) return [];
     const d = await res.json();
     return Array.isArray(d.prompts) ? d.prompts : [];
+  } catch {
+    return [];
+  }
+}
+
+/** List Context Hub agent repos for a workspace (GET /agents). Empty on failure. */
+export async function listAgents(workspace?: string): Promise<string[]> {
+  try {
+    const qs = workspace ? `?workspace=${encodeURIComponent(workspace)}` : "";
+    const res = await fetch(`${getApiBase()}/agents${qs}`, { headers: apiHeaders() });
+    if (!res.ok) return [];
+    const d = await res.json();
+    return Array.isArray(d.agents) ? d.agents : [];
   } catch {
     return [];
   }
