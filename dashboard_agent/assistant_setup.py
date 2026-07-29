@@ -480,8 +480,11 @@ def push_agent_prompt(workspace: str, repo: str, text: str, skill_links: dict | 
 # Appended to a Context Hub agent's AGENTS.md so the model actually consults its
 # skills (deepagents injects the skill catalogue; this tells it to act on it).
 _SKILLS_CLAUSE = (
-    "\n\nSKILLS: You have reusable skills under `/skills/`. When a request matches a skill's "
-    "description, read that skill's SKILL.md first and follow its steps before answering."
+    "\n\nSKILLS (IMPORTANT): You have reusable skills under `/skills/` (their names and "
+    "descriptions are listed for you). At the START of every request, FIRST check whether it "
+    "matches one of your skills. If it does, you MUST read that skill's SKILL.md and follow its "
+    "steps before doing anything else (including before calling datasearch). Only skip the skills "
+    "when none match the request. Never improvise a procedure a skill already covers."
 )
 
 
