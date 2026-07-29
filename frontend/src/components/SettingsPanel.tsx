@@ -247,6 +247,50 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
   ) {
     const [assistants, setAssistants] = useState<Assistant[]>([]);
     const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+
+    // Width (px) of the Customize panel — drag-resizable from its left edge,
+    // mirroring the chat rail (see App.tsx). Persisted across sessions.
+    const [panelWidth, setPanelWidth] = useState<number>(() => {
+      try {
+        const v = Number(localStorage.getItem("settingsPanelWidth"));
+        return v >= 320 && v <= 760 ? v : 380;
+      } catch {
+        return 380;
+      }
+    });
+    const [resizing, setResizing] = useState(false);
+
+    const startResize = useCallback((e: React.PointerEvent) => {
+      e.preventDefault();
+      setResizing(true);
+      const onMove = (ev: PointerEvent) => {
+        // Panel is pinned to the right edge, so width grows as the pointer
+        // moves left. Clamp so it never fully covers the app.
+        const w = Math.min(
+          Math.max(window.innerWidth - ev.clientX, 320),
+          Math.min(760, window.innerWidth - 120),
+        );
+        setPanelWidth(w);
+      };
+      const onUp = () => {
+        setResizing(false);
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    }, []);
+
+    // Persist the width once a drag settles.
+    useEffect(() => {
+      if (resizing) return;
+      try {
+        localStorage.setItem("settingsPanelWidth", String(panelWidth));
+      } catch {
+        /* ignore */
+      }
+    }, [resizing, panelWidth]);
+
     const [hubPrompts, setHubPrompts] = useState<string[]>([]);
     const [agents, setAgents] = useState<string[]>([]);
     const [toolSpecs, setToolSpecs] = useState<ToolSpec[]>([]);
@@ -662,7 +706,16 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
       />
       <DemoBriefDialog brief={demoBrief} onClose={() => setDemoBrief(null)} />
       <Sheet open={open} onOpenChange={onOpenChange}>
-        <SheetContent className="w-[380px] gap-0 p-0 sm:max-w-[380px]">
+        <SheetContent
+          style={{ width: panelWidth, maxWidth: panelWidth }}
+          className={"gap-0 p-0" + (resizing ? " select-none" : "")}
+        >
+          {/* Drag the left edge to resize the panel (mirrors the chat rail). */}
+          <div
+            onPointerDown={startResize}
+            title="Drag to resize"
+            className="absolute top-0 left-0 z-20 h-full w-1.5 cursor-col-resize transition-colors hover:bg-[var(--brand-primary)]/40"
+          />
           <SheetHeader className="p-4 pb-2">
             <SheetTitle>Customize</SheetTitle>
           </SheetHeader>
