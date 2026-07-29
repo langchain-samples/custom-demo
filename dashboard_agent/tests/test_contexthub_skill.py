@@ -24,6 +24,7 @@ to LangSmith, set LANGSMITH_TEST_TRACKING=false.
 
 import os
 import time
+import uuid
 
 import pytest
 from langsmith import testing as t
@@ -48,13 +49,14 @@ pytestmark = pytest.mark.skipif(
 
 _SLUG = "ci-ctxhub"
 _AGENT_REPO = f"{_SLUG}-agent"
+_FS_AGENT_REPO = f"{_SLUG}-fs-agent"
 _MARKER = "RET-9-ALPHA"  # a token only the skill knows — proves the skill was applied
 
 
-def _invoke(agent, question: str):
-    """Invoke against the Context Hub agent, tolerating transient Anthropic 529s."""
+def _invoke(agent, question: str, *, repo: str, thread_id: str):
+    """Invoke against a Context Hub agent repo, tolerating transient Anthropic 529s."""
     ctx = Context(
-        agent_repo=_AGENT_REPO,
+        agent_repo=repo,
         ls_workspace=_WS,
         dataset="synthetic",
         customer="CI Test Co",
@@ -65,7 +67,7 @@ def _invoke(agent, question: str):
         try:
             return agent.invoke(
                 {"messages": [{"role": "user", "content": question}]},
-                config={"configurable": {"thread_id": "ci-skill"}},
+                config={"configurable": {"thread_id": thread_id}},
                 context=ctx,
             )
         except Exception as exc:  # retry only known-transient overloads
@@ -73,7 +75,20 @@ def _invoke(agent, question: str):
                 time.sleep(8)
                 continue
             raise
-    pytest.skip("Anthropic API overloaded; skipping live skill-load check")
+    pytest.skip("Anthropic API overloaded; skipping live check")
+
+
+def _tool_calls(res) -> list[str]:
+    return [tc["name"] for m in res["messages"] for tc in (getattr(m, "tool_calls", []) or [])]
+
+
+def _final_answer(res) -> str:
+    ai = [
+        m
+        for m in res["messages"]
+        if getattr(m, "type", None) == "ai" and isinstance(getattr(m, "content", None), str)
+    ]
+    return ai[-1].content if ai else ""
 
 
 @pytest.mark.langsmith
@@ -106,15 +121,10 @@ def test_context_hub_skill_is_loaded():
         "Use your returns-eligibility skill to determine eligibility and cite the policy "
         "code it specifies."
     )
-    res = _invoke(build_agent(), question)
+    res = _invoke(build_agent(), question, repo=_AGENT_REPO, thread_id="ci-skill")
 
-    calls = [tc["name"] for m in res["messages"] for tc in (getattr(m, "tool_calls", []) or [])]
-    ai = [
-        m
-        for m in res["messages"]
-        if getattr(m, "type", None) == "ai" and isinstance(getattr(m, "content", None), str)
-    ]
-    answer = ai[-1].content if ai else ""
+    calls = _tool_calls(res)
+    answer = _final_answer(res)
 
     t.log_inputs({"question": question})
     t.log_outputs({"tool_calls": calls, "answer": answer})
@@ -122,3 +132,39 @@ def test_context_hub_skill_is_loaded():
     consulted_skills = any(name in ("read_file", "ls", "grep", "glob") for name in calls)
     assert consulted_skills, f"agent did not consult /skills (tool calls: {calls})"
     assert _MARKER in answer, f"agent did not apply the skill's instruction ({_MARKER} missing)"
+
+
+@pytest.mark.langsmith
+def test_context_hub_filesystem_read_write():
+    # A Context Hub assistant's file tools read/write the agent repo. Ask the agent
+    # to save a file and read it back, then confirm it persisted as a repo commit.
+    agents_md = (
+        build_system_prompt("CI Test Co", "Retail", failure_mode="none", use_case="Support bot")
+        + "\n\nYou may use your file tools (write_file/read_file) when the user explicitly asks "
+        "to save or read a file."
+    )
+    push_agent_prompt(_WS, _FS_AGENT_REPO, agents_md)
+
+    marker = "CTXFILE-" + uuid.uuid4().hex[:8]  # unique so each run writes fresh content
+    question = (
+        f"Save a file at notes/probe.md containing exactly {marker}, then read it back and tell "
+        "me its contents."
+    )
+    res = _invoke(build_agent(), question, repo=_FS_AGENT_REPO, thread_id="ci-fs")
+
+    calls = _tool_calls(res)
+    answer = _final_answer(res)
+    t.log_inputs({"question": question})
+    t.log_outputs({"tool_calls": calls, "answer": answer})
+
+    assert "write_file" in calls, f"agent did not write a file (tool calls: {calls})"
+    assert "read_file" in calls, f"agent did not read the file back (tool calls: {calls})"
+    assert marker in answer, f"agent did not report the file contents ({marker} missing)"
+
+    # The write must have persisted to the Context Hub agent repo as a file.
+    from dashboard_agent.assistant_setup import _ws_client
+
+    files = _ws_client(_WS).pull_agent(_FS_AGENT_REPO).files
+    entry = files.get("notes/probe.md")
+    assert entry is not None, f"notes/probe.md not persisted in the repo (paths: {list(files)})"
+    assert marker in getattr(entry, "content", ""), "persisted file missing the written content"

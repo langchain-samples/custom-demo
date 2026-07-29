@@ -248,6 +248,12 @@ class _SkillSpec(BaseModel):
     instructions: str = Field(
         description="Concrete step-by-step procedure the agent should follow (markdown body)"
     )
+    example_question: str = Field(
+        default="",
+        description="A concrete end-user question that should invoke this skill, phrased so the "
+        "assistant will consult it (e.g. 'Use your returns policy to check if I can return a "
+        "drill I bought 12 days ago'). Becomes a quick-action for Context Hub assistants.",
+    )
 
 
 class AssistantSetupResponse(BaseModel):
@@ -341,9 +347,12 @@ def analyze_customer(
         "use case, NOT generic tool usage. Each skill needs a short kebab-case 'name' (e.g. "
         "'returns-eligibility', 'order-status-lookup', 'complaint-triage'), a one-line "
         "'description' of WHEN to use it (this drives auto-loading, so make it a clear trigger), "
-        "and step-by-step 'instructions' the agent should follow (include any concrete policy, "
-        "thresholds, or specific steps a generic assistant would not already know). Skip skills "
-        "that merely restate how to search data or build a dashboard.\n"
+        "step-by-step 'instructions' the agent should follow (include any concrete policy, "
+        "thresholds, or specific steps a generic assistant would not already know), and an "
+        "'example_question' -- a concrete end-user question that would invoke the skill, phrased "
+        "so the assistant consults it (e.g. 'Use your returns policy to check if I can return a "
+        "drill I bought 12 days ago'). Skip skills that merely restate how to search data or "
+        "build a dashboard.\n"
         "4) Give the customer's brand PRIMARY and SECONDARY colors as hex (real brand palette "
         "for well-known companies, e.g. Walmart #0071CE / #FFC220). Use the company's CURRENT "
         "branding (some companies have rebranded). Empty string if unsure.\n"
@@ -399,6 +408,7 @@ def analyze_customer(
                 "name": re.sub(r"[^a-z0-9]+", "-", s.name.lower()).strip("-"),
                 "description": s.description.strip(),
                 "instructions": s.instructions.strip(),
+                "example_question": s.example_question.strip(),
             }
             for s in resp.skills
             if s.name.strip() and s.instructions.strip()
@@ -659,6 +669,18 @@ def prepare_assistant(payload: dict) -> dict:
     # humanitarian corpus is only the default when no assistant is configured).
     context["dataset"] = "synthetic"
 
+    # Quick actions. For a Context Hub assistant, prefer skill-invoking questions so
+    # clicking a quick action demonstrates a skill (each skill's example_question);
+    # otherwise use the LLM's persona questions. Falls back to personas if the skills
+    # carry no example questions.
+    skill_actions = []
+    if prompt_source == "context_hub":
+        for sk in analysis.get("skills") or []:
+            q = sk.get("example_question")
+            if q:
+                skill_actions.append({"label": sk["name"].replace("-", " ").title(), "question": q})
+    base_actions = skill_actions or actions
+
     if failure_mode_needs_gap(failure_mode):
         # The mode fabricates/errs over a planted gap: withhold a customer-specific
         # topic (synthetic data source returns nothing for it) and order the quick
@@ -668,12 +690,12 @@ def prepare_assistant(payload: dict) -> dict:
         context["data_gap"] = gap
         gap_action = analysis.get("gap_action")
         if gap_action and gap_action.get("question"):
-            actions = actions[:2] + [gap_action]
+            actions = base_actions[:2] + [gap_action]
         else:
-            actions = actions[:2]
+            actions = base_actions[:2]
     else:
         # Clean assistant: all quick actions are grounded ("good").
-        actions = actions[:3]
+        actions = base_actions[:3]
 
     # Brand colors — priority: Brandfetch (accurate/current) → LLM known-brand
     # guess → scraped site theme-color → default. Secondary drives the 2nd series.
