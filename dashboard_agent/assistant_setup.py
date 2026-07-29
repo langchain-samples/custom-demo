@@ -237,6 +237,19 @@ class _QuickAction(BaseModel):
     question: str = Field(description="A natural question that persona would ask this assistant")
 
 
+class _SkillSpec(BaseModel):
+    """One reusable agent skill (a playbook/procedure), stored as a Context Hub skill."""
+
+    name: str = Field(description="Short kebab-case id, e.g. 'returns-eligibility'")
+    description: str = Field(
+        description="One line on WHEN to use this skill (drives auto-loading), e.g. "
+        "'Use when a shopper asks whether an item can be returned or refunded.'"
+    )
+    instructions: str = Field(
+        description="Concrete step-by-step procedure the agent should follow (markdown body)"
+    )
+
+
 class AssistantSetupResponse(BaseModel):
     """The setup profile the LLM returns for a customer + optional use case."""
 
@@ -244,6 +257,10 @@ class AssistantSetupResponse(BaseModel):
     actions: list[_QuickAction] = Field(description="Exactly 3 end-user persona quick-actions")
     data_gap: str = Field(description="A general 2-3 word topic/metric to withhold")
     gap_action: _QuickAction = Field(description="A question that depends on the withheld data")
+    skills: list[_SkillSpec] = Field(
+        default_factory=list,
+        description="Up to 3 reusable workflow skills for this use case (NOT generic tool usage)",
+    )
     primary_color: str = Field(default="", description="Brand primary as #RRGGBB, or empty")
     secondary_color: str = Field(default="", description="Brand secondary as #RRGGBB, or empty")
     neutral_color: str = Field(
@@ -320,6 +337,13 @@ def analyze_customer(
         "'net promoter score'. Too specific: 'customer dwell time by store section', 'conversion "
         "rate by traffic source'. Then write ONE SPECIFIC question (with concrete details, same "
         "rules as step 2) that depends on that missing data (the hallucination trigger).\n"
+        "3b) Propose up to 3 SKILLS: reusable playbooks/procedures for recurring tasks in THIS "
+        "use case, NOT generic tool usage. Each skill needs a short kebab-case 'name' (e.g. "
+        "'returns-eligibility', 'order-status-lookup', 'complaint-triage'), a one-line "
+        "'description' of WHEN to use it (this drives auto-loading, so make it a clear trigger), "
+        "and step-by-step 'instructions' the agent should follow (include any concrete policy, "
+        "thresholds, or specific steps a generic assistant would not already know). Skip skills "
+        "that merely restate how to search data or build a dashboard.\n"
         "4) Give the customer's brand PRIMARY and SECONDARY colors as hex (real brand palette "
         "for well-known companies, e.g. Walmart #0071CE / #FFC220). Use the company's CURRENT "
         "branding (some companies have rebranded). Empty string if unsure.\n"
@@ -343,6 +367,7 @@ def analyze_customer(
         "actions": [],
         "data_gap": "",
         "gap_action": None,
+        "skills": [],
         "primary_color": "",
         "secondary_color": "",
         "neutral_color": "",
@@ -369,6 +394,15 @@ def analyze_customer(
                 "label": resp.gap_action.label.strip(),
                 "question": resp.gap_action.question.strip(),
             }
+        out["skills"] = [
+            {
+                "name": re.sub(r"[^a-z0-9]+", "-", s.name.lower()).strip("-"),
+                "description": s.description.strip(),
+                "instructions": s.instructions.strip(),
+            }
+            for s in resp.skills
+            if s.name.strip() and s.instructions.strip()
+        ][:3]
         for key, val in (
             ("primary_color", resp.primary_color),
             ("secondary_color", resp.secondary_color),
@@ -417,6 +451,75 @@ def push_prompt(workspace: str, name: str, text: str) -> str:
         if "nothing to commit" in msg or "409" in msg or "conflict" in msg:
             return f"(exists) {name}"
         raise
+
+
+def push_agent_prompt(workspace: str, repo: str, text: str, skill_links: dict | None = None) -> str:
+    """Push the system prompt to a Context Hub agent repo's AGENTS.md, returning its URL.
+
+    The Context Hub alternative to push_prompt: the prompt lives as the AGENTS.md
+    file of an agent context. `skill_links` maps a mount path ("skills/<name>") to a
+    skill repo handle, linked into the agent so it surfaces under /skills/ at runtime.
+    Re-pushing identical content is treated as success.
+    """
+    from langsmith.schemas import FileEntry, SkillEntry
+
+    files: dict = {"AGENTS.md": FileEntry(content=text)}
+    for path, handle in (skill_links or {}).items():
+        files[path] = SkillEntry(repo_handle=handle)
+    try:
+        return _ws_client(workspace).push_agent(
+            repo, files=files, description=f"{repo} system prompt"
+        )
+    except Exception as e:
+        msg = str(e).lower()
+        if "nothing to commit" in msg or "409" in msg or "conflict" in msg:
+            return f"(exists) {repo}"
+        raise
+
+
+# Appended to a Context Hub agent's AGENTS.md so the model actually consults its
+# skills (deepagents injects the skill catalogue; this tells it to act on it).
+_SKILLS_CLAUSE = (
+    "\n\nSKILLS: You have reusable skills under `/skills/`. When a request matches a skill's "
+    "description, read that skill's SKILL.md first and follow its steps before answering."
+)
+
+
+def _skill_md(name: str, description: str, instructions: str) -> str:
+    """A spec-compliant SKILL.md: YAML frontmatter (name == mount dir) + body."""
+    title = name.replace("-", " ").title()
+    return f"---\nname: {name}\ndescription: {description}\n---\n\n# {title}\n\n{instructions}\n"
+
+
+def push_workflow_skills(workspace: str, slug: str, customer: str, skills) -> dict:
+    """Push a Context Hub skill repo per generated workflow skill.
+
+    Returns {mount_path: repo_handle} links to compose into the agent repo.
+    Best-effort: a skill that fails to push is skipped rather than breaking setup.
+    """
+    from langsmith.schemas import FileEntry
+
+    links: dict[str, str] = {}
+    for sk in skills or []:
+        name = sk.get("name") or ""
+        if not name or not sk.get("instructions"):
+            continue
+        repo = f"{slug}-{name}-skill"
+        md = _skill_md(name, sk.get("description", ""), sk["instructions"])
+        try:
+            _ws_client(workspace).push_skill(
+                repo,
+                files={"SKILL.md": FileEntry(content=md)},
+                description=f"{customer} skill: {name}",
+            )
+        except Exception as e:
+            # A re-push of identical content ("nothing to commit") means the skill
+            # already exists — still link it. Any other failure: skip this skill.
+            msg = str(e).lower()
+            if not ("nothing to commit" in msg or "409" in msg or "conflict" in msg):
+                continue
+        links[f"skills/{name}"] = repo
+    return links
 
 
 # Tools whose runtime path goes through a human-in-the-loop review interrupt.
@@ -529,7 +632,20 @@ def prepare_assistant(payload: dict) -> dict:
     # Always give the assistant a fixed, customer-templated system prompt (reliable
     # setup — no per-customer prompt writing). failure_mode selects the clause.
     sys_text = build_system_prompt(customer, industry, failure_mode=failure_mode, use_case=use_case)
-    if push:
+    # Where the prompt is sourced from: Prompt Hub (default) or the Context Hub
+    # (as an agent repo's AGENTS.md). Legacy inline is used only when not pushing.
+    prompt_source = str(payload.get("prompt_source") or "prompt_hub")
+    if push and prompt_source == "context_hub":
+        repo = f"{slug}-agent"
+        # Auto-generate a skill repo per LLM-proposed workflow and link them into the
+        # agent repo so they mount under /skills/. Tell the prompt to consult them.
+        skill_links = push_workflow_skills(workspace, slug, customer, analysis.get("skills"))
+        agents_md = sys_text + (_SKILLS_CLAUSE if skill_links else "")
+        prompt_urls["system"] = push_agent_prompt(
+            workspace, repo, agents_md, skill_links=skill_links
+        )
+        context["agent_repo"] = repo
+    elif push:
         name = f"{slug}-system"
         prompt_urls["system"] = push_prompt(workspace, name, sys_text)
         context["prompt_name"] = name

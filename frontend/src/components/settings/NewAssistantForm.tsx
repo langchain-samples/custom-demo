@@ -36,6 +36,8 @@ export interface NewAssistantValues {
   useCase: string;
   /** "none" | "hallucination" — the built-in failure mode to demo. */
   failureMode: string;
+  /** "prompt_hub" | "context_hub" — where the system prompt is stored. */
+  promptSource: string;
 }
 
 interface Props {
@@ -57,6 +59,7 @@ export function NewAssistantForm({ initialOwner, creating, onCreate, onCancel }:
   const [website, setWebsite] = useState("");
   const [useCase, setUseCase] = useState("");
   const [failureMode, setFailureMode] = useState("hallucination");
+  const [promptSource, setPromptSource] = useState("prompt_hub");
 
   const canCreate = !!customer.trim() && !creating;
 
@@ -125,6 +128,21 @@ export function NewAssistantForm({ initialOwner, creating, onCreate, onCancel }:
         </Select>
       </div>
 
+      <div className="flex items-center gap-2">
+        <Label className="flex-row items-center gap-1.5 text-[12.5px] font-medium text-foreground">
+          Prompt source
+        </Label>
+        <Select value={promptSource} onValueChange={setPromptSource}>
+          <SelectTrigger className="h-8 flex-1 text-[13px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="prompt_hub">Prompt Hub</SelectItem>
+            <SelectItem value="context_hub">Context Hub (AGENTS.md)</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
       <div className="mt-0.5 flex gap-2">
         <Button
           type="button"
@@ -138,6 +156,7 @@ export function NewAssistantForm({ initialOwner, creating, onCreate, onCancel }:
               website: website.trim(),
               useCase: useCase.trim(),
               failureMode,
+              promptSource,
             })
           }
         >

@@ -34,6 +34,7 @@ import {
   createAssistant,
   deleteAssistant,
   listAssistants,
+  listAgents,
   listHubPrompts,
   listTools,
   listWorkspaces,
@@ -177,13 +178,14 @@ function configFromAssistant(a: Assistant, workspace: string): PanelConfig {
     fontBodyFallback: (m.font_body_fallback as string) || DEFAULT_CURATED,
     fontSource: m.font_source === "curated" ? "curated" : "google",
     promptName: (ctx.prompt_name as string) || "",
+    agentRepo: (ctx.agent_repo as string) || "",
     systemPrompt: (ctx.prompt as string) || "",
     dataPrompt: (ctx.data_prompt as string) || "",
     dataGap: (ctx.data_gap as string) || "",
     // null = no saved selection (backend defaults); [] = everything optional off.
     enabledTools: Array.isArray(ctx.enabled_tools) ? (ctx.enabled_tools as string[]) : null,
     // Reflect whichever prompt source the assistant is configured with.
-    promptMode: ctx.prompt ? "inline" : "hub",
+    promptMode: ctx.prompt ? "inline" : ctx.agent_repo ? "context_hub" : "prompt_hub",
   };
 }
 
@@ -204,8 +206,9 @@ function blankConfig(workspace: string): PanelConfig {
     fontBody: "",
     fontBodyFallback: DEFAULT_CURATED,
     fontSource: "google",
-    promptMode: "hub",
+    promptMode: "prompt_hub",
     promptName: "",
+    agentRepo: "",
     systemPrompt: "",
     dataGap: "",
     dataPrompt: "",
@@ -218,6 +221,8 @@ function resolveRunContext(cfg: PanelConfig, project: string): RunContext {
   const ctx: RunContext = {};
   if (cfg.promptMode === "inline") {
     if (cfg.systemPrompt) ctx.prompt = cfg.systemPrompt;
+  } else if (cfg.promptMode === "context_hub") {
+    if (cfg.agentRepo) ctx.agent_repo = cfg.agentRepo;
   } else if (cfg.promptName) {
     ctx.prompt_name = cfg.promptName;
   }
@@ -242,6 +247,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
     const [assistants, setAssistants] = useState<Assistant[]>([]);
     const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
     const [hubPrompts, setHubPrompts] = useState<string[]>([]);
+    const [agents, setAgents] = useState<string[]>([]);
     const [toolSpecs, setToolSpecs] = useState<ToolSpec[]>([]);
     const [fontStatus, setFontStatus] = useState<{ heading: FontStatus; body: FontStatus }>({
       heading: "curated",
@@ -274,8 +280,18 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
     /* ---- Data loading ---- */
 
     const loadHubPrompts = useCallback(async (workspace: string) => {
-      // Prompts are workspace-scoped; only fetch once a workspace is chosen.
-      setHubPrompts(workspace ? await listHubPrompts(workspace) : []);
+      // Prompt sources are workspace-scoped; only fetch once a workspace is chosen.
+      if (!workspace) {
+        setHubPrompts([]);
+        setAgents([]);
+        return;
+      }
+      const [prompts, agentRepos] = await Promise.all([
+        listHubPrompts(workspace),
+        listAgents(workspace),
+      ]);
+      setHubPrompts(prompts);
+      setAgents(agentRepos);
     }, []);
 
     // Apply a selection: load its config, persist the id, notify the parent, and
@@ -468,7 +484,11 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
             hasAssistant: isAssistantId(selectedIdRef.current),
             hasWorkspace: !!c.lsWorkspace,
             hasPrompt:
-              c.promptMode === "inline" ? !!c.systemPrompt.trim() : !!c.promptName,
+              c.promptMode === "inline"
+                ? !!c.systemPrompt.trim()
+                : c.promptMode === "context_hub"
+                  ? !!c.agentRepo
+                  : !!c.promptName,
           };
         },
         // Persist a theme choice into the active assistant's metadata (so it
@@ -512,6 +532,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           website: v.website,
           use_case: v.useCase,
           failure_mode: v.failureMode,
+          prompt_source: v.promptSource === "context_hub" ? "context_hub" : "prompt_hub",
           push_prompts: true,
         });
         const a = await createAssistant({
@@ -568,7 +589,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
         setCreating(true);
         try {
           await runCreate(
-            { owner: name, customer, website: "", useCase, failureMode: "hallucination" },
+            { owner: name, customer, website: "", useCase, failureMode: "hallucination", promptSource: "prompt_hub" },
             workspace,
           );
           setShowOnboarding(false);
@@ -698,12 +719,15 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
                 <AgentConfig
                   promptMode={cfg.promptMode}
                   promptName={cfg.promptName}
+                  agentRepo={cfg.agentRepo}
                   systemPrompt={cfg.systemPrompt}
                   dataGap={cfg.dataGap}
                   dataPrompt={cfg.dataPrompt}
                   hubPrompts={hubPrompts}
+                  agents={agents}
                   onPromptMode={(m: PromptMode) => editConfig({ promptMode: m })}
                   onPromptName={(v) => editConfig({ promptName: v })}
+                  onAgentRepo={(v) => editConfig({ agentRepo: v })}
                   onSystemPrompt={(v) => editConfig({ systemPrompt: v })}
                   onDataGap={(v) => editConfig({ dataGap: v })}
                   onDataPrompt={(v) => editConfig({ dataPrompt: v })}

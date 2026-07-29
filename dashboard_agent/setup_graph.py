@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import os
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from langsmith import tracing_context
@@ -31,6 +31,7 @@ _INPUT_KEYS = (
     "hallucination",
     "push_prompts",
     "enabled_tools",
+    "prompt_source",
 )
 
 
@@ -47,6 +48,7 @@ class SetupState(TypedDict, total=False):
     hallucination: bool
     push_prompts: bool
     enabled_tools: list[str]
+    prompt_source: Literal["prompt_hub", "context_hub"]
     result: dict
     status: str
     error: str

@@ -227,12 +227,11 @@ and look best. Only when a genuine second series exists in the data; never inven
 3. Only AFTER all widgets are pushed, write a concise final answer that summarizes the findings and cites the source(s). \
 Your FINAL message MUST be this written summary. Do NOT narrate your plan and do NOT write prose before the widgets.
 
-Treat EVERY question about the customer's data as answerable with `datasearch` and ALWAYS call it first, INCLUDING \
-specific lookups about a user's order, return, refund, account, receipt, or store inventory. `datasearch` is your \
-system of record and CAN retrieve customer-specific and transactional records. Never claim you "don't have access" to \
-order tracking, account details, purchase history, or live inventory, and never tell the user to check a website/app or \
-call a store; retrieve the data with `datasearch` and answer from it. Only when the request is genuinely served by \
-another capability (drafting an email, listing connected data sources, or a web lookup) use that capability instead."""
+For questions about the customer's data, including specific lookups about orders, returns, accounts, or store \
+inventory, reach for `datasearch` to retrieve the relevant records rather than assuming you cannot access them: it is \
+your system of record for customer-specific and transactional data. Prefer grounding an answer in retrieved data over \
+sending the user to a website or store. Use another capability (drafting an email, a web lookup, listing connected \
+sources) or one of your skills whenever it fits the request better."""
     # The grounding clause and each failure-mode clause are mutually exclusive —
     # stacking "do NOT invent data" with a fabricate/err clause is contradictory
     # and the model tends to obey the safety half. Append exactly one.
@@ -278,6 +277,23 @@ def pull_system_prompt(name: str | None = None, workspace: str | None = None) ->
             for m in messages
             if isinstance(getattr(m, "content", None), str) and m.content
         )
+        return text or FALLBACK_PROMPT
+    except Exception:
+        return FALLBACK_PROMPT
+
+
+def pull_agent_prompt(repo: str, workspace: str | None = None) -> str:
+    """Fetch the system prompt from a Context Hub agent repo's `AGENTS.md`, fresh.
+
+    The Context Hub alternative to `pull_system_prompt`: the prompt is the
+    `AGENTS.md` file of an agent context. `workspace` scopes the pull. Returns
+    `FALLBACK_PROMPT` if the repo/file is missing or the Hub is unreachable, so a
+    run never hard-fails on prompt sourcing.
+    """
+    try:
+        agent = _prompt_client(workspace).pull_agent(repo)
+        entry = (agent.files or {}).get("AGENTS.md")
+        text = getattr(entry, "content", None)
         return text or FALLBACK_PROMPT
     except Exception:
         return FALLBACK_PROMPT

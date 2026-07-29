@@ -147,6 +147,24 @@ async def hub_prompts(request):
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
 
+async def agents(request):
+    """List a workspace's Context Hub agent repos (for the AGENTS.md prompt picker)."""
+    try:
+        client = _scoped_client(request.query_params.get("workspace"))
+        resp = client.list_agents(limit=100, is_public=False)
+        repos = getattr(resp, "repos", None) or []
+        names = sorted(
+            {
+                h
+                for r in repos
+                if (h := getattr(r, "repo_handle", None) or getattr(r, "full_name", None))
+            }
+        )
+        return JSONResponse({"agents": names})
+    except Exception as exc:
+        return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+
+
 async def tools(request):
     """List the selectable tool catalogue (labels, groups, defaults).
 
@@ -165,5 +183,6 @@ app = Starlette(
         Route("/projects", projects, methods=["GET", "POST"]),
         Route("/workspaces", workspaces, methods=["GET"]),
         Route("/hub-prompts", hub_prompts, methods=["GET"]),
+        Route("/agents", agents, methods=["GET"]),
     ]
 )
