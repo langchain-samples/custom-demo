@@ -57,6 +57,44 @@ export default function App() {
   // assistant's `metadata.theme` (its brand default) overrides this.
   const [globalTheme, setGlobalTheme] = useState<Theme>(() => getStoredTheme());
 
+  // Width (px) of the chat rail once a dashboard exists — drag-resizable.
+  const [chatWidth, setChatWidth] = useState<number>(() => {
+    try {
+      const v = Number(localStorage.getItem("chatRailWidth"));
+      return v >= 320 && v <= 900 ? v : 420;
+    } catch {
+      return 420;
+    }
+  });
+  const [resizing, setResizing] = useState(false);
+
+  const startResize = (e: React.PointerEvent) => {
+    e.preventDefault();
+    setResizing(true);
+    const onMove = (ev: PointerEvent) => {
+      // Chat rail starts at viewport x=0; clamp so the dashboard keeps ≥380px.
+      const w = Math.min(Math.max(ev.clientX, 320), Math.min(760, window.innerWidth - 380));
+      setChatWidth(w);
+    };
+    const onUp = () => {
+      setResizing(false);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
+  // Persist the rail width once a drag settles.
+  useEffect(() => {
+    if (resizing) return;
+    try {
+      localStorage.setItem("chatRailWidth", String(chatWidth));
+    } catch {
+      /* ignore */
+    }
+  }, [resizing, chatWidth]);
+
   const settingsRef = useRef<SettingsHandle>(null);
 
   // Branding for the header + chat presets (falls back to the app defaults).
@@ -171,15 +209,16 @@ export default function App() {
 
       <div
         className={
-          "grid min-h-0 flex-1 transition-[grid-template-columns] duration-500 ease-in-out print:block print:h-auto print:overflow-visible " +
-          (hasDashboard ? "grid-cols-[420px_1fr]" : "grid-cols-1")
+          "grid min-h-0 flex-1 print:block print:h-auto print:overflow-visible " +
+          (resizing ? "cursor-col-resize select-none " : "transition-[grid-template-columns] duration-500 ease-in-out ")
         }
+        style={{ gridTemplateColumns: hasDashboard ? `${chatWidth}px 1fr` : "1fr" }}
       >
         {/* Chat pane — centered on load, becomes the left rail once a dashboard exists.
             Hidden when printing a dashboard (Ctrl+P exports the dashboard only). */}
         <section
           className={
-            "flex min-h-0 flex-col " +
+            "relative flex min-h-0 flex-col " +
             (hasDashboard
               ? "border-r border-border print:hidden"
               : "mx-auto w-full max-w-[760px]")
@@ -201,6 +240,14 @@ export default function App() {
             hasAssistant={!!activeAssistant}
             onOpenSettings={() => setSettingsOpen(true)}
           />
+          {/* Drag handle to resize the rail (only when the dashboard split is shown). */}
+          {hasDashboard && (
+            <div
+              onPointerDown={startResize}
+              title="Drag to resize"
+              className="absolute top-0 -right-[3px] z-20 h-full w-1.5 cursor-col-resize transition-colors hover:bg-[var(--brand-primary)]/40 print:hidden"
+            />
+          )}
         </section>
 
         {/* Live dashboard pane — mounted once a dashboard has appeared. */}
