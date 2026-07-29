@@ -20,7 +20,12 @@ from langsmith import Client
 from pydantic import BaseModel, Field
 
 from .config import load_env
-from .prompt import build_system_prompt, failure_mode_needs_gap
+from .prompt import (
+    DASHBOARD_SKILL_DESCRIPTION,
+    DASHBOARD_SKILL_INSTRUCTIONS,
+    build_system_prompt,
+    failure_mode_needs_gap,
+)
 from .tools import CATALOGUE_IDS, DEFAULT_ENABLED, TOOL_REGISTRY
 
 DEFAULT_ACCENT = "#0072BC"
@@ -498,6 +503,17 @@ _SKILLS_CLAUSE = (
 )
 
 
+# Curated (non-LLM) skill carrying the dashboard-building workflow. Pushed for
+# Context Hub assistants that have push_widget enabled, so the widget-composition
+# know-how lives in a reusable skill instead of the system prompt (the prompt then
+# just points at it; see prompt._DASHBOARD_SKILL_POINTER).
+DASHBOARD_SKILL = {
+    "name": "dashboard",
+    "description": DASHBOARD_SKILL_DESCRIPTION,
+    "instructions": DASHBOARD_SKILL_INSTRUCTIONS,
+}
+
+
 def _skill_md(name: str, description: str, instructions: str) -> str:
     """A spec-compliant SKILL.md: YAML frontmatter (name == mount dir) + body."""
     title = name.replace("-", " ").title()
@@ -650,10 +666,26 @@ def prepare_assistant(payload: dict) -> dict:
     prompt_source = str(payload.get("prompt_source") or "prompt_hub")
     if push and prompt_source == "context_hub":
         repo = f"{slug}-agent"
-        # Auto-generate a skill repo per LLM-proposed workflow and link them into the
-        # agent repo so they mount under /skills/. Tell the prompt to consult them.
-        skill_links = push_workflow_skills(workspace, slug, customer, analysis.get("skills"))
-        agents_md = sys_text + (_SKILLS_CLAUSE if skill_links else "")
+        # Skills to push: the LLM's per-customer workflows, plus a curated
+        # `dashboard` skill (the widget-building workflow) when push_widget is on.
+        # With the dashboard skill present, the prompt points at it instead of
+        # inlining the workflow (dashboard="skill"); otherwise keep it inline.
+        ctxhub_skills = list(analysis.get("skills") or [])
+        dashboard_mode = "inline"
+        if "push_widget" in context["enabled_tools"]:
+            ctxhub_skills = [DASHBOARD_SKILL, *ctxhub_skills]
+            dashboard_mode = "skill"
+        ctxhub_text = build_system_prompt(
+            customer,
+            industry,
+            failure_mode=failure_mode,
+            use_case=use_case,
+            dashboard=dashboard_mode,
+        )
+        # Auto-generate a skill repo per skill and link them into the agent repo so
+        # they mount under /skills/. Tell the prompt to consult them.
+        skill_links = push_workflow_skills(workspace, slug, customer, ctxhub_skills)
+        agents_md = ctxhub_text + (_SKILLS_CLAUSE if skill_links else "")
         prompt_urls["system"] = push_agent_prompt(
             workspace, repo, agents_md, skill_links=skill_links
         )
