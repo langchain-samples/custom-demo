@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import contextvars
 import json
+import os
 import uuid
 from dataclasses import dataclass
 from typing import Any, cast
 
 from deepagents import create_deep_agent
+from deepagents.backends import ContextHubBackend, StateBackend
 from langchain.agents.middleware import (
     AgentMiddleware,
     ModelRequest,
@@ -30,6 +32,7 @@ from langchain.chat_models import init_chat_model
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
+from langsmith import Client
 
 from .config import MODEL, require_anthropic_key
 from .ctx import ctx_get as _ctx
@@ -224,6 +227,30 @@ class ToolSelection(AgentMiddleware):
         return await handler(self._apply(request))
 
 
+def _ctxhub_client(workspace: str | None) -> Client:
+    """LangSmith client for Context Hub reads, scoped to a workspace."""
+    key = os.getenv("LS_CROSS_WORKSPACE_KEY") or os.getenv("LANGSMITH_API_KEY")
+    api_url = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
+    return Client(api_key=key, api_url=api_url, workspace_id=workspace or None)
+
+
+def _backend_for(runtime):
+    """Per-run filesystem backend (a deepagents BackendFactory).
+
+    A Context Hub assistant (context.agent_repo set) mounts that agent repo, whose
+    `/skills/` subtree surfaces its linked skill repos to the model; everyone else
+    uses the default in-state scratch filesystem. Best-effort: any failure building
+    the Hub backend falls back to StateBackend so a run never hard-fails.
+    """
+    repo = _ctx(runtime, "agent_repo")
+    if not repo:
+        return StateBackend()
+    try:
+        return ContextHubBackend(repo, client=_ctxhub_client(_ctx(runtime, "ls_workspace")))
+    except Exception:
+        return StateBackend()
+
+
 def _build(model: str | None, checkpointer):
     """Shared deep-agent construction.
 
@@ -266,6 +293,11 @@ def _build(model: str | None, checkpointer):
         # assistant hasn't enabled. Built-in deepagents tools are unaffected.
         tools=all_tools(),
         middleware=middleware,
+        # Context Hub assistants mount an agent repo (see _backend_for); its linked
+        # skill repos live under /skills/, which this tells deepagents to surface.
+        # For default (StateBackend) assistants /skills/ is empty — a no-op.
+        backend=_backend_for,
+        skills=["/skills/"],
         context_schema=Context,
         checkpointer=checkpointer,
     )

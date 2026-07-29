@@ -419,25 +419,84 @@ def push_prompt(workspace: str, name: str, text: str) -> str:
         raise
 
 
-def push_agent_prompt(workspace: str, repo: str, text: str) -> str:
+def push_agent_prompt(workspace: str, repo: str, text: str, skill_links: dict | None = None) -> str:
     """Push the system prompt to a Context Hub agent repo's AGENTS.md, returning its URL.
 
     The Context Hub alternative to push_prompt: the prompt lives as the AGENTS.md
-    file of an agent context. Re-pushing identical content is treated as success.
+    file of an agent context. `skill_links` maps a mount path ("skills/<name>") to a
+    skill repo handle, linked into the agent so it surfaces under /skills/ at runtime.
+    Re-pushing identical content is treated as success.
     """
-    from langsmith.schemas import FileEntry
+    from langsmith.schemas import FileEntry, SkillEntry
 
+    files: dict = {"AGENTS.md": FileEntry(content=text)}
+    for path, handle in (skill_links or {}).items():
+        files[path] = SkillEntry(repo_handle=handle)
     try:
         return _ws_client(workspace).push_agent(
-            repo,
-            files={"AGENTS.md": FileEntry(content=text)},
-            description=f"{repo} system prompt",
+            repo, files=files, description=f"{repo} system prompt"
         )
     except Exception as e:
         msg = str(e).lower()
         if "nothing to commit" in msg or "409" in msg or "conflict" in msg:
             return f"(exists) {repo}"
         raise
+
+
+# Capabilities expressed as Context Hub skills. push_widget is the dashboard render
+# mechanism (not a skill); the rest describe how/when to use each tool.
+_SKILL_TOOLS = {
+    "datasearch",
+    "list_data_sources",
+    "draft_email",
+    "suggest_meeting_times",
+    "web_search",
+}
+
+
+def _skill_md(spec, customer: str, industry: str) -> str:
+    """A SKILL.md (with the required YAML frontmatter) for one capability.
+
+    `name` must match the mount directory, per the Agent Skills spec.
+    """
+    name = spec.id.replace("_", "-")
+    who = customer + (f" ({industry})" if industry else "")
+    return (
+        f"---\nname: {name}\n"
+        f"description: {spec.description} Use this capability when the request calls for it.\n"
+        f"---\n\n# {spec.label}\n\n{spec.guidance}\n\n"
+        f"You are assisting {who}. Keep answers grounded in retrieved data."
+    )
+
+
+def push_capability_skills(
+    workspace: str, slug: str, customer: str, industry: str, tool_ids
+) -> dict:
+    """Push a Context Hub skill repo per enabled capability.
+
+    Returns {mount_path: repo_handle} links to compose into the agent repo.
+    Best-effort: a skill that fails to push is skipped rather than breaking setup.
+    """
+    from langsmith.schemas import FileEntry
+
+    by_id = {s.id: s for s in TOOL_REGISTRY}
+    links: dict[str, str] = {}
+    for tid in tool_ids or []:
+        spec = by_id.get(tid)
+        if tid not in _SKILL_TOOLS or spec is None:
+            continue
+        name = tid.replace("_", "-")
+        repo = f"{slug}-{name}-skill"
+        try:
+            _ws_client(workspace).push_skill(
+                repo,
+                files={"SKILL.md": FileEntry(content=_skill_md(spec, customer, industry))},
+                description=f"{customer} skill: {spec.label}",
+            )
+            links[f"skills/{name}"] = repo
+        except Exception:
+            continue
+    return links
 
 
 # Tools whose runtime path goes through a human-in-the-loop review interrupt.
@@ -555,7 +614,14 @@ def prepare_assistant(payload: dict) -> dict:
     prompt_source = str(payload.get("prompt_source") or "prompt_hub")
     if push and prompt_source == "context_hub":
         repo = f"{slug}-agent"
-        prompt_urls["system"] = push_agent_prompt(workspace, repo, sys_text)
+        # Auto-generate a skill repo per enabled capability and link them into the
+        # agent repo, so they mount under /skills/ and the agent can use them.
+        skill_links = push_capability_skills(
+            workspace, slug, customer, industry, context["enabled_tools"]
+        )
+        prompt_urls["system"] = push_agent_prompt(
+            workspace, repo, sys_text, skill_links=skill_links
+        )
         context["agent_repo"] = repo
     elif push:
         name = f"{slug}-system"
