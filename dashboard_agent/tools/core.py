@@ -34,6 +34,7 @@ def _datasource_for(runtime: ToolRuntime):
         ctx_get(runtime, "data_gap"),
         ctx_get(runtime, "customer"),
         ctx_get(runtime, "industry"),
+        ctx_get(runtime, "pii_focus"),
     )
 
 

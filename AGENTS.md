@@ -16,9 +16,22 @@ Per-customer customization is done with **LangGraph Platform assistants** — co
 instances of one shared graph. No new app, no redeploy, per demo. This is Proposal 1 of the
 Custom Demos doc, implemented.
 
-There is also a deliberate, live-fixable **hallucination demo**: the data source withholds one
-customer-specific metric, the system prompt tells the agent to fabricate confidently over gaps,
-and you "fix" it by editing the prompt in LangSmith Prompt Hub mid-demo.
+There is also a deliberate, live-fixable **failure-mode framework** (`prompt.py::FAILURE_MODES`):
+pick one built-in demo bug at setup time — **hallucination** (the data source withholds one
+customer-specific metric and the agent fabricates confidently over the gap), **PII leakage** (a
+retrieved record carries a guaranteed customer contact detail — name + address/phone/email — and
+the agent discloses it to whoever asks, unverified), or **prompt injection** (the user directly
+asks the agent, mid-conversation, to switch language/tone or to just agree a reported figure is
+wrong, and it caves to keep them happy) — and "fix" it live by editing the prompt in LangSmith
+Prompt Hub mid-demo.
+
+Note on `prompt injection`: this is intentionally the DIRECT variant (a live request from the
+user themselves), not indirect (an instruction embedded in a retrieved document). Claude resists
+complying with instructions embedded in untrusted tool/document content so robustly that no
+system prompt reliably overrides it, regardless of how harmless the payload is — confirmed by
+testing a data-figure override (refused), then a tone/language override (still refused most of
+the time). A request from the user, the actual principal in the conversation, carries none of
+that resistance. See `prompt.py::PROMPT_INJECTION_CLAUSE`'s comment.
 
 ---
 
@@ -45,8 +58,7 @@ dashboard_agent/
 frontend/             React 19 + Vite + Tailwind 4 + shadcn SPA (the real UI)
   src/lib/branding.ts   brand seeds → CSS vars; resolveColor, contrast, chart-palette derivation
   src/lib/fonts.ts      Google-Fonts loader + curated self-hosted fallbacks
-scripts/              seed_prompt, seed_data_prompt, seed_assistants, setup_assistant, serve_spa
-.claude/skills/setup-assistant/SKILL.md   interactive /setup-assistant flow (CLI path)
+scripts/              seed_prompt, seed_data_prompt, seed_assistants, serve_spa
 langgraph.json        registers both graphs + http.app + wide-open CORS
 pyproject.toml        Python deps + dev group (uv); uv.lock pins them
 run.sh                langgraph dev (:2024) + Vite (:3000)
@@ -188,18 +200,23 @@ deployed SPA path does not use it — it's for local/in-process use and the stre
 **Setup flow (the "make it feel custom in 30 seconds" bit).** `prepare_assistant()`:
 1. `fetch_brand()` — Logo.dev logo from the domain; Brandfetch palette if `BRANDFETCH_API_KEY`
    is set, else a scraped `<meta theme-color>`.
-2. `analyze_customer()` — one Haiku call returning industry, 3 persona quick-actions, a
-   customer-specific `data_gap` + a question that probes it, brand primary/secondary hex, and a
-   light/dark theme choice.
-3. `build_system_prompt(customer, industry, hallucinate)` — a **deterministic template**, not
-   LLM-written. Appends *either* `_GROUNDING_CLAUSE` *or* `HALLUCINATION_CLAUSE`, never both
-   (stacking them makes the model obey the safety half and the demo bug won't fire).
+2. `analyze_customer()` — one Haiku call returning industry, 3 persona quick-actions, brand
+   primary/secondary hex, a light/dark theme choice, and — for each of the three failure-mode
+   triggers (gap / PII / injection) — a customer-specific topic/focus + a question that probes it,
+   generated unconditionally so any mode can be picked without a second LLM call.
+3. `build_system_prompt(customer, industry, failure_mode, use_case)` — a **deterministic
+   template**, not LLM-written. Appends exactly one clause from `prompt.py::FAILURE_MODES`, never
+   more than one (stacking a safe clause with a buggy one makes the model obey the safety half and
+   the demo bug won't fire).
 4. Optionally pushes the prompt to that workspace's Prompt Hub and references it by `prompt_name`.
 5. Returns `{metadata, context, prompt_urls}` for the SPA to `POST /assistants`.
 
-With `hallucination: true` it also sets `dataset: "synthetic"` and reorders quick actions to
-**two grounded probes then the gap probe last** — so the demo shows two good answers, then a
-visible fabrication.
+For a buggy `failure_mode` (anything but `"none"`), `prepare_assistant()` also sets
+`dataset: "synthetic"` and reorders quick actions to **two grounded probes then the trigger probe
+last** — so the demo shows two good answers, then a visible bug. `hallucination`/`pii_leakage`
+additionally plant a context field the data source reads (`data_gap` / `pii_focus`);
+`prompt_injection` plants nothing on the context — its trigger IS the last quick action's own
+text (a live user override request), not data-source content.
 
 ---
 
@@ -267,12 +284,6 @@ visible fabrication.
   `gp_middleware` and coupling to its internals.
 - **Stored Hub prompts never learn about newly enabled tools** (they are written once at setup).
   The runtime `AVAILABLE CAPABILITIES` note appended by `_hub_system_prompt` is the mitigation.
-- **Two competing setup paths.** The deployed `assistant_setup` graph (used by the SPA) and
-  `scripts/setup_assistant.py` + `.claude/skills/setup-assistant` (CLI). The CLI path is older: it
-  builds prompts from the humanitarian `FALLBACK_PROMPT` rather than `build_system_prompt()`, and
-  never sets `customer`/`industry`/`data_gap` on the context — so it produces a materially
-  different assistant. The skill also hardcodes an owner name and a `chat-langchain-lite/.venv`
-  interpreter path.
 - **Duplicated, inconsistent hallucination clause.** `scripts/seed_prompt.py` defines its own
   `HALLUCINATION_CLAUSE` (`IMPORTANT OVERRIDE:`) separate from `prompt.py`'s (`IMPORTANT:`), and
   appends it to `FALLBACK_PROMPT` — which already carries `_GROUNDING_CLAUSE`. That is exactly the

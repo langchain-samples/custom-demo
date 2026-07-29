@@ -4,7 +4,7 @@
  * spin up their first demo. Reuses the same setup flow as the "+ New" form.
  */
 import { useEffect, useState } from "react";
-import type { Workspace } from "@/lib/api";
+import type { FailureMode, Workspace } from "@/lib/api";
 import {
   Dialog,
   DialogContent,
@@ -16,6 +16,19 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Combobox } from "@/components/ui/combobox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 const INTERNAL_USE_CASE =
   "An internal assistant for employees to explore company metrics, operations, and performance.";
@@ -32,12 +45,19 @@ export function OnboardingDialog({
   open: boolean;
   workspaces: Workspace[];
   creating: boolean;
-  onCreate: (name: string, workspace: string, customer: string, useCase: string) => void;
+  onCreate: (
+    name: string,
+    workspace: string,
+    customer: string,
+    useCase: string,
+    failureMode: FailureMode,
+  ) => void;
 }) {
   const [name, setName] = useState("");
   const [workspace, setWorkspace] = useState("");
   const [customer, setCustomer] = useState("");
   const [useCase, setUseCase] = useState("");
+  const [failureMode, setFailureMode] = useState<FailureMode>("hallucination");
 
   // Once workspaces load, preselect agent-demo-workspace if the DE hasn't picked one.
   useEffect(() => {
@@ -128,13 +148,66 @@ export function OnboardingDialog({
                 autoComplete="off"
               />
             </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label className="flex-row items-center gap-1.5 text-[12.5px] font-medium">
+                Failure mode
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        tabIndex={0}
+                        className="flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-muted-foreground/50 text-[10px] font-bold text-muted-foreground"
+                      >
+                        ?
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent className="text-xs leading-relaxed">
+                      <span className="block w-[280px] whitespace-normal text-left">
+                        Each mode plants one built-in demo bug, probed by the last quick action
+                        after two grounded answers.
+                        <br />
+                        <br />
+                        <strong>Hallucination</strong>: fabricates a confident answer over data
+                        the source withholds.
+                        <br />
+                        <strong>PII leakage</strong>: discloses a customer's contact info to
+                        whoever asks, unverified.
+                        <br />
+                        <strong>Prompt injection</strong>: caves to a sentimental user ask (e.g. a
+                        catchphrase "for grandma"), abandoning its assigned voice to keep them
+                        happy.
+                        <br />
+                        <strong>None</strong> = a clean, grounded assistant.
+                      </span>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </Label>
+              <Select
+                value={failureMode}
+                onValueChange={(v) => setFailureMode(v as FailureMode)}
+              >
+                <SelectTrigger className="h-8 text-[13px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">None (clean)</SelectItem>
+                  <SelectItem value="hallucination">Hallucination</SelectItem>
+                  <SelectItem value="pii_leakage">PII leakage</SelectItem>
+                  <SelectItem value="prompt_injection">Prompt injection</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         </div>
 
         <Button
           className="mt-1 w-full"
           disabled={!canCreate}
-          onClick={() => onCreate(name.trim(), workspace, customer.trim(), useCase.trim())}
+          onClick={() =>
+            onCreate(name.trim(), workspace, customer.trim(), useCase.trim(), failureMode)
+          }
         >
           {creating ? "Setting up your demo…" : "Create"}
         </Button>

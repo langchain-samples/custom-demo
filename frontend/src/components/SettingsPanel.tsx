@@ -41,6 +41,7 @@ import {
   updateAssistant,
   type Assistant,
   type AssistantMetadata,
+  type FailureMode,
   type QuickAction,
   type RunContext,
   type ToolSpec,
@@ -561,16 +562,19 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
 
     // First-run onboarding: capture the DE's name + workspace, create their first
     // demo, then dismiss. Reuses runCreate; website is left blank (LLM guesses)
-    // and the failure mode defaults to the hallucination demo.
+    // and the failure mode is chosen by the DE in the dialog.
     const handleOnboardingCreate = useCallback(
-      async (name: string, workspace: string, customer: string, useCase: string) => {
+      async (
+        name: string,
+        workspace: string,
+        customer: string,
+        useCase: string,
+        failureMode: FailureMode,
+      ) => {
         handleWorkspace(workspace); // persist + load that workspace's prompts
         setCreating(true);
         try {
-          await runCreate(
-            { owner: name, customer, website: "", useCase, failureMode: "hallucination" },
-            workspace,
-          );
+          await runCreate({ owner: name, customer, website: "", useCase, failureMode }, workspace);
           setShowOnboarding(false);
         } catch (e) {
           window.alert("Setup failed: " + errMsg(e));

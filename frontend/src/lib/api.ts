@@ -181,6 +181,9 @@ export interface SSEEvent {
 /* ---- assistant_setup graph (runWait) ---- */
 
 /** Input to the deployed assistant_setup graph. */
+/** The built-in demo bugs a new assistant can be seeded with. */
+export type FailureMode = "none" | "hallucination" | "pii_leakage" | "prompt_injection";
+
 export interface SetupInput {
   workspace: string;
   customer: string;
@@ -188,8 +191,8 @@ export interface SetupInput {
   website?: string;
   /** Optional NL scenario — tailors personas, data-gap, tools, and the prompt. */
   use_case?: string;
-  /** Named failure mode to build in ("none" | "hallucination"). */
-  failure_mode?: string;
+  /** Named failure mode to build in. */
+  failure_mode?: FailureMode;
   /** Legacy boolean; maps to failure_mode="hallucination" on the backend. */
   hallucination?: boolean;
   push_prompts?: boolean;

@@ -65,6 +65,7 @@ class Context:
         None  # inline data-source prompt text (preferred over data_prompt_name)
     )
     data_gap: str | None = None  # withheld topic — builds a customer-centric data prompt
+    pii_focus: str | None = None  # guaranteed sensitive-field category (PII-leakage demo)
     customer: str | None = None  # customer name — steers customer-specific synthetic data
     industry: str | None = None  # customer industry — steers synthetic data
     ls_workspace: str | None = None  # workspace to pull Hub prompts from (matches trace routing)
