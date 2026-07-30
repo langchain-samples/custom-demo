@@ -40,9 +40,9 @@ jobs:
           enable-cache: true
       # Installs deps + dev tools (ruff, ty, pytest) into .venv; uv provides Python 3.14.
       - run: uv sync
-      - run: uv run ruff check dashboard_agent scripts
-      - run: uv run ruff format --check dashboard_agent scripts
-      - run: uv run ty check dashboard_agent scripts
+      - run: uv run ruff check dashboard_agent scripts evals
+      - run: uv run ruff format --check dashboard_agent scripts evals
+      - run: uv run ty check dashboard_agent scripts evals
       # Import smoke: catches broken imports (e.g. a removed tool still referenced).
       # graph.py eagerly builds the graph at import (build_graph -> require_anthropic_key),
       # so a placeholder key is needed. It is only constructed, never called — no API hit.
