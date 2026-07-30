@@ -202,6 +202,26 @@ async def cleanup(request):
     return JSONResponse({"deleted": deleted, "failed": failed})
 
 
+async def trace_url(request):
+    """Resolve the LangSmith trace URL for a run (for the debug link on answers).
+
+    GET ?run_id=<uuid>[&workspace=<id>]: returns {url}. The run traced to the
+    assistant's workspace, so scope the lookup there. Keeps the LangSmith key
+    server-side (the SPA only ever gets the resolved URL).
+    """
+    run_id = request.query_params.get("run_id")
+    if not run_id:
+        return JSONResponse({"error": "run_id is required"}, status_code=400)
+    try:
+        client = _scoped_client(request.query_params.get("workspace"))
+        url = getattr(client.read_run(run_id), "url", None)
+        if not url:
+            return JSONResponse({"error": "no url for run"}, status_code=404)
+        return JSONResponse({"url": url})
+    except Exception as exc:
+        return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+
+
 async def tools(request):
     """List the selectable tool catalogue (labels, groups, defaults).
 
@@ -222,5 +242,6 @@ app = Starlette(
         Route("/hub-prompts", hub_prompts, methods=["GET"]),
         Route("/agents", agents, methods=["GET"]),
         Route("/cleanup", cleanup, methods=["POST"]),
+        Route("/trace-url", trace_url, methods=["GET"]),
     ]
 )

@@ -522,6 +522,18 @@ export async function cleanupAssistantArtifacts(
   }
 }
 
+/**
+ * Resolve the LangSmith trace URL for a run (the debug link under an answer).
+ * Server-side lookup so the LangSmith key never reaches the client.
+ */
+export async function getTraceUrl(runId: string, workspace?: string): Promise<string> {
+  const qs = new URLSearchParams({ run_id: runId, ...(workspace ? { workspace } : {}) });
+  const res = await fetch(`${getApiBase()}/trace-url?${qs}`, { headers: apiHeaders() });
+  const d = (await res.json().catch(() => ({}))) as { url?: string; error?: string };
+  if (!res.ok || !d.url) throw new Error(d.error || `HTTP ${res.status}`);
+  return d.url;
+}
+
 /* ---------------------- Workspaces / projects / prompts ------------------ */
 
 /** List LangSmith workspaces (GET /workspaces). Empty on failure. */
