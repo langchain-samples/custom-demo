@@ -88,24 +88,38 @@ _prompt_override: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 def _hub_system_prompt(request: ModelRequest) -> str:
     """Inject the system prompt for each model call from the Hub-sourced text.
 
-    Precedence: a per-run pulled value (set by run/run_stream) > an inline
-    `prompt` from runtime context > a Context Hub `agent_repo` (its AGENTS.md) >
-    the assistant's `prompt_name` from Prompt Hub > the configured default.
+    Precedence for our base prompt: a per-run pulled value (set by run/run_stream)
+    > an inline `prompt` from runtime context > a Context Hub `agent_repo` (its
+    AGENTS.md) > the assistant's `prompt_name` from Prompt Hub > the default.
+
+    Context Hub assistants COMPOSE this with deepagents' middleware-built system
+    prompt (`request.system_prompt`) rather than discarding it: that prompt carries
+    the SkillsMiddleware catalogue, the filesystem/todo instructions, and anything
+    memory injects, all of which a plain override would throw away (which is why
+    skills went un-listed and the agent denied it could write files). Our prompt
+    goes LAST so its persona, dashboard workflow, and failure-mode clause stay
+    authoritative. Prompt Hub / default assistants keep the clean, scoped prompt
+    (no deepagents base, no filesystem) exactly as before.
     """
+    agent_repo = _ctx(request.runtime, "agent_repo")
     override = _prompt_override.get()
     if override is not None:
         base = override
     else:
         inline = _ctx(request.runtime, "prompt")
         workspace = _ctx(request.runtime, "ls_workspace")
-        agent_repo = _ctx(request.runtime, "agent_repo")
         if inline:
             base = inline
         elif agent_repo:
             base = pull_agent_prompt(agent_repo, workspace=workspace)
         else:
             base = pull_system_prompt(_ctx(request.runtime, "prompt_name"), workspace=workspace)
-    return base + _capability_note(request.runtime)
+    ours = base + _capability_note(request.runtime)
+    if agent_repo:
+        framework = request.system_prompt or ""
+        if framework:
+            return f"{framework}\n\n{ours}"
+    return ours
 
 
 def _capability_note(runtime) -> str:
@@ -118,32 +132,22 @@ def _capability_note(runtime) -> str:
 
     Returns "" for the default selection, so the common path is byte-identical to
     before (no prompt-cache churn, no behaviour change for existing assistants).
-    """
-    # Context Hub assistants (agent_repo set) mount that repo as a real, persistent
-    # filesystem, so their file tools (write_file/read_file/...) are genuine
-    # capabilities the assistant should use ("save this for later" persists to the
-    # repo). Prompt Hub assistants get only the in-state scratch filesystem, which
-    # we keep them scoped away from for the demo.
-    has_files = bool(_ctx(runtime, "agent_repo"))
-    files_note = (
-        "\n\nFILES: You can persist and recall information with your file tools "
-        "(`write_file`, `read_file`, plus `ls`/`glob`/`grep`), backed by your Context Hub "
-        "knowledge store. Files you save stay available in later conversations. When the user "
-        "asks to save, note, or recall something, USE these tools. Never say you cannot save files."
-        if has_files
-        else ""
-    )
 
+    Note: Context Hub assistants get their filesystem instructions from deepagents'
+    base prompt (composed in by _hub_system_prompt), so no explicit file-tool note
+    is needed here.
+    """
     raw = _ctx(runtime, "enabled_tools")
     if raw is None:
-        return files_note
+        return ""
     allowed = allowed_tool_names(raw)
     lines = guidance_for(allowed)
     if not lines:
-        return files_note
-    # A directive ("use only these"), not a factual claim ("these are the only
-    # tools that exist"): the runtime also binds deepagents' scratch-file tools,
-    # which we deliberately keep the assistant scoped away from for the demo.
+        return ""
+    # A directive ("use these"), not a factual claim ("these are the only tools
+    # that exist"): the runtime also binds deepagents' scratch-file tools, which
+    # Prompt Hub assistants are kept scoped away from (their prompt never mentions
+    # them). Context Hub assistants intentionally do get them, via the base prompt.
     note = "\n\nAVAILABLE CAPABILITIES (use these tools to serve the user):\n" + "\n".join(
         f"- {line}" for line in lines
     )
@@ -169,7 +173,7 @@ def _capability_note(runtime) -> str:
             "answer briefly — do not run a data search or build widgets first, and never say "
             "the request is off-topic."
         )
-    return note + files_note
+    return note
 
 
 # Per-run model override. When an assistant's context sets `model`, swap the LLM

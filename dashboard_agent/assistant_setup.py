@@ -492,35 +492,18 @@ def push_agent_prompt(workspace: str, repo: str, text: str, skill_links: dict | 
         raise
 
 
-# Appended to a Context Hub agent's AGENTS.md, right after the AVAILABLE SKILLS
-# catalogue (see _skills_catalogue). We bake the catalogue into the prompt text
-# ourselves rather than relying on deepagents' SkillsMiddleware: its injected
-# catalogue is overwritten by our dynamic system prompt (agent._hub_system_prompt
-# replaces request.system_prompt), so the model would otherwise never see the skill
-# list and could only discover skills by running `ls /skills` at runtime.
+# Appended to a Context Hub agent's AGENTS.md. deepagents' SkillsMiddleware injects
+# a skill catalogue (each skill's name, description, and SKILL.md path) plus
+# progressive-disclosure guidance into the system prompt, which agent.py now
+# composes in (see _hub_system_prompt) instead of discarding. This clause just
+# enforces that the model acts on that catalogue before falling back to datasearch.
 _SKILLS_CLAUSE = (
-    "\n\nSKILLS (IMPORTANT): At the START of every request, FIRST check the AVAILABLE SKILLS "
-    "listed above (each with its description and SKILL.md path). If the request matches one, you "
-    "MUST read that skill's SKILL.md at the given path and follow its steps before doing anything "
-    "else (including before calling datasearch). Only skip the skills when none match. Never "
-    "improvise a procedure a skill already covers."
+    "\n\nSKILLS (IMPORTANT): At the START of every request, FIRST check your available skills "
+    "(their names, descriptions, and SKILL.md paths are listed above). If the request matches "
+    "one, you MUST read that skill's SKILL.md at the given path and follow its steps before doing "
+    "anything else (including before calling datasearch). Only skip the skills when none match. "
+    "Never improvise a procedure a skill already covers."
 )
-
-
-def _skills_catalogue(skills) -> str:
-    """An AVAILABLE SKILLS section for AGENTS.md: name, description, SKILL.md path.
-
-    Baked into the prompt so the model always sees its skill list (see the note on
-    _SKILLS_CLAUSE). `skills` are the skill dicts that were actually linked.
-    """
-    items = [
-        f"- `{name}`: {sk.get('description', '').strip()} (read /skills/{name}/SKILL.md)"
-        for sk in (skills or [])
-        if (name := sk.get("name"))
-    ]
-    if not items:
-        return ""
-    return "\n\nAVAILABLE SKILLS (read the matching SKILL.md before acting):\n" + "\n".join(items)
 
 
 # Curated (non-LLM) skill carrying the dashboard-building workflow. Pushed for
@@ -714,11 +697,7 @@ def prepare_assistant(payload: dict) -> dict:
         # they mount under /skills/. Tell the prompt to consult them.
         skill_links = push_workflow_skills(workspace, slug, customer, ctxhub_skills)
         skill_repos = sorted(set(skill_links.values()))  # for cleanup on delete
-        # Bake a catalogue of the skills that actually linked into AGENTS.md, so the
-        # model always sees its skill list (see _skills_catalogue / _SKILLS_CLAUSE).
-        linked_names = {path.split("/", 1)[1] for path in skill_links}
-        catalogue = _skills_catalogue([s for s in ctxhub_skills if s.get("name") in linked_names])
-        agents_md = ctxhub_text + catalogue + (_SKILLS_CLAUSE if skill_links else "")
+        agents_md = ctxhub_text + (_SKILLS_CLAUSE if skill_links else "")
         prompt_urls["system"] = push_agent_prompt(
             workspace, repo, agents_md, skill_links=skill_links
         )
