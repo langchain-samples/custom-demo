@@ -45,7 +45,18 @@ export interface AssistantMetadata {
   demo_brief?: string[];
   /** Recommended demo-flow steps shown alongside the brief. */
   demo_flow?: string[];
+  /** Handles of the LangSmith artifacts this assistant created, for cascade cleanup on delete. */
+  ls_artifacts?: LsArtifacts;
   [key: string]: unknown;
+}
+
+/** LangSmith artifacts a setup run created; deleted together when the assistant is removed. */
+export interface LsArtifacts {
+  workspace?: string;
+  project?: string;
+  prompt_name?: string;
+  agent_repo?: string;
+  skills?: string[];
 }
 
 /** A server-side assistant: a stored configuration instance of the graph. */
@@ -488,6 +499,27 @@ export async function deleteAssistant(id: string): Promise<void> {
     headers: apiHeaders(),
   });
   if (!res.ok && res.status !== 204) throw await errorFrom(res);
+}
+
+/**
+ * Best-effort cascade delete of the LangSmith artifacts a setup run created
+ * (trace project, Prompt/Context Hub repo, linked skills). Never throws — a
+ * cleanup failure must not block deleting the assistant record itself. Returns
+ * the server's per-artifact report so callers can surface partial failures.
+ */
+export async function cleanupAssistantArtifacts(
+  refs: LsArtifacts,
+): Promise<{ deleted: string[]; failed: { artifact: string; error: string }[] }> {
+  try {
+    const res = await fetch(`${getApiBase()}/cleanup`, {
+      method: "POST",
+      headers: apiHeaders(),
+      body: JSON.stringify(refs),
+    });
+    return await res.json();
+  } catch {
+    return { deleted: [], failed: [] };
+  }
 }
 
 /* ---------------------- Workspaces / projects / prompts ------------------ */
