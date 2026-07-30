@@ -53,6 +53,29 @@ _FS_AGENT_REPO = f"{_SLUG}-fs-agent"
 _MARKER = "RET-9-ALPHA"  # a token only the skill knows — proves the skill was applied
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _cleanup_fixture_repos():
+    """Delete the fixed fixture repos after the module runs so they don't accumulate.
+
+    The repos are re-pushed idempotently at the start of each test, so deleting
+    them here leaves the workspace clean between runs. Best-effort: skipped
+    silently if the key lacks delete permission (older org keys could not delete).
+    """
+    yield
+    from dashboard_agent.assistant_setup import _ws_client
+
+    client = _ws_client(_WS)
+    for repo in (_AGENT_REPO, _FS_AGENT_REPO):
+        try:
+            client.delete_agent(repo)
+        except Exception:
+            pass
+    try:
+        client.delete_skill(f"{_SLUG}-returns-eligibility-skill")
+    except Exception:
+        pass
+
+
 def _invoke(agent, question: str, *, repo: str, thread_id: str):
     """Invoke against a Context Hub agent repo, tolerating transient Anthropic 529s."""
     ctx = Context(
