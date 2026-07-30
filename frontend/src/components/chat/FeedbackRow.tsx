@@ -4,8 +4,8 @@
  * re-sent, reusing the returned feedback_id. Ported from `renderFeedback()`.
  */
 import { useRef, useState } from "react";
-import { IconThumbUp, IconThumbDown } from "@tabler/icons-react";
-import { postFeedback } from "@/lib/api";
+import { IconThumbUp, IconThumbDown, IconExternalLink } from "@tabler/icons-react";
+import { postFeedback, getTraceUrl } from "@/lib/api";
 
 type StatusKind = "" | "ok" | "err";
 
@@ -57,6 +57,21 @@ export function FeedbackRow({ runId, workspace }: { runId: string; workspace?: s
     "flex cursor-pointer items-center rounded-lg border bg-panel-2 px-2 py-1 " +
     (sel ? "border-brand bg-brand/15 text-brand" : "border-border text-muted-foreground hover:border-brand hover:text-foreground");
 
+  // Open the run's LangSmith trace for debugging. Open a blank tab synchronously
+  // (so the click isn't blocked as a popup), then redirect it once the server
+  // resolves the URL; close it and flag an error if the lookup fails.
+  const openTrace = () => {
+    const w = window.open("", "_blank");
+    getTraceUrl(runId, workspace)
+      .then((url) => {
+        if (w) w.location.href = url;
+      })
+      .catch((e) => {
+        if (w) w.close();
+        setStatus({ text: "trace: " + (e as Error).message, kind: "err" });
+      });
+  };
+
   return (
     <div className="-mt-1 flex flex-wrap items-center gap-1.5 self-start text-[13px] text-muted-foreground">
       <span className="mr-0.5">Was this helpful?</span>
@@ -65,6 +80,15 @@ export function FeedbackRow({ runId, workspace }: { runId: string; workspace?: s
       </button>
       <button type="button" aria-label="Not helpful" className={btn(score === 0)} onClick={() => pick(0)}>
         <IconThumbDown size={15} />
+      </button>
+      <button
+        type="button"
+        aria-label="Open trace"
+        title="Open this run's trace in LangSmith"
+        className={btn(false)}
+        onClick={openTrace}
+      >
+        <IconExternalLink size={15} />
       </button>
       {status.text && (
         <span
