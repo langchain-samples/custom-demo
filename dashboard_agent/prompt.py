@@ -182,15 +182,52 @@ def data_prompt_for_gap(gap: str) -> str:
     return build_data_prompt(gap)
 
 
+# The dashboard-building workflow. Inlined in the system prompt for Prompt Hub
+# assistants (dashboard="inline"); Context Hub assistants instead carry a curated
+# `dashboard` skill (see assistant_setup.DASHBOARD_SKILL) and the prompt points to
+# it (dashboard="skill"), keeping the base prompt lean and demonstrating skills.
+_DASHBOARD_WORKFLOW = """When a question calls for figures you can chart (and dashboards are available), follow this workflow:
+1. Gather grounded data: call `datasearch` (retry with different terms if the first results miss).
+2. Build a dashboard by calling `push_widget` SEVERAL times: 2-4 `kpi` cards for headline numbers, at least one chart \
+(`bar`/`line`/`pie`), a `table` when there is a natural list, and a final `text` "Key findings" widget (3-5 bullets). \
+Use ONLY numbers returned by the tools. Pre-format KPI values (e.g. "2.4M", "68%"). Pick chart types sensibly. \
+STYLE: prefer charts with TWO series, e.g. a grouped `bar` comparing two related measures/segments (this year vs last, \
+plan vs actual, two cohorts) or a `line` with two trend lines; they render in the brand's primary AND secondary colors \
+and look best. Only when a genuine second series exists in the data; never invent one to fill the slot.
+3. Only AFTER all widgets are pushed, write a concise final answer that summarizes the findings and cites the source(s). \
+Your FINAL message MUST be this written summary. Do NOT narrate your plan and do NOT write prose before the widgets."""
+
+# The lean replacement used when the workflow lives in the `dashboard` skill: point
+# the model at the skill rather than spelling the steps out inline.
+_DASHBOARD_SKILL_POINTER = """When a question calls for figures you can chart (and dashboards are available), build a \
+live dashboard: FIRST read your `dashboard` skill (SKILL.md under /skills/dashboard/) and follow its \
+widget-composition and styling steps, THEN call `push_widget`. Do not improvise the dashboard layout."""
+
+# Exposed so the setup flow can push the identical workflow as a curated skill.
+DASHBOARD_SKILL_DESCRIPTION = (
+    "Use when a question calls for chartable figures and dashboards are available: builds a live, "
+    "data-rich dashboard (KPI cards, charts, an optional table, and a key-findings summary)."
+)
+DASHBOARD_SKILL_INSTRUCTIONS = _DASHBOARD_WORKFLOW
+
+
 def build_system_prompt(
-    customer: str = "", industry: str = "", failure_mode: str = "none", use_case: str = ""
+    customer: str = "",
+    industry: str = "",
+    failure_mode: str = "none",
+    use_case: str = "",
+    dashboard: str = "inline",
 ) -> str:
     """A fixed, customer-templated agent system prompt (just a couple of variables).
 
     Deterministic — the setup flow fills in customer/industry/use_case rather than
     having an LLM write a fresh prompt each time. `failure_mode` selects which
     behavioral clause is appended (grounded by default; see FAILURE_MODES).
+    `dashboard`: "inline" spells the dashboard workflow out in the prompt (Prompt
+    Hub); "skill" replaces it with a pointer to the curated `dashboard` skill
+    (Context Hub).
     """
+    workflow = _DASHBOARD_WORKFLOW if dashboard != "skill" else _DASHBOARD_SKILL_POINTER
     who = (
         f"You are {customer}'s AI assistant"
         + (f", a {industry} organization" if industry else "")
@@ -216,16 +253,7 @@ prose plus structured figures. It is your system of record. This assistant may h
 the AVAILABLE CAPABILITIES list appended below (when present) is authoritative for what you can do. Use whichever tool \
 fits the request the user actually made.
 
-When a question calls for figures you can chart (and dashboards are available), follow this workflow:
-1. Gather grounded data: call `datasearch` (retry with different terms if the first results miss).
-2. Build a dashboard by calling `push_widget` SEVERAL times: 2-4 `kpi` cards for headline numbers, at least one chart \
-(`bar`/`line`/`pie`), a `table` when there is a natural list, and a final `text` "Key findings" widget (3-5 bullets). \
-Use ONLY numbers returned by the tools. Pre-format KPI values (e.g. "2.4M", "68%"). Pick chart types sensibly. \
-STYLE: prefer charts with TWO series, e.g. a grouped `bar` comparing two related measures/segments (this year vs last, \
-plan vs actual, two cohorts) or a `line` with two trend lines; they render in the brand's primary AND secondary colors \
-and look best. Only when a genuine second series exists in the data; never invent one to fill the slot.
-3. Only AFTER all widgets are pushed, write a concise final answer that summarizes the findings and cites the source(s). \
-Your FINAL message MUST be this written summary. Do NOT narrate your plan and do NOT write prose before the widgets.
+{workflow}
 
 For questions about the customer's data, including specific lookups about orders, returns, accounts, or store \
 inventory, reach for `datasearch` to retrieve the relevant records rather than assuming you cannot access them: it is \
