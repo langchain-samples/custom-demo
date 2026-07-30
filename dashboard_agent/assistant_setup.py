@@ -492,15 +492,35 @@ def push_agent_prompt(workspace: str, repo: str, text: str, skill_links: dict | 
         raise
 
 
-# Appended to a Context Hub agent's AGENTS.md so the model actually consults its
-# skills (deepagents injects the skill catalogue; this tells it to act on it).
+# Appended to a Context Hub agent's AGENTS.md, right after the AVAILABLE SKILLS
+# catalogue (see _skills_catalogue). We bake the catalogue into the prompt text
+# ourselves rather than relying on deepagents' SkillsMiddleware: its injected
+# catalogue is overwritten by our dynamic system prompt (agent._hub_system_prompt
+# replaces request.system_prompt), so the model would otherwise never see the skill
+# list and could only discover skills by running `ls /skills` at runtime.
 _SKILLS_CLAUSE = (
-    "\n\nSKILLS (IMPORTANT): You have reusable skills under `/skills/` (their names and "
-    "descriptions are listed for you). At the START of every request, FIRST check whether it "
-    "matches one of your skills. If it does, you MUST read that skill's SKILL.md and follow its "
-    "steps before doing anything else (including before calling datasearch). Only skip the skills "
-    "when none match the request. Never improvise a procedure a skill already covers."
+    "\n\nSKILLS (IMPORTANT): At the START of every request, FIRST check the AVAILABLE SKILLS "
+    "listed above (each with its description and SKILL.md path). If the request matches one, you "
+    "MUST read that skill's SKILL.md at the given path and follow its steps before doing anything "
+    "else (including before calling datasearch). Only skip the skills when none match. Never "
+    "improvise a procedure a skill already covers."
 )
+
+
+def _skills_catalogue(skills) -> str:
+    """An AVAILABLE SKILLS section for AGENTS.md: name, description, SKILL.md path.
+
+    Baked into the prompt so the model always sees its skill list (see the note on
+    _SKILLS_CLAUSE). `skills` are the skill dicts that were actually linked.
+    """
+    items = [
+        f"- `{name}`: {sk.get('description', '').strip()} (read /skills/{name}/SKILL.md)"
+        for sk in (skills or [])
+        if (name := sk.get("name"))
+    ]
+    if not items:
+        return ""
+    return "\n\nAVAILABLE SKILLS (read the matching SKILL.md before acting):\n" + "\n".join(items)
 
 
 # Curated (non-LLM) skill carrying the dashboard-building workflow. Pushed for
@@ -515,9 +535,16 @@ DASHBOARD_SKILL = {
 
 
 def _skill_md(name: str, description: str, instructions: str) -> str:
-    """A spec-compliant SKILL.md: YAML frontmatter (name == mount dir) + body."""
+    """A spec-compliant SKILL.md: YAML frontmatter (name == mount dir) + body.
+
+    The description is emitted as a double-quoted YAML scalar: descriptions often
+    contain a colon (e.g. "Use when ...: builds ..."), which as a bare scalar makes
+    the YAML parser read it as a nested mapping and SkillsMiddleware then silently
+    skips the whole skill.
+    """
     title = name.replace("-", " ").title()
-    return f"---\nname: {name}\ndescription: {description}\n---\n\n# {title}\n\n{instructions}\n"
+    desc = description.replace("\\", "\\\\").replace('"', '\\"')
+    return f'---\nname: {name}\ndescription: "{desc}"\n---\n\n# {title}\n\n{instructions}\n'
 
 
 def push_workflow_skills(workspace: str, slug: str, customer: str, skills) -> dict:
@@ -687,7 +714,11 @@ def prepare_assistant(payload: dict) -> dict:
         # they mount under /skills/. Tell the prompt to consult them.
         skill_links = push_workflow_skills(workspace, slug, customer, ctxhub_skills)
         skill_repos = sorted(set(skill_links.values()))  # for cleanup on delete
-        agents_md = ctxhub_text + (_SKILLS_CLAUSE if skill_links else "")
+        # Bake a catalogue of the skills that actually linked into AGENTS.md, so the
+        # model always sees its skill list (see _skills_catalogue / _SKILLS_CLAUSE).
+        linked_names = {path.split("/", 1)[1] for path in skill_links}
+        catalogue = _skills_catalogue([s for s in ctxhub_skills if s.get("name") in linked_names])
+        agents_md = ctxhub_text + catalogue + (_SKILLS_CLAUSE if skill_links else "")
         prompt_urls["system"] = push_agent_prompt(
             workspace, repo, agents_md, skill_links=skill_links
         )
