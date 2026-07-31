@@ -79,6 +79,10 @@ def _rt(**ctx):
 def _install_client(monkeypatch, client=None):
     client = client or _FakeClient()
     monkeypatch.setenv("DA_SANDBOX", "1")
+    # `_get_or_create_sandbox` short-circuits to None when no LangSmith key is set
+    # (CI has none — this avoids a real network attempt). Tests that exercise the
+    # sandbox path must supply a placeholder so the FAKE client below is reached.
+    monkeypatch.setenv("LANGSMITH_API_KEY", "test-key")
     monkeypatch.setattr(A, "SandboxClient", lambda **kw: client)
     return client
 
@@ -135,6 +139,9 @@ def test_available_seeds_synthetic_data_once_on_create(monkeypatch):
 
 def test_client_failure_falls_back_to_statebackend(monkeypatch):
     monkeypatch.setenv("DA_SANDBOX", "1")
+    monkeypatch.setenv(
+        "LANGSMITH_API_KEY", "test-key"
+    )  # reach the client (its raise), not the no-key guard
 
     def _boom(**_):
         raise RuntimeError("sandbox service not enabled")
@@ -143,6 +150,19 @@ def test_client_failure_falls_back_to_statebackend(monkeypatch):
     backend = A._backend_for(_rt(customer="Eval Co"))
     assert isinstance(backend, StateBackend)
     assert supports_execution(backend) is False
+
+
+def test_no_langsmith_key_skips_sandbox(monkeypatch):
+    # No LangSmith credentials (e.g. CI) → skip the sandbox cleanly, no network
+    # attempt — even with DA_SANDBOX on and a client installed.
+    monkeypatch.setenv("DA_SANDBOX", "1")
+    monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
+    monkeypatch.delenv("LS_CROSS_WORKSPACE_KEY", raising=False)
+    client = _FakeClient()
+    monkeypatch.setattr(A, "SandboxClient", lambda **kw: client)
+    backend = A._backend_for(_rt(customer="Eval Co"))
+    assert isinstance(backend, StateBackend)
+    assert client.created == []
 
 
 def test_env_kill_switch_disables_sandbox(monkeypatch):
