@@ -151,10 +151,10 @@ def _sandbox_note(runtime) -> str:
     return (
         "\n\nCODE EXECUTION: You have an isolated Linux VM with an `execute` tool. A prepared "
         "dataset is waiting at /workspace/data/ — start by running `ls /workspace/data` and "
-        "loading it. To add libraries, install with "
-        "`pip install --break-system-packages <packages>` (the system Python is externally "
-        "managed, so a bare `pip install` will refuse) — e.g. pandas, numpy, statsmodels. Run "
-        "Python for analysis or forecasting and read/write files there. When you produce a result "
+        "loading it. pandas, numpy, and statsmodels are already installed. To add more libraries, "
+        "install with `pip install --break-system-packages <packages>` (the system Python is "
+        "externally managed, so a bare `pip install` will refuse). Run Python for analysis or "
+        "forecasting and read/write files there. When you produce a result "
         "worth showing (a forecast, a breakdown), visualize it with `push_widget`, don't only "
         "describe it."
     )
@@ -322,10 +322,16 @@ def _import_sandbox_client() -> Any:
 # Module-level, monkeypatchable name (tests swap this for a fake); None ⇒ no sandbox.
 SandboxClient: Any = _import_sandbox_client()
 
-# Deterministic synthetic dataset seeded into a fresh VM (pure stdlib, so seeding
-# never depends on a library being pre-installed): 24 months of sales with a trend
-# and seasonality, so a forecast has real signal to work with.
-_SEED_SCRIPT = """mkdir -p /workspace/data && python3 - <<'PY'
+# Prepared once when a fresh VM is created:
+#   1. pre-install the data-analysis stack so the first forecast turn is instant
+#      (the system Python is externally managed → --break-system-packages; a bare
+#      `pip install` refuses). Best-effort: `|| true` so a slow/failed install never
+#      blocks the dataset write — the agent can still install on demand.
+#   2. write a deterministic synthetic dataset with pure stdlib (no dependency on
+#      the install above): 24 months of sales with a trend + seasonality, so a
+#      forecast has real signal.
+_SEED_SCRIPT = """pip install --break-system-packages -q pandas numpy statsmodels >/dev/null 2>&1 || true
+mkdir -p /workspace/data && python3 - <<'PY'
 import csv, math
 rows = []
 for i in range(24):
