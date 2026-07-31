@@ -561,6 +561,37 @@ def push_workflow_skills(workspace: str, slug: str, customer: str, skills) -> di
     return links
 
 
+def push_skills_bundle(workspace: str, slug: str, customer: str, skills) -> str:
+    """Push all of an assistant's skills into ONE Context Hub repo, at its ROOT.
+
+    Files are `"<name>/SKILL.md"` (root layout) so the repo can be mounted at
+    `/skills/` at runtime via a plain CompositeBackend route: the composite strips
+    the mount prefix, and root-layout keys have no `skills/` prefix to lose (a repo
+    that keeps skills under `skills/`, like an agent repo, would be served from the
+    wrong subtree). Every assistant gets one, so skills are decoupled from where the
+    prompt is stored (Prompt Hub vs Context Hub). Idempotent (a re-push of identical
+    content is treated as success). Returns the repo handle, or "" if no valid skills.
+    """
+    from langsmith.schemas import FileEntry
+
+    files: dict = {}
+    for sk in skills or []:
+        name = sk.get("name") or ""
+        if not name or not sk.get("instructions"):
+            continue
+        files[f"{name}/SKILL.md"] = FileEntry(content=_skill_md(name, sk.get("description", ""), sk["instructions"]))
+    if not files:
+        return ""
+    repo = f"{slug}-skills"
+    try:
+        _ws_client(workspace).push_agent(repo, files=files, description=f"{customer} skills")
+    except Exception as e:
+        msg = str(e).lower()
+        if not ("nothing to commit" in msg or "409" in msg or "conflict" in msg):
+            raise
+    return repo
+
+
 # Tools whose runtime path goes through a human-in-the-loop review interrupt.
 _HITL_TOOLS = {"draft_email", "suggest_meeting_times"}
 
@@ -667,63 +698,62 @@ def prepare_assistant(payload: dict) -> dict:
     else:
         context["enabled_tools"] = sorted(DEFAULT_ENABLED)
     prompt_urls: dict = {}
-
-    # Always give the assistant a fixed, customer-templated system prompt (reliable
-    # setup — no per-customer prompt writing). failure_mode selects the clause.
-    sys_text = build_system_prompt(customer, industry, failure_mode=failure_mode, use_case=use_case)
-    # Where the prompt is sourced from: Prompt Hub (default) or the Context Hub
-    # (as an agent repo's AGENTS.md). Legacy inline is used only when not pushing.
+    # Where the PROMPT is stored: Prompt Hub (default) or the Context Hub (as an
+    # agent repo's AGENTS.md). Legacy inline is used only when not pushing. Skills
+    # are independent of this choice (see below).
     prompt_source = str(payload.get("prompt_source") or "prompt_hub")
-    skill_repos: list[str] = []  # Context Hub skill repo handles, for cleanup on delete
+
+    # Skills are UNIVERSAL — every assistant gets them (the CH/PH choice only picks
+    # where the prompt is stored). Assemble the LLM's per-customer workflow skills,
+    # plus the curated `dashboard` skill (the widget-building workflow) when
+    # push_widget is enabled. With the dashboard skill present the prompt points at
+    # it (dashboard="skill") instead of inlining the workflow.
+    skills = list(analysis.get("skills") or [])
+    dashboard_mode = "inline"
+    if "push_widget" in context["enabled_tools"]:
+        skills = [DASHBOARD_SKILL, *skills]
+        dashboard_mode = "skill"
+
+    # Push all skills into ONE root-layout bundle repo; agent._backend_for mounts it
+    # at /skills/ for every assistant (independent of prompt storage).
+    skills_repo = push_skills_bundle(workspace, slug, customer, skills) if push else ""
+    if skills_repo:
+        context["skills_repo"] = skills_repo
+
+    # The system prompt: customer-templated (failure_mode selects the clause), with
+    # the skills clause appended so the model consults its skills first. Same text
+    # regardless of where it's stored.
+    prompt_text = build_system_prompt(
+        customer, industry, failure_mode=failure_mode, use_case=use_case, dashboard=dashboard_mode
+    ) + (_SKILLS_CLAUSE if skills_repo else "")
+
     if push and prompt_source == "context_hub":
         repo = f"{slug}-agent"
-        # Skills to push: the LLM's per-customer workflows, plus a curated
-        # `dashboard` skill (the widget-building workflow) when push_widget is on.
-        # With the dashboard skill present, the prompt points at it instead of
-        # inlining the workflow (dashboard="skill"); otherwise keep it inline.
-        ctxhub_skills = list(analysis.get("skills") or [])
-        dashboard_mode = "inline"
-        if "push_widget" in context["enabled_tools"]:
-            ctxhub_skills = [DASHBOARD_SKILL, *ctxhub_skills]
-            dashboard_mode = "skill"
-        ctxhub_text = build_system_prompt(
-            customer,
-            industry,
-            failure_mode=failure_mode,
-            use_case=use_case,
-            dashboard=dashboard_mode,
-        )
-        # Auto-generate a skill repo per skill and link them into the agent repo so
-        # they mount under /skills/. Tell the prompt to consult them.
-        skill_links = push_workflow_skills(workspace, slug, customer, ctxhub_skills)
-        skill_repos = sorted(set(skill_links.values()))  # for cleanup on delete
-        agents_md = ctxhub_text + (_SKILLS_CLAUSE if skill_links else "")
-        prompt_urls["system"] = push_agent_prompt(
-            workspace, repo, agents_md, skill_links=skill_links
-        )
+        prompt_urls["system"] = push_agent_prompt(workspace, repo, prompt_text)
         context["agent_repo"] = repo
     elif push:
         name = f"{slug}-system"
-        prompt_urls["system"] = push_prompt(workspace, name, sys_text)
+        prompt_urls["system"] = push_prompt(workspace, name, prompt_text)
         context["prompt_name"] = name
     else:
-        context["prompt"] = sys_text
+        context["prompt"] = prompt_text
 
     # Every created assistant invents customer-relevant data (the bundled
     # humanitarian corpus is only the default when no assistant is configured).
     context["dataset"] = "synthetic"
 
-    # Quick actions. For a Context Hub assistant, prefer skill-invoking questions so
-    # clicking a quick action demonstrates a skill (each skill's example_question);
-    # otherwise use the LLM's persona questions. Falls back to personas if the skills
+    # Quick actions. Every assistant now has skills, so prefer skill-invoking
+    # questions (each skill's example_question) so clicking a quick action
+    # demonstrates a skill; fall back to the LLM's persona questions when the skills
     # carry no example questions.
     skill_actions = []
-    if prompt_source == "context_hub":
-        for sk in analysis.get("skills") or []:
-            q = sk.get("example_question")
-            if q:
-                skill_actions.append({"label": sk["name"].replace("-", " ").title(), "question": q})
-    base_actions = skill_actions or actions
+    for sk in analysis.get("skills") or []:
+        q = sk.get("example_question")
+        if q:
+            skill_actions.append({"label": sk["name"].replace("-", " ").title(), "question": q})
+    # Lead with skill-invoking actions (they demo a skill), then top up with the
+    # LLM's persona questions so there are always enough to fill the 2–3 slots.
+    base_actions = skill_actions + actions
 
     if failure_mode_needs_gap(failure_mode):
         # The mode fabricates/errs over a planted gap: withhold a customer-specific
@@ -782,7 +812,10 @@ def prepare_assistant(payload: dict) -> dict:
             "project": context.get("ls_project", ""),
             "prompt_name": context.get("prompt_name", ""),
             "agent_repo": context.get("agent_repo", ""),
-            "skills": skill_repos,
+            # The skills bundle is an agent-type repo → deleted via delete_agent, not
+            # delete_skill. `skills` remains for legacy per-skill repos (unused now).
+            "skills_repo": skills_repo,
+            "skills": [],
         },
     }
     # Presenter brief + recommended flow, surfaced in a popup once setup finishes.

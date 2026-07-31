@@ -16,7 +16,9 @@ dependencies = [
     "langchain-core>=1.4.0",
     "langchain-anthropic>=1.4.3",
     "langgraph>=1.2.1",
-    "langsmith>=0.8.3",
+    # [sandbox] extra: the SandboxClient behind the agent's code-execution VM
+    # (deepagents LangSmithSandbox backend).
+    "langsmith[sandbox]>=0.10",
     # auth.py (loaded by the deployment) uses langgraph_sdk.Auth
     "langgraph-sdk>=0.1",
     "pydantic>=2.13.4",

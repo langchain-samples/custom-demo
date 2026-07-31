@@ -22,7 +22,12 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from deepagents import create_deep_agent
-from deepagents.backends import ContextHubBackend, StateBackend
+from deepagents.backends import (
+    CompositeBackend,
+    ContextHubBackend,
+    LangSmithSandbox,
+    StateBackend,
+)
 from langchain.agents.middleware import (
     AgentMiddleware,
     ModelRequest,
@@ -62,6 +67,7 @@ class Context:
     prompt: str | None = None  # inline system prompt text (preferred over prompt_name)
     prompt_name: str | None = None  # system prompt in Prompt Hub
     agent_repo: str | None = None  # Context Hub agent repo whose AGENTS.md is the prompt
+    skills_repo: str | None = None  # Context Hub skills-bundle repo mounted at /skills/ (all assistants)
     dataset: str | None = None  # "humanitarian" | "synthetic"
     data_model: str | None = None  # model id for the synthetic data backend
     data_prompt_name: str | None = None  # data-source prompt in Prompt Hub
@@ -98,8 +104,10 @@ def _hub_system_prompt(request: ModelRequest) -> str:
     memory injects, all of which a plain override would throw away (which is why
     skills went un-listed and the agent denied it could write files). Our prompt
     goes LAST so its persona, dashboard workflow, and failure-mode clause stay
-    authoritative. Prompt Hub / default assistants keep the clean, scoped prompt
-    (no deepagents base, no filesystem) exactly as before.
+    authoritative. This now fires for ANY assistant that has skills (`skills_repo`)
+    or a Context Hub repo (`agent_repo`) — skills only surface if the middleware
+    catalogue reaches the model. Legacy assistants with neither keep the clean,
+    scoped prompt (no deepagents base, no filesystem) exactly as before.
     """
     agent_repo = _ctx(request.runtime, "agent_repo")
     override = _prompt_override.get()
@@ -114,12 +122,40 @@ def _hub_system_prompt(request: ModelRequest) -> str:
             base = pull_agent_prompt(agent_repo, workspace=workspace)
         else:
             base = pull_system_prompt(_ctx(request.runtime, "prompt_name"), workspace=workspace)
-    ours = base + _capability_note(request.runtime)
-    if agent_repo:
+    ours = base + _capability_note(request.runtime) + _sandbox_note(request.runtime)
+    # Compose deepagents' middleware-built prompt (SkillsMiddleware catalogue,
+    # filesystem/execute instructions, memory) whenever the assistant actually has
+    # those capabilities — i.e. it mounts skills (`skills_repo`) or a Context Hub
+    # repo (`agent_repo`). Our prompt goes LAST so its persona/workflow/failure-mode
+    # clause stays authoritative. Legacy assistants with neither keep the clean,
+    # scoped prompt exactly as before.
+    if agent_repo or _ctx(request.runtime, "skills_repo"):
         framework = request.system_prompt or ""
         if framework:
             return f"{framework}\n\n{ours}"
     return ours
+
+
+def _sandbox_note(runtime) -> str:
+    """Tell the model it has a code-execution VM and a prepared dataset.
+
+    deepagents already injects its own execution + host-path prompt when the
+    `execute` tool is live; this is a thin, demo-specific pointer to the seeded
+    data and the analyse-then-visualize workflow. Gated on the same `DA_SANDBOX`
+    flag as the backend so it stays off when the sandbox is disabled.
+    """
+    if os.getenv("DA_SANDBOX", "1") == "0":
+        return ""
+    return (
+        "\n\nCODE EXECUTION: You have an isolated Linux VM with an `execute` tool. A prepared "
+        "dataset is waiting at /workspace/data/ — start by running `ls /workspace/data` and "
+        "loading it. To add libraries, install with "
+        "`pip install --break-system-packages <packages>` (the system Python is externally "
+        "managed, so a bare `pip install` will refuse) — e.g. pandas, numpy, statsmodels. Run "
+        "Python for analysis or forecasting and read/write files there. When you produce a result "
+        "worth showing (a forecast, a breakdown), visualize it with `push_widget`, don't only "
+        "describe it."
+    )
 
 
 def _capability_note(runtime) -> str:
@@ -253,21 +289,148 @@ def _ctxhub_client(workspace: str | None) -> Client:
     return Client(api_key=key, api_url=api_url, workspace_id=workspace or None)
 
 
+# --- code-execution sandbox (an isolated Linux VM behind the `execute` tool) ---
+#
+# The agent's default backend is a LangSmith sandbox VM: it gives the model the
+# `execute` tool plus a real filesystem, so it can pip-install pandas/numpy, run
+# analysis/forecasts, and write outputs. deepagents only offers `execute` when the
+# CompositeBackend's *default* is a sandbox (execute is not path-routable), so the
+# sandbox is the default and Context Hub `/skills/` is a route on top.
+#
+# The backend factory is resolved on every model call and every filesystem/execute
+# tool call with no caching upstream, so we cache the VM ourselves, keyed by a
+# stable per-assistant id (assistant-scoped: concurrent users of one assistant
+# share a warm VM). Idle VMs self-reap via the sandbox TTL.
+_SANDBOX_CACHE: dict[str, Any] = {}
+
+
+def _import_sandbox_client() -> Any:
+    """The langsmith `SandboxClient`, or None if the `[sandbox]` extra is absent.
+
+    Imported inside a function so a missing extra can never break graph load.
+    """
+    try:
+        from langsmith.sandbox import SandboxClient
+
+        return SandboxClient
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# Module-level, monkeypatchable name (tests swap this for a fake); None ⇒ no sandbox.
+SandboxClient: Any = _import_sandbox_client()
+
+# Deterministic synthetic dataset seeded into a fresh VM (pure stdlib, so seeding
+# never depends on a library being pre-installed): 24 months of sales with a trend
+# and seasonality, so a forecast has real signal to work with.
+_SEED_SCRIPT = """mkdir -p /workspace/data && python3 - <<'PY'
+import csv, math
+rows = []
+for i in range(24):
+    year, month = 2024 + i // 12, i % 12 + 1
+    trend = 100000 + i * 3500
+    seasonal = 1 + 0.18 * math.sin((month - 1) / 12 * 2 * math.pi)
+    revenue = round(trend * seasonal)
+    units = round(revenue / (42 + 0.05 * i))
+    rows.append((f"{year}-{month:02d}", revenue, units))
+with open("/workspace/data/sales.csv", "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["month", "revenue_usd", "units"])
+    w.writerows(rows)
+print("seeded", len(rows), "rows -> /workspace/data/sales.csv")
+PY"""
+
+
+def _slug(text: str) -> str:
+    """A DNS-ish sandbox-name slug from an arbitrary id."""
+    out = "".join(c if c.isalnum() else "-" for c in text.lower()).strip("-")
+    return out or "default"
+
+
+def _sandbox_key(runtime) -> str:
+    """Stable per-assistant cache/VM key (assistant-scoped)."""
+    return _ctx(runtime, "agent_repo") or _ctx(runtime, "customer") or "default"
+
+
+def _seed_data(backend: Any) -> None:
+    """Best-effort: prepare the synthetic dataset inside a freshly created VM."""
+    try:
+        backend.execute(_SEED_SCRIPT)
+    except Exception:  # noqa: BLE001 - a seed failure must not fail the run
+        pass
+
+
+def _get_or_create_sandbox(runtime) -> Any | None:
+    """A warm LangSmith sandbox for this assistant, or None if unavailable.
+
+    Reuses a cached VM, then a VM surviving a restart (matched by name), else
+    creates one and seeds it with data. Any failure — no entitlement, no network,
+    or `DA_SANDBOX=0` — returns None so `_backend_for` degrades to StateBackend.
+    """
+    if SandboxClient is None or os.getenv("DA_SANDBOX", "1") == "0":
+        return None
+    if not (os.getenv("LANGSMITH_API_KEY") or os.getenv("LS_CROSS_WORKSPACE_KEY")):
+        return None  # no credentials → skip cleanly, no network attempt
+    key = _sandbox_key(runtime)
+    cached = _SANDBOX_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        client = SandboxClient(api_key=os.getenv("LANGSMITH_API_KEY") or None)
+        name = f"da-{_slug(key)}"
+        raw = next((s for s in client.list_sandboxes() if getattr(s, "name", None) == name), None)
+        created = raw is None
+        if raw is None:
+            raw = client.create_sandbox(
+                name=name, idle_ttl_seconds=3600, delete_after_stop_seconds=3600
+            )
+        backend = LangSmithSandbox(raw)
+        if created:
+            _seed_data(backend)
+        _SANDBOX_CACHE[key] = backend
+        return backend
+    except Exception:  # noqa: BLE001 - never hard-fail a run on sandbox trouble
+        return None
+
+
 def _backend_for(runtime):
     """Per-run filesystem backend (a deepagents BackendFactory).
 
-    A Context Hub assistant (context.agent_repo set) mounts that agent repo, whose
-    `/skills/` subtree surfaces its linked skill repos to the model; everyone else
-    uses the default in-state scratch filesystem. Best-effort: any failure building
-    the Hub backend falls back to StateBackend so a run never hard-fails.
+    One `CompositeBackend`: the sandbox VM is the **default** (so `execute` is
+    offered — it is not path-routable, deepagents keys it off the default), and the
+    assistant's Context Hub skills-bundle repo is mounted at `/skills/` (live,
+    read/write). The bundle stores each skill at its ROOT (`<name>/SKILL.md`) so the
+    plain route works — the composite strips the `/skills/` prefix, and the repo's
+    keys have no `skills/` prefix to lose. Every assistant gets skills this way,
+    independent of whether its prompt lives in Prompt Hub or Context Hub.
+
+    Degrades gracefully:
+    - sandbox unavailable (`DA_SANDBOX=0`, no entitlement, no network) → StateBackend
+      default (no `execute`); skills still mount if present.
+    - no skills + no sandbox → plain StateBackend (exactly today's default).
+    - Back-compat: an old Context Hub assistant has `agent_repo` but no `skills_repo`
+      — its skills live under the agent repo's `/skills/` subtree, which can't be
+      prefix-routed, so mount the whole repo as before (no execute) rather than
+      regress its skills. New assistants set `skills_repo` and get both.
     """
-    repo = _ctx(runtime, "agent_repo")
-    if not repo:
-        return StateBackend()
-    try:
-        return ContextHubBackend(repo, client=_ctxhub_client(_ctx(runtime, "ls_workspace")))
-    except Exception:
-        return StateBackend()
+    skills_repo = _ctx(runtime, "skills_repo")
+    agent_repo = _ctx(runtime, "agent_repo")
+    ws = _ctx(runtime, "ls_workspace")
+    if agent_repo and not skills_repo:
+        try:
+            return ContextHubBackend(agent_repo, client=_ctxhub_client(ws))
+        except Exception:  # noqa: BLE001
+            return StateBackend()
+
+    sandbox = _get_or_create_sandbox(runtime)
+    default = sandbox if sandbox is not None else StateBackend()
+    routes: dict[str, Any] = {}
+    if skills_repo:
+        try:
+            routes["/skills/"] = ContextHubBackend(skills_repo, client=_ctxhub_client(ws))
+        except Exception:  # noqa: BLE001 - skills are best-effort; the VM still works
+            routes = {}
+    return CompositeBackend(default=default, routes=routes) if routes else default
 
 
 def _build(model: str | None, checkpointer):

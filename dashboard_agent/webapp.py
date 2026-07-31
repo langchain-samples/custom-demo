@@ -196,7 +196,13 @@ async def cleanup(request):
     )
     _try("prompt", body.get("prompt_name"), lambda: client.delete_prompt(body["prompt_name"]))
     _try("agent", body.get("agent_repo"), lambda: client.delete_agent(body["agent_repo"]))
-    for skill in body.get("skills") or []:
+    # The skills bundle is an agent-type repo (push_agent) → delete_agent, not delete_skill.
+    _try(
+        "skills bundle",
+        body.get("skills_repo"),
+        lambda: client.delete_agent(body["skills_repo"]),
+    )
+    for skill in body.get("skills") or []:  # legacy per-skill repos
         _try("skill", skill, lambda s=skill: client.delete_skill(s))
 
     return JSONResponse({"deleted": deleted, "failed": failed})
