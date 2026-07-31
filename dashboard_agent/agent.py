@@ -356,9 +356,21 @@ def _slug(text: str) -> str:
     return out or "default"
 
 
+def _sandbox_key_from(agent_repo: str | None, customer: str | None) -> str:
+    """The cache/VM key for an assistant: agent_repo, else customer, else default."""
+    return agent_repo or customer or "default"
+
+
 def _sandbox_key(runtime) -> str:
     """Stable per-assistant cache/VM key (assistant-scoped)."""
-    return _ctx(runtime, "agent_repo") or _ctx(runtime, "customer") or "default"
+    return _sandbox_key_from(_ctx(runtime, "agent_repo"), _ctx(runtime, "customer"))
+
+
+def _sandbox_enabled() -> bool:
+    """Whether a sandbox can be built at all (extra present, flag on, creds set)."""
+    if SandboxClient is None or os.getenv("DA_SANDBOX", "1") == "0":
+        return False
+    return bool(os.getenv("LANGSMITH_API_KEY") or os.getenv("LS_CROSS_WORKSPACE_KEY"))
 
 
 def _seed_data(backend: Any) -> None:
@@ -369,18 +381,13 @@ def _seed_data(backend: Any) -> None:
         pass
 
 
-def _get_or_create_sandbox(runtime) -> Any | None:
-    """A warm LangSmith sandbox for this assistant, or None if unavailable.
+def _ensure_sandbox(key: str) -> Any | None:
+    """Get/reattach/create the sandbox VM named for `key`, caching + seeding once.
 
-    Reuses a cached VM, then a VM surviving a restart (matched by name), else
-    creates one and seeds it with data. Any failure — no entitlement, no network,
-    or `DA_SANDBOX=0` — returns None so `_backend_for` degrades to StateBackend.
+    Reuses the process cache, then a VM surviving a restart / made by another
+    replica or the pre-warm step (matched by name), else creates + seeds one. Any
+    failure returns None so callers degrade to StateBackend.
     """
-    if SandboxClient is None or os.getenv("DA_SANDBOX", "1") == "0":
-        return None
-    if not (os.getenv("LANGSMITH_API_KEY") or os.getenv("LS_CROSS_WORKSPACE_KEY")):
-        return None  # no credentials → skip cleanly, no network attempt
-    key = _sandbox_key(runtime)
     cached = _SANDBOX_CACHE.get(key)
     if cached is not None:
         return cached
@@ -400,6 +407,30 @@ def _get_or_create_sandbox(runtime) -> Any | None:
         return backend
     except Exception:  # noqa: BLE001 - never hard-fail a run on sandbox trouble
         return None
+
+
+def _get_or_create_sandbox(runtime) -> Any | None:
+    """The warm sandbox for this run's assistant, or None if unavailable."""
+    if not _sandbox_enabled():
+        return None
+    return _ensure_sandbox(_sandbox_key(runtime))
+
+
+def prewarm_sandbox(agent_repo: str | None = None, customer: str | None = None) -> None:
+    """Create + seed an assistant's VM ahead of its first chat (fire-and-forget).
+
+    Called from assistant setup so the ~30s VM boot + data seed happens in the
+    background at provisioning instead of blocking the user's first message. Keyed
+    exactly like the runtime (agent_repo → customer), so the first turn reattaches
+    the same warm VM by name rather than creating a second one. Best-effort: a
+    no-op when the sandbox is disabled/unavailable, and never raises.
+    """
+    if not _sandbox_enabled():
+        return
+    try:
+        _ensure_sandbox(_sandbox_key_from(agent_repo, customer))
+    except Exception:  # noqa: BLE001 - provisioning must never fail on a warm-up
+        pass
 
 
 def _backend_for(runtime):
