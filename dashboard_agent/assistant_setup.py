@@ -744,6 +744,22 @@ def prepare_assistant(payload: dict) -> dict:
     # humanitarian corpus is only the default when no assistant is configured).
     context["dataset"] = "synthetic"
 
+    # Pre-warm the assistant's code-execution VM in the BACKGROUND, so the ~30s VM
+    # boot + data seed happens now (at provisioning) instead of blocking the user's
+    # first message. Fire-and-forget on a daemon thread so setup returns immediately;
+    # keyed like the runtime (agent_repo → customer) so the first turn reattaches the
+    # same warm VM. No-op when the sandbox is disabled/unavailable.
+    if push:
+        import threading
+
+        from .agent import prewarm_sandbox
+
+        threading.Thread(
+            target=prewarm_sandbox,
+            kwargs={"agent_repo": context.get("agent_repo"), "customer": customer},
+            daemon=True,
+        ).start()
+
     # Quick actions. Every assistant now has skills, so prefer skill-invoking
     # questions (each skill's example_question) so clicking a quick action
     # demonstrates a skill; fall back to the LLM's persona questions when the skills

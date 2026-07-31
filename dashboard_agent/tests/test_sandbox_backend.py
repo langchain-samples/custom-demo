@@ -179,6 +179,39 @@ def test_env_kill_switch_disables_sandbox(monkeypatch):
     assert client.created == []  # never even constructed a VM
 
 
+# --- pre-warm at provisioning: create+seed up front so the first chat is warm ---
+
+
+def test_prewarm_creates_and_seeds_then_runtime_reuses(monkeypatch):
+    client = _install_client(monkeypatch)
+    A.prewarm_sandbox(customer="Eval Co")
+    assert len(client.created) == 1  # VM created at provisioning time
+    # The agent runtime is a different process → its cache is empty; it must still
+    # reattach the pre-warmed VM by name rather than create/seed a second one.
+    A._SANDBOX_CACHE.clear()
+    backend = A._backend_for(_rt(customer="Eval Co"))
+    assert isinstance(backend, LangSmithSandbox)  # warm VM, execute available
+    assert len(client.created) == 1  # reattached by name, not recreated
+    seeds = [c for sb in client.existing for c in sb.runs if "sales.csv" in c]
+    assert len(seeds) == 1  # seeded once (at pre-warm), not again on the first turn
+
+
+def test_prewarm_uses_agent_repo_precedence(monkeypatch):
+    # Runtime keys on agent_repo (else customer); pre-warm must match so it warms
+    # the SAME named VM the runtime will later reattach.
+    client = _install_client(monkeypatch)
+    A.prewarm_sandbox(agent_repo="acme-agent", customer="Acme")
+    assert client.created == ["da-acme-agent"]  # agent_repo wins over customer
+
+
+def test_prewarm_noop_when_disabled(monkeypatch):
+    client = _FakeClient()
+    monkeypatch.setenv("DA_SANDBOX", "0")
+    monkeypatch.setattr(A, "SandboxClient", lambda **kw: client)
+    A.prewarm_sandbox(customer="Eval Co")
+    assert client.created == []  # kill switch respected — no VM at provisioning
+
+
 # --- back-compat: old Context Hub assistant (agent_repo, no skills_repo) ---
 
 
