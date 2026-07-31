@@ -136,7 +136,7 @@ def test_available_seeds_data_stack_and_dataset_once(monkeypatch):
     assert "sales.csv" in seed  # dataset written to the VM
     # the data-analysis stack is pre-installed so the first forecast turn is instant
     assert "pip install" in seed
-    assert "pandas" in seed and "numpy" in seed and "statsmodels" in seed
+    assert "pandas" in seed and "numpy" in seed and "statsmodels" in seed and "scikit-learn" in seed
 
 
 # --- unavailable / disabled → StateBackend, no execute ---

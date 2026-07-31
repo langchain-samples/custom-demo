@@ -151,7 +151,8 @@ def _sandbox_note(runtime) -> str:
     return (
         "\n\nCODE EXECUTION: You have an isolated Linux VM with an `execute` tool. A prepared "
         "dataset is waiting at /workspace/data/ — start by running `ls /workspace/data` and "
-        "loading it. pandas, numpy, and statsmodels are already installed. To add more libraries, "
+        "loading it. pandas, numpy, statsmodels, and scikit-learn are already installed. To add more "
+        "libraries, "
         "install with `pip install --break-system-packages <packages>` (the system Python is "
         "externally managed, so a bare `pip install` will refuse). Run Python for analysis or "
         "forecasting and read/write files there. When you produce a result "
@@ -330,7 +331,7 @@ SandboxClient: Any = _import_sandbox_client()
 #   2. write a deterministic synthetic dataset with pure stdlib (no dependency on
 #      the install above): 24 months of sales with a trend + seasonality, so a
 #      forecast has real signal.
-_SEED_SCRIPT = """pip install --break-system-packages -q pandas numpy statsmodels >/dev/null 2>&1 || true
+_SEED_SCRIPT = """pip install --break-system-packages -q pandas numpy statsmodels scikit-learn >/dev/null 2>&1 || true
 mkdir -p /workspace/data && python3 - <<'PY'
 import csv, math
 rows = []
