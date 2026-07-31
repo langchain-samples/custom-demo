@@ -232,7 +232,6 @@ export default function App() {
               setWidgets((prev) => [...prev, w]);
               setHasDashboard(true);
             }}
-            onResetDashboard={() => setWidgets([])}
             guard={guard}
             resetKey={resetKey}
             logo={logo}

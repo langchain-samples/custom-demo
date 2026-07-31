@@ -42,10 +42,9 @@ export interface ChatPanelProps {
    * so it reflects the latest settings. An empty object is sent as no context.
    */
   getRunContext: () => RunContext;
-  /** Receives each widget as it flushes (progressive), for the dashboard pane. */
+  /** Receives each widget as it flushes (progressive), for the dashboard pane.
+   *  Widgets accumulate across turns; the dashboard is cleared only by New Chat. */
   onWidget: (widget: Widget) => void;
-  /** Called at the start of every send so the dashboard pane can clear itself. */
-  onResetDashboard?: () => void;
   /**
    * Send guard, run before every send. Return an error string to BLOCK the send
    * (rendered as an assistant message; App opens settings as a side effect) or
@@ -111,7 +110,6 @@ export default function ChatPanel({
   presets = [],
   getRunContext,
   onWidget,
-  onResetDashboard,
   guard,
   resetKey,
   logo,
@@ -191,10 +189,6 @@ export default function ChatPanel({
     let runId: string | null = null;
     let errorMsg: string | null = null;
     let interrupt: ReviewInterrupt | null = null;
-    // Clear the previous dashboard only when THIS run produces its first widget —
-    // not at send time — so a text-only follow-up leaves the existing dashboard up
-    // instead of wiping it. A resume (HITL continuation) never clears.
-    let dashboardCleared = false;
 
     const syncChips = () =>
       patchItem(activityId, (it) =>
@@ -207,11 +201,10 @@ export default function ChatPanel({
       const w = wLatest[id];
       if (w && !wFlushed.has(id) && widgetLooksComplete(w)) {
         wFlushed.add(id);
-        // First widget of a fresh (non-resume) run replaces the old dashboard.
-        if (!isResume && !dashboardCleared) {
-          onResetDashboard?.();
-          dashboardCleared = true;
-        }
+        // Widgets ACCUMULATE across turns — the dashboard is a persistent canvas for
+        // the whole conversation, cleared only by New Chat / assistant switch. So an
+        // "add a chart" follow-up appends (both charts stay), matching what the agent
+        // tells the user, and a text-only turn leaves the dashboard untouched.
         onWidget(w);
         if (!answer) setBubble({ text: "Building your dashboard…" });
       }
