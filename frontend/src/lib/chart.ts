@@ -8,6 +8,7 @@ import type { ChartConfiguration } from "chart.js";
 import type { Widget, ChartWidget } from "./api";
 import type { Theme } from "./theme";
 import { resolveColor } from "./branding";
+import { alignSeries } from "./chartAlign";
 
 /**
  * Categorical series palette used only when there is no DOM to resolve tokens
@@ -82,34 +83,18 @@ export function chartConfig(
     } as ChartConfiguration;
   }
 
-  // Category axis = the UNION of every series' point labels (first-seen order),
-  // and each series is aligned to it BY LABEL, with nulls where it has no point.
-  // Aligning by array index instead would left-align a shorter series (e.g. a
-  // 4-point forecast plotted onto 2017–2020 instead of its real 2026–2029 years).
-  const labels: string[] = [];
-  const seen = new Set<string>();
-  for (const s of series) {
-    for (const p of s.points || []) {
-      if (!seen.has(p.label)) {
-        seen.add(p.label);
-        labels.push(p.label);
-      }
-    }
-  }
-  const datasets = series.map((s, i) => {
-    const byLabel = new Map((s.points || []).map((p) => [p.label, p.value]));
-    return {
-      label: s.name,
-      data: labels.map((l) => (byLabel.has(l) ? (byLabel.get(l) as number) : null)),
-      backgroundColor: w.type === "line" ? "transparent" : pal[i % pal.length],
-      borderColor: pal[i % pal.length],
-      borderWidth: 2,
-      fill: false,
-      tension: 0.3,
-      pointRadius: 3,
-      spanGaps: false, // don't bridge a series across labels it doesn't cover
-    };
-  });
+  const { labels, data: aligned } = alignSeries(series);
+  const datasets = series.map((s, i) => ({
+    label: s.name,
+    data: aligned[i],
+    backgroundColor: w.type === "line" ? "transparent" : pal[i % pal.length],
+    borderColor: pal[i % pal.length],
+    borderWidth: 2,
+    fill: false,
+    tension: 0.3,
+    pointRadius: 3,
+    spanGaps: false, // don't bridge a series across labels it doesn't cover
+  }));
 
   return {
     type: w.type,
