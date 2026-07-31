@@ -4,8 +4,8 @@
  * result arrives the chip becomes clickable to reveal the raw result. Ported
  * from the original `toolChip()` DOM builder.
  */
-import { useState } from "react";
-import { IconChevronDown, IconChevronRight } from "@tabler/icons-react";
+import { useEffect, useRef, useState } from "react";
+import { IconChevronDown, IconChevronRight, IconLoader2 } from "@tabler/icons-react";
 import { toolMeta } from "./helpers";
 import { hasToolCard, renderToolResult } from "./ToolResultCard";
 
@@ -36,6 +36,20 @@ export function ToolChip({ chip }: { chip: ChipData }) {
   const m = toolMeta(chip.name);
   const Icon = m.icon;
   const hasResult = chip.result !== null;
+
+  // While a tool is running (no result yet) show a live spinner + elapsed seconds,
+  // so a long `execute` (pip install, a forecast script) visibly ticks instead of
+  // looking frozen. The counter starts when the chip first renders (~tool-call time).
+  const startRef = useRef<number>(Date.now());
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (hasResult) return;
+    const t = setInterval(
+      () => setElapsed(Math.floor((Date.now() - startRef.current) / 1000)),
+      1000,
+    );
+    return () => clearInterval(t);
+  }, [hasResult]);
   const arg = chip.arg || "";
   const argText = arg.length > 120 ? arg.slice(0, 120) + "…" : arg;
   // null when there's no renderer for this tool, or the payload is off-shape.
@@ -57,11 +71,19 @@ export function ToolChip({ chip }: { chip: ChipData }) {
             {argText}
           </code>
         )}
-        <span
-          className="ml-auto flex items-center"
-          style={{ visibility: hasResult ? "visible" : "hidden" }}
-        >
-          {open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
+        <span className="ml-auto flex items-center gap-1.5">
+          {!hasResult ? (
+            <>
+              {elapsed >= 2 && (
+                <span className="tabular-nums text-[11px] text-muted-foreground">{elapsed}s</span>
+              )}
+              <IconLoader2 size={14} className="animate-spin opacity-70" />
+            </>
+          ) : open ? (
+            <IconChevronDown size={14} />
+          ) : (
+            <IconChevronRight size={14} />
+          )}
         </span>
       </div>
       {hasResult && open && (
