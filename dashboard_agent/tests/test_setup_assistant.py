@@ -28,6 +28,7 @@ def _analysis(**over):
                 "description": "Use when a shopper asks about returns.",
                 "instructions": "Cite the 30-day window.",
                 "example_question": "Can I return this?",
+                "action_label": "Shopper: Returns",
             }
         ],
         "data_gap": "customer satisfaction scores",
@@ -161,6 +162,38 @@ def test_no_failure_mode_has_no_gap_and_three_grounded_actions(rec, monkeypatch)
     out = _prep(monkeypatch, _analysis(), failure_mode="none")
     assert "data_gap" not in out["context"]
     assert len(out["metadata"]["actions"]) == 3
+
+
+# --- every quick-action label reads as '<Persona>: <gist>' ---
+
+
+def test_all_quick_action_labels_are_persona_formatted(rec, monkeypatch):
+    actions = _prep(monkeypatch, _analysis())["metadata"]["actions"]
+    assert actions
+    assert all(":" in a["label"] for a in actions)  # persona chip is consistent
+
+
+def test_skill_action_uses_llm_action_label(rec, monkeypatch):
+    actions = _prep(monkeypatch, _analysis())["metadata"]["actions"]
+    assert any(a["label"] == "Shopper: Returns" for a in actions)  # LLM label used verbatim
+
+
+def test_label_without_persona_is_normalized(rec, monkeypatch):
+    # A skill lacking action_label falls back to its name and still gets a persona
+    # prefix, so the format holds no matter what the LLM returned.
+    a = _analysis(
+        skills=[
+            {
+                "name": "stock-lookup",
+                "description": "d",
+                "instructions": "i",
+                "example_question": "in stock?",
+            }
+        ]
+    )
+    labels = [x["label"] for x in _prep(monkeypatch, a)["metadata"]["actions"]]
+    assert all(":" in label for label in labels)
+    assert "Customer: Stock Lookup" in labels
 
 
 # --- deterministic no-em-dash rule (#6) ---
