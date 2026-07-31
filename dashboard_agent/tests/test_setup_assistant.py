@@ -41,7 +41,7 @@ def _analysis(**over):
 @pytest.fixture
 def rec(monkeypatch):
     """Mock the LLM + every network push; record what got pushed."""
-    calls = {"skills": None, "agent_prompt": None, "prompt": None}
+    calls = {"bundle": None, "agent_prompt": None, "prompt": None}
     monkeypatch.setattr(
         S,
         "fetch_brand",
@@ -54,15 +54,11 @@ def rec(monkeypatch):
         },
     )
 
-    def _skills(ws, slug, customer, skills):
-        calls["skills"] = list(skills or [])
-        return {
-            f"skills/{s['name']}": f"{slug}-{s['name']}-skill"
-            for s in (skills or [])
-            if s.get("name")
-        }
+    def _bundle(ws, slug, customer, skills):
+        calls["bundle"] = list(skills or [])
+        return f"{slug}-skills" if skills else ""
 
-    monkeypatch.setattr(S, "push_workflow_skills", _skills)
+    monkeypatch.setattr(S, "push_skills_bundle", _bundle)
 
     def _agent(ws, repo, md, skill_links=None):
         calls["agent_prompt"] = {"repo": repo, "md": md, "links": skill_links}
@@ -92,8 +88,12 @@ def test_prompt_hub_sets_prompt_name_not_agent_repo(rec, monkeypatch):
     ctx = _prep(monkeypatch, _analysis())["context"]
     assert ctx.get("prompt_name") == "acme-co-system"
     assert "agent_repo" not in ctx
+    # Skills are universal — even a Prompt Hub assistant gets a skills bundle mounted.
+    assert ctx.get("skills_repo") == "acme-co-skills"
     assert rec["prompt"] is not None
     assert rec["agent_prompt"] is None
+    # ...and its prompt carries the skills clause (so the mounted skills get used).
+    assert "SKILLS (IMPORTANT)" in rec["prompt"]["text"]
 
 
 def test_context_hub_sets_agent_repo_and_points_at_skill(rec, monkeypatch):
@@ -101,18 +101,20 @@ def test_context_hub_sets_agent_repo_and_points_at_skill(rec, monkeypatch):
     ctx = out["context"]
     assert ctx.get("agent_repo") == "acme-co-agent"
     assert "prompt_name" not in ctx
+    assert ctx.get("skills_repo") == "acme-co-skills"  # skills come from the bundle, not the repo
     md = rec["agent_prompt"]["md"]
     # Dashboard workflow is a pointer to the skill, not inlined; skills clause present.
     assert "read your `dashboard` skill" in md
     assert "SKILLS (IMPORTANT)" in md
 
 
-# --- dashboard skill pushed for Context Hub (#8) ---
+# --- skills are universal: same bundle regardless of prompt storage (#8) ---
 
 
-def test_context_hub_pushes_dashboard_and_llm_skills(rec, monkeypatch):
-    _prep(monkeypatch, _analysis(), prompt_source="context_hub")
-    names = [s["name"] for s in rec["skills"]]
+def test_skills_bundle_is_universal_dashboard_and_llm_skills(rec, monkeypatch):
+    # Default prompt_source is Prompt Hub — the bundle must STILL be pushed.
+    _prep(monkeypatch, _analysis())
+    names = [s["name"] for s in rec["bundle"]]
     assert names[0] == "dashboard"  # curated dashboard skill prepended
     assert "returns-check" in names  # plus the LLM's workflow skill
 
@@ -125,8 +127,8 @@ def test_metadata_records_ls_artifacts_manifest(rec, monkeypatch):
     assert art["workspace"] == "ws1"
     assert art["project"] == "Acme Co"  # ls_project == customer name
     assert art["agent_repo"] == "acme-co-agent"
-    assert "acme-co-dashboard-skill" in art["skills"]
-    assert "acme-co-returns-check-skill" in art["skills"]
+    assert art["skills_repo"] == "acme-co-skills"  # bundle repo, deleted via delete_agent
+    assert art["skills"] == []  # legacy per-skill list, unused now
 
 
 # --- tool selection (#4) ---

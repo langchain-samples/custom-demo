@@ -70,6 +70,21 @@ def test_prompt_hub_prompt_excludes_deepagents_base(monkeypatch):
     assert "## Filesystem" not in sp  # filesystem tools NOT advertised
 
 
+def test_skills_repo_prompt_composes_deepagents_base(monkeypatch):
+    # A Prompt-Hub/inline assistant that has skills (skills_repo) must ALSO compose
+    # the framework prompt — otherwise the SkillsMiddleware catalogue is discarded
+    # and the model never learns its skills exist.
+    ctx = Context(
+        prompt=_INLINE,
+        skills_repo="acme-skills",
+        dataset="synthetic",
+        enabled_tools=["datasearch", "push_widget"],
+    )
+    sp = _capture(monkeypatch, ctx)
+    assert "INLINE_MARKER" in sp  # our prompt still present + authoritative
+    assert "You are a deep agent" in sp  # framework composed in ⇒ skills catalogue reaches model
+
+
 def test_context_hub_prompt_composes_deepagents_base(monkeypatch):
     # Context Hub assistant (agent_repo set): our prompt is APPENDED to the base.
     ctx = Context(

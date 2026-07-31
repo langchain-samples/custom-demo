@@ -56,6 +56,7 @@ export interface LsArtifacts {
   project?: string;
   prompt_name?: string;
   agent_repo?: string;
+  skills_repo?: string;
   skills?: string[];
 }
 

@@ -70,15 +70,40 @@ Python dependencies are managed with **uv** (`pyproject.toml` + `uv.lock`, `.pyt
 - **Tools come from two independent sources.** deepagents *always* installs its own —
   `write_todos`, the filesystem set (`ls`, `read_file`, `write_file`, `edit_file`, `glob`,
   `grep`) and `task` — because `TodoListMiddleware`/`FilesystemMiddleware` are unconditional
-  and a default general-purpose subagent is auto-added. (`execute` is auto-filtered out since
-  the default `StateBackend` isn't a sandbox.) On top of those sits **our catalogue**
-  (`tools/registry.py`), which is the only part an assistant can select from.
+  and a default general-purpose subagent is auto-added. `execute` is now offered too — the
+  agent's default backend is a code-execution sandbox VM (see **Code execution** below). On top
+  of those sits **our catalogue** (`tools/registry.py`), which is the only part an assistant
+  can select from.
 - Middleware: `ConfigurableModel` (swap LLM from `context.model`), `_hub_system_prompt`
   (`@dynamic_prompt` — pulls the prompt fresh per question, then appends the enabled
   capabilities), the registry's `ToolCallLimitMiddleware` instances (`datasearch` is capped at
   1 call/run — extra searches mask the planted gap), and `ToolSelection` **last**.
 - Model is `ChatAnthropic` with `thinking={"type":"disabled"}` — Sonnet 5's default extended
   thinking breaks the deep-agent tool loop on follow-up turns.
+
+**Code execution (sandbox) + universal skills.** `_backend_for` builds ONE `CompositeBackend`:
+the **default** is an isolated LangSmith sandbox VM (so the model gets an `execute` tool + a real
+filesystem — `pip install --break-system-packages pandas numpy`, run analysis/forecasts, write
+outputs, then chart via `push_widget`), and `/skills/` is **routed to the assistant's Context Hub
+skills-bundle repo** (live read/write). Two deepagents constraints force this shape:
+- `execute` is offered only when the `CompositeBackend`'s *default* is a sandbox (execute isn't
+  path-routable) — so the sandbox must be the default.
+- a composite route strips its prefix, so the mounted skills repo must store skills at its **root**
+  (`<name>/SKILL.md`), not under `skills/`. Hence a dedicated per-assistant `*-skills` bundle repo
+  (see `assistant_setup.push_skills_bundle`), not the agent repo.
+
+**Skills are universal**: every assistant gets a `*-skills` bundle regardless of whether its prompt
+lives in Prompt Hub or Context Hub (that choice is only about prompt storage). `context.skills_repo`
+names the bundle; `context.agent_repo` (if set) only holds the prompt's AGENTS.md. For skills to
+reach the model, `_hub_system_prompt` composes deepagents' middleware prompt (the SkillsMiddleware
+catalogue + filesystem/execute instructions) whenever `skills_repo` or `agent_repo` is set.
+
+The VM is **assistant-scoped and cached** (`_SANDBOX_CACHE`), since the backend factory is resolved
+on every model/tool call; idle VMs self-reap via TTL, and a fresh VM is seeded with a synthetic
+24-month `sales.csv` at `/workspace/data/`. Degrades gracefully: no `[sandbox]` extra, no
+`LANGSMITH_API_KEY`, or `DA_SANDBOX=0` → StateBackend default (no `execute`), skills still mount.
+**Back-compat:** a pre-existing Context Hub assistant has `agent_repo` but no `skills_repo`; it
+keeps the whole-repo `ContextHubBackend` (skills under its `skills/`, no execute) until recreated.
 
 **The tool catalogue** (`tools/registry.py`). One `ToolSpec` table drives the settings UI
 (`GET /tools`), the run-time filter, and the per-tool call caps. Selection lives in
@@ -138,6 +163,8 @@ collide with a real project of the same name; an explicit `context.ls_project` o
 |---|---|
 | `model` | main agent LLM id |
 | `prompt` / `prompt_name` | inline system prompt (wins) or a Prompt Hub handle |
+| `agent_repo` | Context Hub repo whose AGENTS.md is the prompt (prompt storage only) |
+| `skills_repo` | Context Hub `*-skills` bundle mounted at `/skills/` (all assistants) |
 | `dataset` | `humanitarian` \| `synthetic` |
 | `data_model`, `data_prompt`, `data_prompt_name` | synthetic-backend model + prompt |
 | `data_gap` | the withheld topic (builds a customer-centric data prompt) |
@@ -148,7 +175,9 @@ collide with a real project of the same name; an explicit `context.ls_project` o
 Everything else (middleware, checkpointer, backends, permissions, and the *implementation* of
 any tool) is **locked in code** — matching the plan's security boundary. Assistants pick from a
 vetted catalogue; they cannot introduce a tool, and there is no code path where assistant
-config can select a filesystem/shell backend.
+config can select a filesystem/shell backend. (The default backend is now a LangSmith
+code-execution sandbox — chosen in code by `_backend_for`, still never selectable via config;
+`DA_SANDBOX=0` is the code-side kill switch.)
 
 **Display config lives separately, in the assistant's `metadata`:** `display_name`, `logo`,
 `actions[]`, `theme`, `owner_name`, `customer`, `industry`, plus the brand system —
@@ -314,6 +343,9 @@ cd frontend && npx tsc -b && npx oxlint
 Slow, real-LLM: `test_agent_e2e.py`, `test_hallucination_bug.py`.
 
 **Rules of thumb**
+- **Changing agent behavior is spec-first.** Write the failing test/eval before the code — see
+  [docs/agent-development.md](docs/agent-development.md) (the *when-prompted → response → world*
+  checklist and the cheapest-level-that-holds-it rule).
 - Behavior differences between demos → assistant `context` or Prompt Hub. Never a new module.
 - Visual differences → assistant `metadata`. Never a new frontend route.
 - **Adding a capability**: write the tool in `tools/simulated.py`, add a `ToolSpec` row in
