@@ -165,7 +165,6 @@ export default function ChatPanel({
     if (busyRef.current) return;
     if (!isResume && !question) return;
 
-    if (!isResume) onResetDashboard?.();
     busyRef.current = true;
     setBusy(true);
 
@@ -192,6 +191,10 @@ export default function ChatPanel({
     let runId: string | null = null;
     let errorMsg: string | null = null;
     let interrupt: ReviewInterrupt | null = null;
+    // Clear the previous dashboard only when THIS run produces its first widget —
+    // not at send time — so a text-only follow-up leaves the existing dashboard up
+    // instead of wiping it. A resume (HITL continuation) never clears.
+    let dashboardCleared = false;
 
     const syncChips = () =>
       patchItem(activityId, (it) =>
@@ -204,6 +207,11 @@ export default function ChatPanel({
       const w = wLatest[id];
       if (w && !wFlushed.has(id) && widgetLooksComplete(w)) {
         wFlushed.add(id);
+        // First widget of a fresh (non-resume) run replaces the old dashboard.
+        if (!isResume && !dashboardCleared) {
+          onResetDashboard?.();
+          dashboardCleared = true;
+        }
         onWidget(w);
         if (!answer) setBubble({ text: "Building your dashboard…" });
       }
