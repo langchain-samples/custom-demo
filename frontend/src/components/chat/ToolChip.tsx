@@ -17,6 +17,8 @@ export interface ChipData {
   arg: string;
   /** Raw tool result, or null until the matching tool message arrives. */
   result: string | null;
+  /** Set once the run ends so a still-pending chip stops its spinner/timer. */
+  stopped?: boolean;
 }
 
 /** Pretty-print JSON results when possible (matches the original chip). */
@@ -36,20 +38,24 @@ export function ToolChip({ chip }: { chip: ChipData }) {
   const m = toolMeta(chip.name);
   const Icon = m.icon;
   const hasResult = chip.result !== null;
+  // "Running" = no result yet AND the run is still live. Once the run ends
+  // (chip.stopped) a still-pending chip stops spinning/counting instead of ticking
+  // forever — the tool is no longer running, its result just never streamed.
+  const running = !hasResult && !chip.stopped;
 
-  // While a tool is running (no result yet) show a live spinner + elapsed seconds,
-  // so a long `execute` (pip install, a forecast script) visibly ticks instead of
-  // looking frozen. The counter starts when the chip first renders (~tool-call time).
+  // While a tool is running show a live spinner + elapsed seconds, so a long
+  // `execute` (pip install, a forecast script) visibly ticks instead of looking
+  // frozen. The counter starts when the chip first renders (~tool-call time).
   const startRef = useRef<number>(Date.now());
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
-    if (hasResult) return;
+    if (!running) return;
     const t = setInterval(
       () => setElapsed(Math.floor((Date.now() - startRef.current) / 1000)),
       1000,
     );
     return () => clearInterval(t);
-  }, [hasResult]);
+  }, [running]);
   const arg = chip.arg || "";
   const argText = arg.length > 120 ? arg.slice(0, 120) + "…" : arg;
   // null when there's no renderer for this tool, or the payload is off-shape.
@@ -72,18 +78,20 @@ export function ToolChip({ chip }: { chip: ChipData }) {
           </code>
         )}
         <span className="ml-auto flex items-center gap-1.5">
-          {!hasResult ? (
+          {running ? (
             <>
               {elapsed >= 2 && (
                 <span className="tabular-nums text-[11px] text-muted-foreground">{elapsed}s</span>
               )}
               <IconLoader2 size={14} className="animate-spin opacity-70" />
             </>
-          ) : open ? (
-            <IconChevronDown size={14} />
-          ) : (
-            <IconChevronRight size={14} />
-          )}
+          ) : hasResult ? (
+            open ? (
+              <IconChevronDown size={14} />
+            ) : (
+              <IconChevronRight size={14} />
+            )
+          ) : null}
         </span>
       </div>
       {hasResult && open && (

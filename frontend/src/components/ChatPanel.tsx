@@ -216,15 +216,22 @@ export default function ChatPanel({
       if (msg.type === "ai") {
         const tcs = msg.tool_calls || [];
         for (const tc of tcs) {
-          const id = toolCallKey(msg.id, tc);
           const name = tc.name || "";
           const args = tc.args || {};
           if (name === "push_widget") {
+            const id = toolCallKey(msg.id, tc);
             wLatest[id] = widgetFromArgs(args);
             if (!wOrder.includes(id)) wOrder.push(id);
             // Flush every widget except the one still streaming (last in order).
             for (let i = 0; i < wOrder.length - 1; i++) flushWidget(wOrder[i]);
           } else {
+            // A chip MUST be keyed by the real tool_call id so the tool's result
+            // (ToolMessage.tool_call_id) can match and clear its spinner. Skip
+            // partial stream frames that don't carry the id yet — keying a chip on a
+            // fallback would create a phantom that never receives a result and spins
+            // forever (an ever-climbing timer), duplicating the real chip.
+            const id = tc.id;
+            if (!id) continue;
             const summary = chipArgSummary(name, args);
             if (!chipMap[id]) {
               chipMap[id] = { id, name, arg: summary, result: null };
@@ -343,6 +350,14 @@ export default function ChatPanel({
     } finally {
       busyRef.current = false;
       setBusy(false);
+      // The run is over: freeze any chip still without a result so its spinner +
+      // elapsed timer stop (a tool whose result never streamed shouldn't count
+      // forever). No syncChips runs after this, so patching the item is safe.
+      patchItem(activityId, (it) =>
+        it.kind === "activity"
+          ? { ...it, chips: it.chips.map((c) => (c.result === null ? { ...c, stopped: true } : c)) }
+          : it,
+      );
     }
   };
 
