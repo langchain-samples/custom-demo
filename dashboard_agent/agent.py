@@ -67,7 +67,9 @@ class Context:
     prompt: str | None = None  # inline system prompt text (preferred over prompt_name)
     prompt_name: str | None = None  # system prompt in Prompt Hub
     agent_repo: str | None = None  # Context Hub agent repo whose AGENTS.md is the prompt
-    skills_repo: str | None = None  # Context Hub skills-bundle repo mounted at /skills/ (all assistants)
+    skills_repo: str | None = (
+        None  # Context Hub skills-bundle repo mounted at /skills/ (all assistants)
+    )
     dataset: str | None = None  # "humanitarian" | "synthetic"
     data_model: str | None = None  # model id for the synthetic data backend
     data_prompt_name: str | None = None  # data-source prompt in Prompt Hub

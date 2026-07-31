@@ -579,7 +579,9 @@ def push_skills_bundle(workspace: str, slug: str, customer: str, skills) -> str:
         name = sk.get("name") or ""
         if not name or not sk.get("instructions"):
             continue
-        files[f"{name}/SKILL.md"] = FileEntry(content=_skill_md(name, sk.get("description", ""), sk["instructions"]))
+        files[f"{name}/SKILL.md"] = FileEntry(
+            content=_skill_md(name, sk.get("description", ""), sk["instructions"])
+        )
     if not files:
         return ""
     repo = f"{slug}-skills"
