@@ -259,6 +259,11 @@ class _SkillSpec(BaseModel):
         "assistant will consult it (e.g. 'Use your returns policy to check if I can return a "
         "drill I bought 12 days ago'). Becomes a quick-action for Context Hub assistants.",
     )
+    action_label: str = Field(
+        default="",
+        description="Quick-action label for this skill, in '<Persona>: <2-4 word gist>' format "
+        "(same as the persona quick-actions), e.g. 'Shopper: Return eligibility'.",
+    )
 
 
 class AssistantSetupResponse(BaseModel):
@@ -356,8 +361,9 @@ def analyze_customer(
         "thresholds, or specific steps a generic assistant would not already know), and an "
         "'example_question' -- a concrete end-user question that would invoke the skill, phrased "
         "so the assistant consults it (e.g. 'Use your returns policy to check if I can return a "
-        "drill I bought 12 days ago'). Skip skills that merely restate how to search data or "
-        "build a dashboard.\n"
+        "drill I bought 12 days ago'), and an 'action_label' for that question in the SAME "
+        "'<Persona>: <2-4 word gist>' format as step 2's quick-actions (e.g. 'Shopper: Return "
+        "eligibility'). Skip skills that merely restate how to search data or build a dashboard.\n"
         "4) Give the customer's brand PRIMARY and SECONDARY colors as hex (real brand palette "
         "for well-known companies, e.g. Walmart #0071CE / #FFC220). Use the company's CURRENT "
         "branding (some companies have rebranded). Empty string if unsure.\n"
@@ -414,6 +420,7 @@ def analyze_customer(
                 "description": s.description.strip(),
                 "instructions": s.instructions.strip(),
                 "example_question": s.example_question.strip(),
+                "action_label": s.action_label.strip(),
             }
             for s in resp.skills
             if s.name.strip() and s.instructions.strip()
@@ -598,6 +605,19 @@ def push_skills_bundle(workspace: str, slug: str, customer: str, skills) -> str:
 _HITL_TOOLS = {"draft_email", "suggest_meeting_times"}
 
 
+def _persona_label(label: str) -> str:
+    """Ensure a quick-action label reads as '<Persona>: <gist>'.
+
+    Persona and gap actions arrive already formatted; skill actions carry the LLM's
+    `action_label`. Anything still missing the persona prefix (a slip, older data)
+    gets a generic one so the UI's bold-persona chip stays consistent.
+    """
+    label = (label or "").strip()
+    if ":" in label:
+        return label
+    return f"Customer: {label}" if label else "Customer: Ask"
+
+
 def _action_gist(action: dict | None) -> str:
     """The '<gist>' half of a '<Persona>: <gist>' quick-action label (or the label)."""
     label = str((action or {}).get("label", "")).strip()
@@ -768,7 +788,10 @@ def prepare_assistant(payload: dict) -> dict:
     for sk in analysis.get("skills") or []:
         q = sk.get("example_question")
         if q:
-            skill_actions.append({"label": sk["name"].replace("-", " ").title(), "question": q})
+            # The LLM supplies a '<Persona>: <gist>' action_label per skill; fall
+            # back to the skill name (normalized below) if it's missing.
+            label = sk.get("action_label") or sk["name"].replace("-", " ").title()
+            skill_actions.append({"label": label, "question": q})
     # Lead with skill-invoking actions (they demo a skill), then top up with the
     # LLM's persona questions so there are always enough to fill the 2–3 slots.
     base_actions = skill_actions + actions
@@ -788,6 +811,12 @@ def prepare_assistant(payload: dict) -> dict:
     else:
         # Clean assistant: all quick actions are grounded ("good").
         actions = base_actions[:3]
+
+    # Guarantee every quick-action label reads as '<Persona>: <gist>' (the UI bolds
+    # the persona before the colon). Persona/gap actions arrive formatted; skill
+    # actions use the LLM's action_label; anything still missing the prefix is
+    # normalized here, so the format holds regardless of what the LLM returned.
+    actions = [{**a, "label": _persona_label(a.get("label", ""))} for a in actions]
 
     # Brand colors — priority: Brandfetch (accurate/current) → LLM known-brand
     # guess → scraped site theme-color → default. Secondary drives the 2nd series.
