@@ -127,11 +127,16 @@ def test_sandbox_only_is_plain_backend(monkeypatch):
     assert supports_execution(backend) is True
 
 
-def test_available_seeds_synthetic_data_once_on_create(monkeypatch):
+def test_available_seeds_data_stack_and_dataset_once(monkeypatch):
     client = _install_client(monkeypatch)
     A._backend_for(_rt(customer="Eval Co"))
-    seed_runs = [c for sb in client.existing for c in sb.runs if "sales.csv" in c]
-    assert len(seed_runs) == 1  # world: dataset prepared in the VM, exactly once
+    cmds = [c for sb in client.existing for c in sb.runs]
+    assert len(cmds) == 1  # one seed call on create
+    seed = cmds[0]
+    assert "sales.csv" in seed  # dataset written to the VM
+    # the data-analysis stack is pre-installed so the first forecast turn is instant
+    assert "pip install" in seed
+    assert "pandas" in seed and "numpy" in seed and "statsmodels" in seed
 
 
 # --- unavailable / disabled → StateBackend, no execute ---
