@@ -117,6 +117,7 @@ keeps the whole-repo `ContextHubBackend` (skills under its `skills/`, no execute
 | `draft_email` | Comms | simulated draft, rendered as a chat card |
 | `suggest_meeting_times` | Comms | simulated slots, rendered as a chat card |
 | `web_search` | Research | simulated results; shaped like a real search API for later |
+| `ask_user` | Interaction | HITL: pauses via `interrupt()` to ask the user a question, resumes with their answer (renders a question card) |
 
 Capabilities are chosen in the **"+ New" form** when creating an assistant, and stay editable
 afterwards in **Settings → Tools** — changing them is a config edit on the existing assistant

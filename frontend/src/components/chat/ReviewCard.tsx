@@ -11,7 +11,7 @@
  * a half-typed subject line submitted by a re-render.
  */
 import { useState } from "react";
-import { IconCalendarEvent, IconMail, IconPencil } from "@tabler/icons-react";
+import { IconCalendarEvent, IconHelpCircle, IconMail, IconPencil } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -207,11 +207,42 @@ function MeetingReview({ review, busy, onApprove }: Props) {
   );
 }
 
+/* ---------------------------- Ask the user ------------------------------ */
+
+function QuestionReview({ review, busy, onApprove }: Props) {
+  // Payload is { kind:"user_question", question } — no draft; question rides the
+  // ReviewInterrupt index signature.
+  const draft = review.draft as Record<string, unknown> | undefined;
+  const question = String((review.question as string) ?? draft?.question ?? "");
+  const [answer, setAnswer] = useState("");
+  return (
+    <div className="flex flex-col gap-2.5">
+      {question && <p className="m-0 text-sm leading-relaxed text-foreground">{question}</p>}
+      <Textarea
+        value={answer}
+        onChange={(e) => setAnswer(e.target.value)}
+        placeholder="Type your answer…"
+        className="min-h-[80px] font-normal leading-relaxed"
+        autoFocus
+      />
+      <Button
+        size="sm"
+        disabled={busy || !answer.trim()}
+        onClick={() => onApprove({ answer: answer.trim() })}
+        className="self-start"
+      >
+        {busy ? "Sending…" : "Answer"}
+      </Button>
+    </div>
+  );
+}
+
 /* ------------------------------- Shell ---------------------------------- */
 
 const META: Record<string, { icon: typeof IconMail; title: string }> = {
   email_draft: { icon: IconMail, title: "Review before sending" },
   meeting_slots: { icon: IconCalendarEvent, title: "Choose a time" },
+  user_question: { icon: IconHelpCircle, title: "A quick question" },
 };
 
 export function ReviewCard(props: Props) {
@@ -229,6 +260,8 @@ export function ReviewCard(props: Props) {
       </div>
       {props.review.kind === "meeting_slots" ? (
         <MeetingReview {...props} />
+      ) : props.review.kind === "user_question" ? (
+        <QuestionReview {...props} />
       ) : known ? (
         <EmailReview {...props} />
       ) : (
