@@ -21,7 +21,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, cast
 
-from deepagents import create_deep_agent
+from deepagents import SubAgent, create_deep_agent
 from deepagents.backends import (
     CompositeBackend,
     ContextHubBackend,
@@ -124,7 +124,12 @@ def _hub_system_prompt(request: ModelRequest) -> str:
             base = pull_agent_prompt(agent_repo, workspace=workspace)
         else:
             base = pull_system_prompt(_ctx(request.runtime, "prompt_name"), workspace=workspace)
-    ours = base + _capability_note(request.runtime) + _sandbox_note(request.runtime)
+    ours = (
+        base
+        + _capability_note(request.runtime)
+        + _sandbox_note(request.runtime)
+        + _subagents_note()
+    )
     # Compose deepagents' middleware-built prompt (SkillsMiddleware catalogue,
     # filesystem/execute instructions, memory) whenever the assistant actually has
     # those capabilities — i.e. it mounts skills (`skills_repo`) or a Context Hub
@@ -158,6 +163,23 @@ def _sandbox_note(runtime) -> str:
         "forecasting and read/write files there. When you produce a result "
         "worth showing (a forecast, a breakdown), visualize it with `push_widget`, don't only "
         "describe it."
+    )
+
+
+def _subagents_note() -> str:
+    """When dynamic subagents are on, explain orchestration vs. the data sandbox.
+
+    Build-time gated (same env as the interpreter middleware), so it only appears
+    when the JS interpreter + subagents are actually wired in.
+    """
+    if not _dynamic_subagents_enabled():
+        return ""
+    return (
+        "\n\nSUBAGENTS & WORKFLOWS: For a large task with independent parts, orchestrate the "
+        "specialist subagents (`researcher`, `analyst`) — write a short JavaScript workflow script "
+        "that fans out via the `task()` global. Use that JS interpreter ONLY for orchestration; for "
+        "the actual data analysis use the Python `execute` sandbox. Don't over-orchestrate simple "
+        "requests — a single tool call is usually enough."
     )
 
 
@@ -473,6 +495,36 @@ def _backend_for(runtime):
     return CompositeBackend(default=default, routes=routes) if routes else default
 
 
+# Dynamic subagents (deepagents + a QuickJS code-interpreter, langchain-quickjs):
+# the agent writes a JS orchestration script that fans work out to these subagents
+# via a `task()` global. A small fixed generalist set — the value is the
+# orchestration, not per-domain specialization. Gated behind DA_DYNAMIC_SUBAGENTS
+# (build-time env; off by default) because the interpreter middleware is fixed at
+# build and we want a deploy-safe default we can flip on after verification.
+_SUBAGENTS: list[SubAgent] = [
+    {
+        "name": "researcher",
+        "description": "Researches ONE focused question and returns concise, grounded findings.",
+        "system_prompt": (
+            "You are a focused researcher. Look up the requested information and return concise, "
+            "grounded findings with the concrete figures. Do not build dashboards or ask questions."
+        ),
+    },
+    {
+        "name": "analyst",
+        "description": "Runs ONE focused data-analysis task and returns the computed result.",
+        "system_prompt": (
+            "You are a data analyst. Compute the requested result (use the `execute` tool for "
+            "Python — pandas/numpy/statsmodels are available) and return it succinctly."
+        ),
+    },
+]
+
+
+def _dynamic_subagents_enabled() -> bool:
+    return os.getenv("DA_DYNAMIC_SUBAGENTS", "0") == "1"
+
+
 def _build(model: str | None, checkpointer):
     """Shared deep-agent construction.
 
@@ -509,12 +561,29 @@ def _build(model: str | None, checkpointer):
         ],
     )
 
+    # Dynamic subagents (opt-in): add the QuickJS interpreter middleware BEFORE
+    # ToolSelection (last), and register the subagents. Lazy + guarded so a missing
+    # extra can't break graph load; degrades to no subagents.
+    subagents = None
+    if _dynamic_subagents_enabled():
+        try:
+            from langchain_quickjs import CodeInterpreterMiddleware
+
+            middleware = cast(
+                "list[AgentMiddleware]",
+                [*middleware[:-1], CodeInterpreterMiddleware(), middleware[-1]],
+            )
+            subagents = _SUBAGENTS
+        except Exception:  # noqa: BLE001 - never fail graph load on the optional extra
+            subagents = None
+
     return create_deep_agent(
         model=llm,
         # Every catalogue tool is registered; ToolSelection hides the ones this
         # assistant hasn't enabled. Built-in deepagents tools are unaffected.
         tools=all_tools(),
         middleware=middleware,
+        subagents=subagents,
         # Context Hub assistants mount an agent repo (see _backend_for); its linked
         # skill repos live under /skills/, which this tells deepagents to surface.
         # For default (StateBackend) assistants /skills/ is empty — a no-op.
