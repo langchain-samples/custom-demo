@@ -76,3 +76,18 @@ def test_capability_note_no_dashboards_off_when_push_widget_enabled():
 
 def test_capability_note_empty_for_unset_selection():
     assert A._capability_note(_rt(None)) == ""  # default selection → no note (unchanged path)
+
+
+# --- dynamic-subagents gate (DA_DYNAMIC_SUBAGENTS, build-time env) ---
+
+
+def test_subagents_note_off_by_default(monkeypatch):
+    monkeypatch.delenv("DA_DYNAMIC_SUBAGENTS", raising=False)
+    assert A._subagents_note() == ""  # gated off → no orchestration note
+
+
+def test_subagents_note_on_when_enabled(monkeypatch):
+    monkeypatch.setenv("DA_DYNAMIC_SUBAGENTS", "1")
+    note = A._subagents_note()
+    assert "task()" in note and "orchestrat" in note.lower()  # distinguishes JS orchestration
+    assert "execute" in note  # ...from the Python data sandbox

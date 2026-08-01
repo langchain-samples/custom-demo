@@ -25,6 +25,12 @@ dependencies = [
     "python-dotenv>=1.2.2",
     # the /feedback route mounted on the deployment (http.app)
     "starlette>=0.37",
+    # Dynamic subagents: the QuickJS code-interpreter (CodeInterpreterMiddleware).
+    # Pinned to 0.2.x — 0.3+ requires deepagents>=0.7, which we can't take (it drops
+    # the callable-backend factory our sandbox/skills/routing depend on). 0.2.x pins
+    # deepagents<0.7,>=0.6.8, compatible with our 0.6.12. Gated by DA_DYNAMIC_SUBAGENTS
+    # (default off); the native quickjs-rs dep ships cp313 wheels for the deploy image.
+    "langchain-quickjs>=0.2,<0.3",
 ]
 
 [dependency-groups]

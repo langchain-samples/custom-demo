@@ -271,9 +271,16 @@ visible fabrication.
   No slugs, no per-customer URL, no motion field at all. `theme` (light/dark) is the one visual
   axis, and it isn't in the plan.
 - **No `/home` listing page.** Assistant discovery happens in the settings `<Select>`.
-- **Not configurable, though the plan classified them as such:** `skills`, `memory`,
-  `subagents`, `interrupt_on` (HITL), `name`. (`tools` selection — also on that list — is now
-  implemented; see the catalogue above.)
+- **Not configurable, though the plan classified them as such:** `memory`,
+  `interrupt_on` (HITL as a config knob), `name`. (`tools` selection and `skills` are now
+  implemented — see the catalogue + "universal skills" above. `ask_user` gives HITL via a tool
+  rather than `interrupt_on`.)
+- **Dynamic subagents** (`agent.py:_build`): behind `DA_DYNAMIC_SUBAGENTS` (build-time env, default
+  off), `create_deep_agent` gets `subagents=[researcher, analyst]` + `langchain-quickjs`'s
+  `CodeInterpreterMiddleware`, so the agent can write a JS workflow script that fans out via a
+  `task()` global. Pinned to `langchain-quickjs<0.3` to keep `deepagents<0.7`. Two code envs then
+  coexist — the JS interpreter (orchestration only) and the Python `execute` sandbox (data
+  analysis); `_subagents_note` tells the model which to use for what.
 - **No governance machinery.** No CI, no CODEOWNERS, no naming convention enforcement, no
   documented deployment owner — all still open questions from the plan.
 
