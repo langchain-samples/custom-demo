@@ -121,6 +121,30 @@ def review(runtime: ToolRuntime, kind: str, payload: dict, build) -> dict:
 
 
 @tool
+def ask_user(question: str) -> str:
+    """Ask the user ONE short clarifying question and wait for their reply.
+
+    Use when the request is ambiguous or needs information only the user has
+    (which time range? which product? a missing detail?). Pauses the run
+    (human-in-the-loop) and returns the user's typed answer as a string. Prefer
+    asking over guessing when a single question removes the ambiguity — then
+    continue with the answer.
+    """
+    from langgraph.types import interrupt
+
+    # A no-artifact interrupt: nothing is generated or cached, so (unlike `review`)
+    # no `_pending` guard is needed — `interrupt` raises on the first pass and, when
+    # the node re-executes on resume, returns the client's value instead of raising.
+    answer = interrupt({"kind": "user_question", "question": question})
+    if isinstance(answer, dict):
+        # Client sends {"answer": "..."} (or wraps it as {"draft": {"answer": ...}}).
+        inner = answer.get("draft") if isinstance(answer.get("draft"), dict) else answer
+        if isinstance(inner, dict):
+            return str(inner.get("answer", "") or "")
+    return str(answer or "")
+
+
+@tool
 def draft_email(purpose: str, runtime: ToolRuntime, recipient: str = "", tone: str = "") -> str:
     """Draft an email for the user to review and send.
 

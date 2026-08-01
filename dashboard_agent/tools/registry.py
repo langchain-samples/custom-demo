@@ -21,7 +21,13 @@ from langchain.agents.middleware import ToolCallLimitMiddleware
 from langchain_core.tools import BaseTool
 
 from .core import datasearch, push_widget
-from .simulated import draft_email, list_data_sources, suggest_meeting_times, web_search
+from .simulated import (
+    ask_user,
+    draft_email,
+    list_data_sources,
+    suggest_meeting_times,
+    web_search,
+)
 
 
 @dataclass(frozen=True)
@@ -99,6 +105,21 @@ TOOL_REGISTRY: tuple[ToolSpec, ...] = (
             "conversation. It includes its own confirmation step, so the `selected` "
             "slot is already booked — report it as done and never ask them to "
             "confirm or pick again."
+        ),
+    ),
+    ToolSpec(
+        id="ask_user",
+        label="Ask the user",
+        description="Pause to ask the user a clarifying question, then continue with their answer.",
+        group="Interaction",
+        tool=ask_user,
+        # Opt-in like the other optional tools (keeps DEFAULT_ENABLED = datasearch +
+        # push_widget). Capped so the agent can't get stuck in a clarify-loop.
+        run_limit=3,
+        guidance=(
+            "Use `ask_user` to ask ONE short clarifying question when the request is ambiguous or "
+            "needs information only the user has; wait for their answer before proceeding. Don't "
+            "ask about things you can look up or reasonably assume."
         ),
     ),
     ToolSpec(
