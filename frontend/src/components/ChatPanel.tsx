@@ -23,6 +23,7 @@ import { IconArrowUp } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import { ToolChip, type ChipData } from "@/components/chat/ToolChip";
 import { FeedbackRow } from "@/components/chat/FeedbackRow";
+import { IconChevronDown, IconChevronRight } from "@tabler/icons-react";
 import {
   chipArgSummary,
   contentToText,
@@ -30,6 +31,11 @@ import {
   widgetFromArgs,
   widgetLooksComplete,
 } from "@/components/chat/helpers";
+import {
+  effectiveNamespace,
+  parseCheckpointNs,
+  subagentIdentity,
+} from "@/lib/streamEvent";
 
 export interface ChatPanelProps {
   /** The assistant id to run against (a UUID once one is selected in settings). */
@@ -79,6 +85,28 @@ interface ActivityItem {
   id: string;
   chips: ChipData[];
 }
+/** One task-dispatched subagent instance's live work (its own chips + text). */
+interface SubagentGroup {
+  /** subagentIdentity(ns).key — the top-level `tools:<call_id>` segment. */
+  key: string;
+  /** Human-readable name ("Subagent"). */
+  label: string;
+  chips: ChipData[];
+  /** The subagent's own streamed text (non-tool AI output), if any. */
+  text: string;
+  /** Frozen true once the run ends (finally block) — stops the spinner. */
+  done: boolean;
+}
+/**
+ * The "peer into subagents" panel for a turn: a collapsible card per observable
+ * (task-dispatched) subagent. Rendered distinct from the main answer bubble;
+ * subagent work NEVER feeds the main answer/widgets/chips.
+ */
+interface SubagentItem {
+  kind: "subagents";
+  id: string;
+  groups: SubagentGroup[];
+}
 interface AssistantItem {
   kind: "assistant";
   id: string;
@@ -102,7 +130,7 @@ interface ReviewItem {
   /** Cleared once approved, so the editor collapses to a read-only card. */
   done: boolean;
 }
-type Item = UserItem | ActivityItem | AssistantItem | FeedbackItem | ReviewItem;
+type Item = UserItem | ActivityItem | SubagentItem | AssistantItem | FeedbackItem | ReviewItem;
 
 
 export default function ChatPanel({
@@ -167,24 +195,47 @@ export default function ChatPanel({
     setBusy(true);
 
     const activityId = nextId();
+    const subagentId = nextId();
     const bubbleId = nextId();
     setItems((prev) => [
       ...prev,
       ...(question ? [{ kind: "user" as const, id: nextId(), text: question }] : []),
       { kind: "activity", id: activityId, chips: [] },
+      { kind: "subagents", id: subagentId, groups: [] },
       { kind: "assistant", id: bubbleId, text: "Working…", streaming: true, markdown: false },
     ]);
 
     // Per-run mutable stream state (persists across the whole for-await loop).
+    // These maps belong to the MAIN graph ONLY — non-empty-namespace (subagent)
+    // frames are routed to `subState` below and must never touch these, or a
+    // subagent's own model/tool output would leak into the answer/dashboard.
     const chipOrder: string[] = [];
     const chipMap: Record<string, ChipData> = {};
     const wOrder: string[] = [];
     const wLatest: Record<string, Widget> = {};
     const wFlushed = new Set<string>();
-    // langgraph_node per message id, from `messages/metadata` events. The main
-    // agent's messages are node "model"; a tool's internal LLM calls (e.g. the
-    // synthetic data source) are node "tools" — we must NOT render those as chat.
+    // langgraph_node per MAIN-graph message id, from `messages/metadata` events.
+    // The main agent's messages are node "model"; a tool's internal LLM calls
+    // (e.g. the synthetic data source) are node "tools" — we must NOT render
+    // those as chat.
     const nodeById: Record<string, string> = {};
+    // Effective namespace per message id, learned from either the SSE event-name
+    // suffix or a `langgraph_checkpoint_ns` in messages/metadata (fallback for
+    // servers that don't suffix the event name). [] means the root/main graph.
+    const nsById: Record<string, string[]> = {};
+    // Per-subagent reducer state, keyed by subagentIdentity(ns).key. Each bucket
+    // tracks its own chips/nodes/text independently of main and of each other.
+    const subOrder: string[] = [];
+    const subState: Record<
+      string,
+      {
+        label: string;
+        chipOrder: string[];
+        chipMap: Record<string, ChipData>;
+        nodeById: Record<string, string>;
+        text: string;
+      }
+    > = {};
     let answer = "";
     let runId: string | null = null;
     let errorMsg: string | null = null;
@@ -258,13 +309,75 @@ export default function ChatPanel({
       }
     };
 
+    /* ---- Subagent (non-empty namespace) pipeline — fully separate state ---- */
+
+    const ensureSub = (ns: string[]) => {
+      const { key, label } = subagentIdentity(ns);
+      if (!subState[key]) {
+        subState[key] = { label, chipOrder: [], chipMap: {}, nodeById: {}, text: "" };
+        subOrder.push(key);
+      }
+      return key;
+    };
+
+    // Rebuild the SubagentItem from subState. `done` stays false while streaming;
+    // the finally block freezes it (and any pending chip) once the run ends.
+    const syncSubagents = () =>
+      patchItem(subagentId, (it) =>
+        it.kind === "subagents"
+          ? {
+              ...it,
+              groups: subOrder.map((k) => ({
+                key: k,
+                label: subState[k].label,
+                chips: subState[k].chipOrder.map((id) => ({ ...subState[k].chipMap[id] })),
+                text: subState[k].text,
+                done: false,
+              })),
+            }
+          : it,
+      );
+
+    const onSubagentMessage = (ns: string[], msg: ThreadMessage | undefined) => {
+      if (!msg || typeof msg !== "object") return;
+      const key = ensureSub(ns);
+      const st = subState[key];
+      const node = msg.id ? st.nodeById[msg.id] : undefined;
+      if (msg.type === "ai") {
+        const tcs = msg.tool_calls || [];
+        for (const tc of tcs) {
+          // Same keying rule as main chips: a chip MUST carry the real tool_call
+          // id so the matching ToolMessage can clear its spinner.
+          const id = tc.id;
+          if (!id) continue;
+          const name = tc.name || "";
+          const summary = chipArgSummary(name, tc.args || {});
+          if (!st.chipMap[id]) {
+            st.chipMap[id] = { id, name, arg: summary, result: null };
+            st.chipOrder.push(id);
+          } else {
+            st.chipMap[id] = { ...st.chipMap[id], arg: summary };
+          }
+        }
+        const text = contentToText(msg.content);
+        if (text && tcs.length === 0 && node !== "tools") st.text = text;
+        syncSubagents();
+      } else if (msg.type === "tool") {
+        const cid = msg.tool_call_id;
+        if (cid && st.chipMap[cid]) {
+          st.chipMap[cid] = { ...st.chipMap[cid], result: contentToText(msg.content) };
+          syncSubagents();
+        }
+      }
+    };
+
     const controller = new AbortController();
     abortRef.current = controller;
 
     const runContext = getRunContext();
     try {
       const tid = await ensureThread();
-      for await (const { event, data } of runStream({
+      for await (const { event, data, namespace } of runStream({
         threadId: tid,
         assistantId,
         ...(isResume ? { resume } : { messages: [{ role: "user", content: question! }] }),
@@ -278,36 +391,69 @@ export default function ChatPanel({
           continue;
         }
         if (event === "metadata") {
-          const d = parsed as { run_id?: string };
-          if (d && d.run_id) runId = d.run_id;
+          // run_id ONLY from the ROOT frame — a subagent frame must not hijack the
+          // feedback run_id.
+          if (namespace.length === 0) {
+            const d = parsed as { run_id?: string };
+            if (d && d.run_id) runId = d.run_id;
+          }
           continue;
         }
         if (event === "error") {
-          const d = parsed as { error?: string; message?: string };
-          errorMsg = (d && (d.error || d.message)) || "run error";
+          // Only surface root-graph errors in the main bubble; a subagent error
+          // must not leak into the main answer.
+          if (namespace.length === 0) {
+            const d = parsed as { error?: string; message?: string };
+            errorMsg = (d && (d.error || d.message)) || "run error";
+          }
           continue;
         }
         if (event === "messages/metadata") {
-          // { "<message_id>": { metadata: { langgraph_node, ... } } }
-          const d = parsed as Record<string, { metadata?: { langgraph_node?: string } }>;
+          // { "<message_id>": { metadata: { langgraph_node, langgraph_checkpoint_ns, ... } } }
+          const d = parsed as Record<
+            string,
+            {
+              metadata?: {
+                langgraph_node?: string;
+                langgraph_checkpoint_ns?: string;
+                checkpoint_ns?: string;
+              };
+            }
+          >;
           if (d && typeof d === "object") {
             for (const [mid, info] of Object.entries(d)) {
-              const n = info?.metadata?.langgraph_node;
-              if (n) nodeById[mid] = n;
+              const meta = info?.metadata;
+              // Prefer the event-name namespace; else fall back to the checkpoint
+              // ns carried in metadata (older servers) so partial frames for this
+              // message id can be routed correctly.
+              const cns = meta?.langgraph_checkpoint_ns ?? meta?.checkpoint_ns;
+              const ns = namespace.length ? namespace : parseCheckpointNs(cns);
+              if (ns.length) nsById[mid] = ns;
+              const n = meta?.langgraph_node;
+              if (!n) continue;
+              if (ns.length === 0) nodeById[mid] = n;
+              else subState[ensureSub(ns)].nodeById[mid] = n;
             }
           }
           continue;
         }
         if (event === "updates") {
           // A tool called interrupt() — the run is now paused awaiting a human.
-          const d = parsed as { __interrupt__?: Array<{ value?: ReviewInterrupt }> };
-          const value = d?.__interrupt__?.[0]?.value;
-          if (value && typeof value === "object") interrupt = value;
+          // HITL review is a main-graph concern; ignore subagent-scoped updates.
+          if (namespace.length === 0) {
+            const d = parsed as { __interrupt__?: Array<{ value?: ReviewInterrupt }> };
+            const value = d?.__interrupt__?.[0]?.value;
+            if (value && typeof value === "object") interrupt = value;
+          }
           continue;
         }
         if (event === "messages/partial" || event === "messages/complete") {
           const msg = (Array.isArray(parsed) ? parsed[0] : parsed) as ThreadMessage;
-          onStreamMessage(msg);
+          // Partition strictly by namespace: ONLY root frames feed the main
+          // pipeline; everything else is a subagent (kept out of answer/widgets).
+          const ns = effectiveNamespace(namespace, msg?.id, nsById);
+          if (ns.length === 0) onStreamMessage(msg);
+          else onSubagentMessage(ns, msg);
         }
       }
       // Flush the last (still-open) widget now the stream has ended.
@@ -356,6 +502,20 @@ export default function ChatPanel({
       patchItem(activityId, (it) =>
         it.kind === "activity"
           ? { ...it, chips: it.chips.map((c) => (c.result === null ? { ...c, stopped: true } : c)) }
+          : it,
+      );
+      // Same freeze for each subagent: mark done (stops the card spinner) and
+      // stop any chip whose result never streamed.
+      patchItem(subagentId, (it) =>
+        it.kind === "subagents"
+          ? {
+              ...it,
+              groups: it.groups.map((g) => ({
+                ...g,
+                done: true,
+                chips: g.chips.map((c) => (c.result === null ? { ...c, stopped: true } : c)),
+              })),
+            }
           : it,
       );
     }
@@ -481,10 +641,14 @@ export default function ChatPanel({
             let prevSide: "user" | "assistant" | null = null;
             // Skip activity items with no chips yet — they render nothing, so they
             // shouldn't claim the avatar row (which would strand the logo above the
-            // "Working…" bubble until the first chip arrives).
-            const visible = items.filter(
-              (it) => !(it.kind === "activity" && it.chips.length === 0),
-            );
+            // "Working…" bubble until the first chip arrives). Likewise skip the
+            // subagent panel until it has a group with actual content.
+            const visible = items.filter((it) => {
+              if (it.kind === "activity") return it.chips.length > 0;
+              if (it.kind === "subagents")
+                return it.groups.some((g) => g.chips.length > 0 || g.text);
+              return true;
+            });
             return visible.map((it) => {
               const side: "user" | "assistant" = it.kind === "user" ? "user" : "assistant";
               const showAvatar = side !== prevSide;
@@ -603,6 +767,17 @@ function ItemView({
       </div>
     );
   }
+  if (item.kind === "subagents") {
+    const groups = item.groups.filter((g) => g.chips.length > 0 || g.text);
+    if (!groups.length) return null;
+    return (
+      <div className="flex flex-col gap-1.5">
+        {groups.map((g) => (
+          <SubagentCard key={g.key} group={g} />
+        ))}
+      </div>
+    );
+  }
   if (item.kind === "feedback") {
     return <FeedbackRow runId={item.runId} workspace={item.workspace} />;
   }
@@ -640,6 +815,59 @@ function ItemView({
         </span>
       ) : (
         item.text
+      )}
+    </div>
+  );
+}
+
+/**
+ * A collapsible "peer into subagent" card: its label, a live status (spinner
+ * while running, ✓ once the run ends), and — when expanded — its streamed tool
+ * chips and any text it produced. Distinct from the main answer bubble so
+ * subagent work is visible but never mistaken for the assistant's reply.
+ */
+function SubagentCard({ group }: { group: SubagentGroup }) {
+  const [open, setOpen] = useState(true);
+  const running = !group.done;
+  const count = group.chips.length;
+  return (
+    <div className="flex flex-col overflow-hidden rounded-lg border border-border bg-panel-2 text-xs text-muted-foreground">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-2 px-2.5 py-1.5 text-left hover:text-brand"
+      >
+        {open ? (
+          <IconChevronDown size={14} className="shrink-0" />
+        ) : (
+          <IconChevronRight size={14} className="shrink-0" />
+        )}
+        <IconRobot size={15} className="shrink-0" stroke={2} />
+        <span className="font-semibold text-foreground">{group.label}</span>
+        {count > 0 && (
+          <span className="text-[11px] text-muted-foreground">
+            {count} step{count === 1 ? "" : "s"}
+          </span>
+        )}
+        <span className="ml-auto flex items-center gap-1.5">
+          {running ? (
+            <IconLoader2 size={14} className="animate-spin opacity-70" />
+          ) : (
+            <span className="text-[11px] text-muted-foreground">✓ done</span>
+          )}
+        </span>
+      </button>
+      {open && (
+        <div className="flex flex-col gap-1.5 border-t border-border px-2.5 py-2">
+          {group.chips.map((c) => (
+            <ToolChip key={c.id} chip={c} />
+          ))}
+          {group.text && (
+            <div className="whitespace-pre-wrap rounded-md border border-border bg-background px-2 py-1.5 text-[12px] leading-relaxed text-foreground">
+              {group.text}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
