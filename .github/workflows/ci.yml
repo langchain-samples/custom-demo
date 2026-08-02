@@ -87,6 +87,8 @@ jobs:
             echo "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"
             echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"
             echo "ANTHROPIC_CUSTOM_HEADERS=$ANTHROPIC_CUSTOM_HEADERS"
+            # Turn on deepagents dynamic subagents (QuickJS interpreter + task() fan-out).
+            echo "DA_DYNAMIC_SUBAGENTS=1"
           } > .env
       - name: langgraph deploy
         env:
