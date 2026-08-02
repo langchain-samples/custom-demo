@@ -33,6 +33,7 @@ import {
 } from "@/components/chat/helpers";
 import {
   effectiveNamespace,
+  isSubagentNamespace,
   parseCheckpointNs,
   subagentIdentity,
 } from "@/lib/streamEvent";
@@ -94,6 +95,8 @@ interface SubagentGroup {
   chips: ChipData[];
   /** The subagent's own streamed text (non-tool AI output), if any. */
   text: string;
+  /** What the parent dispatched this subagent with (the `task` description). */
+  invokedWith?: string;
   /** Frozen true once the run ends (finally block) — stops the spinner. */
   done: boolean;
 }
@@ -236,6 +239,10 @@ export default function ChatPanel({
         text: string;
       }
     > = {};
+    // Main-agent `task` tool-call args, keyed by tool_call id, so a subagent card
+    // can show what its parent dispatched it with (the task description). The
+    // subagent's namespace key is `tools:<that id>`.
+    const taskArgs: Record<string, string> = {};
     let answer = "";
     let runId: string | null = null;
     let errorMsg: string | null = null;
@@ -283,6 +290,12 @@ export default function ChatPanel({
             // forever (an ever-climbing timer), duplicating the real chip.
             const id = tc.id;
             if (!id) continue;
+            // Remember a task dispatch's description so its subagent card can show
+            // "what it was invoked with" (subagent namespace = tools:<this id>).
+            if (name === "task") {
+              const a = args as { description?: string; subagent_type?: string };
+              taskArgs[id] = a.description || a.subagent_type || "";
+            }
             const summary = chipArgSummary(name, args);
             if (!chipMap[id]) {
               chipMap[id] = { id, name, arg: summary, result: null };
@@ -332,6 +345,8 @@ export default function ChatPanel({
                 label: subState[k].label,
                 chips: subState[k].chipOrder.map((id) => ({ ...subState[k].chipMap[id] })),
                 text: subState[k].text,
+                // key is `tools:<task_call_id>`; look up what it was dispatched with.
+                invokedWith: taskArgs[k.startsWith("tools:") ? k.slice(6) : k] || undefined,
                 done: false,
               })),
             }
@@ -391,9 +406,9 @@ export default function ChatPanel({
           continue;
         }
         if (event === "metadata") {
-          // run_id ONLY from the ROOT frame — a subagent frame must not hijack the
-          // feedback run_id.
-          if (namespace.length === 0) {
+          // run_id ONLY from a root (non-subagent) frame — a subagent frame must
+          // not hijack the feedback run_id.
+          if (!isSubagentNamespace(namespace)) {
             const d = parsed as { run_id?: string };
             if (d && d.run_id) runId = d.run_id;
           }
@@ -402,7 +417,7 @@ export default function ChatPanel({
         if (event === "error") {
           // Only surface root-graph errors in the main bubble; a subagent error
           // must not leak into the main answer.
-          if (namespace.length === 0) {
+          if (!isSubagentNamespace(namespace)) {
             const d = parsed as { error?: string; message?: string };
             errorMsg = (d && (d.error || d.message)) || "run error";
           }
@@ -428,11 +443,18 @@ export default function ChatPanel({
               // message id can be routed correctly.
               const cns = meta?.langgraph_checkpoint_ns ?? meta?.checkpoint_ns;
               const ns = namespace.length ? namespace : parseCheckpointNs(cns);
-              if (ns.length) nsById[mid] = ns;
               const n = meta?.langgraph_node;
-              if (!n) continue;
-              if (ns.length === 0) nodeById[mid] = n;
-              else subState[ensureSub(ns)].nodeById[mid] = n;
+              // A subagent is identified by a `tools:` namespace — NOT merely a
+              // non-empty one. The MAIN agent's own nodes also carry a non-empty
+              // checkpoint_ns (e.g. model_request:…), and must stay on the main
+              // pipeline, or the whole answer lands in a subagent card ("(no
+              // response)" in the main bubble).
+              if (isSubagentNamespace(ns)) {
+                nsById[mid] = ns;
+                if (n) subState[ensureSub(ns)].nodeById[mid] = n;
+              } else if (n) {
+                nodeById[mid] = n;
+              }
             }
           }
           continue;
@@ -440,7 +462,7 @@ export default function ChatPanel({
         if (event === "updates") {
           // A tool called interrupt() — the run is now paused awaiting a human.
           // HITL review is a main-graph concern; ignore subagent-scoped updates.
-          if (namespace.length === 0) {
+          if (!isSubagentNamespace(namespace)) {
             const d = parsed as { __interrupt__?: Array<{ value?: ReviewInterrupt }> };
             const value = d?.__interrupt__?.[0]?.value;
             if (value && typeof value === "object") interrupt = value;
@@ -452,8 +474,10 @@ export default function ChatPanel({
           // Partition strictly by namespace: ONLY root frames feed the main
           // pipeline; everything else is a subagent (kept out of answer/widgets).
           const ns = effectiveNamespace(namespace, msg?.id, nsById);
-          if (ns.length === 0) onStreamMessage(msg);
-          else onSubagentMessage(ns, msg);
+          // Route to a subagent card ONLY for a real `tools:` subagent namespace;
+          // main-agent frames (empty OR internal non-tools ns) feed the answer.
+          if (isSubagentNamespace(ns)) onSubagentMessage(ns, msg);
+          else onStreamMessage(msg);
         }
       }
       // Flush the last (still-open) widget now the stream has ended.
@@ -857,6 +881,14 @@ function SubagentCard({ group }: { group: SubagentGroup }) {
           )}
         </span>
       </button>
+      {group.invokedWith && (
+        <div className="border-t border-border px-2.5 py-1 text-[11px] italic text-muted-foreground">
+          ↳ invoked with:{" "}
+          {group.invokedWith.length > 160
+            ? group.invokedWith.slice(0, 160) + "…"
+            : group.invokedWith}
+        </div>
+      )}
       {open && (
         <div className="flex flex-col gap-1.5 border-t border-border px-2.5 py-2">
           {group.chips.map((c) => (
