@@ -45,10 +45,12 @@ export function parseCheckpointNs(cns: string | null | undefined): string[] {
 
 /**
  * True when a namespace belongs to an observable (task-dispatched) subagent —
- * i.e. it is non-empty and rooted at a `tools:*` subgraph. An empty namespace is
- * the root/main graph. NOTE: routing in ChatPanel partitions on empty vs
- * non-empty (any non-empty namespace is kept out of the main pipeline); this
- * predicate is the finer check for "is this a subagent we can label".
+ * i.e. it is rooted at a `tools:*` subgraph. This is the ONLY reliable
+ * main-vs-subagent discriminator: an empty namespace is the main graph, but the
+ * main agent's OWN internal nodes also carry a NON-empty checkpoint namespace
+ * (e.g. `model_request:…`) on the deployed server, so routing must key on the
+ * `tools:` prefix — not on "non-empty" — or the whole main answer is misrouted
+ * into a subagent card.
  */
 export function isSubagentNamespace(ns: string[]): boolean {
   return ns.length > 0 && ns[0].startsWith("tools:");
