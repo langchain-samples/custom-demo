@@ -19,6 +19,7 @@
  *   POST   /feedback
  */
 import { GRAPH_ID, apiHeaders, getApiBase } from "./config";
+import { splitStreamEvent } from "./streamEvent";
 
 /* ----------------------------- Domain types ----------------------------- */
 
@@ -190,6 +191,12 @@ export interface ThreadState {
 export interface SSEEvent {
   event: string;
   data: string;
+  /**
+   * Subgraph namespace path parsed off the SSE event-name `|` suffix (present
+   * when the run is streamed with `stream_subgraphs`). `[]` = the main graph;
+   * `["tools:<task_call_id>"]` = a task-dispatched subagent; deeper = nested.
+   */
+  namespace: string[];
 }
 
 /* ---- assistant_setup graph (runWait) ---- */
@@ -360,6 +367,10 @@ export async function* runStream(opts: RunStreamOptions): AsyncGenerator<SSEEven
     // "updates" carries `__interrupt__` when a tool pauses for human review;
     // "messages" is the token stream the chat + widgets are built from.
     stream_mode: ["messages", "updates"],
+    // Also stream frames emitted from inside subgraphs (task-dispatched
+    // subagents) so we can peer into their work. Their event names carry a `|`
+    // namespace suffix; the root graph's frames stay unsuffixed.
+    stream_subgraphs: true,
   };
   if (resume !== undefined) {
     // A resume replaces input entirely — sending both would duplicate the turn.
@@ -395,7 +406,13 @@ export async function* runStream(opts: RunStreamOptions): AsyncGenerator<SSEEven
         if (line.startsWith("event:")) event = line.slice(6).trim();
         else if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
       }
-      if (dataLines.length) yield { event, data: dataLines.join("\n") };
+      if (dataLines.length) {
+        // The server suffixes the event name with the emitting subgraph's
+        // namespace (`event|tools:abc|…`) when stream_subgraphs is on; split it
+        // off so the caller can route root vs subagent frames.
+        const { event: base, namespace } = splitStreamEvent(event);
+        yield { event: base, data: dataLines.join("\n"), namespace };
+      }
     }
   }
 }
