@@ -264,6 +264,13 @@ class _SkillSpec(BaseModel):
         description="Quick-action label for this skill, in '<Persona>: <2-4 word gist>' format "
         "(same as the persona quick-actions), e.g. 'Shopper: Return eligibility'.",
     )
+    workflow: str = Field(
+        default="",
+        description="If this skill's task naturally spans MANY items/candidates, the best-fit "
+        "dynamic-subagent workflow pattern, one of: classify-and-act, fan-out-and-synthesize, "
+        "adversarial-verification, generate-and-filter, tournament, loop-until-done. Leave EMPTY "
+        "when a single step suffices (most skills). Don't force it.",
+    )
 
 
 class AssistantSetupResponse(BaseModel):
@@ -363,7 +370,12 @@ def analyze_customer(
         "so the assistant consults it (e.g. 'Use your returns policy to check if I can return a "
         "drill I bought 12 days ago'), and an 'action_label' for that question in the SAME "
         "'<Persona>: <2-4 word gist>' format as step 2's quick-actions (e.g. 'Shopper: Return "
-        "eligibility'). Skip skills that merely restate how to search data or build a dashboard.\n"
+        "eligibility'). Also, when a skill's task naturally spans MANY items or candidates (e.g. "
+        "triage every open ticket, compare all suppliers, review each store), set a 'workflow' to "
+        "the best-fit dynamic-subagent pattern — one of: classify-and-act, fan-out-and-synthesize, "
+        "adversarial-verification, generate-and-filter, tournament, loop-until-done — so invoking "
+        "the skill orchestrates parallel subagents. Leave 'workflow' EMPTY for single-step skills; "
+        "don't force it. Skip skills that merely restate how to search data or build a dashboard.\n"
         "4) Give the customer's brand PRIMARY and SECONDARY colors as hex (real brand palette "
         "for well-known companies, e.g. Walmart #0071CE / #FFC220). Use the company's CURRENT "
         "branding (some companies have rebranded). Empty string if unsure.\n"
@@ -421,6 +433,7 @@ def analyze_customer(
                 "instructions": s.instructions.strip(),
                 "example_question": s.example_question.strip(),
                 "action_label": s.action_label.strip(),
+                "workflow": s.workflow.strip(),
             }
             for s in resp.skills
             if s.name.strip() and s.instructions.strip()
@@ -524,17 +537,54 @@ DASHBOARD_SKILL = {
 }
 
 
-def _skill_md(name: str, description: str, instructions: str) -> str:
+# The dynamic-subagent workflow "shapes" from the deepagents dynamic-subagents
+# blog. A generated skill names the one that fits its task, so when the skill is
+# invoked the agent orchestrates that pattern (writing a `task()` workflow script
+# in the code interpreter) — this is how we show off dynamic subagents. Each value
+# is the one-line "what it does" used in the skill body.
+WORKFLOW_PATTERNS: dict[str, str] = {
+    "classify-and-act": "route each input to the right specialist by type, then act on it",
+    "fan-out-and-synthesize": "run the same step across many items in parallel, then combine the results",
+    "adversarial-verification": "have separate subagents independently verify each finding before you keep it",
+    "generate-and-filter": "generate several candidate options, score them, and keep the best",
+    "tournament": "judge candidates head-to-head in rounds, advancing the winners",
+    "loop-until-done": "repeat passes until nothing new turns up",
+}
+
+
+def _workflow_clause(workflow: str) -> str:
+    """A SKILL.md section telling the agent which dynamic-subagent pattern to run.
+
+    Returns "" for an unset/unknown pattern. Written to degrade gracefully: it
+    orchestrates via `task()` when a code interpreter is available, else falls back
+    to the plain `task` tool or inline work for small inputs.
+    """
+    key = (workflow or "").strip().lower().replace("_", "-")
+    how = WORKFLOW_PATTERNS.get(key)
+    if not how:
+        return ""
+    return (
+        f"\n\n## Workflow: {key}\n"
+        f"When this task spans multiple items or candidates, orchestrate a **{key}** "
+        f"dynamic-subagent workflow — {how}. Write a short script that calls `task()` to fan the "
+        f"work out to subagents, then combine their results. For a small or single-step request, "
+        f"just do it directly (or one `task` call) — don't over-orchestrate."
+    )
+
+
+def _skill_md(name: str, description: str, instructions: str, workflow: str = "") -> str:
     """A spec-compliant SKILL.md: YAML frontmatter (name == mount dir) + body.
 
     The description is emitted as a double-quoted YAML scalar: descriptions often
     contain a colon (e.g. "Use when ...: builds ..."), which as a bare scalar makes
     the YAML parser read it as a nested mapping and SkillsMiddleware then silently
-    skips the whole skill.
+    skips the whole skill. `workflow` (optional) appends a dynamic-subagent pattern
+    section so invoking the skill can showcase dynamic subagents.
     """
     title = name.replace("-", " ").title()
     desc = description.replace("\\", "\\\\").replace('"', '\\"')
-    return f'---\nname: {name}\ndescription: "{desc}"\n---\n\n# {title}\n\n{instructions}\n'
+    body = f"{instructions}{_workflow_clause(workflow)}"
+    return f'---\nname: {name}\ndescription: "{desc}"\n---\n\n# {title}\n\n{body}\n'
 
 
 def push_workflow_skills(workspace: str, slug: str, customer: str, skills) -> dict:
@@ -551,7 +601,7 @@ def push_workflow_skills(workspace: str, slug: str, customer: str, skills) -> di
         if not name or not sk.get("instructions"):
             continue
         repo = f"{slug}-{name}-skill"
-        md = _skill_md(name, sk.get("description", ""), sk["instructions"])
+        md = _skill_md(name, sk.get("description", ""), sk["instructions"], sk.get("workflow", ""))
         try:
             _ws_client(workspace).push_skill(
                 repo,
@@ -587,7 +637,9 @@ def push_skills_bundle(workspace: str, slug: str, customer: str, skills) -> str:
         if not name or not sk.get("instructions"):
             continue
         files[f"{name}/SKILL.md"] = FileEntry(
-            content=_skill_md(name, sk.get("description", ""), sk["instructions"])
+            content=_skill_md(
+                name, sk.get("description", ""), sk["instructions"], sk.get("workflow", "")
+            )
         )
     if not files:
         return ""
