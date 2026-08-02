@@ -29,6 +29,7 @@ def _analysis(**over):
                 "instructions": "Cite the 30-day window.",
                 "example_question": "Can I return this?",
                 "action_label": "Shopper: Returns",
+                "workflow": "fan-out-and-synthesize",
             }
         ],
         "data_gap": "customer satisfaction scores",
@@ -209,6 +210,29 @@ def test_demo_brief_has_no_em_dash():
         "customer satisfaction scores",
     )
     assert all("—" not in line for line in d["brief"] + d["flow"])
+
+
+# --- dynamic-subagent workflow pattern woven into skills ---
+
+
+def test_skill_md_appends_known_workflow_pattern():
+    md = S._skill_md(
+        "triage", "Use when triaging tickets", "Do the steps.", "fan-out-and-synthesize"
+    )
+    assert "## Workflow: fan-out-and-synthesize" in md
+    assert "task()" in md  # tells the agent to orchestrate via the interpreter
+    assert "Do the steps." in md  # original instructions preserved
+
+
+def test_skill_md_omits_workflow_when_empty_or_unknown():
+    assert "## Workflow" not in S._skill_md("s", "d", "body", "")
+    assert "## Workflow" not in S._skill_md("s", "d", "body", "not-a-pattern")
+
+
+def test_workflow_flows_from_analysis_into_pushed_skill(rec, monkeypatch):
+    _prep(monkeypatch, _analysis())
+    names_workflows = {s["name"]: s.get("workflow") for s in rec["bundle"]}
+    assert names_workflows.get("returns-check") == "fan-out-and-synthesize"
 
 
 # --- SKILL.md frontmatter survives a colon in the description (#13) ---
