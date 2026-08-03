@@ -33,12 +33,7 @@ import {
   widgetFromArgs,
   widgetLooksComplete,
 } from "@/components/chat/helpers";
-import {
-  effectiveNamespace,
-  isSubagentNamespace,
-  parseCheckpointNs,
-  subagentIdentity,
-} from "@/lib/streamEvent";
+import { effectiveNamespace, isSubagentNamespace, subagentIdentity } from "@/lib/streamEvent";
 
 export interface ChatPanelProps {
   /** The assistant id to run against (a UUID once one is selected in settings). */
@@ -465,20 +460,17 @@ export default function ChatPanel({
           if (d && typeof d === "object") {
             for (const [mid, info] of Object.entries(d)) {
               const meta = info?.metadata;
-              // Prefer the event-name namespace; else fall back to the checkpoint
-              // ns carried in metadata (older servers) so partial frames for this
-              // message id can be routed correctly.
-              const cns = meta?.langgraph_checkpoint_ns ?? meta?.checkpoint_ns;
-              const ns = namespace.length ? namespace : parseCheckpointNs(cns);
               const n = meta?.langgraph_node;
-              // A subagent is identified by a `tools:` namespace — NOT merely a
-              // non-empty one. The MAIN agent's own nodes also carry a non-empty
-              // checkpoint_ns (e.g. model_request:…), and must stay on the main
-              // pipeline, or the whole answer lands in a subagent card ("(no
-              // response)" in the main bubble).
-              if (isSubagentNamespace(ns)) {
-                nsById[mid] = ns;
-                if (n) subState[ensureSub(ns)].nodeById[mid] = n;
+              // Route by the EVENT-NAME namespace ONLY. Real subagents are streamed
+              // subgraphs, so their frames carry a `tools:<call_id>` event-name
+              // suffix. The metadata `checkpoint_ns` is NOT a reliable subagent
+              // signal: the MAIN agent's own `tools` node also has a `tools:<uuid>`
+              // checkpoint_ns, so using it as a fallback here tagged every main-agent
+              // tool RESULT as a subagent — the tool chip never got its result and
+              // couldn't be expanded (datasearch/read_file/execute).
+              if (isSubagentNamespace(namespace)) {
+                nsById[mid] = namespace;
+                if (n) subState[ensureSub(namespace)].nodeById[mid] = n;
               } else if (n) {
                 nodeById[mid] = n;
               }
