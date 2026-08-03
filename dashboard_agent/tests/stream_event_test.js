@@ -80,7 +80,7 @@ function ok(name, fn) {
       key: "tools:abc",
       label: "Subagent",
     });
-    // Nested frames roll up under the SAME top-level subagent instance.
+    // Nested NAMED nodes roll up under the SAME top-level subagent instance.
     assert.deepStrictEqual(subagentIdentity(["tools:abc", "model_request:def"]), {
       key: "tools:abc",
       label: "Subagent",
@@ -89,6 +89,20 @@ function ok(name, fn) {
     assert.notStrictEqual(
       subagentIdentity(["tools:abc"]).key,
       subagentIdentity(["tools:xyz"]).key,
+    );
+    // Parallel task()-from-code dispatches share the eval tool-call id and differ
+    // only by a trailing NUMERIC branch — each is its own subagent card.
+    assert.strictEqual(subagentIdentity(["tools:eval", "1"]).key, "tools:eval|1");
+    assert.strictEqual(subagentIdentity(["tools:eval", "2"]).key, "tools:eval|2");
+    assert.notStrictEqual(
+      subagentIdentity(["tools:eval"]).key, // bare = first parallel branch
+      subagentIdentity(["tools:eval", "1"]).key,
+    );
+    // A numeric branch that then descends into a named node still rolls the named
+    // node up, keeping the branch: tools:eval|1|model:x -> tools:eval|1.
+    assert.strictEqual(
+      subagentIdentity(["tools:eval", "1", "model:x"]).key,
+      "tools:eval|1",
     );
   });
 

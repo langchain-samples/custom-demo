@@ -63,16 +63,28 @@ export interface SubagentIdentity {
 }
 
 /**
- * Identify the subagent instance a namespace belongs to. Keyed by the FIRST path
- * segment so every frame from one dispatched subagent (its model_request/tools
- * nodes, and any nested work) rolls up into a single card. The label reads
- * nicely — the raw "tools" dispatch node becomes "Subagent".
+ * Identify the subagent instance a namespace belongs to.
+ *
+ * Keyed by the first path segment (`tools:<call_id>`) PLUS any trailing NUMERIC
+ * segments. Two cases share the `tools:` root but mean different things:
+ *
+ *   - A `task`-tool subagent streams messages under `tools:abc` and its internal
+ *     nodes under `tools:abc|model:def` — those NAMED (colon-bearing) deeper
+ *     segments are internal to ONE subagent and must roll up into one card.
+ *   - `task()`-from-code (eval) dispatches run in PARALLEL and are distinguished
+ *     only by a trailing numeric branch: `tools:abc`, `tools:abc|1`, `tools:abc|2`.
+ *     Those are separate subagent instances and each gets its own card.
+ *
+ * So we keep numeric branch segments in the key and drop named node segments.
+ * The label reads nicely — the raw "tools" dispatch node becomes "Subagent".
  */
 export function subagentIdentity(ns: string[]): SubagentIdentity {
   const head = ns[0] || "";
   const prefix = head.split(":")[0] || "subagent";
   const label = prefix === "tools" ? "Subagent" : prefix;
-  return { key: head || "subagent", label };
+  const branches = ns.slice(1).filter((s) => /^\d+$/.test(s));
+  const key = [head || "subagent", ...branches].join("|");
+  return { key, label };
 }
 
 /**
