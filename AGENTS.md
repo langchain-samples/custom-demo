@@ -18,7 +18,9 @@ Custom Demos doc, implemented.
 
 There is also a deliberate, live-fixable **hallucination demo**: the data source withholds one
 customer-specific metric, the system prompt tells the agent to fabricate confidently over gaps,
-and you "fix" it by editing the prompt in LangSmith Prompt Hub mid-demo.
+and you "fix" it by editing the prompt in LangSmith Prompt Hub mid-demo. Each assistant also gets
+its own **LangSmith eval dataset** that scores that arc live — 2/3 passing before the fix, 3/3
+after (§3, *Per-assistant demo evals*; mind the polarity, it is the reverse of `evals/`).
 
 ---
 
@@ -34,6 +36,8 @@ dashboard_agent/
   graph.py            Agent Server entrypoint — async factory that wraps runs in tracing_context
   setup_graph.py      SECOND graph (`assistant_setup`): prepares a new customer assistant
   assistant_setup.py  brand fetch (Logo.dev/Brandfetch/scrape) + LLM customer analysis + prompt push
+  assistant_evals.py  per-assistant demo eval: EVAL_MODES registry, dataset upsert, experiment
+                      run, and the evaluator (score 1 = CORRECT — the OPPOSITE of evals/)
   prompt.py           prompt construction + Prompt Hub pulls + the hallucination/grounding clauses
   config.py           env loading, model/prompt/workspace/dataset accessors, LangSmith client
   datasource.py       pluggable backend behind `datasearch`: static corpus | synthetic LLM
@@ -41,11 +45,15 @@ dashboard_agent/
   widgets.py          Pydantic widget schemas — the agent↔frontend contract
   webapp.py           extra Starlette routes: /feedback /projects /workspaces /hub-prompts /tools
                       /sandbox-files /sandbox-file (read-only browse of the assistant's VM)
+                      /evals/run + /evals/status (per-assistant demo eval), /cleanup, /trace-url
   static/             LEGACY vanilla-JS SPA (superseded by frontend/, still on disk)
-  tests/              rag, widgets, streaming, tool-registry (fast) + e2e, hallucination (slow)
+  tests/              rag, widgets, streaming, tool-registry, eval examples/polarity/routes (fast)
+                      + e2e, hallucination (slow)
 frontend/             React 19 + Vite + Tailwind 4 + shadcn SPA (the real UI)
   src/lib/branding.ts   brand seeds → CSS vars; resolveColor, contrast, chart-palette derivation
   src/lib/fonts.ts      Google-Fonts loader + curated self-hosted fallbacks
+evals/                repo-level Tier-3 LLM evals, run by us before a release — score 1 = the
+                      planted BUG fired. Not the per-assistant demo eval; see evals/README.md
 scripts/              seed_prompt, seed_data_prompt, seed_assistants, setup_assistant, serve_spa
 .claude/skills/setup-assistant/SKILL.md   interactive /setup-assistant flow (CLI path)
 langgraph.json        registers both graphs + http.app + wide-open CORS
@@ -242,6 +250,81 @@ With `hallucination: true` it also sets `dataset: "synthetic"` and reorders quic
 **two grounded probes then the gap probe last** — so the demo shows two good answers, then a
 visible fabrication.
 
+**Teardown manifest.** Every LangSmith artifact an assistant creates is recorded in
+`metadata.ls_artifacts`: `workspace`, `project`, `prompt_name`, `agent_repo`, `skills_repo`,
+`skills[]` (legacy per-skill repos) and `eval_dataset`. Deleting the assistant in the SPA POSTs
+that manifest to `POST /cleanup`, which deletes each artifact **independently and best-effort**
+(the `_try` helper), returns `{deleted, failed}`, and deletes the assistant regardless — a
+permission gap must never leave an undeletable assistant. Anything new an assistant creates in a
+customer's workspace has to be added to *both* the manifest and `/cleanup`, or it leaks.
+
+**Per-assistant demo evals** (`assistant_evals.py`). **Polarity first — the two eval systems in
+this repo score in OPPOSITE directions:**
+
+| | `evals/` (repo-level, Tier-3) | `assistant_evals.py` (per-assistant) |
+|---|---|---|
+| who runs it | us, manually, before a release | the presenter, from the SPA, mid-demo |
+| dataset lives in | our eval workspace (`EVAL_WORKSPACE`) | the **customer's** workspace, created at setup |
+| **score 1 means** | the planted **bug fired** (the demo still works) | the agent **behaved correctly** — admitted the gap, no figures presented as fact |
+
+Copy `evals/evaluators.py:agent_behavior` polarity into `assistant_evals.demo_behavior` and the
+whole demo inverts: the baseline reads 3/3 green and the presenter's "fix" looks like a
+regression. Tests pin both directions with the judge stubbed.
+
+The arc it exists to serve:
+1. `prepare_assistant` plants the gap *and* upserts `<customer-slug>-demo-evals-<fingerprint>` in
+   the customer's workspace — quick action 1 (grounded), quick action 2 (grounded), the **gap probe
+   (the 3rd quick action) LAST**. Which rows a dataset gets comes from `EVAL_MODES`, keyed by
+   `failure_mode` and **parallel to `prompt.FAILURE_MODES`** (`none` → all grounded;
+   `hallucination` → 2 grounded + 1 gap). The name is **content-addressed** (`dataset_fingerprint`
+   = mode + questions + gap topic) — a bare per-customer name makes a second Acme assistant inherit
+   the first one's questions and gap, which grades a demo that no longer exists and makes
+   `/cleanup` delete the live assistant's dataset. Creation is **best-effort** —
+   `ensure_eval_dataset` swallows LangSmith failures and returns `""`, because a dataset must never
+   be able to fail assistant setup. Which action is the gap probe is a **tag on the action**
+   (`kind: "gap"`, stamped in `prepare_assistant`), not its index: with a thin LLM analysis the
+   probe can land at index 1, and grading it as grounded reads all-green with nothing to fix.
+2. The SPA fires the baseline experiment right after `createAssistant` (fire-and-forget, never in
+   the create path's way) → **2/3, red**.
+3. The presenter edits the prompt in Prompt Hub to remove the fabrication clause.
+4. The evals button re-runs the experiment → **3/3, green**.
+5. Deleting the assistant cascade-deletes the dataset with the rest of `ls_artifacts`.
+
+Implementation notes, each of which is load-bearing:
+- The experiment **target runs in-process** — `agent.build_agent()` plus a `Context` built from the
+  assistant's stored `context` (mirroring `evals/fixtures.py:make_context`), never a self-call over
+  HTTP (there is no reliable self-URL in the deployment). This is also what makes step 4 work:
+  `_hub_system_prompt` pulls the prompt with `skip_cache=True` on *every* question, so an
+  in-process run reflects the presenter's Prompt Hub edit immediately.
+- `POST /evals/run` spawns a daemon thread and returns at once — 3 real agent runs take 30-90s and
+  must not block the request (same fire-and-forget shape as `prewarm_sandbox`). `GET /evals/status`
+  re-derives the score from LangSmith on every call (the dataset's experiments + their
+  `feedback_stats`), so **LangSmith is the state store**: status survives a page reload, a second
+  browser, a redeploy mid-run. `webapp.py`'s `_INFLIGHT` / `_LAST_RUN_ERROR` maps are *hints* —
+  they cover the seconds before the new experiment shows up, refuse a second concurrent run for the
+  same dataset, and surface a runner crash the presenter would otherwise read as a number that
+  never changes (the target is built *before* `client.evaluate`, so a missing model key or an
+  unreachable workspace dies with no experiment and no trace). Nothing correct depends on them.
+- The target **answers HITL interrupts itself**. `draft_email` / `suggest_meeting_times` /
+  `ask_user` pause for a human (`tools/simulated.py`), and nobody is there during an experiment; an
+  unresumed interrupt returns state with `__interrupt__` and no final answer, so one enabled comms
+  tool would peg an example at 0 forever. `_resume_value` plays the human (empty dict = "approved
+  unchanged"; a sentence for `ask_user`), and a run still parked after `_MAX_RESUMES` scores 0 with
+  a comment that *says* it was interrupted.
+- The evaluator grades the **answer plus the widgets**, not the prose alone: the prompt tells the
+  agent to keep numbers in the dashboard and the prose short, so a prose-only judge fails good
+  grounded answers *and* passes a fabrication whose invented figures are all in KPI cards.
+- Both routes scope to the customer's workspace (`LS_CROSS_WORKSPACE_KEY` + `workspace_id`, via
+  `_scoped_client`) like the prompt-push and `/cleanup` paths, and the LangSmith key never reaches
+  the SPA.
+- **Layering:** `evals/` may import from `dashboard_agent`; never the reverse. The demo evaluator
+  and its LLM-judge helper live in `dashboard_agent/assistant_evals.py`.
+- In the SPA it is a discrete toolbar button + compact dialog (`EvalPanel` → `evals/EvalRunner`,
+  the same split as `FileBrowser` → `SandboxBrowser`) showing the dataset name, a red/green
+  "2/3 passing" badge, a "Run experiment" action and a link out to LangSmith. It polls
+  `/evals/status` while a run is in flight and shows a calm empty state — assistants created
+  before this feature have no `eval_dataset`, which is not an error.
+
 ---
 
 ## 4. How this maps to the original plan
@@ -339,7 +422,9 @@ visible fabrication.
   langgraph_api mounts a custom `http.app`'s routes with no auth middleware at all. That auth is
   one shared token (`APP_SHARED_SECRET`) that ships in the SPA bundle, so treat "anyone with the
   bundle can read the VM's files" as the real posture; `.env*` and non-allowlisted extensions are
-  excluded server-side, and `DA_FILES_ROOT` narrows the browsable root.
+  excluded server-side, and `DA_FILES_ROOT` narrows the browsable root. `POST /evals/run` sits
+  behind the same one shared token and *spends real model tokens* (3 agent runs per click) — the
+  one custom route where an unauthenticated-in-practice caller costs money, not just data.
 - Local-run env fallbacks (`DASHBOARD_DATASET` etc.) coexist with assistant context; context wins.
 
 ---
@@ -357,10 +442,14 @@ customer assistant. Sends are guarded in this order — assistant → workspace 
 
 Fast tests (no LLM, no network):
 ```bash
-python -m pytest dashboard_agent/tests/test_rag.py dashboard_agent/tests/test_widgets.py \
-                 dashboard_agent/tests/test_streaming_unit.py \
-                 dashboard_agent/tests/test_tool_registry.py \
-                 dashboard_agent/tests/test_sandbox_files_routes.py -q
+uv run pytest dashboard_agent/tests -q       # the whole fast suite; what CI runs
+uv run pytest dashboard_agent/tests/test_rag.py dashboard_agent/tests/test_widgets.py \
+              dashboard_agent/tests/test_streaming_unit.py \
+              dashboard_agent/tests/test_tool_registry.py \
+              dashboard_agent/tests/test_sandbox_files_routes.py \
+              dashboard_agent/tests/test_assistant_evals.py \
+              dashboard_agent/tests/test_evals_routes.py -q
+uv run ruff check dashboard_agent scripts evals   # + ruff format --check, ty check (same paths)
 node dashboard_agent/tests/branding_test.js     # colour maths (imports the real .ts)
 node dashboard_agent/tests/trace_test.js        # trace-project naming
 node dashboard_agent/tests/frontend_test.js     # legacy static/app.js — see rough edges
@@ -377,6 +466,13 @@ Slow, real-LLM: `test_agent_e2e.py`, `test_hallucination_bug.py`.
 - **Adding a capability**: write the tool in `tools/simulated.py`, add a `ToolSpec` row in
   `tools/registry.py`, add a `TOOL_META` entry (and a card renderer if it returns structured
   data). Nothing else — the settings UI and the filter are both registry-driven.
+- **Adding a failure mode** is two rows and nothing else: `prompt.FAILURE_MODES` (its clause +
+  whether it needs a planted gap) and `assistant_evals.EVAL_MODES` (which examples its dataset
+  gets). If it takes more than that, the extension point is broken — fix the registry, not the
+  caller.
+- **Two eval systems, opposite polarity** (§3): `evals/` scores 1 when the planted bug *fires*;
+  `assistant_evals.py` scores 1 when the agent is *correct*. Get it backwards and the demo reads
+  green before the fix.
 - New middleware / widget type → a code change to the shared graph, affecting every DE's
   assistant. Treat it as a reviewed change.
 - Never plumb `backend`, `permissions`, `middleware`, or `checkpointer` through assistant config.

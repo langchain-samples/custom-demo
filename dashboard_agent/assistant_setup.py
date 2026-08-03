@@ -733,7 +733,8 @@ def prepare_assistant(payload: dict) -> dict:
 
     Inputs: workspace, customer, owner, industry, website, use_case, failure_mode
     (or legacy `hallucination` bool), enabled_tools, push_prompts. Does brand fetch
-    + LLM analysis (personas, data gap, tool selection) + optional prompt push.
+    + LLM analysis (personas, data gap, tool selection) + optional prompt push, and
+    upserts the assistant's demo eval dataset (best-effort; see assistant_evals).
     Returns {name, display_name, accent, logo, actions, metadata, context, prompt_urls}.
     """
     workspace = payload["workspace"]
@@ -862,7 +863,14 @@ def prepare_assistant(payload: dict) -> dict:
         context["data_gap"] = gap
         gap_action = analysis.get("gap_action")
         if gap_action and gap_action.get("question"):
-            actions = base_actions[:2] + [gap_action]
+            # Tag the gap probe AT THE SOURCE. assistant_evals has to know which quick
+            # action is the honesty example, and inferring it from list position holds
+            # only while there are two base actions in front of it — with a thin LLM
+            # analysis the probe lands at index 1, gets graded as "should answer with
+            # figures", and the fabricating baseline reads all-green with nothing left
+            # to fix on stage. The tag rides along in metadata.actions; the UI reads
+            # label/question and ignores it.
+            actions = base_actions[:2] + [{**gap_action, "kind": "gap"}]
         else:
             actions = base_actions[:2]
     else:
@@ -874,6 +882,23 @@ def prepare_assistant(payload: dict) -> dict:
     # actions use the LLM's action_label; anything still missing the prefix is
     # normalized here, so the format holds regardless of what the LLM returned.
     actions = [{**a, "label": _persona_label(a.get("label", ""))} for a in actions]
+
+    # The assistant's demo eval dataset, in the CUSTOMER's workspace: one example per
+    # finalized quick action (the gap probe last, for a gap-planting failure mode), so
+    # the baseline experiment grades exactly what the presenter is about to click.
+    # Done here rather than in a route because this is where the workspace, the
+    # failure mode, the finalized actions and the data gap are all in hand — and where
+    # the `ls_artifacts` manifest that /cleanup cascades from is written. Function-local
+    # import: assistant_evals imports THIS module, so importing it at the top would be
+    # a cycle. Best-effort by contract — ensure_eval_dataset returns "" on any
+    # LangSmith failure, and "" simply means this assistant has no eval panel.
+    eval_dataset = ""
+    if push:
+        from .assistant_evals import ensure_eval_dataset
+
+        eval_dataset = ensure_eval_dataset(
+            workspace, customer, failure_mode, actions, context.get("data_gap", "")
+        )
 
     # Brand colors — priority: Brandfetch (accurate/current) → LLM known-brand
     # guess → scraped site theme-color → default. Secondary drives the 2nd series.
@@ -920,6 +945,9 @@ def prepare_assistant(payload: dict) -> dict:
             # delete_skill. `skills` remains for legacy per-skill repos (unused now).
             "skills_repo": skills_repo,
             "skills": [],
+            # Per-assistant demo eval dataset ("" when it couldn't be created, or for
+            # an assistant provisioned before this feature existed).
+            "eval_dataset": eval_dataset,
         },
     }
     # Presenter brief + recommended flow, surfaced in a popup once setup finishes.
