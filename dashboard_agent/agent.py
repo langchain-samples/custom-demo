@@ -403,12 +403,16 @@ def _seed_data(backend: Any) -> None:
         pass
 
 
-def _ensure_sandbox(key: str) -> Any | None:
+def _ensure_sandbox(key: str, *, create: bool = True) -> Any | None:
     """Get/reattach/create the sandbox VM named for `key`, caching + seeding once.
 
     Reuses the process cache, then a VM surviving a restart / made by another
     replica or the pre-warm step (matched by name), else creates + seeds one. Any
     failure returns None so callers degrade to StateBackend.
+
+    `create=False` is attach-only: read-only callers (the `/sandbox-files` file
+    browser in webapp.py) must never provision infrastructure — creating costs a
+    ~30s boot plus a pip install, which is not something a UI click may trigger.
     """
     cached = _SANDBOX_CACHE.get(key)
     if cached is not None:
@@ -418,6 +422,8 @@ def _ensure_sandbox(key: str) -> Any | None:
         name = f"da-{_slug(key)}"
         raw = next((s for s in client.list_sandboxes() if getattr(s, "name", None) == name), None)
         created = raw is None
+        if raw is None and not create:
+            return None
         if raw is None:
             raw = client.create_sandbox(
                 name=name, idle_ttl_seconds=3600, delete_after_stop_seconds=3600

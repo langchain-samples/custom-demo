@@ -12,6 +12,7 @@
   },
   "http": {
     "app": "./dashboard_agent/webapp.py:app",
+    "enable_custom_route_auth": true,
     "cors": {
       "allow_origins": ["*"],
       "allow_methods": ["*"],

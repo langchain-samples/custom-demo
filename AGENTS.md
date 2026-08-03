@@ -40,6 +40,7 @@ dashboard_agent/
   corpus.py / rag.py  bundled humanitarian corpus + dependency-free TF-IDF retriever
   widgets.py          Pydantic widget schemas — the agent↔frontend contract
   webapp.py           extra Starlette routes: /feedback /projects /workspaces /hub-prompts /tools
+                      /sandbox-files /sandbox-file (read-only browse of the assistant's VM)
   static/             LEGACY vanilla-JS SPA (superseded by frontend/, still on disk)
   tests/              rag, widgets, streaming, tool-registry (fast) + e2e, hallucination (slow)
 frontend/             React 19 + Vite + Tailwind 4 + shadcn SPA (the real UI)
@@ -104,6 +105,16 @@ on every model/tool call; idle VMs self-reap via TTL, and a fresh VM is seeded w
 `LANGSMITH_API_KEY`, or `DA_SANDBOX=0` → StateBackend default (no `execute`), skills still mount.
 **Back-compat:** a pre-existing Context Hub assistant has `agent_repo` but no `skills_repo`; it
 keeps the whole-repo `ContextHubBackend` (skills under its `skills/`, no execute) until recreated.
+
+**Browsing that VM from the SPA.** A toolbar button opens a near-fullscreen dialog (`FileBrowser`
+→ `SandboxBrowser`) with a lazy file tree on the left and a viewer on the right, over
+`GET /sandbox-files` (one directory per request, 500-entry cap) and `GET /sandbox-file` (one
+page of one file, `limit` lines, `next_offset` for "Show more"). Two rules shape it:
+**attach-only** — `_ensure_sandbox(key, create=False)`, so a UI click can never provision a VM
+(~30s boot + pip install) and "no sandbox" is a calm 503 the dialog renders as copy; and
+**read-only, allowlisted** — extensions outside `_TEXT_EXTS` (and anything named `.env*`) never
+reach the VM, and the browsable root is `DA_FILES_ROOT` (default `/workspace`). The dialog's
+Refresh is a remount, so there is no cache-invalidation code.
 
 **The tool catalogue** (`tools/registry.py`). One `ToolSpec` table drives the settings UI
 (`GET /tools`), the run-time filter, and the per-tool call caps. Selection lives in
@@ -321,8 +332,14 @@ visible fabrication.
 - **Google Fonts is the app's first third-party asset** and there is no CSP anywhere. Mitigated
   by `font_source: "curated"` per assistant, which keeps everything self-hosted.
 - **`config.py:load_env` reaches into a sibling project** (`chat-langchain-lite/.env`) for keys.
-- **CORS is `*`** on the deployment, and `webapp.py` exposes workspace/project/prompt listing with
-  no auth — fine for a local demo, worth knowing before hosting it.
+- **CORS is `*`** on the deployment, and `webapp.py`'s custom routes expose workspace/project/prompt
+  listing plus read-only listing and reading of the assistant VM's `/workspace`
+  (`/sandbox-files`, `/sandbox-file`). Those routes are behind the same auth as the rest of the
+  deployment only because `langgraph.json` sets `http.enable_custom_route_auth` — without it,
+  langgraph_api mounts a custom `http.app`'s routes with no auth middleware at all. That auth is
+  one shared token (`APP_SHARED_SECRET`) that ships in the SPA bundle, so treat "anyone with the
+  bundle can read the VM's files" as the real posture; `.env*` and non-allowlisted extensions are
+  excluded server-side, and `DA_FILES_ROOT` narrows the browsable root.
 - Local-run env fallbacks (`DASHBOARD_DATASET` etc.) coexist with assistant context; context wins.
 
 ---
@@ -342,7 +359,8 @@ Fast tests (no LLM, no network):
 ```bash
 python -m pytest dashboard_agent/tests/test_rag.py dashboard_agent/tests/test_widgets.py \
                  dashboard_agent/tests/test_streaming_unit.py \
-                 dashboard_agent/tests/test_tool_registry.py -q
+                 dashboard_agent/tests/test_tool_registry.py \
+                 dashboard_agent/tests/test_sandbox_files_routes.py -q
 node dashboard_agent/tests/branding_test.js     # colour maths (imports the real .ts)
 node dashboard_agent/tests/trace_test.js        # trace-project naming
 node dashboard_agent/tests/frontend_test.js     # legacy static/app.js — see rough edges
