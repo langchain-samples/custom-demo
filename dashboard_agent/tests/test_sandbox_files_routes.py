@@ -18,6 +18,8 @@ The contract:
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 from deepagents.backends import LangSmithSandbox
 from deepagents.backends.protocol import FileData, FileInfo, LsResult, ReadResult
@@ -440,7 +442,7 @@ def test_wedged_vm_also_times_out_in_the_vm_not_just_the_await(monkeypatch):
             calls.append(("run", timeout))
             return _FakeRun(self._stdout)
 
-    backend = LangSmithSandbox(_Recording('{"encoding": "utf-8", "content": "hi"}'))
+    backend = LangSmithSandbox(cast("Any", _Recording('{"encoding": "utf-8", "content": "hi"}')))
     _install(monkeypatch, backend)
     monkeypatch.setattr(W, "SANDBOX_TIMEOUT", 7)
 
@@ -476,7 +478,7 @@ def test_list_consumes_real_lsresult(monkeypatch):
         '{"path": "/workspace/a.md", "is_dir": false}\n'
         '{"path": "/workspace/data", "is_dir": true}\n'
     )
-    _install(monkeypatch, LangSmithSandbox(_FakeRawSandbox(stdout)))
+    _install(monkeypatch, LangSmithSandbox(cast("Any", _FakeRawSandbox(stdout))))
     body = client.get("/sandbox-files?path=/workspace").json()
     assert [(e["name"], e["kind"]) for e in body["entries"]] == [("data", "dir"), ("a.md", "text")]
     assert body["sandbox_id"] == "da-wire"
@@ -485,7 +487,9 @@ def test_list_consumes_real_lsresult(monkeypatch):
 def test_read_consumes_real_readresult(monkeypatch):
     _install(
         monkeypatch,
-        LangSmithSandbox(_FakeRawSandbox('{"encoding": "utf-8", "content": "# Title"}')),
+        LangSmithSandbox(
+            cast("Any", _FakeRawSandbox('{"encoding": "utf-8", "content": "# Title"}'))
+        ),
     )
     body = client.get("/sandbox-file?path=/workspace/a.md").json()
     assert body["content"] == "# Title" and body["language"] == "markdown"
@@ -506,7 +510,7 @@ class _FakeVM:
 class _FakeClient:
     def __init__(self, existing=()):
         self.created: list[str] = []
-        self.existing = list(existing)
+        self.existing: list[Any] = list(existing)
 
     def list_sandboxes(self, **_):
         return list(self.existing)
