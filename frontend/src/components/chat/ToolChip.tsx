@@ -6,7 +6,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { IconChevronDown, IconChevronRight, IconLoader2 } from "@tabler/icons-react";
-import { Streamdown } from "streamdown";
+import { CodeView } from "./CodeView";
 import { toolMeta } from "./helpers";
 import { hasToolCard, renderToolResult } from "./ToolResultCard";
 
@@ -105,13 +105,9 @@ export function ToolChip({ chip }: { chip: ChipData }) {
       </div>
       {expandable && open && (
         <div className="flex flex-col gap-1.5">
-          {/* The code/command that ran, highlighted (Streamdown = the chat renderer).
-              Shown as soon as it's known — even before the result streams back. */}
-          {chip.code && (
-            <div className="max-h-72 overflow-auto rounded-md border border-border text-[11px] [&_pre]:!my-0">
-              <Streamdown>{"```" + (chip.codeLang || "js") + "\n" + chip.code + "\n```"}</Streamdown>
-            </div>
-          )}
+          {/* The code/command that ran, syntax-highlighted (Shiki; heredoc bodies in
+              their own language). Shown as soon as it's known — before the result. */}
+          {chip.code && <CodeView code={chip.code} lang={chip.codeLang || "js"} />}
           {/* Output: the typed card, else the raw result — only once it has arrived. */}
           {hasResult &&
             (card ?? (
