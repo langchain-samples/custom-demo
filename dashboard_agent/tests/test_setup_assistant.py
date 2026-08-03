@@ -147,6 +147,18 @@ def test_enabled_tools_intersect_catalogue_union_defaults(rec, monkeypatch):
     assert {"datasearch", "push_widget"} <= tools  # defaults always present
 
 
+def test_setup_never_auto_enables_explicit_only_tools(rec, monkeypatch):
+    # list_data_sources is explicit-only: even if the LLM lists it, setup drops it
+    # (the user must turn it on themselves in settings).
+    tools = set(
+        _prep(monkeypatch, _analysis(enabled_tools=["web_search", "list_data_sources"]))["context"][
+            "enabled_tools"
+        ]
+    )
+    assert "list_data_sources" not in tools  # explicit-only, never auto-enabled
+    assert "web_search" in tools  # a normal optional pick is still kept
+
+
 # --- failure mode / planted gap (#5) ---
 
 

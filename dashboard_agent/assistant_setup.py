@@ -26,7 +26,7 @@ from .prompt import (
     build_system_prompt,
     failure_mode_needs_gap,
 )
-from .tools import CATALOGUE_IDS, DEFAULT_ENABLED, TOOL_REGISTRY
+from .tools import CATALOGUE_IDS, DEFAULT_ENABLED, EXPLICIT_ONLY, TOOL_REGISTRY
 
 DEFAULT_ACCENT = "#0072BC"
 # Logo.dev publishable key (safe client-side; Clearbit's logo API shut down 2025-12).
@@ -327,7 +327,7 @@ def analyze_customer(
     catalogue = "; ".join(
         f"{s.id} ({s.label}, {s.group})"
         for s in TOOL_REGISTRY
-        if not s.always_on and not s.default_on
+        if not s.always_on and not s.default_on and not s.explicit_only
     )
     prompt = (
         f"You are configuring a demo AI assistant for '{customer}'{site}.{scenario}"
@@ -454,10 +454,11 @@ def analyze_customer(
         theme = (resp.theme or "").strip().lower()
         if theme in ("light", "dark"):
             out["theme"] = theme
-        # Keep only catalogue ids, then union the always-on core (push_widget +
-        # datasearch): the LLM is told not to list those, so they'd otherwise be
-        # dropped and the agent would lose data retrieval.
-        picked = {t.strip() for t in resp.enabled_tools} & CATALOGUE_IDS
+        # Keep only catalogue ids, drop any explicit-only tool the LLM shouldn't
+        # auto-enable (it isn't even offered below), then union the always-on core
+        # (push_widget + datasearch): the LLM is told not to list those, so they'd
+        # otherwise be dropped and the agent would lose data retrieval.
+        picked = ({t.strip() for t in resp.enabled_tools} & CATALOGUE_IDS) - EXPLICIT_ONLY
         out["enabled_tools"] = sorted(picked | set(DEFAULT_ENABLED))
     except Exception:
         pass
@@ -766,11 +767,15 @@ def prepare_assistant(payload: dict) -> dict:
     # Tool selection: explicit caller override → the LLM's pick → DEFAULT_ENABLED.
     # Union DEFAULT_ENABLED (push_widget + datasearch) so a new assistant always
     # keeps the always-on core plus data retrieval, then adds the optional picks.
-    picked = payload.get("enabled_tools") or analysis.get("enabled_tools")
-    if picked:
-        context["enabled_tools"] = sorted((set(picked) & CATALOGUE_IDS) | set(DEFAULT_ENABLED))
+    # An explicit override is the USER's choice and is respected verbatim; the LLM's
+    # pick never auto-enables an explicit-only tool (the user must opt in themselves).
+    if payload.get("enabled_tools"):
+        picked = set(payload["enabled_tools"]) & CATALOGUE_IDS
+    elif analysis.get("enabled_tools"):
+        picked = (set(analysis["enabled_tools"]) & CATALOGUE_IDS) - EXPLICIT_ONLY
     else:
-        context["enabled_tools"] = sorted(DEFAULT_ENABLED)
+        picked = set()
+    context["enabled_tools"] = sorted(picked | set(DEFAULT_ENABLED))
     prompt_urls: dict = {}
     # Where the PROMPT is stored: Prompt Hub (default) or the Context Hub (as an
     # agent repo's AGENTS.md). Legacy inline is used only when not pushing. Skills

@@ -6,6 +6,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { IconChevronDown, IconChevronRight, IconLoader2 } from "@tabler/icons-react";
+import { Streamdown } from "streamdown";
 import { toolMeta } from "./helpers";
 import { hasToolCard, renderToolResult } from "./ToolResultCard";
 
@@ -19,6 +20,12 @@ export interface ChipData {
   result: string | null;
   /** Set once the run ends so a still-pending chip stops its spinner/timer. */
   stopped?: boolean;
+  /**
+   * Source code the tool ran (the `eval` interpreter's `code` arg). When present
+   * the expanded chip shows it syntax-highlighted above the output — the raw JSON
+   * arg is unreadable and the code is the interesting part.
+   */
+  code?: string;
 }
 
 /** Pretty-print JSON results when possible (matches the original chip). */
@@ -95,11 +102,19 @@ export function ToolChip({ chip }: { chip: ChipData }) {
         </span>
       </div>
       {hasResult && open && (
-        card ?? (
-          <pre className="m-0 max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background p-2 font-mono text-[11px] text-foreground">
-            {formatResult(chip.result as string)}
-          </pre>
-        )
+        <div className="flex flex-col gap-1.5">
+          {/* The code that ran, syntax-highlighted (Streamdown = the chat renderer). */}
+          {chip.code && (
+            <div className="max-h-72 overflow-auto rounded-md border border-border text-[11px] [&_pre]:!my-0">
+              <Streamdown>{"```js\n" + chip.code + "\n```"}</Streamdown>
+            </div>
+          )}
+          {card ?? (
+            <pre className="m-0 max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background p-2 font-mono text-[11px] text-foreground">
+              {formatResult(chip.result as string)}
+            </pre>
+          )}
+        </div>
       )}
     </div>
   );

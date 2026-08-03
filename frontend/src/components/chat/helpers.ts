@@ -17,6 +17,7 @@ import {
   IconFolder,
   IconFileText,
   IconFilePencil,
+  IconCode,
 } from "@tabler/icons-react";
 import type { MessageContent, ToolCall, Widget } from "@/lib/api";
 
@@ -94,6 +95,7 @@ export const TOOL_META: Record<string, { icon: TablerIcon; label: string }> = {
   // deepagents built-ins that are always live
   write_todos: { icon: IconChecklist, label: "Planned steps" },
   task: { icon: IconRobot, label: "Delegated to subagent" },
+  eval: { icon: IconCode, label: "Ran code" },
   ls: { icon: IconFolder, label: "Listed files" },
   glob: { icon: IconFolder, label: "Found files" },
   grep: { icon: IconSearch, label: "Searched files" },
@@ -111,6 +113,13 @@ export function toolMeta(name: string): { icon: TablerIcon; label: string } {
  * it's the `query` arg; otherwise a truncated JSON of the args. Matches app.js.
  */
 export function chipArgSummary(name: string, args: Record<string, unknown>): string {
+  // The code interpreter's arg IS a program — the raw JSON `{"code":"…"}` is
+  // unreadable on a pill, so show the first non-empty line (usually a comment
+  // stating intent). The full, highlighted code is revealed when the chip opens.
+  if (name === "eval") {
+    const code = String(args.code ?? "");
+    return code.split("\n").map((l) => l.trim()).find(Boolean) || "";
+  }
   // Show the single most meaningful arg per tool; fall back to truncated JSON.
   const primary: Record<string, string> = {
     datasearch: "query",
