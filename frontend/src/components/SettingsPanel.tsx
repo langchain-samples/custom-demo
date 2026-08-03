@@ -39,6 +39,7 @@ import {
   listHubPrompts,
   listTools,
   listWorkspaces,
+  runEvalExperiment,
   runSetup,
   updateAssistant,
   type Assistant,
@@ -580,11 +581,32 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           prompt_source: v.promptSource === "context_hub" ? "context_hub" : "prompt_hub",
           push_prompts: true,
         });
+        // Hoisted so the baseline experiment below runs against the SAME context
+        // the assistant was created with.
+        const assistantContext = result.context || { ls_workspace: workspace };
         const a = await createAssistant({
           name: v.customer,
-          context: result.context || { ls_workspace: workspace },
+          context: assistantContext,
           metadata: result.metadata || { owner_name: v.owner, customer: v.customer },
         });
+        // Kick off the BASELINE experiment over the dataset setup just planted,
+        // so the presenter finds a score already waiting (red, 2/3, for the
+        // hallucination demo). Fire-and-forget on purpose: it is three real
+        // agent turns, and nothing here may delay or break the create path —
+        // runEvalExperiment resolves with { ok: false } instead of throwing, so
+        // there is no rejection to swallow. Skipped when setup planted no
+        // dataset (best-effort creation, or a failure mode without evals).
+        const evalDataset = (result.metadata || a.metadata)?.ls_artifacts?.eval_dataset;
+        if (evalDataset) {
+          void runEvalExperiment({
+            assistant_id: a.assistant_id,
+            dataset: evalDataset,
+            workspace,
+            // Without this the baseline grades a default agent and the planted
+            // bug never fires — the run would come back a meaningless 3/3.
+            context: assistantContext,
+          });
+        }
         const list = await listAssistants();
         setAssistants(list);
         applySelection(a.assistant_id, list, true);

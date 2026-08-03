@@ -21,10 +21,12 @@ import {
   IconSettings,
   IconRobot,
   IconFolders,
+  IconFlask,
 } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import ChatPanel from "@/components/ChatPanel";
 import { DashboardCanvas } from "@/components/DashboardCanvas";
+import { EvalPanel } from "@/components/EvalPanel";
 import { FileBrowser } from "@/components/FileBrowser";
 import { SettingsPanel, type SettingsHandle } from "@/components/SettingsPanel";
 import { getAssistantId } from "@/lib/config";
@@ -55,6 +57,7 @@ function BrandLogo({ logo }: { logo: string }) {
 export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+  const [evalsOpen, setEvalsOpen] = useState(false);
   const [activeAssistant, setActiveAssistant] = useState<Assistant | null>(null);
   const [widgets, setWidgets] = useState<Widget[]>([]);
   // Sticky: once a dashboard has appeared, keep the two-column layout until a
@@ -208,6 +211,16 @@ export default function App() {
           variant="secondary"
           size="icon"
           className="print:hidden"
+          title="Evals — run this assistant's demo dataset in LangSmith"
+          aria-label="Evals"
+          onClick={() => setEvalsOpen(true)}
+        >
+          <IconFlask size={18} />
+        </Button>
+        <Button
+          variant="secondary"
+          size="icon"
+          className="print:hidden"
           title={effectiveTheme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
           aria-label="Toggle theme"
           onClick={toggleTheme}
@@ -279,6 +292,12 @@ export default function App() {
       <FileBrowser
         open={filesOpen}
         onOpenChange={setFilesOpen}
+        assistant={activeAssistant}
+      />
+
+      <EvalPanel
+        open={evalsOpen}
+        onOpenChange={setEvalsOpen}
         assistant={activeAssistant}
       />
 
