@@ -18,6 +18,7 @@ import {
   IconFileText,
   IconFilePencil,
   IconCode,
+  IconTerminal2,
 } from "@tabler/icons-react";
 import type { MessageContent, ToolCall, Widget } from "@/lib/api";
 
@@ -96,6 +97,7 @@ export const TOOL_META: Record<string, { icon: TablerIcon; label: string }> = {
   write_todos: { icon: IconChecklist, label: "Planned steps" },
   task: { icon: IconRobot, label: "Delegated to subagent" },
   eval: { icon: IconCode, label: "Ran code" },
+  execute: { icon: IconTerminal2, label: "Ran command" },
   ls: { icon: IconFolder, label: "Listed files" },
   glob: { icon: IconFolder, label: "Found files" },
   grep: { icon: IconSearch, label: "Searched files" },
@@ -109,15 +111,40 @@ export function toolMeta(name: string): { icon: TablerIcon; label: string } {
 }
 
 /**
+ * Tools whose primary arg is a program/command worth showing syntax-highlighted
+ * when the chip is expanded (rather than as raw JSON): the `eval` interpreter's
+ * `code`, and the sandbox `execute` tool's shell `command`.
+ */
+const CODE_ARG: Record<string, { key: string; lang: string }> = {
+  eval: { key: "code", lang: "js" },
+  execute: { key: "command", lang: "bash" },
+};
+
+/**
+ * The source/command a tool ran, with a fence language, for the expandable
+ * highlighted view — or undefined for tools that don't carry code.
+ */
+export function chipCode(
+  name: string,
+  args: Record<string, unknown>,
+): { code: string; lang: string } | undefined {
+  const spec = CODE_ARG[name];
+  if (!spec) return undefined;
+  return { code: String(args[spec.key] ?? ""), lang: spec.lang };
+}
+
+/**
  * The one-line summary shown on a tool chip's arg pill. For datasearch/query_sql
  * it's the `query` arg; otherwise a truncated JSON of the args. Matches app.js.
  */
 export function chipArgSummary(name: string, args: Record<string, unknown>): string {
-  // The code interpreter's arg IS a program — the raw JSON `{"code":"…"}` is
-  // unreadable on a pill, so show the first non-empty line (usually a comment
-  // stating intent). The full, highlighted code is revealed when the chip opens.
-  if (name === "eval") {
-    const code = String(args.code ?? "");
+  // A tool whose arg IS a program/command — the raw JSON (`{"code":…}` /
+  // `{"command":…}`) is unreadable on a pill, so show the first non-empty line
+  // (usually a comment or the command itself). The full, highlighted source is
+  // revealed when the chip opens (see chipCode).
+  const codeSpec = CODE_ARG[name];
+  if (codeSpec) {
+    const code = String(args[codeSpec.key] ?? "");
     return code.split("\n").map((l) => l.trim()).find(Boolean) || "";
   }
   // Show the single most meaningful arg per tool; fall back to truncated JSON.

@@ -21,11 +21,14 @@ export interface ChipData {
   /** Set once the run ends so a still-pending chip stops its spinner/timer. */
   stopped?: boolean;
   /**
-   * Source code the tool ran (the `eval` interpreter's `code` arg). When present
-   * the expanded chip shows it syntax-highlighted above the output — the raw JSON
-   * arg is unreadable and the code is the interesting part.
+   * Source/command the tool ran (the `eval` interpreter's `code`, or the sandbox
+   * `execute` tool's shell `command`). When present the expanded chip shows it
+   * syntax-highlighted above the output — the raw JSON arg is unreadable and the
+   * code is the interesting part.
    */
   code?: string;
+  /** Fence language for `code` (e.g. "js", "bash"). Defaults to "js". */
+  codeLang?: string;
 }
 
 /** Pretty-print JSON results when possible (matches the original chip). */
@@ -103,10 +106,10 @@ export function ToolChip({ chip }: { chip: ChipData }) {
       </div>
       {hasResult && open && (
         <div className="flex flex-col gap-1.5">
-          {/* The code that ran, syntax-highlighted (Streamdown = the chat renderer). */}
+          {/* The code/command that ran, highlighted (Streamdown = the chat renderer). */}
           {chip.code && (
             <div className="max-h-72 overflow-auto rounded-md border border-border text-[11px] [&_pre]:!my-0">
-              <Streamdown>{"```js\n" + chip.code + "\n```"}</Streamdown>
+              <Streamdown>{"```" + (chip.codeLang || "js") + "\n" + chip.code + "\n```"}</Streamdown>
             </div>
           )}
           {card ?? (

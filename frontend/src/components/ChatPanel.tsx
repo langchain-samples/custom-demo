@@ -27,6 +27,7 @@ import { FeedbackRow } from "@/components/chat/FeedbackRow";
 import { IconChevronDown, IconChevronRight } from "@tabler/icons-react";
 import {
   chipArgSummary,
+  chipCode,
   contentToText,
   toolCallKey,
   widgetFromArgs,
@@ -315,16 +316,19 @@ export default function ChatPanel({
               taskArgs[id] = a.description || a.subagent_type || "";
             }
             const summary = chipArgSummary(name, args);
-            // Carry the interpreter's source so the expanded chip can show it
-            // highlighted (the raw JSON arg is unreadable). Accumulates across
-            // partial frames just like the summary.
-            const code =
-              name === "eval" ? String((args as { code?: unknown }).code ?? "") : undefined;
+            // Carry the source/command a code-running tool executed (eval's `code`,
+            // execute's `command`) so the expanded chip can show it highlighted.
+            // Accumulates across partial frames just like the summary.
+            const ci = chipCode(name, args);
             if (!chipMap[id]) {
-              chipMap[id] = { id, name, arg: summary, result: null, code };
+              chipMap[id] = { id, name, arg: summary, result: null, code: ci?.code, codeLang: ci?.lang };
               chipOrder.push(id);
             } else {
-              chipMap[id] = { ...chipMap[id], arg: summary, ...(code !== undefined && { code }) };
+              chipMap[id] = {
+                ...chipMap[id],
+                arg: summary,
+                ...(ci && { code: ci.code, codeLang: ci.lang }),
+              };
             }
             syncChips();
           }
