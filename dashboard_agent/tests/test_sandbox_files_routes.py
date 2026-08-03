@@ -428,19 +428,27 @@ def test_wedged_vm_times_out(monkeypatch, url):
 
 
 def test_wedged_vm_also_times_out_in_the_vm_not_just_the_await(monkeypatch):
-    """The 504 above frees the request; only a VM-side timeout frees the THREAD.
+    """The 504 above frees the request; only a VM-side timeout frees the VM call.
 
-    `als`/`aread` reach the VM through `asyncio.to_thread(execute)` on the loop's
-    process-wide default executor. Cancelling the awaiting coroutine cannot cancel a
-    thread already inside `Sandbox.run`, and `LangSmithSandbox._default_timeout` is
-    30 minutes — so what matters is the timeout the route pushes down to `run`.
+    deepagents 0.7 routes `als`/`aread` through the async client
+    (`aexecute` → `sandbox.run(command, timeout=...)`), and
+    `LangSmithSandbox._default_timeout` is 30 minutes — so what matters is the
+    timeout the route pushes down via `_bounded` (a shallow copy with a small
+    `_default_timeout`). Assert it reaches the async `run`.
     """
     calls: list[tuple[str, int | None]] = []
 
-    class _Recording(_FakeRawSandbox):
-        def run(self, command, timeout=None):
+    class _RecordingAsync:
+        def __init__(self, stdout):
+            self._stdout = stdout
+
+        async def run(self, command, timeout=None):
             calls.append(("run", timeout))
             return _FakeRun(self._stdout)
+
+    class _Recording(_FakeRawSandbox):
+        def to_async(self, client: object | None = None):
+            return _RecordingAsync(self._stdout)
 
     backend = LangSmithSandbox(cast("Any", _Recording('{"encoding": "utf-8", "content": "hi"}')))
     _install(monkeypatch, backend)
@@ -449,7 +457,7 @@ def test_wedged_vm_also_times_out_in_the_vm_not_just_the_await(monkeypatch):
     client.get("/sandbox-files?path=/workspace")
     client.get("/sandbox-file?path=/workspace/a.md")
 
-    assert calls == [("run", 7), ("run", 7)]  # not 1800 — the thread comes back
+    assert calls == [("run", 7), ("run", 7)]  # not 1800 — the pushed-down bound wins
     # And the backend the AGENT runs turns on keeps its generous default.
     assert backend._default_timeout == 30 * 60
 
@@ -462,15 +470,47 @@ class _FakeRun:
         self.stdout, self.stderr, self.exit_code = stdout, "", 0
 
 
+class _FakeAsyncSandbox:
+    """Async sandbox returned by `Sandbox.to_async()` (deepagents 0.7 path)."""
+
+    def __init__(self, stdout: str):
+        self._stdout = stdout
+
+    async def run(self, command: str, timeout: int | None = None) -> _FakeRun:
+        return _FakeRun(self._stdout)
+
+
+class _FakeAsyncClient:
+    async def aclose(self) -> None:
+        pass
+
+
+class _FakeSDKClient:
+    """The private `Sandbox._client` deepagents reaches for `.to_async()`."""
+
+    def to_async(self) -> _FakeAsyncClient:
+        return _FakeAsyncClient()
+
+
 class _FakeRawSandbox:
-    """Stand-in for a langsmith `Sandbox` — replays canned in-VM script output."""
+    """Stand-in for a langsmith `Sandbox` — replays canned in-VM script output.
+
+    deepagents 0.7's `LangSmithSandbox` runs filesystem ops through the async
+    client path (`_sandbox._client.to_async()` + `_sandbox.to_async(client=...)`),
+    so the fake exposes both the sync `run` (seed path) and the async `to_async`
+    surface. Both replay the same canned stdout.
+    """
 
     def __init__(self, stdout: str):
         self.name = "da-wire"
         self._stdout = stdout
+        self._client = _FakeSDKClient()
 
     def run(self, command: str, timeout: int | None = None) -> _FakeRun:
         return _FakeRun(self._stdout)
+
+    def to_async(self, client: object | None = None) -> _FakeAsyncSandbox:
+        return _FakeAsyncSandbox(self._stdout)
 
 
 def test_list_consumes_real_lsresult(monkeypatch):

@@ -1,18 +1,28 @@
 """Spec for the backend wiring: sandbox default (execute) + `/skills/` → Context Hub.
 
-Written first (TDD). Uses a FAKE raw sandbox wrapped in the REAL `LangSmithSandbox`,
-a monkeypatched `SandboxClient`, and a monkeypatched `ContextHubBackend` — no live
-VM, no network, CI-safe.
+Uses a FAKE raw sandbox wrapped in the REAL `LangSmithSandbox`, a monkeypatched
+`SandboxClient`, and a monkeypatched `ContextHubBackend` — no live VM, no network,
+CI-safe.
 
-The three-column spec:
-- Assistant with skills + sandbox available → one CompositeBackend whose `.default`
-  is the sandbox (⇒ `execute` offered) and whose routes mount `/skills/` to Context
-  Hub. World: skills readable/writable in CH, code runnable in the VM.
+deepagents 0.7 removed the callable backend factory, so per-run selection now lives
+in `_resolve_backends(runtime) -> (default, routes)` (the logic) behind a single
+concrete `DynamicBackend(CompositeBackend)` whose `.default`/`.routes` resolve per run
+via `get_runtime()`. These tests exercise `_resolve_backends` directly (deterministic,
+no graph) and assert the execute gate the way deepagents does — `supports_execution`
+keys off a composite's `.default`.
+
+The spec:
+- Assistant with skills + sandbox available → sandbox default (⇒ `execute` offered) +
+  `/skills/` route to Context Hub. World: skills readable/writable in CH, code
+  runnable in the VM.
 - Sandbox unavailable / `DA_SANDBOX=0` → StateBackend default (no `execute`); skills
   still mount if present.
-- Back-compat: an old Context Hub assistant (`agent_repo`, no `skills_repo`) keeps
-  the whole-repo ContextHubBackend (today's behavior, no execute).
-- Caching: the factory runs per model/tool call, so N calls create ONE VM, seed ONCE.
+- Back-compat: an old Context Hub assistant (`agent_repo`, no `skills_repo`) keeps the
+  whole-repo ContextHubBackend (today's behavior, no execute).
+- Caching: `_resolve_backends` runs per model/tool call, so N calls create ONE VM,
+  seed ONCE.
+- `DynamicBackend` off a run (build/import/tests) falls back to plain state, so graph
+  load never fails.
 """
 
 from __future__ import annotations
@@ -66,10 +76,12 @@ class _FakeClient:
 
 
 @pytest.fixture(autouse=True)
-def _clear_sandbox_cache():
+def _clear_caches():
     A._SANDBOX_CACHE.clear()
+    A._CTXHUB_CACHE.clear()
     yield
     A._SANDBOX_CACHE.clear()
+    A._CTXHUB_CACHE.clear()
 
 
 def _rt(**ctx):
@@ -94,42 +106,46 @@ def _stub_ctxhub(monkeypatch):
     )
 
 
-# --- skills + sandbox compose on one CompositeBackend ---
+def _execute_offered(default, routes) -> bool:
+    """Mirror how deepagents gates `execute` per run: off a CompositeBackend's default."""
+    return supports_execution(CompositeBackend(default=default, routes=routes))
+
+
+# --- skills + sandbox compose: sandbox default (execute) + /skills/ route ---
 
 
 def test_skills_and_sandbox_compose(monkeypatch):
     _install_client(monkeypatch)
     _stub_ctxhub(monkeypatch)
-    backend = A._backend_for(_rt(customer="Eval Co", skills_repo="eval-skills"))
-    assert isinstance(backend, CompositeBackend)
-    assert isinstance(backend.default, LangSmithSandbox)  # ⇒ execute offered
-    assert supports_execution(backend) is True
-    assert "/skills/" in backend.routes  # skills mounted live from Context Hub
+    default, routes = A._resolve_backends(_rt(customer="Eval Co", skills_repo="eval-skills"))
+    assert isinstance(default, LangSmithSandbox)  # ⇒ execute offered
+    assert _execute_offered(default, routes) is True
+    assert "/skills/" in routes  # skills mounted live from Context Hub
 
 
 def test_skills_mount_without_sandbox_has_no_execute(monkeypatch):
     monkeypatch.setenv("DA_SANDBOX", "0")  # sandbox off
     _stub_ctxhub(monkeypatch)
-    backend = A._backend_for(_rt(customer="Eval Co", skills_repo="eval-skills"))
-    assert isinstance(backend, CompositeBackend)
-    assert isinstance(backend.default, StateBackend)
-    assert supports_execution(backend) is False  # no VM ⇒ no execute
-    assert "/skills/" in backend.routes  # ...but skills still mount
+    default, routes = A._resolve_backends(_rt(customer="Eval Co", skills_repo="eval-skills"))
+    assert isinstance(default, StateBackend)
+    assert _execute_offered(default, routes) is False  # no VM ⇒ no execute
+    assert "/skills/" in routes  # ...but skills still mount
 
 
-# --- sandbox alone (no skills) → plain sandbox backend, execute available ---
+# --- sandbox alone (no skills) → sandbox default, no routes, execute available ---
 
 
 def test_sandbox_only_is_plain_backend(monkeypatch):
     _install_client(monkeypatch)
-    backend = A._backend_for(_rt(customer="Eval Co"))  # no skills_repo, no agent_repo
-    assert isinstance(backend, LangSmithSandbox)
-    assert supports_execution(backend) is True
+    default, routes = A._resolve_backends(_rt(customer="Eval Co"))  # no skills/agent repo
+    assert isinstance(default, LangSmithSandbox)
+    assert routes == {}
+    assert _execute_offered(default, routes) is True
 
 
 def test_available_seeds_data_stack_and_dataset_once(monkeypatch):
     client = _install_client(monkeypatch)
-    A._backend_for(_rt(customer="Eval Co"))
+    A._resolve_backends(_rt(customer="Eval Co"))
     cmds = [c for sb in client.existing for c in sb.runs]
     assert len(cmds) == 1  # one seed call on create
     seed = cmds[0]
@@ -152,9 +168,9 @@ def test_client_failure_falls_back_to_statebackend(monkeypatch):
         raise RuntimeError("sandbox service not enabled")
 
     monkeypatch.setattr(A, "SandboxClient", _boom)
-    backend = A._backend_for(_rt(customer="Eval Co"))
-    assert isinstance(backend, StateBackend)
-    assert supports_execution(backend) is False
+    default, routes = A._resolve_backends(_rt(customer="Eval Co"))
+    assert isinstance(default, StateBackend)
+    assert _execute_offered(default, routes) is False
 
 
 def test_no_langsmith_key_skips_sandbox(monkeypatch):
@@ -165,8 +181,8 @@ def test_no_langsmith_key_skips_sandbox(monkeypatch):
     monkeypatch.delenv("LS_CROSS_WORKSPACE_KEY", raising=False)
     client = _FakeClient()
     monkeypatch.setattr(A, "SandboxClient", lambda **kw: client)
-    backend = A._backend_for(_rt(customer="Eval Co"))
-    assert isinstance(backend, StateBackend)
+    default, _routes = A._resolve_backends(_rt(customer="Eval Co"))
+    assert isinstance(default, StateBackend)
     assert client.created == []
 
 
@@ -174,9 +190,22 @@ def test_env_kill_switch_disables_sandbox(monkeypatch):
     client = _FakeClient()
     monkeypatch.setenv("DA_SANDBOX", "0")
     monkeypatch.setattr(A, "SandboxClient", lambda **kw: client)
-    backend = A._backend_for(_rt(customer="Eval Co"))
-    assert isinstance(backend, StateBackend)
+    default, _routes = A._resolve_backends(_rt(customer="Eval Co"))
+    assert isinstance(default, StateBackend)
     assert client.created == []  # never even constructed a VM
+
+
+# --- DynamicBackend: off a run, degrade to plain state so graph load never fails ---
+
+
+def test_dynamic_backend_offrun_falls_back_to_state():
+    # No active graph run → get_runtime() raises → safe StateBackend default, no routes,
+    # execute NOT offered. This is what makes create_deep_agent(backend=DynamicBackend())
+    # importable/compilable at build time.
+    backend = A.DynamicBackend()
+    assert isinstance(backend.default, StateBackend)
+    assert backend.routes == {}
+    assert supports_execution(backend) is False
 
 
 # --- pre-warm at provisioning: create+seed up front so the first chat is warm ---
@@ -189,8 +218,8 @@ def test_prewarm_creates_and_seeds_then_runtime_reuses(monkeypatch):
     # The agent runtime is a different process → its cache is empty; it must still
     # reattach the pre-warmed VM by name rather than create/seed a second one.
     A._SANDBOX_CACHE.clear()
-    backend = A._backend_for(_rt(customer="Eval Co"))
-    assert isinstance(backend, LangSmithSandbox)  # warm VM, execute available
+    default, _routes = A._resolve_backends(_rt(customer="Eval Co"))
+    assert isinstance(default, LangSmithSandbox)  # warm VM, execute available
     assert len(client.created) == 1  # reattached by name, not recreated
     seeds = [c for sb in client.existing for c in sb.runs if "sales.csv" in c]
     assert len(seeds) == 1  # seeded once (at pre-warm), not again on the first turn
@@ -218,20 +247,21 @@ def test_prewarm_noop_when_disabled(monkeypatch):
 def test_legacy_context_hub_assistant_keeps_whole_repo(monkeypatch):
     client = _install_client(monkeypatch)
     _stub_ctxhub(monkeypatch)
-    backend = A._backend_for(_rt(agent_repo="acme-agent", ls_workspace="ws"))
-    assert getattr(backend, "_repo", None) == "acme-agent"  # ContextHubBackend, whole FS
+    default, routes = A._resolve_backends(_rt(agent_repo="acme-agent", ls_workspace="ws"))
+    assert getattr(default, "_repo", None) == "acme-agent"  # ContextHubBackend, whole FS
+    assert routes == {}
     assert client.created == []  # no sandbox for the legacy path
 
 
-# --- caching: factory runs per call → create ONCE, seed ONCE ---
+# --- caching: resolver runs per call → create ONCE, seed ONCE, reuse the VM object ---
 
 
 def test_sandbox_created_and_seeded_once_across_calls(monkeypatch):
     client = _install_client(monkeypatch)
     rt = _rt(customer="Eval Co")
-    backends = [A._backend_for(rt) for _ in range(5)]
-    assert len(client.created) == 1  # one VM for five factory calls
-    assert {id(b) for b in backends} == {id(backends[0])}
+    defaults = [A._resolve_backends(rt)[0] for _ in range(5)]
+    assert len(client.created) == 1  # one VM for five resolver calls
+    assert {id(b) for b in defaults} == {id(defaults[0])}  # same cached VM object
     seed_runs = [c for sb in client.existing for c in sb.runs if "sales.csv" in c]
     assert len(seed_runs) == 1
 
@@ -240,7 +270,7 @@ def test_existing_vm_reused_not_recreated(monkeypatch):
     client = _FakeClient()
     client.existing.append(_FakeSandbox("da-eval-co"))  # a VM survived a restart
     _install_client(monkeypatch, client)
-    A._backend_for(_rt(customer="Eval Co"))
+    A._resolve_backends(_rt(customer="Eval Co"))
     assert client.created == []  # reused by name, not recreated
 
 

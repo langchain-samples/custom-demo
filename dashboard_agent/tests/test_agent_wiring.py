@@ -93,7 +93,7 @@ def test_subagents_note_on_when_enabled(monkeypatch):
     assert "execute" in note  # ...from the Python data sandbox
 
 
-# --- todo middleware removed (write_todos tool + planning prompt) ---
+# --- no todo middleware (deepagents 0.7 makes it opt-in; we don't opt in) ---
 
 
 def _bound_tool_names(compiled) -> set[str]:
@@ -117,25 +117,6 @@ def test_build_graph_has_no_write_todos_tool(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setenv("DA_DYNAMIC_SUBAGENTS", "0")
     names = _bound_tool_names(A.build_graph())
-    assert "write_todos" not in names  # TodoListMiddleware excluded
-    # Sanity: other built-ins/tools are untouched (we removed only the todo one).
+    assert "write_todos" not in names  # TodoListMiddleware not opted in on 0.7
+    # Sanity: other built-ins/tools are present (only the todo one is absent).
     assert {"task", "read_file", "datasearch"} <= names
-
-
-def test_disable_todo_middleware_registers_the_exclusion():
-    from deepagents._models import get_model_identifier, get_model_provider
-    from deepagents.profiles.harness import harness_profiles as HP
-    from langchain_anthropic import ChatAnthropic
-
-    llm = ChatAnthropic(model_name=A.MODEL, api_key="test-key")  # no API call at init
-    key = f"{get_model_provider(llm)}:{get_model_identifier(llm)}"
-    saved = HP._HARNESS_PROFILES.get(key)  # snapshot to avoid leaking global state
-    try:
-        A._disable_todo_middleware(llm)
-        prof = HP._harness_profile_for_model(llm, None)
-        assert "TodoListMiddleware" in prof.excluded_middleware
-    finally:
-        if saved is None:
-            HP._HARNESS_PROFILES.pop(key, None)
-        else:
-            HP._HARNESS_PROFILES[key] = saved

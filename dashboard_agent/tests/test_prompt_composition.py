@@ -43,7 +43,7 @@ def _capture(monkeypatch, context, *, mock_ctxhub=False):
         # Avoid the real Context Hub network: an in-state backend + a canned AGENTS.md.
         from deepagents.backends import StateBackend
 
-        monkeypatch.setattr(A, "_backend_for", lambda runtime: StateBackend())
+        monkeypatch.setattr(A, "_resolve_backends", lambda runtime: (StateBackend(), {}))
         monkeypatch.setattr(A, "pull_agent_prompt", lambda repo, workspace=None: _AGENTS_MD)
     agent = A.build_agent()
     try:
@@ -82,7 +82,9 @@ def test_skills_repo_prompt_composes_deepagents_base(monkeypatch):
     )
     sp = _capture(monkeypatch, ctx)
     assert "INLINE_MARKER" in sp  # our prompt still present + authoritative
-    assert "You are a deep agent" in sp  # framework composed in ⇒ skills catalogue reaches model
+    # deepagents 0.7 dropped the "You are a deep agent" base persona; the framework
+    # prompt that MUST compose in is the SkillsMiddleware catalogue.
+    assert "## Skills System" in sp  # framework composed in ⇒ skills catalogue reaches model
 
 
 def test_context_hub_prompt_composes_deepagents_base(monkeypatch):
@@ -95,7 +97,9 @@ def test_context_hub_prompt_composes_deepagents_base(monkeypatch):
     )
     sp = _capture(monkeypatch, ctx, mock_ctxhub=True)
     assert "AGENTS_MD_MARKER" in sp  # our AGENTS.md is present
-    assert "You are a deep agent" in sp  # framework base composed in
-    assert "## Filesystem" in sp  # filesystem tool instructions survive
+    # deepagents 0.7 dropped the "You are a deep agent" base persona and the
+    # "## Filesystem" prompt section (tool descriptions moved onto the tools). The
+    # framework prompt that MUST compose in is the SkillsMiddleware catalogue.
+    assert "## Skills System" in sp  # framework base composed in
     # Our prompt is last so it stays authoritative.
-    assert sp.index("AGENTS_MD_MARKER") > sp.index("You are a deep agent")
+    assert sp.index("AGENTS_MD_MARKER") > sp.index("## Skills System")

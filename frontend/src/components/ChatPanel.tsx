@@ -478,13 +478,29 @@ export default function ChatPanel({
           continue;
         }
         if (event === "updates") {
-          // A tool called interrupt() — the run is now paused awaiting a human.
-          // HITL review is a main-graph concern; ignore subagent-scoped updates.
-          if (!isSubagentNamespace(namespace)) {
-            const d = parsed as { __interrupt__?: Array<{ value?: ReviewInterrupt }> };
-            const value = d?.__interrupt__?.[0]?.value;
-            if (value && typeof value === "object") interrupt = value;
+          if (isSubagentNamespace(namespace)) {
+            // eval/`task()`-from-code subagents don't emit a namespaced token
+            // stream — they surface as namespaced STATE updates. Pull each node's
+            // messages into that subagent's card (its model output = its result,
+            // its tool calls = its chips), keyed by the full namespace so parallel
+            // dispatches land in separate cards.
+            const nodes = parsed as Record<string, { messages?: ThreadMessage[] } | null>;
+            if (nodes && typeof nodes === "object") {
+              const key = ensureSub(namespace);
+              for (const [node, upd] of Object.entries(nodes)) {
+                for (const m of upd?.messages || []) {
+                  if (m && typeof m === "object" && m.id) subState[key].nodeById[m.id] = node;
+                  onSubagentMessage(namespace, m);
+                }
+              }
+            }
+            continue;
           }
+          // A tool called interrupt() — the run is now paused awaiting a human.
+          // HITL review is a main-graph concern (main namespace only).
+          const d = parsed as { __interrupt__?: Array<{ value?: ReviewInterrupt }> };
+          const value = d?.__interrupt__?.[0]?.value;
+          if (value && typeof value === "object") interrupt = value;
           continue;
         }
         if (event === "messages/partial" || event === "messages/complete") {

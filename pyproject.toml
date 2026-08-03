@@ -6,12 +6,11 @@ readme = "README.md"
 # Max Python the LangGraph deployment base image supports (3.14 can't deploy yet).
 requires-python = ">=3.13"
 dependencies = [
-    # Cap below 0.7: it removed the BackendFactory (callable) API we pass as
-    # `backend=_backend_for` for per-run backend selection (StateBackend vs
-    # ContextHubBackend). Deploys were pulling a 0.7 prerelease and crashing on
-    # graph load ("backend must be an initialized backend instance"), leaving a
-    # stale pre-Context-Hub revision serving. Migration to 0.7 tracked in #35.
-    "deepagents>=0.6.3,<0.7",
+    # 0.7: the callable BackendFactory is gone; per-run backend selection is now a
+    # concrete BackendProtocol that reads runtime context internally (get_runtime),
+    # see agent.py DynamicBackend. 0.7 also makes TodoListMiddleware opt-in (we drop
+    # our exclusion hack) and is required by langchain-quickjs>=0.3 (below).
+    "deepagents>=0.7,<0.8",
     "langchain>=1.3.1",
     "langchain-core>=1.4.0",
     "langchain-anthropic>=1.4.3",
@@ -26,11 +25,11 @@ dependencies = [
     # the /feedback route mounted on the deployment (http.app)
     "starlette>=0.37",
     # Dynamic subagents: the QuickJS code-interpreter (CodeInterpreterMiddleware).
-    # Pinned to 0.2.x — 0.3+ requires deepagents>=0.7, which we can't take (it drops
-    # the callable-backend factory our sandbox/skills/routing depend on). 0.2.x pins
-    # deepagents<0.7,>=0.6.8, compatible with our 0.6.12. Gated by DA_DYNAMIC_SUBAGENTS
-    # (default off); the native quickjs-rs dep ships cp313 wheels for the deploy image.
-    "langchain-quickjs>=0.2,<0.3",
+    # 0.3.x requires deepagents>=0.7 and makes `task()`-from-code dispatches stream as
+    # named, namespaced delegated subagents (the point of the 0.7 upgrade — so the SPA
+    # panel can see eval-launched subagents). Gated by DA_DYNAMIC_SUBAGENTS (default
+    # off); the native quickjs-rs dep ships cp313 wheels for the deploy image.
+    "langchain-quickjs>=0.3,<0.4",
 ]
 
 [dependency-groups]

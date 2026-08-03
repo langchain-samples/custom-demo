@@ -28,6 +28,7 @@ from deepagents.backends import (
     LangSmithSandbox,
     StateBackend,
 )
+from deepagents.backends.protocol import BackendProtocol
 from langchain.agents.middleware import (
     AgentMiddleware,
     ModelRequest,
@@ -37,6 +38,7 @@ from langchain.chat_models import init_chat_model
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.runtime import get_runtime
 from langsmith import Client
 
 from .config import MODEL, require_anthropic_key
@@ -461,16 +463,32 @@ def prewarm_sandbox(agent_repo: str | None = None, customer: str | None = None) 
         pass
 
 
-def _backend_for(runtime):
-    """Per-run filesystem backend (a deepagents BackendFactory).
+# Context Hub backends are keyed by (repo, workspace) so a run's repeated filesystem
+# calls reuse one instance instead of rebuilding a LangSmith client each call (the
+# 0.6 factory rebuilt the whole backend per call; the VM was already cached).
+_CTXHUB_CACHE: dict[tuple[str, str | None], Any] = {}
 
-    One `CompositeBackend`: the sandbox VM is the **default** (so `execute` is
-    offered — it is not path-routable, deepagents keys it off the default), and the
-    assistant's Context Hub skills-bundle repo is mounted at `/skills/` (live,
-    read/write). The bundle stores each skill at its ROOT (`<name>/SKILL.md`) so the
-    plain route works — the composite strips the `/skills/` prefix, and the repo's
-    keys have no `skills/` prefix to lose. Every assistant gets skills this way,
-    independent of whether its prompt lives in Prompt Hub or Context Hub.
+
+def _ctxhub_backend(repo: str, ws: str | None) -> Any:
+    """Get/create a cached ContextHubBackend for a repo (raises on construction error)."""
+    key = (repo, ws)
+    backend = _CTXHUB_CACHE.get(key)
+    if backend is None:
+        backend = ContextHubBackend(repo, client=_ctxhub_client(ws))
+        _CTXHUB_CACHE[key] = backend
+    return backend
+
+
+def _resolve_backends(runtime) -> tuple[BackendProtocol, dict[str, BackendProtocol]]:
+    """Resolve this run's (default, routes) filesystem backends from runtime context.
+
+    The sandbox VM is the **default** when available (so `execute` is offered —
+    it's not path-routable, deepagents keys it off the default), and the assistant's
+    Context Hub skills-bundle repo mounts at `/skills/` (live, read/write). The bundle
+    stores each skill at its ROOT (`<name>/SKILL.md`) so the plain route works — the
+    composite strips the `/skills/` prefix, and the repo's keys have no `skills/`
+    prefix to lose. Every assistant gets skills this way, independent of whether its
+    prompt lives in Prompt Hub or Context Hub.
 
     Degrades gracefully:
     - sandbox unavailable (`DA_SANDBOX=0`, no entitlement, no network) → StateBackend
@@ -478,7 +496,7 @@ def _backend_for(runtime):
     - no skills + no sandbox → plain StateBackend (exactly today's default).
     - Back-compat: an old Context Hub assistant has `agent_repo` but no `skills_repo`
       — its skills live under the agent repo's `/skills/` subtree, which can't be
-      prefix-routed, so mount the whole repo as before (no execute) rather than
+      prefix-routed, so mount the whole repo as the default (no execute) rather than
       regress its skills. New assistants set `skills_repo` and get both.
     """
     skills_repo = _ctx(runtime, "skills_repo")
@@ -486,19 +504,64 @@ def _backend_for(runtime):
     ws = _ctx(runtime, "ls_workspace")
     if agent_repo and not skills_repo:
         try:
-            return ContextHubBackend(agent_repo, client=_ctxhub_client(ws))
+            return _ctxhub_backend(agent_repo, ws), {}
         except Exception:  # noqa: BLE001
-            return StateBackend()
+            return StateBackend(), {}
 
     sandbox = _get_or_create_sandbox(runtime)
-    default = sandbox if sandbox is not None else StateBackend()
-    routes: dict[str, Any] = {}
+    default: BackendProtocol = sandbox if sandbox is not None else StateBackend()
+    routes: dict[str, BackendProtocol] = {}
     if skills_repo:
         try:
-            routes["/skills/"] = ContextHubBackend(skills_repo, client=_ctxhub_client(ws))
+            routes["/skills/"] = _ctxhub_backend(skills_repo, ws)
         except Exception:  # noqa: BLE001 - skills are best-effort; the VM still works
             routes = {}
-    return CompositeBackend(default=default, routes=routes) if routes else default
+    return default, routes
+
+
+class DynamicBackend(CompositeBackend):
+    """A CompositeBackend whose default + routes are chosen per run, from context.
+
+    deepagents 0.7 removed the callable backend factory (`backend=_backend_for`), so
+    per-run backend selection — sandbox VM vs Context Hub vs plain state, keyed on the
+    assistant's runtime context — moves *inside* one concrete backend. Each filesystem/
+    `execute` call resolves the underlying backends via `get_runtime()` and lets
+    `CompositeBackend`'s routing do the rest. `default`/`routes`/`sorted_routes` are
+    live properties (not `__init__` attributes), so a single shared instance serves
+    every assistant. Because deepagents keys `supports_execution()` off `.default`,
+    the `execute` tool is offered iff THIS run resolved a sandbox VM — matching the
+    pre-0.7 per-run behavior. Off a run (build/import/tests) `get_runtime()` raises and
+    we fall back to a plain `StateBackend`, so construction and graph load never fail.
+    """
+
+    artifacts_root = "/"
+
+    def __init__(self) -> None:  # noqa: D107 - see class docstring
+        # Intentionally does NOT call super().__init__: default/routes/sorted_routes
+        # are resolved per run by the properties below, not stored at construction.
+        pass
+
+    def _resolve(self) -> tuple[BackendProtocol, dict[str, BackendProtocol]]:
+        try:
+            runtime = get_runtime()
+        except Exception:  # noqa: BLE001 - off a run (build/tests): safe default
+            return StateBackend(), {}
+        return _resolve_backends(runtime)
+
+    @property
+    def default(self) -> BackendProtocol:  # type: ignore[override]
+        """This run's default backend (sandbox VM, Context Hub, or state)."""
+        return self._resolve()[0]
+
+    @property
+    def routes(self) -> dict[str, BackendProtocol]:  # type: ignore[override]
+        """This run's prefix routes (e.g. ``/skills/`` → Context Hub)."""
+        return self._resolve()[1]
+
+    @property
+    def sorted_routes(self):  # type: ignore[override]
+        """Routes sorted longest-prefix-first, as CompositeBackend expects."""
+        return sorted(self.routes.items(), key=lambda kv: len(kv[0]), reverse=True)
 
 
 # Dynamic subagents (deepagents + a QuickJS code-interpreter, langchain-quickjs):
@@ -531,37 +594,6 @@ def _dynamic_subagents_enabled() -> bool:
     return os.getenv("DA_DYNAMIC_SUBAGENTS", "0") == "1"
 
 
-def _disable_todo_middleware(llm: Any) -> None:
-    """Drop deepagents' built-in TodoListMiddleware for this model.
-
-    Removes the `write_todos` tool, its planning system prompt, and the `todos`
-    state key from the main agent AND every subagent.
-
-    `create_deep_agent` hardcodes `TodoListMiddleware()` with no off-switch, but
-    it is not one of the required scaffolding middlewares (only Filesystem +
-    SubAgent are), so the supported removal is a harness profile whose
-    `excluded_middleware` names it. `register_harness_profile` is additive: it
-    unions the exclusion onto any existing profile for this model rather than
-    replacing it, so no other tuning is lost. Keyed by the model's resolved
-    `provider:identifier` so it matches deepagents' own profile lookup. Best
-    effort — a missing/renamed API must never break graph load.
-    """
-    try:
-        from deepagents import HarnessProfile, register_harness_profile
-        from deepagents._models import get_model_identifier, get_model_provider
-
-        provider = get_model_provider(llm)
-        identifier = get_model_identifier(llm)
-        if not (provider and identifier):
-            return
-        key = identifier if ":" in identifier else f"{provider}:{identifier}"
-        register_harness_profile(
-            key, HarnessProfile(excluded_middleware=frozenset({"TodoListMiddleware"}))
-        )
-    except Exception:  # noqa: BLE001 - optional profile tweak, never fail graph load
-        pass
-
-
 def _build(model: str | None, checkpointer):
     """Shared deep-agent construction.
 
@@ -580,10 +612,6 @@ def _build(model: str | None, checkpointer):
         max_tokens=8000,
         thinking={"type": "disabled"},
     )
-
-    # Remove deepagents' built-in todo list (write_todos tool + planning prompt);
-    # must run before create_deep_agent resolves this model's harness profile.
-    _disable_todo_middleware(llm)
 
     # ToolCallLimitMiddleware subclasses AgentMiddleware but binds an invariant
     # generic param that type checkers don't accept as assignable to the base — a
@@ -623,12 +651,16 @@ def _build(model: str | None, checkpointer):
         # Every catalogue tool is registered; ToolSelection hides the ones this
         # assistant hasn't enabled. Built-in deepagents tools are unaffected.
         tools=all_tools(),
-        middleware=middleware,
+        # cast: our middleware list is typed with ContextT=None, but create_deep_agent
+        # binds ContextT to our context_schema (Context). Assignable at runtime; the
+        # variance mismatch is a typing-only interop gap.
+        middleware=cast("Any", middleware),
         subagents=subagents,
-        # Context Hub assistants mount an agent repo (see _backend_for); its linked
-        # skill repos live under /skills/, which this tells deepagents to surface.
-        # For default (StateBackend) assistants /skills/ is empty — a no-op.
-        backend=_backend_for,
+        # One shared backend that resolves per run (see DynamicBackend): sandbox VM
+        # default + the assistant's Context Hub skills repo mounted at /skills/, which
+        # this tells deepagents to surface. For default (StateBackend) assistants
+        # /skills/ is empty — a no-op.
+        backend=DynamicBackend(),
         skills=["/skills/"],
         context_schema=Context,
         checkpointer=checkpointer,
