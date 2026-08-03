@@ -16,6 +16,7 @@
  *   GET    /workspaces
  *   GET    /projects  ·  POST /projects
  *   GET    /hub-prompts
+ *   GET    /sandbox-files  ·  GET /sandbox-file
  *   POST   /feedback
  */
 import { GRAPH_ID, apiHeaders, getApiBase } from "./config";
@@ -626,6 +627,149 @@ export async function listAgents(workspace?: string): Promise<string[]> {
   } catch {
     return [];
   }
+}
+
+/* ----------------------------- Sandbox files ----------------------------- */
+
+/**
+ * How the server classified a directory entry. Derived from the extension
+ * allowlist, not from the bytes — so the UI can pick an icon and grey out
+ * non-previewable files before the user clicks one.
+ */
+export type SandboxKind = "dir" | "text" | "binary";
+
+/**
+ * Which sandbox VM to browse. Both fields come from the ACTIVE ASSISTANT'S
+ * metadata (`ls_artifacts.agent_repo` and `customer`) and mirror the key the
+ * agent itself uses. Blank strings must be omitted, not sent: assistant_setup
+ * writes `ls_artifacts.agent_repo = ""` when there is no Context Hub repo.
+ */
+export interface SandboxTarget {
+  agent_repo?: string;
+  customer?: string;
+}
+
+/** One entry in a sandbox directory listing. Dirs first, then case-insensitive name. */
+export interface SandboxEntry {
+  name: string;
+  /** Absolute path on the sandbox VM — also the tree node id. */
+  path: string;
+  is_dir: boolean;
+  kind: SandboxKind;
+}
+
+/** One directory listing (GET /sandbox-files). */
+export interface SandboxListing {
+  /** Sandbox root (e.g. "/workspace") — the tree's root item id. */
+  root: string;
+  /** The directory that was listed. */
+  path: string;
+  /** Parent directory, or null when `path` is the root. */
+  parent: string | null;
+  entries: SandboxEntry[];
+  /** True when the directory held more entries than the server's cap. */
+  truncated: boolean;
+  /** The VM name (e.g. "da-acme-agents"), handy in a footer. */
+  sandbox_id?: string | null;
+  /**
+   * Client-populated: why the listing failed (no sandbox, no entitlement,
+   * network, HTTP error). Set instead of throwing so the tree still renders.
+   */
+  error?: string;
+}
+
+/** One file read from the sandbox (GET /sandbox-file). */
+export interface SandboxFile {
+  path: string;
+  name: string;
+  kind: SandboxKind;
+  /** "markdown" for .md/.mdx/.markdown, else the bare extension; null if none. */
+  language: string | null;
+  encoding: string | null;
+  /** null when the file is not previewable — see `reason` / `message`. */
+  content: string | null;
+  offset: number;
+  limit: number;
+  /**
+   * True when this is NOT the whole file: the page filled `limit` lines, or the
+   * in-VM ~500 KiB cap or the server's 256 KiB cap fired.
+   */
+  truncated: boolean;
+  /**
+   * Line to resume from for the next page, or null on the last page (also null
+   * when a single line is itself over a byte cap, so paging can't advance).
+   */
+  next_offset: number | null;
+  /** Present only when `content` is null. */
+  reason?: "binary" | "not_previewable" | "too_large";
+  /** Human-readable companion to `reason`, safe to show verbatim. */
+  message?: string;
+  sandbox_id?: string | null;
+}
+
+/** Shared `?agent_repo=&customer=` query for the sandbox routes; blanks are omitted. */
+function sandboxQuery(target: SandboxTarget, extra: Record<string, string>): URLSearchParams {
+  const qs = new URLSearchParams(extra);
+  if (target.agent_repo) qs.set("agent_repo", target.agent_repo);
+  if (target.customer) qs.set("customer", target.customer);
+  return qs;
+}
+
+/**
+ * List ONE directory on the assistant's sandbox (GET /sandbox-files); omit
+ * `path` for the root. Lazy by design — the tree calls this per expanded node.
+ *
+ * Never throws: the sandbox is legitimately absent (DA_SANDBOX=0, no key, no
+ * entitlement), so failures come back as an empty listing carrying `error`.
+ */
+export async function listSandboxFiles(
+  target: SandboxTarget,
+  path?: string,
+): Promise<SandboxListing> {
+  const failed = (error: string): SandboxListing => ({
+    root: path ?? "",
+    path: path ?? "",
+    parent: null,
+    entries: [],
+    truncated: false,
+    error,
+  });
+  try {
+    const qs = sandboxQuery(target, path ? { path } : {});
+    const res = await fetch(`${getApiBase()}/sandbox-files?${qs}`, { headers: apiHeaders() });
+    if (!res.ok) return failed((await errorFrom(res)).message);
+    const d = (await res.json()) as Partial<SandboxListing>;
+    return {
+      root: d.root ?? path ?? "",
+      path: d.path ?? path ?? "",
+      parent: d.parent ?? null,
+      entries: Array.isArray(d.entries) ? d.entries : [],
+      truncated: !!d.truncated,
+      sandbox_id: d.sandbox_id ?? null,
+    };
+  } catch (e) {
+    return failed(e instanceof Error ? e.message : String(e));
+  }
+}
+
+/**
+ * Read one file from the assistant's sandbox (GET /sandbox-file). Throws so the
+ * viewer pane can show the real message; a binary/oversized file is a SUCCESS
+ * with `content: null` plus `reason`/`message`, not an error.
+ */
+export async function readSandboxFile(
+  target: SandboxTarget,
+  path: string,
+  opts: { offset?: number; limit?: number } = {},
+): Promise<SandboxFile> {
+  const extra: Record<string, string> = { path };
+  if (opts.offset) extra.offset = String(opts.offset);
+  if (opts.limit) extra.limit = String(opts.limit);
+  const res = await fetch(`${getApiBase()}/sandbox-file?${sandboxQuery(target, extra)}`, {
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw await errorFrom(res);
+  return res.json();
 }
 
 /* -------------------------------- Feedback ------------------------------- */

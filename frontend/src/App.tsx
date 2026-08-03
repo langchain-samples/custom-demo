@@ -14,10 +14,18 @@
  * and the conversation-reset key (bumped on assistant switch/create).
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { IconSparkles, IconSun, IconMoon, IconSettings, IconRobot } from "@tabler/icons-react";
+import {
+  IconSparkles,
+  IconSun,
+  IconMoon,
+  IconSettings,
+  IconRobot,
+  IconFolders,
+} from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import ChatPanel from "@/components/ChatPanel";
 import { DashboardCanvas } from "@/components/DashboardCanvas";
+import { FileBrowser } from "@/components/FileBrowser";
 import { SettingsPanel, type SettingsHandle } from "@/components/SettingsPanel";
 import { getAssistantId } from "@/lib/config";
 import { applyTheme, getStoredTheme, setStoredTheme, type Theme } from "@/lib/theme";
@@ -46,6 +54,7 @@ function BrandLogo({ logo }: { logo: string }) {
 
 export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
   const [activeAssistant, setActiveAssistant] = useState<Assistant | null>(null);
   const [widgets, setWidgets] = useState<Widget[]>([]);
   // Sticky: once a dashboard has appeared, keep the two-column layout until a
@@ -189,6 +198,16 @@ export default function App() {
           variant="secondary"
           size="icon"
           className="print:hidden"
+          title="Browse the agent's files"
+          aria-label="Browse agent files"
+          onClick={() => setFilesOpen(true)}
+        >
+          <IconFolders size={18} />
+        </Button>
+        <Button
+          variant="secondary"
+          size="icon"
+          className="print:hidden"
           title={effectiveTheme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
           aria-label="Toggle theme"
           onClick={toggleTheme}
@@ -256,6 +275,12 @@ export default function App() {
           </section>
         )}
       </div>
+
+      <FileBrowser
+        open={filesOpen}
+        onOpenChange={setFilesOpen}
+        assistant={activeAssistant}
+      />
 
       <SettingsPanel
         ref={settingsRef}
