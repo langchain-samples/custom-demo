@@ -91,3 +91,51 @@ def test_subagents_note_on_when_enabled(monkeypatch):
     note = A._subagents_note()
     assert "task()" in note and "orchestrat" in note.lower()  # distinguishes JS orchestration
     assert "execute" in note  # ...from the Python data sandbox
+
+
+# --- todo middleware removed (write_todos tool + planning prompt) ---
+
+
+def _bound_tool_names(compiled) -> set[str]:
+    """Every tool name bound anywhere in a compiled deep-agent graph."""
+    names: set[str] = set()
+    for node in compiled.nodes.values():
+        bound = getattr(node, "bound", None)
+        by_name = getattr(bound, "tools_by_name", None)
+        if isinstance(by_name, dict):
+            names.update(by_name.keys())
+        for t in getattr(bound, "tools", None) or []:
+            n = getattr(t, "name", None)
+            if n:
+                names.add(n)
+    return names
+
+
+def test_build_graph_has_no_write_todos_tool(monkeypatch):
+    # Compiling the graph never calls the model, so a fake key is enough and this
+    # runs in key-stripped CI. Asserts the real assembled harness, not just config.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("DA_DYNAMIC_SUBAGENTS", "0")
+    names = _bound_tool_names(A.build_graph())
+    assert "write_todos" not in names  # TodoListMiddleware excluded
+    # Sanity: other built-ins/tools are untouched (we removed only the todo one).
+    assert {"task", "read_file", "datasearch"} <= names
+
+
+def test_disable_todo_middleware_registers_the_exclusion():
+    from deepagents._models import get_model_identifier, get_model_provider
+    from deepagents.profiles.harness import harness_profiles as HP
+    from langchain_anthropic import ChatAnthropic
+
+    llm = ChatAnthropic(model_name=A.MODEL, api_key="test-key")  # no API call at init
+    key = f"{get_model_provider(llm)}:{get_model_identifier(llm)}"
+    saved = HP._HARNESS_PROFILES.get(key)  # snapshot to avoid leaking global state
+    try:
+        A._disable_todo_middleware(llm)
+        prof = HP._harness_profile_for_model(llm, None)
+        assert "TodoListMiddleware" in prof.excluded_middleware
+    finally:
+        if saved is None:
+            HP._HARNESS_PROFILES.pop(key, None)
+        else:
+            HP._HARNESS_PROFILES[key] = saved
