@@ -41,6 +41,9 @@ class ToolSpec:
     tool: BaseTool
     always_on: bool = False  # cannot be switched off
     default_on: bool = False  # enabled when an assistant has no saved selection
+    # Never auto-enabled — not by the defaults, and not by the setup LLM's tool
+    # pick. Only turned on when the user explicitly selects it in settings.
+    explicit_only: bool = False
     run_limit: int | None = None  # per-run call cap, enforced by middleware
     guidance: str = ""  # appended to the system prompt when enabled
 
@@ -76,6 +79,9 @@ TOOL_REGISTRY: tuple[ToolSpec, ...] = (
         description="Show the systems behind the answer (CRM, warehouse, ticketing…).",
         group="Data",
         tool=list_data_sources,
+        # Opt-in only: keep it out of new assistants unless the user asks for it —
+        # the setup LLM tended to add it even when the scenario didn't call for it.
+        explicit_only=True,
         guidance=(
             "Use `list_data_sources` when the user asks what data you can see or "
             "where the numbers come from."
@@ -140,6 +146,8 @@ ALWAYS_ON: frozenset[str] = frozenset(s.id for s in TOOL_REGISTRY if s.always_on
 DEFAULT_ENABLED: frozenset[str] = frozenset(
     s.id for s in TOOL_REGISTRY if s.default_on or s.always_on
 )
+# Tools the setup auto-picker (and defaults) must never turn on — user opt-in only.
+EXPLICIT_ONLY: frozenset[str] = frozenset(s.id for s in TOOL_REGISTRY if s.explicit_only)
 
 _BY_ID: dict[str, ToolSpec] = {s.id: s for s in TOOL_REGISTRY}
 

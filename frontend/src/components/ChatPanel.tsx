@@ -315,11 +315,16 @@ export default function ChatPanel({
               taskArgs[id] = a.description || a.subagent_type || "";
             }
             const summary = chipArgSummary(name, args);
+            // Carry the interpreter's source so the expanded chip can show it
+            // highlighted (the raw JSON arg is unreadable). Accumulates across
+            // partial frames just like the summary.
+            const code =
+              name === "eval" ? String((args as { code?: unknown }).code ?? "") : undefined;
             if (!chipMap[id]) {
-              chipMap[id] = { id, name, arg: summary, result: null };
+              chipMap[id] = { id, name, arg: summary, result: null, code };
               chipOrder.push(id);
             } else {
-              chipMap[id] = { ...chipMap[id], arg: summary };
+              chipMap[id] = { ...chipMap[id], arg: summary, ...(code !== undefined && { code }) };
             }
             syncChips();
           }
