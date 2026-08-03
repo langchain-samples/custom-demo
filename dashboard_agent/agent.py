@@ -531,6 +531,37 @@ def _dynamic_subagents_enabled() -> bool:
     return os.getenv("DA_DYNAMIC_SUBAGENTS", "0") == "1"
 
 
+def _disable_todo_middleware(llm: Any) -> None:
+    """Drop deepagents' built-in TodoListMiddleware for this model.
+
+    Removes the `write_todos` tool, its planning system prompt, and the `todos`
+    state key from the main agent AND every subagent.
+
+    `create_deep_agent` hardcodes `TodoListMiddleware()` with no off-switch, but
+    it is not one of the required scaffolding middlewares (only Filesystem +
+    SubAgent are), so the supported removal is a harness profile whose
+    `excluded_middleware` names it. `register_harness_profile` is additive: it
+    unions the exclusion onto any existing profile for this model rather than
+    replacing it, so no other tuning is lost. Keyed by the model's resolved
+    `provider:identifier` so it matches deepagents' own profile lookup. Best
+    effort — a missing/renamed API must never break graph load.
+    """
+    try:
+        from deepagents import HarnessProfile, register_harness_profile
+        from deepagents._models import get_model_identifier, get_model_provider
+
+        provider = get_model_provider(llm)
+        identifier = get_model_identifier(llm)
+        if not (provider and identifier):
+            return
+        key = identifier if ":" in identifier else f"{provider}:{identifier}"
+        register_harness_profile(
+            key, HarnessProfile(excluded_middleware=frozenset({"TodoListMiddleware"}))
+        )
+    except Exception:  # noqa: BLE001 - optional profile tweak, never fail graph load
+        pass
+
+
 def _build(model: str | None, checkpointer):
     """Shared deep-agent construction.
 
@@ -549,6 +580,10 @@ def _build(model: str | None, checkpointer):
         max_tokens=8000,
         thinking={"type": "disabled"},
     )
+
+    # Remove deepagents' built-in todo list (write_todos tool + planning prompt);
+    # must run before create_deep_agent resolves this model's harness profile.
+    _disable_todo_middleware(llm)
 
     # ToolCallLimitMiddleware subclasses AgentMiddleware but binds an invariant
     # generic param that type checkers don't accept as assignable to the base — a
