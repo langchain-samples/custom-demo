@@ -17,6 +17,7 @@
  *   GET    /projects  ·  POST /projects
  *   GET    /hub-prompts
  *   GET    /sandbox-files  ·  GET /sandbox-file
+ *   POST   /evals/run  ·  GET /evals/status
  *   POST   /feedback
  */
 import { GRAPH_ID, apiHeaders, getApiBase } from "./config";
@@ -60,6 +61,14 @@ export interface LsArtifacts {
   agent_repo?: string;
   skills_repo?: string;
   skills?: string[];
+  /**
+   * LangSmith dataset the setup run provisioned for this assistant's demo
+   * evals. Absent on every assistant created before the eval feature (and
+   * whenever the best-effort dataset creation failed) — treat that as "this
+   * assistant has no evals", never as an error. /cleanup deletes it alongside
+   * the other artifacts, so it only has to be present in this object.
+   */
+  eval_dataset?: string;
 }
 
 /** A server-side assistant: a stored configuration instance of the graph. */
@@ -770,6 +779,146 @@ export async function readSandboxFile(
   });
   if (!res.ok) throw await errorFrom(res);
   return res.json();
+}
+
+/* --------------------------------- Evals --------------------------------- */
+
+/**
+ * Which assistant's demo eval dataset to act on. The server keeps no assistant
+ * store of its own and does NOT look the assistant up, so everything it needs
+ * rides in the request — the same way the sandbox routes carry
+ * `agent_repo`/`customer` rather than resolving them server-side. All of it
+ * comes off the assistant object the SPA already holds. Blanks are omitted.
+ */
+export interface EvalTarget {
+  assistant_id: string;
+  /** Dataset name from `metadata.ls_artifacts.eval_dataset`. */
+  dataset?: string;
+  /** Workspace the dataset + experiments live in (`context.ls_workspace`). */
+  workspace?: string;
+  /**
+   * The assistant's stored `context`, forwarded verbatim to the experiment
+   * target (POST /evals/run only). REQUIRED for a meaningful score: the server
+   * rebuilds the runtime Context from this, so omitting it grades a default
+   * agent — wrong prompt handle, wrong customer, wrong planted gap — and the
+   * demo's 2/3 baseline would be an accident rather than the planted bug.
+   */
+  context?: RunContext & Record<string, unknown>;
+}
+
+/**
+ * Latest state of an assistant's eval dataset (GET /evals/status). LangSmith is
+ * the source of truth — there is no server-side run store — so this survives a
+ * page reload mid-experiment.
+ *
+ * `dataset_name: null` is the ordinary "this assistant has no evals" answer, NOT
+ * a failure; `error` is only set when the lookup itself broke.
+ */
+export interface EvalStatus {
+  /** null when the assistant has no eval dataset. */
+  dataset_name: string | null;
+  /** Deep link to the dataset in LangSmith. */
+  dataset_url?: string | null;
+  /** An experiment is in flight right now. */
+  running: boolean;
+  /** Name of the most recent experiment, if one has ever run. */
+  experiment_name?: string | null;
+  /** Deep link to that experiment in LangSmith. */
+  url?: string | null;
+  /** Examples that scored 1 (correct behaviour) in the latest experiment. */
+  passed?: number | null;
+  /** Examples in the latest experiment. */
+  total?: number | null;
+  /** Set only when the status lookup failed. */
+  error?: string;
+  /**
+   * Why the last experiment we started died, when it did. Distinct from `error`:
+   * the lookup worked fine, the RUN did not — and it usually died before it
+   * created anything in LangSmith (a missing model key, a workspace the server's
+   * key cannot see), so without this the panel would just show the previous score
+   * forever and the presenter would read a dead run as "the fix did nothing".
+   */
+  last_error?: string | null;
+}
+
+/** Acknowledgement of POST /evals/run — the experiment itself runs detached. */
+export interface EvalRunAck {
+  ok: boolean;
+  dataset_name?: string | null;
+  error?: string;
+}
+
+/** Shared `?assistant_id=&dataset=&workspace=` query; blanks are omitted. */
+function evalQuery(target: EvalTarget): URLSearchParams {
+  const qs = new URLSearchParams({ assistant_id: target.assistant_id });
+  if (target.dataset) qs.set("dataset", target.dataset);
+  if (target.workspace) qs.set("workspace", target.workspace);
+  return qs;
+}
+
+/**
+ * Read the latest experiment for an assistant's eval dataset
+ * (GET /evals/status). Also the poll used while a run is in flight.
+ *
+ * Never throws. An assistant without a dataset is the common case (every
+ * assistant predating this feature), and the panel renders that as a calm empty
+ * state — so a 404 comes back as `dataset_name: null` with no `error` set, and
+ * only a genuine transport/server failure fills `error`.
+ */
+export async function getEvalStatus(target: EvalTarget): Promise<EvalStatus> {
+  const empty: EvalStatus = { dataset_name: null, running: false };
+  try {
+    const res = await fetch(`${getApiBase()}/evals/status?${evalQuery(target)}`, {
+      headers: apiHeaders(),
+    });
+    if (res.status === 404) return empty;
+    if (!res.ok) return { ...empty, error: (await errorFrom(res)).message };
+    const d = (await res.json()) as Partial<EvalStatus>;
+    return {
+      dataset_name: d.dataset_name || null,
+      dataset_url: d.dataset_url ?? null,
+      running: !!d.running,
+      experiment_name: d.experiment_name ?? null,
+      url: d.url ?? null,
+      passed: typeof d.passed === "number" ? d.passed : null,
+      total: typeof d.total === "number" ? d.total : null,
+      error: d.error,
+      last_error: d.last_error ?? null,
+    };
+  } catch (e) {
+    return { ...empty, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * Kick off an experiment over the assistant's eval dataset (POST /evals/run).
+ * Returns as soon as the server has spawned the run — three real agent turns
+ * take 30-90s, so progress is observed through getEvalStatus, not this call.
+ *
+ * Never throws, deliberately: this is also fired forget-style right after an
+ * assistant is created (the baseline run), where a rejection would surface as
+ * an unhandled promise or, worse, break the create path.
+ */
+export async function runEvalExperiment(target: EvalTarget): Promise<EvalRunAck> {
+  try {
+    const res = await fetch(`${getApiBase()}/evals/run`, {
+      method: "POST",
+      headers: apiHeaders(),
+      body: JSON.stringify({
+        assistant_id: target.assistant_id,
+        dataset: target.dataset || undefined,
+        workspace: target.workspace || undefined,
+        // Not decoration: the target is built from this dict, so a run without
+        // it evaluates a default agent instead of this assistant's.
+        context: target.context || undefined,
+      }),
+    });
+    if (!res.ok) return { ok: false, error: (await errorFrom(res)).message };
+    const d = (await res.json()) as Partial<EvalRunAck>;
+    return { ok: d.ok !== false, dataset_name: d.dataset_name ?? null, error: d.error };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 /* -------------------------------- Feedback ------------------------------- */

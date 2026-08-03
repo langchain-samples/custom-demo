@@ -37,6 +37,8 @@ For any change to what the agent does — a new tool, a prompt edit, a backend s
    - **Level 3 — LLM-judge eval:** only for genuinely semantic properties a regex can't reach.
      Lives in `evals/` (LangSmith datasets + experiments), never in per-PR CI.
 
+   Level 3 has two homes, and they are not interchangeable — see *Two evals, opposite polarity*.
+
 ## Non-negotiables
 
 - **Keep the app boundary out of the agent.** Data access / business rules are testable without a
@@ -45,11 +47,35 @@ For any change to what the agent does — a new tool, a prompt edit, a backend s
 - **Tool errors carry the fix.** An empty result reads to a model as "doesn't exist" → confident
   lies. Return an error that names the correct next step, not `{}` / `[]`.
 - **Binary evaluators with a reason, and unit-test them.** A broken evaluator manufactures false
-  confidence. See `evals/evaluators.py` and its tests.
+  confidence. See `evals/evaluators.py` and its tests. Unit-test the *polarity* in both
+  directions with the judge stubbed — a one-directional test passes for an inverted evaluator.
 - **Backends stay locked in code.** Assistant `context` never selects a filesystem/shell/sandbox
   backend — that's the security boundary in AGENTS.md §3.
 
+## Two evals, opposite polarity
+
+The repo deliberately ships a broken agent (the hallucination demo), so "correct" points in two
+different directions depending on which suite you are in. Decide which one you are writing
+*before* you write the criterion:
+
+| | `evals/` (repo-level Tier-3) | `dashboard_agent/assistant_evals.py` (per-assistant) |
+|---|---|---|
+| what it protects | our code — the planted demo bug still works | the demo narrative — the agent is grounded |
+| **score 1** | the bug **fired** (figures fabricated) | the agent was **correct** (said the data is unavailable / hedged, no figures as fact) |
+| dataset | ours, in `EVAL_WORKSPACE` | one per assistant, in the customer's workspace, made at setup |
+| trigger | `uv run python -m evals.run`, manual | `POST /evals/run` — a button in the SPA, mid-demo |
+
+The per-assistant eval is a *demo artifact*, not a regression suite: it reads **2/3 red**, the
+presenter fixes the prompt in Prompt Hub, the button re-runs it and it reads **3/3 green**. Its
+target runs in-process so the fresh Prompt Hub pull is picked up. An inverted evaluator makes the
+baseline green and the fix a regression, so its polarity is pinned by CI tests in both directions
+with the judge stubbed.
+
 ## What runs where
 
-- Per-PR CI: Level 0/1/2 (no real model, no VM, no network) — `dashboard_agent/tests/`.
+- Per-PR CI: Level 0/1/2 (no real model, no VM, no network) — `dashboard_agent/tests/`. This
+  includes the per-assistant eval's *pure* parts: example construction per failure mode,
+  evaluator polarity (judge stubbed), and the routes against a fake LangSmith client.
 - Manual / pre-release: Level 3 judge evals and live smoke tests — `evals/`, gated on env.
+- In the product, on demand: the per-assistant demo experiment (real model, customer's
+  workspace) — `dashboard_agent/assistant_evals.py`, driven from the SPA.
