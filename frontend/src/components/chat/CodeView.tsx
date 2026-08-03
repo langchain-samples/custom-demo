@@ -47,13 +47,13 @@ export function CodeView({ code, lang }: { code: string; lang: string }) {
       >
         {copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
       </button>
-      <pre className="m-0 p-2.5 text-[11px] leading-relaxed">
+      <pre className="m-0 p-2.5 text-[11px] leading-normal">
         {html !== null ? (
-          <code
-            className="[&_.line]:block"
-            // Shiki output: escaped token spans with inline colors (safe to inject).
-            dangerouslySetInnerHTML={{ __html: html }}
-          />
+          // Shiki output: escaped token spans with inline colors (safe to inject).
+          // Lines are separated by real newlines inside the <pre>, so the `.line`
+          // spans must stay inline — forcing them to `display:block` double-spaced
+          // every line (the block break PLUS the newline).
+          <code dangerouslySetInnerHTML={{ __html: html }} />
         ) : (
           <code className="whitespace-pre text-muted-foreground">{code}</code>
         )}
