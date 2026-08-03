@@ -157,6 +157,10 @@ export default function ChatPanel({
   const abortRef = useRef<AbortController | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
   const firstRun = useRef(true);
+  // Whether to keep the log pinned to the bottom as new content streams in.
+  // Flips to false the moment the user scrolls up (so they can read history
+  // mid-stream), and back to true when they return to the bottom or send.
+  const stickToBottom = useRef(true);
 
   const nextId = () => `m${++idRef.current}`;
 
@@ -173,11 +177,22 @@ export default function ChatPanel({
     setItems([]);
   }, [resetKey]);
 
-  // Keep the log pinned to the newest message.
+  // Keep the log pinned to the newest message — but only while the user is at
+  // the bottom. If they've scrolled up to read history mid-stream, leave their
+  // position alone (stickToBottom is false) instead of yanking them back down.
   useEffect(() => {
     const el = logRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
   }, [items]);
+
+  // Track whether the user is at (or near) the bottom. A small threshold keeps
+  // "stick" true through sub-pixel rounding and the last streamed line.
+  const onLogScroll = () => {
+    const el = logRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickToBottom.current = distanceFromBottom <= 60;
+  };
 
   const patchItem = (id: string, fn: (it: Item) => Item) =>
     setItems((prev) => prev.map((it) => (it.id === id ? fn(it) : it)));
@@ -196,6 +211,8 @@ export default function ChatPanel({
 
     busyRef.current = true;
     setBusy(true);
+    // A fresh turn always scrolls into view, even if the user had scrolled up.
+    stickToBottom.current = true;
 
     const activityId = nextId();
     const subagentId = nextId();
@@ -632,7 +649,11 @@ export default function ChatPanel({
 
   return (
     <div className="flex min-h-0 w-full flex-1 flex-col bg-panel">
-      <div ref={logRef} className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-[18px]">
+      <div
+        ref={logRef}
+        onScroll={onLogScroll}
+        className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-[18px]"
+      >
         {items.length === 0 ? (
           hasAssistant ? (
             /* Hero: logo + prompt + centered composer + quick prompts */
@@ -851,7 +872,9 @@ function ItemView({
  * subagent work is visible but never mistaken for the assistant's reply.
  */
 function SubagentCard({ group }: { group: SubagentGroup }) {
-  const [open, setOpen] = useState(true);
+  // Subagent cards start collapsed — the header (label, "invoked with",
+  // step count, running/done) stays visible; expand to see the step chips.
+  const [open, setOpen] = useState(false);
   const running = !group.done;
   const count = group.chips.length;
   return (
