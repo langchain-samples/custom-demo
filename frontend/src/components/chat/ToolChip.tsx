@@ -52,6 +52,10 @@ export function ToolChip({ chip }: { chip: ChipData }) {
   // (chip.stopped) a still-pending chip stops spinning/counting instead of ticking
   // forever — the tool is no longer running, its result just never streamed.
   const running = !hasResult && !chip.stopped;
+  // Expandable when there's something to reveal: the result, OR the code/command
+  // the tool ran (eval/execute). The latter lets the chip open even while still
+  // running (to read the command live) and even if the result never streamed.
+  const expandable = hasResult || !!chip.code;
 
   // While a tool is running show a live spinner + elapsed seconds, so a long
   // `execute` (pip install, a forecast script) visibly ticks instead of looking
@@ -75,10 +79,9 @@ export function ToolChip({ chip }: { chip: ChipData }) {
     <div className="flex animate-in fade-in slide-in-from-bottom-1 flex-col gap-1.5 rounded-lg border border-border bg-panel-2 px-2.5 py-1.5 text-xs text-muted-foreground duration-200">
       <div
         className={
-          "flex items-center gap-2" +
-          (hasResult ? " cursor-pointer hover:text-brand" : "")
+          "flex items-center gap-2" + (expandable ? " cursor-pointer hover:text-brand" : "")
         }
-        onClick={() => hasResult && setOpen((v) => !v)}
+        onClick={() => expandable && setOpen((v) => !v)}
       >
         <Icon size={15} className="shrink-0" stroke={2} />
         <span className="whitespace-nowrap font-semibold">{m.label}</span>
@@ -88,35 +91,34 @@ export function ToolChip({ chip }: { chip: ChipData }) {
           </code>
         )}
         <span className="ml-auto flex items-center gap-1.5">
-          {running ? (
+          {running && (
             <>
               {elapsed >= 2 && (
                 <span className="tabular-nums text-[11px] text-muted-foreground">{elapsed}s</span>
               )}
               <IconLoader2 size={14} className="animate-spin opacity-70" />
             </>
-          ) : hasResult ? (
-            open ? (
-              <IconChevronDown size={14} />
-            ) : (
-              <IconChevronRight size={14} />
-            )
-          ) : null}
+          )}
+          {expandable &&
+            (open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />)}
         </span>
       </div>
-      {hasResult && open && (
+      {expandable && open && (
         <div className="flex flex-col gap-1.5">
-          {/* The code/command that ran, highlighted (Streamdown = the chat renderer). */}
+          {/* The code/command that ran, highlighted (Streamdown = the chat renderer).
+              Shown as soon as it's known — even before the result streams back. */}
           {chip.code && (
             <div className="max-h-72 overflow-auto rounded-md border border-border text-[11px] [&_pre]:!my-0">
               <Streamdown>{"```" + (chip.codeLang || "js") + "\n" + chip.code + "\n```"}</Streamdown>
             </div>
           )}
-          {card ?? (
-            <pre className="m-0 max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background p-2 font-mono text-[11px] text-foreground">
-              {formatResult(chip.result as string)}
-            </pre>
-          )}
+          {/* Output: the typed card, else the raw result — only once it has arrived. */}
+          {hasResult &&
+            (card ?? (
+              <pre className="m-0 max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background p-2 font-mono text-[11px] text-foreground">
+                {formatResult(chip.result as string)}
+              </pre>
+            ))}
         </div>
       )}
     </div>
