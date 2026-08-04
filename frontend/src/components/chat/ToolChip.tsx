@@ -65,21 +65,19 @@ export function ToolChip({ chip }: { chip: ChipData }) {
 
   return (
     <ToolResult
-      tool={
-        <span className="inline-flex items-center gap-1.5">
-          <Icon size={13} stroke={2} />
-          {chip.name}
-        </span>
-      }
+      icon={<Icon size={13} stroke={2} />}
       title={m.label}
-      meta={argText || undefined}
+      // The arg summary (query / first code line) goes in the truncating `tool`
+      // slot, NOT `meta`: beUI's meta slot is shrink-0 with no truncate, so a
+      // long arg there overflowed into the status label (the "squished" chips).
+      tool={argText || chip.name}
       status={status}
       kind={isCode ? "terminal" : "custom"}
       defaultOpen={cardTool}
       collapseOnComplete={!cardTool}
       copyText={chip.result ?? chip.code ?? undefined}
     >
-      <div className="flex flex-col gap-1.5">
+      <div className="flex min-w-0 flex-col gap-1.5">
         {/* The code/command that ran, syntax-highlighted (our CodeView; heredoc
             bodies in their own language). Shown as soon as it's known. */}
         {chip.code && <CodeView code={chip.code} lang={chip.codeLang || "js"} />}

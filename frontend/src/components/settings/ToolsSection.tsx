@@ -61,7 +61,7 @@ export function ToolsSection({ specs, enabled, onChange, defaultOpen }: Props) {
           <div className="flex items-start gap-1.5 rounded-lg border border-border bg-panel-2 px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">
             <IconAlertTriangle size={13} className="mt-px shrink-0" />
             <span>
-              Data search is off — the agent has no grounded data source and will
+              Data search is off - the agent has no grounded data source and will
               answer from the conversation only.
             </span>
           </div>
@@ -74,7 +74,7 @@ export function ToolsSection({ specs, enabled, onChange, defaultOpen }: Props) {
               <label
                 key={spec.id}
                 className="flex cursor-pointer items-start gap-2.5"
-                title={spec.always_on ? "Always on — the dashboard depends on it" : undefined}
+                title={spec.always_on ? "Always on - the dashboard depends on it" : undefined}
               >
                 <Switch
                   className="mt-0.5 shrink-0"

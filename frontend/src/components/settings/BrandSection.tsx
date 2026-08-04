@@ -100,7 +100,7 @@ export function BrandSection({
             onChange={onNeutral}
           />
           <p className="m-0 text-[10px] leading-snug text-muted-foreground">
-            Set this when the primary is a saturated red or orange — those make an
+            Set this when the primary is a saturated red or orange - those make an
             unpleasant surface tint. A brand's dark neutral usually works better.
           </p>
 
@@ -117,7 +117,7 @@ export function BrandSection({
               ))}
             </div>
             <p className="m-0 text-[10px] leading-snug text-muted-foreground">
-              Derived from the brand pair. Live values — this is what charts draw.
+              Derived from the brand pair. Live values - this is what charts draw.
             </p>
           </div>
 

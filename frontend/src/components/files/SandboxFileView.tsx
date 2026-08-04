@@ -100,7 +100,7 @@ export function SandboxFileView({ node, state, onLoadMore, appending }: SandboxF
                 <span className="inline-flex items-center gap-1.5">
                   <IconAlertTriangle size={13} />
                   Showing the first {(file.content ?? "").split("\n").length.toLocaleString()}{" "}
-                  lines — this file is longer.
+                  lines - this file is longer.
                 </span>
                 {file.next_offset != null && onLoadMore ? (
                   <Button variant="secondary" size="sm" onClick={onLoadMore} disabled={appending}>
