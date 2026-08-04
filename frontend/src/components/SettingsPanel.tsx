@@ -61,6 +61,7 @@ import { TypographySection } from "./settings/TypographySection";
 import { AgentConfig } from "./settings/AgentConfig";
 import { ToolsSection } from "./settings/ToolsSection";
 import { DeleteAssistant } from "./settings/DeleteAssistant";
+import { DemoTraffic } from "./settings/DemoTraffic";
 import type { PanelConfig, PromptMode } from "./settings/types";
 import { coerceTheme } from "@/lib/theme";
 import type { Theme } from "@/lib/theme";
@@ -828,6 +829,25 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
                   specs={toolSpecs}
                   enabled={cfg.enabledTools}
                   onChange={editTools}
+                />
+
+                <DemoTraffic
+                  target={
+                    selectedAssistant
+                      ? {
+                          project:
+                            (selectedAssistant.context?.ls_project as string) ||
+                            selectedAssistant.metadata?.customer ||
+                            selectedAssistant.name ||
+                            "",
+                          workspace: selectedAssistant.context?.ls_workspace as string,
+                          context: selectedAssistant.context,
+                          actions: selectedAssistant.metadata?.actions,
+                          data_gap: selectedAssistant.context?.data_gap as string,
+                          customer: selectedAssistant.metadata?.customer,
+                        }
+                      : null
+                  }
                 />
 
                 <DeleteAssistant label={deleteLabel} onDelete={handleDelete} />

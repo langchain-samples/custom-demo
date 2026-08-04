@@ -921,6 +921,82 @@ export async function runEvalExperiment(target: EvalTarget): Promise<EvalRunAck>
   }
 }
 
+/* ------------------------------ Demo traffic ----------------------------- */
+
+/** What POST /demo-traffic needs to backfill an assistant's trace project. */
+export interface DemoTrafficTarget {
+  /** Trace project to fill — `context.ls_project`, i.e. the customer name. */
+  project: string;
+  workspace?: string;
+  /** The assistant's stored context; the seed runs are made with it. */
+  context?: RunContext & Record<string, unknown>;
+  /** Finalized quick actions — the seed questions come from these. */
+  actions?: { question?: string; kind?: string }[];
+  data_gap?: string;
+  customer?: string;
+}
+
+/** Progress of the last backfill (GET /demo-traffic/status). In-process only. */
+export interface DemoTrafficStatus {
+  project: string;
+  running: boolean;
+  result?: {
+    traces?: number;
+    runs?: number;
+    gap_traces?: number;
+    hours?: number;
+    error?: string;
+    insights?: { job_error?: string };
+  };
+}
+
+/**
+ * Start a synthetic-traffic backfill for an assistant's trace project.
+ *
+ * Returns as soon as the server spawns the job — it makes several real agent
+ * runs for seeds and then ingests a few thousand backdated runs, so progress is
+ * observed through getDemoTrafficStatus, not this call.
+ *
+ * Never throws: this is also fired forget-style from the create path.
+ */
+export async function generateDemoTraffic(
+  target: DemoTrafficTarget,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await fetch(`${getApiBase()}/demo-traffic`, {
+      method: "POST",
+      headers: apiHeaders(),
+      body: JSON.stringify({
+        project: target.project,
+        workspace: target.workspace || undefined,
+        context: target.context || undefined,
+        actions: target.actions || undefined,
+        data_gap: target.data_gap || undefined,
+        customer: target.customer || undefined,
+      }),
+    });
+    if (!res.ok) return { ok: false, error: (await errorFrom(res)).message };
+    const d = (await res.json()) as { ok?: boolean; error?: string };
+    return { ok: d.ok !== false, error: d.error };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** Poll a backfill's progress. Never throws; a dead server reads as "not running". */
+export async function getDemoTrafficStatus(project: string): Promise<DemoTrafficStatus> {
+  try {
+    const res = await fetch(
+      `${getApiBase()}/demo-traffic/status?project=${encodeURIComponent(project)}`,
+      { headers: apiHeaders() },
+    );
+    if (!res.ok) return { project, running: false };
+    return (await res.json()) as DemoTrafficStatus;
+  } catch {
+    return { project, running: false };
+  }
+}
+
 /* -------------------------------- Feedback ------------------------------- */
 
 /** Post run feedback (POST /feedback). Returns the parsed { ok, feedback_id, error }. */
