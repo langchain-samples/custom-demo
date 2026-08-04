@@ -1,32 +1,71 @@
 "use client"
 
-import { Collapsible as CollapsiblePrimitive } from "radix-ui"
+import * as React from "react"
+
+import { AgentDisclosure } from "@/components/agents/agent-disclosure"
+
+/**
+ * beUI-backed collapsible, keeping the shadcn compound API
+ * (Collapsible / CollapsibleTrigger / CollapsibleContent, controlled via
+ * open/onOpenChange). The content's open/close animation is beUI's spring
+ * AgentDisclosure instead of Radix Collapsible.
+ */
+const Ctx = React.createContext<{
+  open: boolean
+  onOpenChange?: (open: boolean) => void
+}>({ open: false })
 
 function Collapsible({
-  ...props
-}: React.ComponentProps<typeof CollapsiblePrimitive.Root>) {
-  return <CollapsiblePrimitive.Root data-slot="collapsible" {...props} />
+  open = false,
+  onOpenChange,
+  className,
+  children,
+}: {
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+  className?: string
+  children: React.ReactNode
+}) {
+  return (
+    <div data-slot="collapsible" data-state={open ? "open" : "closed"} className={className}>
+      <Ctx.Provider value={{ open, onOpenChange }}>{children}</Ctx.Provider>
+    </div>
+  )
 }
 
 function CollapsibleTrigger({
+  className,
+  children,
   ...props
-}: React.ComponentProps<typeof CollapsiblePrimitive.CollapsibleTrigger>) {
+}: React.ComponentProps<"button">) {
+  const { open, onOpenChange } = React.useContext(Ctx)
   return (
-    <CollapsiblePrimitive.CollapsibleTrigger
+    <button
+      type="button"
       data-slot="collapsible-trigger"
+      data-state={open ? "open" : "closed"}
+      aria-expanded={open}
+      className={className}
+      onClick={() => onOpenChange?.(!open)}
       {...props}
-    />
+    >
+      {children}
+    </button>
   )
 }
 
 function CollapsibleContent({
-  ...props
-}: React.ComponentProps<typeof CollapsiblePrimitive.CollapsibleContent>) {
+  className,
+  children,
+}: {
+  className?: string
+  children: React.ReactNode
+}) {
+  const { open } = React.useContext(Ctx)
   return (
-    <CollapsiblePrimitive.CollapsibleContent
-      data-slot="collapsible-content"
-      {...props}
-    />
+    <AgentDisclosure open={open} className={className}>
+      {children}
+    </AgentDisclosure>
   )
 }
 

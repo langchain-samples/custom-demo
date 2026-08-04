@@ -45,10 +45,12 @@ langgraph.json  # deployment config: both graphs + http.app + CORS
   | `list_data_sources` | shows the "connected systems" behind an answer |
   | `draft_email` | composes an email, then **pauses for you to edit and approve it** |
   | `suggest_meeting_times` | proposes slots, then **pauses for you to pick one** |
-  | `web_search` | looks up external context and cites it |
+  | `web_search` | **real** web search via Tavily — looks up external context and cites it |
 
   Everything except `datasearch` + `push_widget` is off by default. All are LLM-simulated and
-  tailored to the customer — no per-customer credentials, nothing to break live.
+  tailored to the customer — no per-customer credentials, nothing to break live — **except
+  `web_search`**, which calls the Tavily API and needs `TAVILY_API_KEY` in `.env`. Without the
+  key it returns an error rather than inventing sources, so the agent can never cite fake URLs.
 
 - **deepagents built-ins**, always present and never filtered: `write_todos`, the filesystem
   set (`ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`) and `task`.

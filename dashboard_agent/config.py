@@ -41,6 +41,21 @@ def require_anthropic_key() -> str:
     return key
 
 
+def require_tavily_key() -> str:
+    """Return the Tavily API key, raising if it isn't configured.
+
+    `web_search` deliberately has no offline fallback: a missing key must surface
+    as a tool error, never as invented search results.
+    """
+    load_env()
+    key = os.getenv("TAVILY_API_KEY")
+    if not key:
+        raise RuntimeError(
+            "TAVILY_API_KEY is not set. Add it to dashboard-agent/.env or the environment."
+        )
+    return key
+
+
 MODEL = os.getenv("DASHBOARD_MODEL", "claude-sonnet-5")
 
 
