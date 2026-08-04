@@ -965,6 +965,27 @@ async def demo_traffic(request):
     return JSONResponse({"ok": True, "project": project, "running": True})
 
 
+# Tabs hanging off a tracing project's URL. The SDK gives us the project URL; the
+# per-tab suffixes are UI routes and are NOT documented, so they are isolated here —
+# if LangSmith renames one, this is the only line to change and the fallback is the
+# project page itself, which always works.
+_PROJECT_TABS = {"insights": "insights", "engine": "engine"}
+
+
+def _project_links(workspace: str | None, project: str) -> dict:
+    """LangSmith URLs for a trace project and its Insights/Engine tabs.
+
+    Blocking (one read_project round trip) — call it off the event loop.
+    """
+    session = _scoped_client(workspace).read_project(project_name=project)
+    base = str(getattr(session, "url", "") or "").rstrip("/")
+    if not base:
+        return {}
+    links = {"project": base}
+    links.update({name: f"{base}/{suffix}" for name, suffix in _PROJECT_TABS.items()})
+    return links
+
+
 async def demo_traffic_status(request):
     """Progress of the last backfill for a project. GET ?project=<name>.
 
@@ -974,14 +995,21 @@ async def demo_traffic_status(request):
     """
     project = (request.query_params.get("project") or "").strip()
     if not project:
-        return JSONResponse({"project": "", "running": False})
-    return JSONResponse(
-        {
-            "project": project,
-            "running": project in _TRAFFIC_INFLIGHT,
-            "result": _TRAFFIC_RESULT.get(project) or {},
-        }
-    )
+        return JSONResponse({"project": "", "running": False, "links": {}})
+    out = {
+        "project": project,
+        "running": project in _TRAFFIC_INFLIGHT,
+        "result": _TRAFFIC_RESULT.get(project) or {},
+    }
+    try:
+        out["links"] = await asyncio.to_thread(
+            _project_links, request.query_params.get("workspace"), project
+        )
+    except Exception:  # noqa: BLE001 - links are navigation, not state
+        # A project that does not exist yet (no traffic, no runs) is the common
+        # case here, not an error — the panel just shows no links.
+        out["links"] = {}
+    return JSONResponse(out)
 
 
 app = Starlette(
