@@ -899,6 +899,91 @@ async def sandbox_file(request):
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
 
+# --- demo traffic --------------------------------------------------------------
+
+# One backfill per project at a time. Each is hundreds of traces and several thousand
+# run ingests; two racing would double the traffic and blow through the hourly ingest
+# quota. Same hint-not-truth contract as _INFLIGHT above.
+_TRAFFIC_INFLIGHT: dict[str, float] = {}
+_TRAFFIC_RESULT: dict[str, dict] = {}
+
+
+def _demo_traffic_bg(workspace: str, project: str, payload: dict) -> None:
+    """Thread body for POST /demo-traffic. Never raises."""
+    try:
+        from dashboard_agent.demo_traffic import generate_demo_traffic
+
+        _TRAFFIC_RESULT[project] = generate_demo_traffic(
+            workspace,
+            project,
+            context=payload.get("context") or {},
+            actions=payload.get("actions") or [],
+            data_gap=payload.get("data_gap") or "",
+            customer=payload.get("customer") or "",
+            seed_traces=payload.get("seed_traces") or None,
+            with_insights=bool(payload.get("with_insights", True)),
+        )
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        _TRAFFIC_RESULT[project] = {"error": f"{type(exc).__name__}: {exc}"}
+    finally:
+        with _RUN_LOCK:
+            _TRAFFIC_INFLIGHT.pop(project, None)
+
+
+async def demo_traffic(request):
+    """Backfill a day of synthetic traffic into an assistant's trace project.
+
+    POST {project, workspace?, context?, actions?, data_gap?, customer?} → a receipt.
+    Slow (real seed runs + a few thousand run ingests), so it is spawned on a thread
+    like /evals/run. Exists mainly so assistants created BEFORE this feature can be
+    given traffic without recreating them.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+
+    project = (body.get("project") or body.get("ls_project") or "").strip()
+    if not project:
+        return JSONResponse({"error": "project is required"}, status_code=400)
+    if project in _TRAFFIC_INFLIGHT:
+        return JSONResponse({"ok": True, "project": project, "already_running": True})
+    with _RUN_LOCK:
+        _TRAFFIC_INFLIGHT[project] = time.time()
+
+    try:
+        threading.Thread(
+            target=_demo_traffic_bg,
+            args=(body.get("workspace") or "", project, body),
+            daemon=True,
+        ).start()
+    except Exception as exc:
+        with _RUN_LOCK:
+            _TRAFFIC_INFLIGHT.pop(project, None)
+        return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+    return JSONResponse({"ok": True, "project": project, "running": True})
+
+
+async def demo_traffic_status(request):
+    """Progress of the last backfill for a project. GET ?project=<name>.
+
+    In-process only — unlike /evals/status there is nothing in LangSmith that says
+    "a backfill happened", so a redeploy loses this. That is acceptable: the traffic
+    itself is durable and visible in the project; only the receipt is ephemeral.
+    """
+    project = (request.query_params.get("project") or "").strip()
+    if not project:
+        return JSONResponse({"project": "", "running": False})
+    return JSONResponse(
+        {
+            "project": project,
+            "running": project in _TRAFFIC_INFLIGHT,
+            "result": _TRAFFIC_RESULT.get(project) or {},
+        }
+    )
+
+
 app = Starlette(
     routes=[
         Route("/feedback", feedback, methods=["POST"]),
@@ -913,5 +998,7 @@ app = Starlette(
         Route("/trace-url", trace_url, methods=["GET"]),
         Route("/evals/run", evals_run, methods=["POST"]),
         Route("/evals/status", evals_status, methods=["GET"]),
+        Route("/demo-traffic", demo_traffic, methods=["POST"]),
+        Route("/demo-traffic/status", demo_traffic_status, methods=["GET"]),
     ]
 )

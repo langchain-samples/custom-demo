@@ -79,3 +79,43 @@ with the judge stubbed.
 - Manual / pre-release: Level 3 judge evals and live smoke tests — `evals/`, gated on env.
 - In the product, on demand: the per-assistant demo experiment (real model, customer's
   workspace) — `dashboard_agent/assistant_evals.py`, driven from the SPA.
+
+## Synthetic demo traffic
+
+`dashboard_agent/demo_traffic.py` fills a new assistant's trace project with a day of
+traffic so the LangSmith **Monitoring** and **Insights** tabs have something to show. It runs
+fire-and-forget at setup, and `POST /demo-traffic` (a button in Settings) does the same for
+assistants created before the feature.
+
+It **replays**, it does not fabricate. A real trace here is 50-151 runs at depth 11 — every
+model call wrapped in nine middleware chain runs — so hand-built traces would look wrong in
+the trace view and would drift with every deepagents upgrade. Instead a handful of real runs
+are made once (they are also genuine traffic), then cloned with shifted timestamps, fresh
+uuid7 ids and a rebuilt `dotted_order`. That is the same remap as langsmith's
+`RunTree._remap_for_project`, plus time.
+
+Three things to know before changing it:
+
+- **The 24-hour wall.** The ingest API rejects any run whose `start_time` is more than 24h
+  from now (`"start_time for post must be within ±24 hours of current time"`). The SDK does
+  not enforce this and the docs do not mention it. Worse, it is *silent* on the batch paths:
+  `create_run` raises, but `multipart_ingest`/`batch_ingest_runs` only log and drop. This is
+  why the backfill is a dense day rather than the week it was first scoped as, and why
+  `_schedule` hard-caps at `MAX_BACKDATE_HOURS`. There is no bulk-import endpoint to route
+  around it — `bulk-exports` is export-only.
+- **`failure_mode` does not mark a fabrication.** It is inherited from the seed and is set on
+  *every* trace of a hallucination assistant — it says what the assistant is, not what the run
+  did. The gap replays carry `demo_gap_probe: true`; that is what a presenter and an Insights
+  filter select on.
+- **Synthetic runs are marked** with `metadata.synthetic = true` and the `synthetic-demo` tag,
+  because this data lands in a project that also holds real traces. Anything built on that
+  project — a monitor, a saved filter, an eval sampling production runs — has to be able to
+  exclude it.
+
+Insights is created through the API (`POST /sessions/{id}/insights/configs`, then
+`POST /sessions/{id}/insights`). Running a job needs a model secret on the **workspace**
+(Settings → Model secrets); without it the config still saves and the job returns a 422
+listing the missing key, which the code turns into a readable message.
+
+Teardown is free: the runs live in the assistant's own trace project, which `POST /cleanup`
+already deletes.

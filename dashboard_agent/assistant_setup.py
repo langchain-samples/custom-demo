@@ -900,6 +900,31 @@ def prepare_assistant(payload: dict) -> dict:
             workspace, customer, failure_mode, actions, context.get("data_gap", "")
         )
 
+    # A day of synthetic traffic in the assistant's trace project, so the LangSmith
+    # Monitoring and Insights tabs have something to show the moment the demo starts
+    # (otherwise every chart is empty and Insights has nothing to cluster). Spawned on
+    # a daemon thread like the sandbox prewarm above: it runs several REAL agent turns
+    # to get seed traces and then ingests a few thousand backdated runs, which is
+    # minutes of work that setup must not wait on. Fire-and-forget and best-effort —
+    # `generate_demo_traffic` reports failures in its return value rather than raising,
+    # and nothing downstream depends on it having succeeded.
+    if push:
+        import threading
+
+        from .demo_traffic import generate_demo_traffic
+
+        threading.Thread(
+            target=generate_demo_traffic,
+            args=(workspace, context.get("ls_project") or customer),
+            kwargs={
+                "context": context,
+                "actions": actions,
+                "data_gap": context.get("data_gap", ""),
+                "customer": customer,
+            },
+            daemon=True,
+        ).start()
+
     # Brand colors — priority: Brandfetch (accurate/current) → LLM known-brand
     # guess → scraped site theme-color → default. Secondary drives the 2nd series.
     accent = (

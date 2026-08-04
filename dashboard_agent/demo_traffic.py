@@ -341,8 +341,8 @@ def run_seeds(context: dict | None, questions: list[dict], *, project: str = "")
     run — and they double as the replay seeds, so nothing is paid for twice. Returns
     [{trace_id, is_gap}] for the ones that produced a trace.
     """
+    from langchain_core.tracers.context import collect_runs
     from langsmith import tracing_context
-    from langsmith.run_helpers import get_current_run_tree
 
     from .assistant_evals import make_run_context
 
@@ -355,14 +355,21 @@ def run_seeds(context: dict | None, questions: list[dict], *, project: str = "")
                 from .agent import build_agent
 
                 agent = build_agent()
-            with tracing_context(enabled=True, project_name=project or None):
+            # `collect_runs` captures the root run synchronously as it completes.
+            # `get_current_run_tree()` does NOT work here: it reads a context var that
+            # is only set INSIDE a traced call, so after `invoke` returns it is always
+            # None and every seed is silently discarded.
+            with (
+                tracing_context(enabled=True, project_name=project or None),
+                collect_runs() as collected,
+            ):
                 agent.invoke(
                     {"messages": [{"role": "user", "content": item["question"]}]},
                     config={"configurable": {"thread_id": str(uuid.uuid4())}},
                     context=ctx,
                 )
-                tree = get_current_run_tree()
-            trace_id = str(getattr(tree, "trace_id", "") or "") if tree else ""
+            traced = getattr(collected, "traced_runs", None) or []
+            trace_id = str(getattr(traced[0], "id", "") or "") if traced else ""
             if trace_id:
                 out.append({"trace_id": trace_id, "is_gap": item.get("is_gap", False)})
         except Exception:  # noqa: BLE001 - one bad seed must not lose the others
