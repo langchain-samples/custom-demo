@@ -88,6 +88,18 @@ export function subagentIdentity(ns: string[]): SubagentIdentity {
 }
 
 /**
+ * The launching call's root for a subagent bucket key: the `tools:<call_id>`
+ * head, with any trailing numeric branch dropped. Every parallel `task()`
+ * dispatch from ONE `eval` shares this root (they differ only by branch:
+ * `tools:abc`, `tools:abc|1`, `tools:abc|2`), so grouping cards by it collapses a
+ * whole fanned-out fleet into one group. A lone `task`-tool subagent is its own
+ * root (a group of one).
+ */
+export function subagentRoot(key: string): string {
+  return (key || "").split("|")[0] || "";
+}
+
+/**
  * Resolve the effective namespace for a streamed message frame: prefer the
  * namespace parsed off the event name; if that is empty (older servers), fall
  * back to a checkpoint namespace previously recorded for this message id.

@@ -71,7 +71,7 @@ export function EvalPanel({ open, onOpenChange, assistant }: EvalPanelProps) {
           <DialogTitle>Evals</DialogTitle>
           <DialogDescription>
             Run this assistant's demo questions as a LangSmith experiment. A pass means the answer
-            stayed grounded — including admitting when the data isn't there.
+            stayed grounded - including admitting when the data isn't there.
           </DialogDescription>
         </DialogHeader>
 
@@ -79,7 +79,7 @@ export function EvalPanel({ open, onOpenChange, assistant }: EvalPanelProps) {
           <PaneState
             icon={<IconUserOff size={26} />}
             title="No assistant selected"
-            detail="Pick or create an assistant in Settings — evals run against that assistant's dataset."
+            detail="Pick or create an assistant in Settings - evals run against that assistant's dataset."
           />
         ) : !dataset ? (
           <NoEvalDataset />

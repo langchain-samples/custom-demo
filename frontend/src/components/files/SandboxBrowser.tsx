@@ -166,7 +166,7 @@ export function SandboxBrowser({ target, onReload }: SandboxBrowserProps) {
       <PaneState
         icon={<IconFolderOff size={30} />}
         title="No sandbox available for this assistant"
-        detail={`${boot.message} — a sandbox appears once the agent has run a turn that uses one, and browsing never starts one.`}
+        detail={`${boot.message} - a sandbox appears once the agent has run a turn that uses one, and browsing never starts one.`}
         action={
           <Button variant="secondary" size="sm" className="mt-1" onClick={onReload}>
             <IconRefresh size={14} /> Try again

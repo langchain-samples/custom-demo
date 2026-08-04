@@ -35,7 +35,7 @@ export function FeedbackRow({ runId, workspace }: { runId: string; workspace?: s
       if (d.ok) {
         if (d.feedback_id) feedbackId.current = d.feedback_id;
         setStatus({
-          text: withComment ? "✓ Sent with comment" : "✓ Sent — add a comment?",
+          text: withComment ? "✓ Sent with comment" : "✓ Sent - add a comment?",
           kind: "ok",
         });
       } else {

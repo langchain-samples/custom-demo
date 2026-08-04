@@ -163,11 +163,11 @@ export default function App() {
     }
     if (!guards.hasWorkspace) {
       setSettingsOpen(true);
-      return "Pick a Workspace in Settings before sending — trace routing needs an explicit workspace.";
+      return "Pick a Workspace in Settings before sending - trace routing needs an explicit workspace.";
     }
     if (!guards.hasPrompt) {
       setSettingsOpen(true);
-      return "A system prompt is required — pick one from the Hub or switch to Prompt and write one (Settings → System prompt).";
+      return "A system prompt is required - pick one from the Hub or switch to Prompt and write one (Settings → System prompt).";
     }
     return null;
   };
@@ -211,7 +211,7 @@ export default function App() {
             <IconFolders size={18} />
           </Button>
         </Tooltip>
-        <Tooltip content="Evals — run this assistant's demo dataset in LangSmith" side="bottom">
+        <Tooltip content="Evals - run this assistant's demo dataset in LangSmith" side="bottom">
           <Button
             variant="secondary"
             size="icon"

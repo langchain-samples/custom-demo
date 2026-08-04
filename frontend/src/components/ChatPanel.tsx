@@ -37,7 +37,12 @@ import {
   widgetFromArgs,
   widgetLooksComplete,
 } from "@/components/chat/helpers";
-import { effectiveNamespace, isSubagentNamespace, subagentIdentity } from "@/lib/streamEvent";
+import {
+  effectiveNamespace,
+  isSubagentNamespace,
+  subagentIdentity,
+  subagentRoot,
+} from "@/lib/streamEvent";
 
 export interface ChatPanelProps {
   /** The assistant id to run against (a UUID once one is selected in settings). */
@@ -650,7 +655,7 @@ export default function ChatPanel({
       <div
         ref={logRef}
         onScroll={onLogScroll}
-        className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-[18px]"
+        className="flex min-h-0 flex-1 flex-col gap-3 overflow-x-hidden overflow-y-auto p-[18px]"
       >
         {items.length === 0 ? (
           hasAssistant ? (
@@ -813,11 +818,26 @@ function ItemView({
   if (item.kind === "subagents") {
     const groups = item.groups.filter((g) => g.chips.length > 0 || g.text);
     if (!groups.length) return null;
+    // Group parallel eval-dispatched subagents by their launching-eval root, so a
+    // fan-out of N shows as ONE collapsible "Delegated to N subagents" card
+    // instead of N identical rows. A lone task-tool subagent is its own group of
+    // one and renders as a normal card.
+    const byRoot: { root: string; members: SubagentGroup[] }[] = [];
+    for (const g of groups) {
+      const root = subagentRoot(g.key);
+      const bucket = byRoot.find((b) => b.root === root);
+      if (bucket) bucket.members.push(g);
+      else byRoot.push({ root, members: [g] });
+    }
     return (
       <div className="flex flex-col gap-1.5">
-        {groups.map((g) => (
-          <SubagentCard key={g.key} group={g} />
-        ))}
+        {byRoot.map((b) =>
+          b.members.length === 1 ? (
+            <SubagentCard key={b.root} group={b.members[0]} />
+          ) : (
+            <SubagentFleet key={b.root} groups={b.members} />
+          ),
+        )}
       </div>
     );
   }
@@ -862,9 +882,10 @@ function ItemView({
  * chips and any text it produced. Distinct from the main answer bubble so
  * subagent work is visible but never mistaken for the assistant's reply.
  */
-function SubagentCard({ group }: { group: SubagentGroup }) {
+function SubagentCard({ group, index }: { group: SubagentGroup; index?: number }) {
   // Subagent cards start collapsed — the header (label, "invoked with",
   // step count, running/done) stays visible; expand to see the step chips.
+  // `index` numbers a card within a fleet ("Subagent 1", "Subagent 2", …).
   const [open, setOpen] = useState(false);
   const running = !group.done;
   const count = group.chips.length;
@@ -881,7 +902,10 @@ function SubagentCard({ group }: { group: SubagentGroup }) {
           <IconChevronRight size={14} className="shrink-0" />
         )}
         <IconRobot size={15} className="shrink-0" stroke={2} />
-        <span className="font-semibold text-foreground">{group.label}</span>
+        <span className="font-semibold text-foreground">
+          {group.label}
+          {index ? " " + index : ""}
+        </span>
         {count > 0 && (
           <span className="text-[11px] text-muted-foreground">
             {count} step{count === 1 ? "" : "s"}
@@ -913,6 +937,53 @@ function SubagentCard({ group }: { group: SubagentGroup }) {
               {group.text}
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A collapsed "fleet" card for a fan-out of eval-dispatched subagents that share
+ * one launching eval. Shows the count + aggregate status on one line; expand to
+ * see each subagent (numbered) as its own SubagentCard. Collapses the wall of N
+ * identical "Subagent" rows a workflow turn used to produce.
+ */
+function SubagentFleet({ groups }: { groups: SubagentGroup[] }) {
+  const [open, setOpen] = useState(false);
+  const n = groups.length;
+  const running = groups.filter((g) => !g.done).length;
+  const allDone = running === 0;
+  return (
+    <div className="flex flex-col overflow-hidden rounded-lg border border-border bg-panel-2 text-xs text-muted-foreground">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-2 px-2.5 py-1.5 text-left hover:text-brand"
+      >
+        {open ? (
+          <IconChevronDown size={14} className="shrink-0" />
+        ) : (
+          <IconChevronRight size={14} className="shrink-0" />
+        )}
+        <IconRobot size={15} className="shrink-0" stroke={2} />
+        <span className="font-semibold text-foreground">Delegated to {n} subagents</span>
+        <span className="ml-auto flex items-center gap-1.5">
+          {allDone ? (
+            <span className="text-[11px] text-muted-foreground">✓ all done</span>
+          ) : (
+            <>
+              <span className="text-[11px] text-muted-foreground">{running} running</span>
+              <IconLoader2 size={14} className="animate-spin opacity-70" />
+            </>
+          )}
+        </span>
+      </button>
+      {open && (
+        <div className="flex max-h-80 flex-col gap-1.5 overflow-auto border-t border-border px-2.5 py-2">
+          {groups.map((g, i) => (
+            <SubagentCard key={g.key} group={g} index={i + 1} />
+          ))}
         </div>
       )}
     </div>

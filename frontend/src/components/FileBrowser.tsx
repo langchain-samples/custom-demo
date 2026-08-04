@@ -93,7 +93,7 @@ export function FileBrowser({ open, onOpenChange, assistant }: FileBrowserProps)
           <PaneState
             icon={<IconUserOff size={30} />}
             title="No assistant selected"
-            detail="Pick or create an assistant in Settings — the file browser reads that assistant's sandbox."
+            detail="Pick or create an assistant in Settings - the file browser reads that assistant's sandbox."
           />
         )}
       </DialogContent>
