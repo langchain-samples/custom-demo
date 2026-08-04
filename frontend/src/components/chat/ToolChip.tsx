@@ -1,11 +1,15 @@
 /**
- * A collapsible tool-activity "chip" (datasearch / query_sql / write_todos / …).
- * The arg (e.g. the SQL query or search terms) streams in live; once the tool's
- * result arrives the chip becomes clickable to reveal the raw result. Ported
- * from the original `toolChip()` DOM builder.
+ * A tool-activity "chip" (datasearch / query_sql / eval / …), now rendered with
+ * beUI's `ToolResult` disclosure as the outer chrome. The streaming reducer in
+ * ChatPanel still owns the ChipData model; this is presentation only.
+ *
+ * The arg (SQL / search terms / first line of code) shows in the header `meta`;
+ * once the result arrives the body reveals either a typed capability card
+ * (ToolResultCard) or the raw output. Code-running tools (eval/execute) show the
+ * source syntax-highlighted via our own CodeView (handles js/bash/python heredocs,
+ * which beUI's AgentCode language set doesn't cover).
  */
-import { useEffect, useRef, useState } from "react";
-import { IconChevronDown, IconChevronRight, IconLoader2 } from "@tabler/icons-react";
+import { ToolResult, type ToolResultStatus } from "@/components/agents/tool-result";
 import { CodeView } from "./CodeView";
 import { toolMeta } from "./helpers";
 import { hasToolCard, renderToolResult } from "./ToolResultCard";
@@ -42,81 +46,51 @@ function formatResult(content: string): string {
 }
 
 export function ToolChip({ chip }: { chip: ChipData }) {
-  // Capability tools render a typed card, which is the point of calling them —
-  // so those start expanded. Plumbing tools stay collapsed as before.
-  const [open, setOpen] = useState(hasToolCard(chip.name));
   const m = toolMeta(chip.name);
   const Icon = m.icon;
   const hasResult = chip.result !== null;
-  // "Running" = no result yet AND the run is still live. Once the run ends
-  // (chip.stopped) a still-pending chip stops spinning/counting instead of ticking
-  // forever — the tool is no longer running, its result just never streamed.
-  const running = !hasResult && !chip.stopped;
-  // Expandable when there's something to reveal: the result, OR the code/command
-  // the tool ran (eval/execute). The latter lets the chip open even while still
-  // running (to read the command live) and even if the result never streamed.
-  const expandable = hasResult || !!chip.code;
+  const isCode = !!chip.code;
 
-  // While a tool is running show a live spinner + elapsed seconds, so a long
-  // `execute` (pip install, a forecast script) visibly ticks instead of looking
-  // frozen. The counter starts when the chip first renders (~tool-call time).
-  const startRef = useRef<number>(Date.now());
-  const [elapsed, setElapsed] = useState(0);
-  useEffect(() => {
-    if (!running) return;
-    const t = setInterval(
-      () => setElapsed(Math.floor((Date.now() - startRef.current) / 1000)),
-      1000,
-    );
-    return () => clearInterval(t);
-  }, [running]);
-  const arg = chip.arg || "";
-  const argText = arg.length > 120 ? arg.slice(0, 120) + "…" : arg;
-  // null when there's no renderer for this tool, or the payload is off-shape.
+  // Map the chip lifecycle to beUI's ToolResult status. A tool whose result
+  // never streamed before the run ended (stopped) is shown as cancelled rather
+  // than spinning forever.
+  const status: ToolResultStatus = hasResult ? "success" : chip.stopped ? "cancelled" : "running";
+
+  // Capability tools render a typed card, which is the point of calling them —
+  // so those start (and stay) expanded. Plumbing tools collapse once complete.
+  const cardTool = hasToolCard(chip.name);
   const card = hasResult ? renderToolResult(chip.name, chip.result as string) : null;
 
+  const argText = chip.arg && chip.arg.length > 120 ? chip.arg.slice(0, 120) + "…" : chip.arg;
+
   return (
-    <div className="flex animate-in fade-in slide-in-from-bottom-1 flex-col gap-1.5 rounded-lg border border-border bg-panel-2 px-2.5 py-1.5 text-xs text-muted-foreground duration-200">
-      <div
-        className={
-          "flex items-center gap-2" + (expandable ? " cursor-pointer hover:text-brand" : "")
-        }
-        onClick={() => expandable && setOpen((v) => !v)}
-      >
-        <Icon size={15} className="shrink-0" stroke={2} />
-        <span className="whitespace-nowrap font-semibold">{m.label}</span>
-        {argText && (
-          <code className="overflow-hidden text-ellipsis whitespace-nowrap rounded-[5px] border border-border bg-background px-1.5 py-px font-mono text-[11px] text-muted-foreground">
-            {argText}
-          </code>
-        )}
-        <span className="ml-auto flex items-center gap-1.5">
-          {running && (
-            <>
-              {elapsed >= 2 && (
-                <span className="tabular-nums text-[11px] text-muted-foreground">{elapsed}s</span>
-              )}
-              <IconLoader2 size={14} className="animate-spin opacity-70" />
-            </>
-          )}
-          {expandable &&
-            (open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />)}
+    <ToolResult
+      tool={
+        <span className="inline-flex items-center gap-1.5">
+          <Icon size={13} stroke={2} />
+          {chip.name}
         </span>
+      }
+      title={m.label}
+      meta={argText || undefined}
+      status={status}
+      kind={isCode ? "terminal" : "custom"}
+      defaultOpen={cardTool}
+      collapseOnComplete={!cardTool}
+      copyText={chip.result ?? chip.code ?? undefined}
+    >
+      <div className="flex flex-col gap-1.5">
+        {/* The code/command that ran, syntax-highlighted (our CodeView; heredoc
+            bodies in their own language). Shown as soon as it's known. */}
+        {chip.code && <CodeView code={chip.code} lang={chip.codeLang || "js"} />}
+        {/* Output: the typed card, else the raw result — only once it has arrived. */}
+        {hasResult &&
+          (card ?? (
+            <pre className="m-0 max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background p-2 font-mono text-[11px] text-foreground">
+              {formatResult(chip.result as string)}
+            </pre>
+          ))}
       </div>
-      {expandable && open && (
-        <div className="flex flex-col gap-1.5">
-          {/* The code/command that ran, syntax-highlighted (Shiki; heredoc bodies in
-              their own language). Shown as soon as it's known — before the result. */}
-          {chip.code && <CodeView code={chip.code} lang={chip.codeLang || "js"} />}
-          {/* Output: the typed card, else the raw result — only once it has arrived. */}
-          {hasResult &&
-            (card ?? (
-              <pre className="m-0 max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background p-2 font-mono text-[11px] text-foreground">
-                {formatResult(chip.result as string)}
-              </pre>
-            ))}
-        </div>
-      )}
-    </div>
+    </ToolResult>
   );
 }
