@@ -20,11 +20,15 @@ import type { QuickAction, ReviewInterrupt, RunContext, ThreadMessage, Widget } 
 import { ensureThread, resetThread, runStream } from "@/lib/api";
 import { PROSE_CLS } from "@/lib/markdown";
 import { ReviewCard } from "@/components/chat/ReviewCard";
-import { IconArrowUp } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import { ToolChip, type ChipData } from "@/components/chat/ToolChip";
 import { FeedbackRow } from "@/components/chat/FeedbackRow";
 import { IconChevronDown, IconChevronRight } from "@tabler/icons-react";
+// beUI agent surface (copy-paste registry components under @/components/agents).
+import { MessageBubble, MessageBubbleContent } from "@/components/agents/message-bubble";
+import { StreamingResponse } from "@/components/agents/streaming-response";
+import { ReasoningText } from "@/components/agents/loading-states/reasoning-text";
+import { PromptInput } from "@/components/agents/prompt-input";
 import {
   chipArgSummary,
   chipCode,
@@ -604,65 +608,41 @@ export default function ChatPanel({
     void runTurn({ resume: value });
   };
 
-  const submitCurrent = () => {
-    const q = input;
+  // Submit from beUI's PromptInput: clear the composer, then run the turn.
+  // (send() re-reads the passed text and applies the App guard.)
+  const submit = (text: string) => {
     setInput("");
-    send(q);
-  };
-
-  const onSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    submitCurrent();
-  };
-
-  // Enter sends; Shift+Enter inserts a newline (standard chat-composer behaviour).
-  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      if (!busy && input.trim()) submitCurrent();
-    }
+    send(text);
   };
 
   const heroPlaceholder = industry
     ? `Ask me anything about ${industry}…`
     : "Ask a question…";
 
+  // The composer is beUI's PromptInput (auto-growing textarea, built-in send/stop
+  // buttons, Enter-to-send / Shift+Enter newline). The hero variant (shown only
+  // before the first prompt) keeps a resting brand glow via a wrapper; the bottom
+  // variant sits on a top border. `loading` swaps the send button for a stop that
+  // aborts the in-flight stream.
   const composer = (variant: "hero" | "bottom") => (
-    <form
-      onSubmit={onSubmit}
-      className={variant === "hero" ? "w-full" : "border-t border-border px-3.5 py-3"}
+    <div
+      className={
+        variant === "hero"
+          ? "w-full rounded-2xl shadow-[0_0_16px_-5px_color-mix(in_oklch,var(--brand-primary)_38%,transparent)]"
+          : "border-t border-border px-3.5 py-3"
+      }
     >
-      {/* Rounded, auto-growing composer. The hero variant (shown only before the
-          first prompt) carries a resting brand-primary glow; the bottom variant is
-          plain. Both intensify the glow on focus. */}
-      <div
-        className={
-          "flex items-end gap-2 rounded-2xl border bg-panel-2 px-3 py-2 transition-[box-shadow,border-color] " +
-          (variant === "hero"
-            ? "border-[color-mix(in_oklch,var(--brand-primary)_35%,var(--border))] shadow-[0_0_12px_-6px_color-mix(in_oklch,var(--brand-primary)_28%,transparent)] focus-within:border-[var(--brand-primary)] focus-within:shadow-[0_0_16px_-5px_color-mix(in_oklch,var(--brand-primary)_38%,transparent)]"
-            : "border-input shadow-sm focus-within:border-[var(--brand-primary)] focus-within:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-primary)_28%,transparent)]")
-        }
-      >
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={onKeyDown}
-          rows={1}
-          placeholder={variant === "hero" ? heroPlaceholder : "Ask a question…"}
-          autoComplete="off"
-          className="field-sizing-content max-h-40 min-h-[28px] flex-1 resize-none self-center bg-transparent py-1 text-sm leading-relaxed outline-none placeholder:text-muted-foreground"
-        />
-        <Button
-          type="submit"
-          size="icon"
-          disabled={busy || !input.trim()}
-          aria-label="Send"
-          className="h-8 w-8 shrink-0 rounded-full"
-        >
-          <IconArrowUp className="h-4 w-4" stroke={2.5} />
-        </Button>
-      </div>
-    </form>
+      <PromptInput
+        value={input}
+        onValueChange={setInput}
+        onSubmit={(text) => submit(text)}
+        loading={busy}
+        onStop={() => abortRef.current?.abort()}
+        placeholder={variant === "hero" ? heroPlaceholder : "Ask a question…"}
+        minRows={variant === "hero" ? 2 : 1}
+        aria-label="Prompt"
+      />
+    </div>
   );
 
   return (
@@ -815,9 +795,9 @@ function ItemView({
   }
   if (item.kind === "user") {
     return (
-      <div className="rounded-xl bg-panel-2 px-3 py-2.5 text-sm leading-relaxed text-foreground">
-        {item.text}
-      </div>
+      <MessageBubble variant="tint" align="start" animateIn className="text-sm leading-relaxed">
+        <MessageBubbleContent>{item.text}</MessageBubbleContent>
+      </MessageBubble>
     );
   }
   if (item.kind === "activity") {
@@ -845,30 +825,34 @@ function ItemView({
     return <FeedbackRow runId={item.runId} workspace={item.workspace} />;
   }
   // assistant
-  const base = "text-sm leading-relaxed text-foreground";
-  // Render markdown for real answers — both the final message AND live while it
-  // streams (Streamdown gracefully closes half-finished tables/bold/code fences,
-  // so partial output stays clean instead of showing raw ** and |---| syntax).
-  const isAnswer = item.markdown || (item.streaming && item.text !== "Working…");
+  // The bare pre-stream placeholder → beUI's animated ReasoningText ("Thinking /
+  // Reading the context / …") instead of a static "Working…".
+  if (item.streaming && item.text === "Working…") {
+    return <ReasoningText className="px-1 py-1.5" />;
+  }
+  // Real answers (final, or streaming once tokens arrive) render as markdown inside
+  // beUI's StreamingResponse — it shows a streaming indicator and closes on
+  // complete. Streamdown gracefully closes half-finished tables/bold/code fences so
+  // partial output stays clean. Actions are suppressed; our FeedbackRow owns rating
+  // (it posts to LangSmith with the run's id + workspace).
+  const isAnswer = item.markdown || item.streaming;
   if (isAnswer) {
-    // PROSE_CLS already carries `base`; only the bubble chrome is local.
     return (
-      <div className={PROSE_CLS + " rounded-xl bg-panel-2 px-3 py-2.5"}>
+      <StreamingResponse
+        status={item.streaming ? "streaming" : "complete"}
+        copyText={item.text}
+        showActions={false}
+        contentClassName={PROSE_CLS}
+      >
         <Streamdown parseIncompleteMarkdown>{item.text}</Streamdown>
-      </div>
+      </StreamingResponse>
     );
   }
+  // Terminal non-answer text: errors, guard messages, "Dashboard ready.".
   return (
-    <div className={base + " rounded-xl bg-panel-2 px-3 py-2.5"}>
-      {item.streaming && item.text === "Working…" ? (
-        <span className="inline-flex items-center gap-1.5">
-          <IconLoader2 size={15} className="animate-spin [animation-duration:0.6s]" />
-          {item.text}
-        </span>
-      ) : (
-        item.text
-      )}
-    </div>
+    <MessageBubble variant="soft" align="start" className="text-sm leading-relaxed">
+      <MessageBubbleContent>{item.text}</MessageBubbleContent>
+    </MessageBubble>
   );
 }
 
