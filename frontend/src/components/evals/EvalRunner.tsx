@@ -296,7 +296,7 @@ function DemoResources({ project, workspace }: { project: string; workspace?: st
     alive.current = true;
     if (!project) return () => { alive.current = false; };
     void (async () => {
-      const next = await getDemoTrafficStatus(project);
+      const next = await getDemoTrafficStatus(project, workspace);
       if (alive.current) setTraffic(next);
     })();
     return () => {
