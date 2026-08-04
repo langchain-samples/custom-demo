@@ -23,7 +23,8 @@ import {
   IconFolders,
   IconFlask,
 } from "@tabler/icons-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/motion/button";
+import { Tooltip } from "@/components/motion/tooltip";
 import ChatPanel from "@/components/ChatPanel";
 import { DashboardCanvas } from "@/components/DashboardCanvas";
 import { EvalPanel } from "@/components/EvalPanel";
@@ -189,54 +190,63 @@ export default function App() {
           <BrandLogo logo={logo} />
           <h1 className="m-0 font-heading text-2xl font-bold tracking-tight">{displayName}</h1>
         </button>
-        <Button
-          variant="secondary"
-          className="ml-auto gap-1.5 rounded-full px-4 print:hidden"
-          title="Start a new chat (reset the conversation + dashboard)"
-          onClick={handleResetConversation}
+        <Tooltip content="Start a new chat (reset the conversation + dashboard)" side="bottom">
+          <Button
+            variant="secondary"
+            className="ml-auto gap-1.5 rounded-full px-4 print:hidden"
+            aria-label="New Chat"
+            onClick={handleResetConversation}
+          >
+            <IconSparkles size={16} /> New Chat
+          </Button>
+        </Tooltip>
+        <Tooltip content="Browse the agent's files" side="bottom">
+          <Button
+            variant="secondary"
+            size="icon"
+            className="print:hidden"
+            aria-label="Browse agent files"
+            onClick={() => setFilesOpen(true)}
+          >
+            <IconFolders size={18} />
+          </Button>
+        </Tooltip>
+        <Tooltip content="Evals — run this assistant's demo dataset in LangSmith" side="bottom">
+          <Button
+            variant="secondary"
+            size="icon"
+            className="print:hidden"
+            aria-label="Evals"
+            onClick={() => setEvalsOpen(true)}
+          >
+            <IconFlask size={18} />
+          </Button>
+        </Tooltip>
+        <Tooltip
+          content={effectiveTheme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          side="bottom"
         >
-          <IconSparkles size={16} /> New Chat
-        </Button>
-        <Button
-          variant="secondary"
-          size="icon"
-          className="print:hidden"
-          title="Browse the agent's files"
-          aria-label="Browse agent files"
-          onClick={() => setFilesOpen(true)}
-        >
-          <IconFolders size={18} />
-        </Button>
-        <Button
-          variant="secondary"
-          size="icon"
-          className="print:hidden"
-          title="Evals — run this assistant's demo dataset in LangSmith"
-          aria-label="Evals"
-          onClick={() => setEvalsOpen(true)}
-        >
-          <IconFlask size={18} />
-        </Button>
-        <Button
-          variant="secondary"
-          size="icon"
-          className="print:hidden"
-          title={effectiveTheme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-          aria-label="Toggle theme"
-          onClick={toggleTheme}
-        >
-          {effectiveTheme === "dark" ? <IconSun size={18} /> : <IconMoon size={18} />}
-        </Button>
-        <Button
-          variant="secondary"
-          size="icon"
-          className="print:hidden"
-          title="Customize appearance"
-          aria-label="Settings"
-          onClick={() => setSettingsOpen(true)}
-        >
-          <IconSettings size={18} />
-        </Button>
+          <Button
+            variant="secondary"
+            size="icon"
+            className="print:hidden"
+            aria-label="Toggle theme"
+            onClick={toggleTheme}
+          >
+            {effectiveTheme === "dark" ? <IconSun size={18} /> : <IconMoon size={18} />}
+          </Button>
+        </Tooltip>
+        <Tooltip content="Customize appearance" side="bottom">
+          <Button
+            variant="secondary"
+            size="icon"
+            className="print:hidden"
+            aria-label="Settings"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <IconSettings size={18} />
+          </Button>
+        </Tooltip>
       </header>
 
       <div

@@ -20,7 +20,7 @@ import type { QuickAction, ReviewInterrupt, RunContext, ThreadMessage, Widget } 
 import { ensureThread, resetThread, runStream } from "@/lib/api";
 import { PROSE_CLS } from "@/lib/markdown";
 import { ReviewCard } from "@/components/chat/ReviewCard";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/motion/button";
 import { ToolChip, type ChipData } from "@/components/chat/ToolChip";
 import { FeedbackRow } from "@/components/chat/FeedbackRow";
 import { IconChevronDown, IconChevronRight } from "@tabler/icons-react";
