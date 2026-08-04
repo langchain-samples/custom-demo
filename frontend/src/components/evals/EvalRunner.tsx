@@ -315,7 +315,7 @@ function DemoResources({ project, workspace }: { project: string; workspace?: st
         {traffic?.running ? (
           <span className="inline-flex items-center gap-1.5 text-[13px] text-muted-foreground">
             <IconLoader2 size={13} className="animate-spin" />
-            Generating — seed runs, then backfill.
+            Generating: seed runs, then backfill.
           </span>
         ) : result?.traces ? (
           <span className="text-[13px] text-muted-foreground">
