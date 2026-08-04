@@ -77,7 +77,7 @@ export function ToolChip({ chip }: { chip: ChipData }) {
       collapseOnComplete={!cardTool}
       copyText={chip.result ?? chip.code ?? undefined}
     >
-      <div className="flex flex-col gap-1.5">
+      <div className="flex min-w-0 flex-col gap-1.5">
         {/* The code/command that ran, syntax-highlighted (our CodeView; heredoc
             bodies in their own language). Shown as soon as it's known. */}
         {chip.code && <CodeView code={chip.code} lang={chip.codeLang || "js"} />}
