@@ -25,6 +25,7 @@ function ok(name, fn) {
     parseCheckpointNs,
     isSubagentNamespace,
     subagentIdentity,
+    subagentRoot,
     effectiveNamespace,
   } = await import(MOD);
 
@@ -104,6 +105,17 @@ function ok(name, fn) {
       subagentIdentity(["tools:eval", "1", "model:x"]).key,
       "tools:eval|1",
     );
+  });
+
+  ok("subagentRoot: parallel eval dispatches share a root; distinct calls do not", () => {
+    // All parallel task() branches of one eval collapse to the same root, so the
+    // fleet card groups them together.
+    assert.strictEqual(subagentRoot("tools:eval"), "tools:eval");
+    assert.strictEqual(subagentRoot("tools:eval|1"), "tools:eval");
+    assert.strictEqual(subagentRoot("tools:eval|2"), "tools:eval");
+    // A different eval / task dispatch is a different root (its own group).
+    assert.notStrictEqual(subagentRoot("tools:eval|1"), subagentRoot("tools:other"));
+    assert.strictEqual(subagentRoot(""), "");
   });
 
   ok("effectiveNamespace: event ns wins; else falls back to nsById; else main", () => {

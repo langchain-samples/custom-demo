@@ -264,7 +264,7 @@ export function ToolResult({
           {icon ?? <KindIcon kind={kind} />}
         </span>
         <span className="flex min-w-0 flex-1 items-baseline gap-2">
-          <span className="min-w-0 truncate font-medium text-foreground/90">
+          <span className="shrink-0 whitespace-nowrap font-medium text-foreground/90">
             <ActionSwapRollText value={titleKey}>
               {title}
             </ActionSwapRollText>
