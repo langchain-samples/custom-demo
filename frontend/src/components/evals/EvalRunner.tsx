@@ -218,7 +218,7 @@ export function EvalRunner({ target }: { target: EvalTarget }) {
         {busy ? (
           <span className="inline-flex items-center gap-1.5 text-[13px] text-muted-foreground">
             <IconLoader2 size={14} className="animate-spin" />
-            Running — three real agent turns, usually 30-90s.
+            Running - three real agent turns, usually 30-90s.
           </span>
         ) : hasScore ? (
           <div className="flex flex-wrap items-center gap-2">

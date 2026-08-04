@@ -129,7 +129,7 @@ const DEFAULT_ACTIONS: QuickAction[] = [
   },
 ];
 
-const DEFAULT_NAME = "Dashboard Agent — Humanitarian Insights";
+const DEFAULT_NAME = "Dashboard Agent - Humanitarian Insights";
 const DEFAULT_ACCENT = "#0072BC";
 const DEFAULT_LOGO = "";
 
@@ -627,11 +627,11 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
       async (v: NewAssistantValues) => {
         const workspace = cfgRef.current.lsWorkspace;
         if (!v.customer) {
-          window.alert("Customer is required — it's used as the assistant name.");
+          window.alert("Customer is required - it's used as the assistant name.");
           return;
         }
         if (!workspace) {
-          window.alert("Pick a Workspace first (top of the panel) — setup needs it.");
+          window.alert("Pick a Workspace first (top of the panel) - setup needs it.");
           return;
         }
         setCreating(true);

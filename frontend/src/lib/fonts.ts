@@ -9,11 +9,11 @@
 
 /** Self-hosted families bundled with the app (see the @imports in index.css). */
 export const CURATED_FONTS = [
-  { id: "Geist Variable", label: "Geist — neutral geometric" },
-  { id: "Inter Variable", label: "Inter — neutral UI" },
-  { id: "IBM Plex Sans Variable", label: "IBM Plex Sans — humanist / technical" },
-  { id: "Space Grotesk Variable", label: "Space Grotesk — display / techy" },
-  { id: "Source Serif 4 Variable", label: "Source Serif — editorial / institutional" },
+  { id: "Geist Variable", label: "Geist - neutral geometric" },
+  { id: "Inter Variable", label: "Inter - neutral UI" },
+  { id: "IBM Plex Sans Variable", label: "IBM Plex Sans - humanist / technical" },
+  { id: "Space Grotesk Variable", label: "Space Grotesk - display / techy" },
+  { id: "Source Serif 4 Variable", label: "Source Serif - editorial / institutional" },
 ] as const;
 
 export type CuratedFont = (typeof CURATED_FONTS)[number]["id"];
