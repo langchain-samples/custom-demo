@@ -89,14 +89,25 @@ typography, agent config and tools.
 
 ## Run it
 
-Needs `langgraph-cli[inmem]` (Agent Server) + a LangSmith key.
+**Prerequisites**, none of which this repo can install for you:
+
+| | | |
+| :-- | :-- | :-- |
+| **uv** | required | `curl -LsSf https://astral.sh/uv/install.sh \| sh` — also provisions Python |
+| **Python ≥ 3.13** | required | uv installs it; a system Python only matters if you skip uv |
+| **Node 20+ / npm** | for the UI | the SPA is a Vite app. The agent and its evals run without it |
+| **LangSmith key** | required | tracing, Prompt Hub, and the demo evals |
+| **A model provider key** | required | Anthropic by default; any `init_chat_model` provider works |
 
 ```bash
 # from dashboard-agent/
 uv sync --group dev          # dev group includes langgraph-cli[inmem] + langgraph-sdk
 
 # provide your keys (see .env.example)
-cp .env.example .env         # then edit: ANTHROPIC_API_KEY + LANGSMITH_API_KEY
+cp .env.example .env         # then edit: LANGSMITH_API_KEY + one model provider key
+
+# check the setup BEFORE anything else — it names what's missing and how to fix it
+uv run python scripts/preflight.py
 
 # seed the Prompt Hub prompts (once)
 uv run python scripts/seed_prompt.py         # system prompt (starts buggy)
@@ -108,6 +119,25 @@ uv run ./run.sh
 # open the SPA (http://127.0.0.1:3000), then in ⚙️: pick a Workspace, hit "+ New"
 # to set up a customer assistant, and ask a question.
 ```
+
+`preflight.py` makes one cheap real model call and one LangSmith round-trip, then
+prints `ALL CHECKS PASSED` or the specific fix. Run it first; most setup problems
+show up there rather than as a stack trace ten minutes into a demo.
+
+### If something doesn't work
+
+| Symptom | Cause |
+| :-- | :-- |
+| `ANTHROPIC_API_KEY is not set` on a non-Anthropic setup | `DASHBOARD_MODEL` still defaults to Anthropic. Set it to your `provider:model` and that provider's key. |
+| Azure calls 404 | `AZURE_OPENAI_ENDPOINT` includes `/openai/deployments/...`. It must stop before that; the client appends it. |
+| The model rejects `temperature` | Reasoning-tuned models allow only their own default. Set `DASHBOARD_TEMPERATURE=` (empty) to omit it. |
+| Editing the prompt in the Hub changes nothing | You edited a different prompt. `+ New` gives each assistant its own `<slug>-system`; `seed_prompt.py` writes the shared default. |
+| Model calls go somewhere unexpected | `ANTHROPIC_BASE_URL` is set in your shell and redirects everything. Preflight warns about this. |
+
+**Running this with a group.** Each `+ New` assistant gets its own Prompt Hub prompt
+(`<slug>-system`) and its own eval dataset, so people don't overwrite each other **as
+long as they pick distinct customer names**. `seed_prompt.py` is the exception: it
+writes one shared prompt, so it only needs running once per workspace.
 
 `scripts/seed_assistants.py` still exists if you want two bare variants
 ("Humanitarian (bundled corpus)" / "Synthetic — any topic") without the branding flow.
