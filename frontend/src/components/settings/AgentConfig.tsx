@@ -94,13 +94,13 @@ export function AgentConfig({
         {promptMode === "prompt_hub" ? (
           <Combobox
             options={[
-              { value: "", label: "None — write a system prompt below" },
+              { value: "", label: "None - write a system prompt below" },
               ...hubPrompts.map((p) => ({ value: p, label: p })),
               ...extraPrompt.map((p) => ({ value: p, label: p })),
             ]}
             value={promptName || ""}
             onChange={(v) => onPromptName(v)}
-            placeholder="None — write a system prompt below"
+            placeholder="None - write a system prompt below"
             searchPlaceholder="Filter prompts…"
             emptyText="No prompts in this workspace."
           />

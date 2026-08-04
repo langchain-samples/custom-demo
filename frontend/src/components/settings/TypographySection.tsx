@@ -22,8 +22,8 @@ interface SlotProps {
 
 const STATUS: Record<FontStatus, { text: string; cls: string }> = {
   loaded: { text: "Loaded from Google Fonts", cls: "text-success" },
-  unavailable: { text: "Unavailable — using fallback", cls: "text-warning" },
-  invalid: { text: "Invalid name — using fallback", cls: "text-danger" },
+  unavailable: { text: "Unavailable - using fallback", cls: "text-warning" },
+  invalid: { text: "Invalid name - using fallback", cls: "text-danger" },
   curated: { text: "Using bundled font", cls: "text-muted-foreground" },
 };
 
@@ -35,7 +35,7 @@ function Slot({ label, family, fallback, status, onFamily, onFallback }: SlotPro
         {label} <span className={HINT_CLS}>(Google Fonts family)</span>
       </Label>
       <Input
-        placeholder="e.g. Poppins — blank to use the bundled font"
+        placeholder="e.g. Poppins - blank to use the bundled font"
         value={family}
         onChange={(e) => onFamily(e.target.value)}
         autoComplete="off"
@@ -89,7 +89,7 @@ export function TypographySection({
         Load brand fonts from Google Fonts
       </label>
       <p className="m-0 -mt-2 text-[10px] leading-snug text-muted-foreground">
-        Off keeps the app fully self-hosted — no third-party request.
+        Off keeps the app fully self-hosted - no third-party request.
       </p>
 
       <Slot
