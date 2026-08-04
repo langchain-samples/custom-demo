@@ -36,7 +36,7 @@ export function CodeView({ code, lang }: { code: string; lang: string }) {
 
   return (
     <div
-      className="relative max-h-72 overflow-auto rounded-md border border-border"
+      className="relative max-h-72 min-w-0 overflow-auto rounded-md border border-border"
       style={{ backgroundColor: "#0d1117" }}
     >
       <button

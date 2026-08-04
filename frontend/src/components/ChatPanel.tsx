@@ -655,7 +655,7 @@ export default function ChatPanel({
       <div
         ref={logRef}
         onScroll={onLogScroll}
-        className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-[18px]"
+        className="flex min-h-0 flex-1 flex-col gap-3 overflow-x-hidden overflow-y-auto p-[18px]"
       >
         {items.length === 0 ? (
           hasAssistant ? (
