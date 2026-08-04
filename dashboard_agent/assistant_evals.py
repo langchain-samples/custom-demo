@@ -53,6 +53,7 @@ from pydantic import BaseModel, Field
 # `assistant_setup` imports THIS module lazily (inside prepare_assistant), so the
 # dependency only runs one way at import time and there is no cycle.
 from .assistant_setup import _ws_client, slugify
+from .config import judge_model, sampling_kwargs
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, keeps agent.py off the import path
     from .agent import Context
@@ -63,8 +64,10 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, keeps agent.py off the impo
 # "2/3 passing" badge).
 EVAL_FEEDBACK_KEY = "correct"
 
-# Judge model: the same small/fast model the repo-level evals use.
-JUDGE_MODEL = "anthropic:claude-haiku-4-5-20251001"
+# Judge model: a small/fast model, set by DASHBOARD_JUDGE_MODEL so a customer without
+# an Anthropic key can still grade. Deliberately NOT tied to the agent model —
+# pinning the judge is what keeps two experiments comparable when the agent model
+# changes underneath them.
 
 
 # --- the mode registry ---------------------------------------------------------
@@ -287,7 +290,7 @@ def judge(criterion: str, content: str) -> Verdict:
     Kept as a module-level function (not inlined into the evaluator) so tests can
     stub it — the evaluator's polarity is unit-testable with no network or API key.
     """
-    llm = init_chat_model(JUDGE_MODEL, temperature=0)
+    llm = init_chat_model(judge_model(), **sampling_kwargs(0))
     prompt = (
         "You are grading an AI assistant. Decide if the CRITERION holds for the CONTENT. "
         f"Be strict.\n\nCRITERION:\n{criterion}\n\nCONTENT:\n{content}"

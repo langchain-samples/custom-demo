@@ -35,13 +35,12 @@ from langchain.agents.middleware import (
     dynamic_prompt,
 )
 from langchain.chat_models import init_chat_model
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.runtime import get_runtime
 from langsmith import Client
 
-from .config import MODEL, require_anthropic_key
+from .config import MODEL, model_provider, require_model_key
 from .ctx import ctx_get as _ctx
 from .prompt import pull_agent_prompt, pull_system_prompt
 from .tools import (
@@ -239,6 +238,31 @@ def _capability_note(runtime) -> str:
     return note
 
 
+def build_chat_model(model_id: str):
+    """The one place a chat model is constructed. Provider-aware.
+
+    Everything here used to be Anthropic-specific kwargs on a hardcoded
+    `ChatAnthropic`, which is what made the model unswappable: a customer on an
+    Azure OpenAI deployment could set `DASHBOARD_MODEL` and still get Claude.
+
+    `thinking` is the reason this needs a branch rather than one kwargs dict. It is
+    an Anthropic-only argument, and passing it to any other provider is a TypeError
+    at construction, so the agent would fail to build rather than fail over.
+    """
+    provider = model_provider(model_id)
+    # Bare ids are Anthropic by history; init_chat_model needs the prefix to route.
+    qualified = model_id if ":" in model_id else f"anthropic:{model_id}"
+
+    # Hardened against transient API overload (HTTP 529) on every provider.
+    kwargs: dict[str, Any] = {"max_retries": 8, "timeout": 120}
+    if provider == "anthropic":
+        # thinking disabled: Sonnet 5 defaults to extended thinking, whose thinking
+        # blocks break the deep-agent tool loop on follow-up turns (Anthropic 400).
+        kwargs["max_tokens"] = 8000
+        kwargs["thinking"] = {"type": "disabled"}
+    return init_chat_model(qualified, **kwargs)
+
+
 # Per-run model override. When an assistant's context sets `model`, swap the LLM
 # for every model call in that run (mirrors the deepagents configurable-model
 # pattern). Built models are cached by id so we don't reinit each call.
@@ -248,7 +272,9 @@ _model_cache: dict[str, Any] = {}
 def _model_for(model_id: str):
     llm = _model_cache.get(model_id)
     if llm is None:
-        llm = init_chat_model(model_id)
+        # Same factory as the default model, so a per-assistant override inherits the
+        # retry/timeout hardening instead of getting a bare client.
+        llm = build_chat_model(model_id)
         _model_cache[model_id] = llm
     return llm
 
@@ -600,18 +626,9 @@ def _build(model: str | None, checkpointer):
     `checkpointer=None` for Agent Server (it provides persistence); a MemorySaver
     for local in-process runs.
     """
-    require_anthropic_key()
-
-    # Explicit model, hardened against transient API overload (HTTP 529).
-    # thinking disabled: Sonnet 5 defaults to extended thinking, whose thinking
-    # blocks break the deep-agent tool loop on follow-up turns (Anthropic 400).
-    llm = ChatAnthropic(
-        model_name=model or MODEL,
-        max_retries=8,
-        timeout=120,
-        max_tokens=8000,
-        thinking={"type": "disabled"},
-    )
+    model_id = model or MODEL
+    require_model_key(model_id)
+    llm = build_chat_model(model_id)
 
     # ToolCallLimitMiddleware subclasses AgentMiddleware but binds an invariant
     # generic param that type checkers don't accept as assignable to the base — a

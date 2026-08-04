@@ -19,7 +19,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langsmith import Client
 from pydantic import BaseModel, Field
 
-from .config import load_env
+from .config import load_env, sampling_kwargs, setup_model
 from .prompt import (
     DASHBOARD_SKILL_DESCRIPTION,
     DASHBOARD_SKILL_INSTRUCTIONS,
@@ -314,7 +314,7 @@ def analyze_customer(
     the personas, the data gap, and the tool selection.
     """
     load_env()
-    llm = init_chat_model(model or "anthropic:claude-haiku-4-5-20251001", temperature=0.5)
+    llm = init_chat_model(model or setup_model(), **sampling_kwargs(0.5))
     site = f" (website: {website})" if website else ""
     scenario = (
         f"\nUSE CASE — build the ENTIRE assistant around this scenario (its users, "

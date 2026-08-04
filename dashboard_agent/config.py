@@ -31,7 +31,11 @@ def load_env() -> None:
 
 
 def require_anthropic_key() -> str:
-    """Return the Anthropic API key, raising if it isn't configured."""
+    """Return the Anthropic API key, raising if it isn't configured.
+
+    Only meaningful on the Anthropic path. `require_model_key` is the provider-aware
+    gate; this stays for callers that specifically need an Anthropic credential.
+    """
     load_env()
     key = os.getenv("ANTHROPIC_API_KEY")
     if not key:
@@ -57,6 +61,83 @@ def require_tavily_key() -> str:
 
 
 MODEL = os.getenv("DASHBOARD_MODEL", "claude-sonnet-5")
+
+# A `DASHBOARD_MODEL` carrying an explicit `provider:model` prefix picks the provider.
+# Bare ids (the historical form, e.g. "claude-sonnet-5") stay Anthropic, so every
+# existing demo keeps working untouched.
+_PROVIDER_KEYS = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "azure_openai": "AZURE_OPENAI_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "google_genai": "GOOGLE_API_KEY",
+    "bedrock_converse": "AWS_ACCESS_KEY_ID",
+}
+
+
+def model_provider(model_id: str | None = None) -> str:
+    """Provider half of an `init_chat_model` id. Unprefixed ids are Anthropic."""
+    candidate = model_id or MODEL
+    provider, _, rest = candidate.partition(":")
+    return provider if rest else "anthropic"
+
+
+def require_model_key(model_id: str | None = None) -> str:
+    """Return the API key for whichever provider `model_id` names.
+
+    Replaces the unconditional Anthropic check at agent build time. An Azure OpenAI
+    deployment needs `AZURE_OPENAI_API_KEY` and no Anthropic key at all, and hard
+    failing on the latter is what stopped a non-Anthropic model from loading.
+    """
+    load_env()
+    provider = model_provider(model_id)
+    var = _PROVIDER_KEYS.get(provider)
+    if var is None:
+        # An unrecognized provider is not necessarily broken (it may authenticate
+        # some other way), so let init_chat_model be the one to complain.
+        return ""
+    key = os.getenv(var)
+    if not key:
+        raise RuntimeError(
+            f"{var} is not set, and DASHBOARD_MODEL selects the '{provider}' provider. "
+            "Add it to dashboard-agent/.env or the environment."
+        )
+    return key
+
+
+def sampling_kwargs(default_temperature: float) -> dict[str, float]:
+    """`{"temperature": ...}`, or `{}` when the model won't accept one.
+
+    Not every model takes a temperature. Reasoning-tuned models on both Anthropic
+    and Azure OpenAI reject anything but their own default and fail the call at
+    invoke time, not construction — so a hardcoded `temperature=0` turns into a
+    runtime 400 deep inside an eval run, which reads as "the judge is broken".
+
+    `DASHBOARD_TEMPERATURE` unset keeps today's behavior (send the caller's value).
+    Set it empty to omit temperature entirely, or to a number to force one.
+    """
+    load_env()
+    override = os.getenv("DASHBOARD_TEMPERATURE")
+    if override is None:
+        return {"temperature": default_temperature}
+    if override.strip() == "":
+        return {}
+    return {"temperature": float(override)}
+
+
+def judge_model() -> str:
+    """Model id for the demo eval judge (`init_chat_model` form).
+
+    Split from the agent model on purpose: the judge should stay pinned while the
+    agent model is swapped, or an experiment comparison measures two changes at once.
+    """
+    load_env()
+    return os.getenv("DASHBOARD_JUDGE_MODEL", "anthropic:claude-haiku-4-5-20251001")
+
+
+def setup_model() -> str:
+    """Model id for the assistant-setup agent (`init_chat_model` form)."""
+    load_env()
+    return os.getenv("DASHBOARD_SETUP_MODEL", "anthropic:claude-haiku-4-5-20251001")
 
 
 def prompt_name() -> str:
