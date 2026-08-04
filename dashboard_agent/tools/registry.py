@@ -26,8 +26,8 @@ from .simulated import (
     draft_email,
     list_data_sources,
     suggest_meeting_times,
-    web_search,
 )
+from .web_search import web_search
 
 
 @dataclass(frozen=True)
@@ -136,7 +136,9 @@ TOOL_REGISTRY: tuple[ToolSpec, ...] = (
         tool=web_search,
         guidance=(
             "Use `web_search` for context that would not be in internal data "
-            "(market conditions, competitors, public news). Cite what you use."
+            "(market conditions, competitors, public news). Results are real, so "
+            "cite the URLs you use. If it returns an error, say search was "
+            "unavailable — never substitute remembered or invented sources."
         ),
     ),
 )

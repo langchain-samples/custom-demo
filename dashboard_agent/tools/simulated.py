@@ -7,8 +7,10 @@ keeps a demo credible without per-customer credentials, OAuth, or anything that
 can fail live on stage.
 
 They all return a JSON string in a fixed shape so the frontend can render a
-typed card for each. `web_search` is the one worth backing with a real API
-later — its result shape is deliberately the shape a search API returns.
+typed card for each.
+
+`web_search` used to live here; it is now backed by a real API and lives in
+`web_search.py`.
 """
 
 from __future__ import annotations
@@ -262,28 +264,5 @@ def list_data_sources(runtime: ToolRuntime, area: str = "") -> str:
             "'syncing', 'degraded' — mostly 'connected'. `last_synced` is a relative "
             "time (e.g. '12 minutes ago'). `record_count` is a formatted count "
             "(e.g. '2.4M')."
-        ),
-    )
-
-
-@tool
-def web_search(query: str, runtime: ToolRuntime) -> str:
-    """Search the web for external context and citable sources.
-
-    Use for context that would not appear in internal data — market conditions,
-    competitors, regulation, public news. Cite what you use in your answer.
-
-    Returns JSON {results:[{title, url, snippet, published}]}.
-    """
-    return simulate(
-        runtime,
-        role="You are a web search engine returning results for a query.",
-        shape='{"results":[{"title":"","url":"","snippet":"","published":""}]}',
-        instruction=(
-            f"Return 4 search results for: {query!r}\n"
-            "Use real, plausible publications and outlets for this topic and sector. "
-            "`url` must be a plausible https URL on that publication's real domain. "
-            "`snippet` is 1-2 sentences of substance, with a concrete figure where "
-            "natural. `published` is a date like '2026-05-14'."
         ),
     )

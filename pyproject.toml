@@ -30,6 +30,9 @@ dependencies = [
     # panel can see eval-launched subagents). Gated by DA_DYNAMIC_SUBAGENTS (default
     # off); the native quickjs-rs dep ships cp313 wheels for the deploy image.
     "langchain-quickjs>=0.3,<0.4",
+    # Real web search behind the `web_search` tool (tools/web_search.py). Without
+    # TAVILY_API_KEY the tool returns an error rather than inventing results.
+    "langchain-tavily>=0.2.18,<0.3",
 ]
 
 [dependency-groups]

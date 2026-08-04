@@ -32,7 +32,8 @@ dashboard_agent/
   ctx.py              ctx_get() — reads a Context field off a runtime (dict or dataclass)
   tools/registry.py   THE TOOL CATALOGUE — declarative source of truth for selectable capabilities
   tools/core.py       datasearch + push_widget (and the widget ContextVar sink)
-  tools/simulated.py  capability tools: draft_email, suggest_meeting_times, list_data_sources, web_search
+  tools/simulated.py  capability tools: draft_email, suggest_meeting_times, list_data_sources
+  tools/web_search.py web_search — REAL results via Tavily (errors out without TAVILY_API_KEY)
   graph.py            Agent Server entrypoint — async factory that wraps runs in tracing_context
   setup_graph.py      SECOND graph (`assistant_setup`): prepares a new customer assistant
   assistant_setup.py  brand fetch (Logo.dev/Brandfetch/scrape) + LLM customer analysis + prompt push
@@ -135,7 +136,7 @@ Refresh is a remount, so there is no cache-invalidation code.
 | `list_data_sources` | Data | simulated "connected systems" list |
 | `draft_email` | Comms | simulated draft, rendered as a chat card |
 | `suggest_meeting_times` | Comms | simulated slots, rendered as a chat card |
-| `web_search` | Research | simulated results; shaped like a real search API for later |
+| `web_search` | Research | REAL results via the Tavily API; returns an error (never invented results) if `TAVILY_API_KEY` is unset |
 | `ask_user` | Interaction | HITL: pauses via `interrupt()` to ask the user a question, resumes with their answer (renders a question card) |
 
 Capabilities are chosen in the **"+ New" form** when creating an assistant, and stay editable
