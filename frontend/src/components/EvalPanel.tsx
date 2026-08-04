@@ -50,6 +50,13 @@ export function EvalPanel({ open, onOpenChange, assistant }: EvalPanelProps) {
   // handle and planted gap. Depend on the object identity — it comes from the
   // assistant App holds, so it only changes when the assistant does.
   const context = assistant?.context;
+  // Trace project — same derivation the SPA uses everywhere else (traceProject()).
+  // Only for the demo-traffic state and the LangSmith deep links.
+  const project =
+    (assistant?.context?.ls_project as string) ||
+    assistant?.metadata?.customer ||
+    assistant?.name ||
+    "";
 
   const target = useMemo<EvalTarget | null>(
     () =>
@@ -58,10 +65,11 @@ export function EvalPanel({ open, onOpenChange, assistant }: EvalPanelProps) {
             assistant_id: assistantId,
             dataset: dataset || undefined,
             workspace: workspace || undefined,
+            project: project || undefined,
             context,
           }
         : null,
-    [assistantId, dataset, workspace, context],
+    [assistantId, dataset, workspace, project, context],
   );
 
   return (

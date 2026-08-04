@@ -797,6 +797,12 @@ export interface EvalTarget {
   /** Workspace the dataset + experiments live in (`context.ls_workspace`). */
   workspace?: string;
   /**
+   * Trace project (`context.ls_project`). Only used to show demo-traffic state
+   * and the LangSmith deep links alongside the eval — the experiment itself does
+   * not need it.
+   */
+  project?: string;
+  /**
    * The assistant's stored `context`, forwarded verbatim to the experiment
    * target (POST /evals/run only). REQUIRED for a meaningful score: the server
    * rebuilds the runtime Context from this, so omitting it grades a default
@@ -948,6 +954,12 @@ export interface DemoTrafficStatus {
     error?: string;
     insights?: { job_error?: string };
   };
+  /**
+   * LangSmith deep links for the trace project and its tabs. Empty when the
+   * project does not exist yet (no traffic has been generated) — that is the
+   * normal pre-backfill state, not an error.
+   */
+  links?: { project?: string; insights?: string; engine?: string };
 }
 
 /**

@@ -31,7 +31,14 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { PaneState } from "@/components/files/PaneState";
-import { getEvalStatus, runEvalExperiment, type EvalStatus, type EvalTarget } from "@/lib/api";
+import {
+  getDemoTrafficStatus,
+  getEvalStatus,
+  runEvalExperiment,
+  type DemoTrafficStatus,
+  type EvalStatus,
+  type EvalTarget,
+} from "@/lib/api";
 
 /** How often to re-read LangSmith while an experiment is in flight. */
 const POLL_MS = 4000;
@@ -264,6 +271,74 @@ export function EvalRunner({ target }: { target: EvalTarget }) {
           <IconAlertTriangle size={13} className="mt-px shrink-0" />
           {runError || status.error || `Last run failed before it finished: ${status.last_error}`}
         </p>
+      ) : null}
+
+      <DemoResources project={target.project || ""} workspace={target.workspace} />
+    </div>
+  );
+}
+
+/**
+ * The rest of the demo's LangSmith surface: how much synthetic traffic is in the
+ * trace project, and jump-off links to the places a presenter actually navigates
+ * to — the project, its Insights tab and its Engine tab.
+ *
+ * Separate from the eval state above because it comes from a different endpoint
+ * and a different lifecycle: the traffic is backfilled once at setup, whereas the
+ * experiment is re-run mid-demo. Links are absent until the project exists, which
+ * is the normal state before any traffic has been generated.
+ */
+function DemoResources({ project, workspace }: { project: string; workspace?: string }) {
+  const [traffic, setTraffic] = useState<DemoTrafficStatus | null>(null);
+  const alive = useRef(true);
+
+  useEffect(() => {
+    alive.current = true;
+    if (!project) return () => { alive.current = false; };
+    void (async () => {
+      const next = await getDemoTrafficStatus(project);
+      if (alive.current) setTraffic(next);
+    })();
+    return () => {
+      alive.current = false;
+    };
+  }, [project, workspace]);
+
+  if (!project) return null;
+  const links = traffic?.links || {};
+  const result = traffic?.result;
+  const hasLinks = links.project || links.insights || links.engine;
+
+  return (
+    <div className="flex flex-col gap-3 border-t border-border pt-3">
+      <Row label="Demo traffic">
+        {traffic?.running ? (
+          <span className="inline-flex items-center gap-1.5 text-[13px] text-muted-foreground">
+            <IconLoader2 size={13} className="animate-spin" />
+            Generating — seed runs, then backfill.
+          </span>
+        ) : result?.traces ? (
+          <span className="text-[13px] text-muted-foreground">
+            {result.traces} traces over the last {result.hours ?? 23}h
+            {result.gap_traces ? ` · ${result.gap_traces} fabricating over the data gap` : ""}
+          </span>
+        ) : (
+          <span className="text-[13px] text-muted-foreground">
+            {/* Only ever a receipt: it is held in memory, so a redeploy clears it
+                even though the traffic itself is still in the project. */}
+            No backfill recorded this session.
+          </span>
+        )}
+      </Row>
+
+      {hasLinks ? (
+        <Row label="Open in LangSmith">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            {links.project && <OpenLink href={links.project}>Project</OpenLink>}
+            {links.insights && <OpenLink href={links.insights}>Insights</OpenLink>}
+            {links.engine && <OpenLink href={links.engine}>Engine</OpenLink>}
+          </div>
+        </Row>
       ) : null}
     </div>
   );
