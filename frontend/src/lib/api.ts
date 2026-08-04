@@ -996,12 +996,22 @@ export async function generateDemoTraffic(
 }
 
 /** Poll a backfill's progress. Never throws; a dead server reads as "not running". */
-export async function getDemoTrafficStatus(project: string): Promise<DemoTrafficStatus> {
+export async function getDemoTrafficStatus(
+  project: string,
+  /**
+   * Required in practice for the `links` to come back. The server resolves the
+   * project URL with a workspace-scoped client, and without this it falls back
+   * to the key's default tenant, fails the lookup, and returns no links at all
+   * (silently, since absent links are also the legitimate pre-backfill state).
+   */
+  workspace?: string,
+): Promise<DemoTrafficStatus> {
   try {
-    const res = await fetch(
-      `${getApiBase()}/demo-traffic/status?project=${encodeURIComponent(project)}`,
-      { headers: apiHeaders() },
-    );
+    const qs = new URLSearchParams({ project });
+    if (workspace) qs.set("workspace", workspace);
+    const res = await fetch(`${getApiBase()}/demo-traffic/status?${qs.toString()}`, {
+      headers: apiHeaders(),
+    });
     if (!res.ok) return { project, running: false };
     return (await res.json()) as DemoTrafficStatus;
   } catch {

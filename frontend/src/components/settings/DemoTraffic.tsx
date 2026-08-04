@@ -37,9 +37,9 @@ export function DemoTraffic({ target }: Props) {
 
   const refresh = useCallback(async () => {
     if (!project) return;
-    const next = await getDemoTrafficStatus(project);
+    const next = await getDemoTrafficStatus(project, target?.workspace);
     if (alive.current) setStatus(next);
-  }, [project]);
+  }, [project, target?.workspace]);
 
   useEffect(() => {
     // Re-armed in the effect body rather than only in cleanup, because React 19
