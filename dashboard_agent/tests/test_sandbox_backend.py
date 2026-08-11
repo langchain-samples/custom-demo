@@ -46,8 +46,9 @@ class _FakeRun:
 class _FakeSandbox:
     """Stand-in for a langsmith `Sandbox` — records the shell commands it runs."""
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, status: str = "ready"):
         self.name = name
+        self.status = status
         self.runs: list[str] = []
 
     def run(self, command: str, timeout: int | None = None) -> _FakeRun:
@@ -59,28 +60,51 @@ class _FakeSandbox:
 
 
 class _FakeClient:
-    """Stand-in for `langsmith.sandbox.SandboxClient`."""
+    """Stand-in for `langsmith.sandbox.SandboxClient`, with the TTL lifecycle."""
 
     def __init__(self, **_):
         self.created: list[str] = []
         self.existing: list[_FakeSandbox] = []
+        self.started: list[str] = []
+        self.retention: list[tuple[int | None, int | None]] = []
 
     def list_sandboxes(self, **_):
         return list(self.existing)
 
-    def create_sandbox(self, *, name=None, **_):
+    def create_sandbox(self, *, name=None, idle_ttl_seconds=None, delete_after_stop_seconds=None):
         self.created.append(name or "unnamed")
+        self.retention.append((idle_ttl_seconds, delete_after_stop_seconds))
         sb = _FakeSandbox(name or "unnamed")
         self.existing.append(sb)
         return sb
+
+    def get_sandbox_status(self, name: str):
+        sb = next((s for s in self.existing if s.name == name), None)
+        if sb is None:
+            raise RuntimeError(f"404 sandbox {name} not found")  # a deleted VM
+        return SimpleNamespace(status=sb.status)
+
+    def start_sandbox(self, name: str, **_):
+        sb = next((s for s in self.existing if s.name == name), None)
+        if sb is None:
+            raise RuntimeError(f"404 sandbox {name} not found")
+        self.started.append(name)
+        sb.status = "ready"
+        return sb
+
+    def _reap(self) -> None:
+        """What the server's sweep does to an idle VM: stop it, then delete it."""
+        self.existing.clear()
 
 
 @pytest.fixture(autouse=True)
 def _clear_caches():
     A._SANDBOX_CACHE.clear()
+    A._SANDBOX_SEEN.clear()
     A._CTXHUB_CACHE.clear()
     yield
     A._SANDBOX_CACHE.clear()
+    A._SANDBOX_SEEN.clear()
     A._CTXHUB_CACHE.clear()
 
 
@@ -320,6 +344,106 @@ def test_root_layout_bundle_surfaces_through_route():
     assert dirs == {"/skills/dashboard", "/skills/returns"}  # discovery sees the skills
     dl = comp.download_files(["/skills/dashboard/SKILL.md"])
     assert dl[0].content == b"# dash" and dl[0].error is None  # read maps to the repo
+
+
+# --- coming back later: the VM stops, gets deleted, and the cache outlives both ---
+#
+# A cached handle is not evidence the VM exists. It stops after an hour idle and is
+# deleted a week after that, while this process (and its cache) keeps running — which
+# is how a demo picked up the next day ended up failing every command with
+# SandboxConnectionError instead of getting a VM back.
+
+
+def _expire_cache(key: str = "Eval Co") -> None:
+    """Age the cache entry past `_SANDBOX_REVALIDATE_AFTER` without sleeping."""
+    A._SANDBOX_SEEN[key] = A._SANDBOX_SEEN[key] - A._SANDBOX_REVALIDATE_AFTER - 1
+
+
+def test_fresh_cache_entry_is_trusted_without_asking_the_service(monkeypatch):
+    client = _install_client(monkeypatch)
+    calls: list[str] = []
+    monkeypatch.setattr(client, "get_sandbox_status", lambda name: calls.append(name))
+    first, _ = A._resolve_backends(_rt(customer="Eval Co"))
+    again, _ = A._resolve_backends(_rt(customer="Eval Co"))
+    # An active conversation resolves backends on every model and tool call; none of
+    # those may turn into a status round trip.
+    assert again is first
+    assert calls == []
+
+
+def test_stale_cache_entry_is_revalidated_and_kept_when_the_vm_lives(monkeypatch):
+    client = _install_client(monkeypatch)
+    first, _ = A._resolve_backends(_rt(customer="Eval Co"))
+    _expire_cache()
+    again, _ = A._resolve_backends(_rt(customer="Eval Co"))
+    assert again is first  # same warm VM, no churn
+    assert client.created == ["da-eval-co"]  # and nothing new provisioned
+
+
+def test_a_stopped_vm_is_restarted_rather_than_replaced(monkeypatch):
+    client = _install_client(monkeypatch)
+    A._resolve_backends(_rt(customer="Eval Co"))
+    client.existing[0].status = "stopped"  # an hour idle
+    _expire_cache()
+
+    default, _ = A._resolve_backends(_rt(customer="Eval Co"))
+
+    assert isinstance(default, LangSmithSandbox)
+    assert client.started == ["da-eval-co"]  # nothing auto-starts it; we must
+    assert client.created == ["da-eval-co"]  # same VM, so its files survive
+    assert len([c for sb in client.existing for c in sb.runs]) == 1  # not reseeded
+
+
+def test_a_deleted_vm_is_replaced_and_reseeded(monkeypatch):
+    client = _install_client(monkeypatch)
+    A._resolve_backends(_rt(customer="Eval Co"))
+    client._reap()  # stopped long enough to be swept
+    _expire_cache()
+
+    default, routes = A._resolve_backends(_rt(customer="Eval Co"))
+
+    assert isinstance(default, LangSmithSandbox)  # a working VM, not the dead handle
+    assert _execute_offered(default, routes) is True
+    assert client.created == ["da-eval-co", "da-eval-co"]
+    # The dataset died with the VM, so the replacement has to be seeded again.
+    assert [c for sb in client.existing for c in sb.runs] != []
+
+
+def test_an_unavailable_vm_degrades_instead_of_serving_a_dead_handle(monkeypatch):
+    client = _install_client(monkeypatch)
+    A._resolve_backends(_rt(customer="Eval Co"))
+    client._reap()
+    _expire_cache()
+    monkeypatch.setattr(
+        client, "create_sandbox", lambda **_: (_ for _ in ()).throw(RuntimeError("no capacity"))
+    )
+
+    default, routes = A._resolve_backends(_rt(customer="Eval Co"))
+
+    assert isinstance(default, StateBackend)  # no execute beats execute-that-throws
+    assert _execute_offered(default, routes) is False
+    assert "Eval Co" not in A._SANDBOX_CACHE
+
+
+def test_attach_only_callers_never_provision_a_replacement(monkeypatch):
+    # The /sandbox-files browser is a UI click; it may not trigger a ~30s boot.
+    client = _install_client(monkeypatch)
+    A._resolve_backends(_rt(customer="Eval Co"))
+    client._reap()
+    _expire_cache()
+
+    assert A._ensure_sandbox("Eval Co", create=False) is None
+    assert client.created == ["da-eval-co"]
+
+
+def test_a_stopped_vm_is_kept_for_a_week(monkeypatch):
+    client = _install_client(monkeypatch)
+    A._resolve_backends(_rt(customer="Eval Co"))
+    idle_ttl, delete_after_stop = client.retention[0]
+    # Stopping costs nothing to keep, so retention is long enough that tomorrow's
+    # demo restarts this VM with its data instead of rebuilding it.
+    assert idle_ttl == 3600
+    assert delete_after_stop == 7 * 24 * 3600
 
 
 # --- prompt: the model is told about the VM + seeded data (Level 0, no model) ---

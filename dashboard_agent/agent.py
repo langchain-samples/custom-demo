@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextvars
 import json
 import os
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, cast
@@ -354,8 +355,28 @@ def _ctxhub_client(workspace: str | None) -> Client:
 # The backend factory is resolved on every model call and every filesystem/execute
 # tool call with no caching upstream, so we cache the VM ourselves, keyed by a
 # stable per-assistant id (assistant-scoped: concurrent users of one assistant
-# share a warm VM). Idle VMs self-reap via the sandbox TTL.
+# share a warm VM).
 _SANDBOX_CACHE: dict[str, Any] = {}
+
+# Retention, and the reason the cache above cannot be trusted forever. The service
+# lifecycle is `running --(idle for idle_ttl)--> stopped --(delete_after_stop)-->
+# deleted`, and NOTHING restarts a stopped VM on its own. A cached handle outlives
+# both transitions — this process is long-lived — so a demo picked up the next day
+# used to fail every `execute` with SandboxConnectionError instead of getting a VM
+# back. A stopped VM costs no compute (only its filesystem clone is retained), so
+# keeping it for a week means "tomorrow" restarts the same VM with its data intact
+# rather than paying a ~30s boot and reseed.
+_SANDBOX_IDLE_TTL = 3600
+_SANDBOX_DELETE_AFTER_STOP = 7 * 24 * 3600
+
+# How long a cached handle is trusted without asking the service about it. Well under
+# `_SANDBOX_IDLE_TTL`, so a VM cannot stop inside a trusted window and an active
+# conversation never pays for the check; a gap longer than this (someone comes back
+# after lunch, or tomorrow) costs one lightweight status call.
+_SANDBOX_REVALIDATE_AFTER = 600
+
+# key -> monotonic time the cached backend was last handed out or revalidated.
+_SANDBOX_SEEN: dict[str, float] = {}
 
 
 def _import_sandbox_client() -> Any:
@@ -432,35 +453,88 @@ def _seed_data(backend: Any) -> None:
         pass
 
 
-def _ensure_sandbox(key: str, *, create: bool = True) -> Any | None:
-    """Get/reattach/create the sandbox VM named for `key`, caching + seeding once.
+def _sandbox_ready(client: Any, name: str) -> bool:
+    """Whether the service still holds `name` in a ready state.
 
-    Reuses the process cache, then a VM surviving a restart / made by another
-    replica or the pre-warm step (matched by name), else creates + seeds one. Any
-    failure returns None so callers degrade to StateBackend.
+    A deleted VM answers 404 and the SDK raises, which tells us the same thing as an
+    explicit non-ready status: whoever asked needs a different VM. Uses the
+    lightweight status endpoint rather than `list_sandboxes`, since this runs on the
+    hot path (once per idle gap, see `_SANDBOX_REVALIDATE_AFTER`).
+    """
+    try:
+        status = client.get_sandbox_status(name)
+    except Exception:  # noqa: BLE001 - gone, unreachable, or an SDK without the call
+        return False
+    return str(getattr(status, "status", "") or "").lower() == "ready"
+
+
+def _acquire_raw(client: Any, name: str, *, create: bool) -> tuple[Any, bool] | None:
+    """The live VM called `name`: restarted if stopped, created if absent.
+
+    Returns `(raw_sandbox, created)`, or None when nothing can be attached to and
+    `create` is False. `created` is True only for a brand-new VM — the only case that
+    needs seeding, since a restarted one still has the filesystem it was stopped with.
+    """
+    raw = next((s for s in client.list_sandboxes() if getattr(s, "name", None) == name), None)
+    if raw is not None:
+        if str(getattr(raw, "status", "") or "").lower() != "stopped":
+            return raw, False
+        # Nothing auto-starts a stopped VM. Skipping this is what made the 1-2h
+        # stopped window look identical to a healthy VM right up until the first
+        # command failed to connect.
+        try:
+            return client.start_sandbox(name) or raw, False
+        except Exception:  # noqa: BLE001 - unstartable is as good as absent
+            pass
+    if not create:
+        return None
+    return (
+        client.create_sandbox(
+            name=name,
+            idle_ttl_seconds=_SANDBOX_IDLE_TTL,
+            delete_after_stop_seconds=_SANDBOX_DELETE_AFTER_STOP,
+        ),
+        True,
+    )
+
+
+def _ensure_sandbox(key: str, *, create: bool = True) -> Any | None:
+    """Get/revalidate/reattach/create the sandbox VM named for `key`, seeding once.
+
+    Reuses the process cache while it is fresh, then re-checks it against the service
+    (a cached handle outlives the VM — see `_SANDBOX_REVALIDATE_AFTER`), then attaches
+    to a VM surviving a restart / made by another replica or the pre-warm step
+    (restarting it if stopped), else creates + seeds one. Any failure returns None so
+    callers degrade to StateBackend.
 
     `create=False` is attach-only: read-only callers (the `/sandbox-files` file
     browser in webapp.py) must never provision infrastructure — creating costs a
     ~30s boot plus a pip install, which is not something a UI click may trigger.
     """
     cached = _SANDBOX_CACHE.get(key)
-    if cached is not None:
+    now = time.monotonic()
+    if cached is not None and now - _SANDBOX_SEEN.get(key, 0.0) < _SANDBOX_REVALIDATE_AFTER:
         return cached
     try:
         client = SandboxClient(api_key=os.getenv("LANGSMITH_API_KEY") or None)
         name = f"da-{_slug(key)}"
-        raw = next((s for s in client.list_sandboxes() if getattr(s, "name", None) == name), None)
-        created = raw is None
-        if raw is None and not create:
+        if cached is not None and _sandbox_ready(client, name):
+            _SANDBOX_SEEN[key] = now
+            return cached
+        # Past here the cached handle (if any) is dead: drop it rather than hand it
+        # back, so a caller that cannot get a VM degrades to StateBackend instead of
+        # calling a VM that no longer exists.
+        _SANDBOX_CACHE.pop(key, None)
+        _SANDBOX_SEEN.pop(key, None)
+        got = _acquire_raw(client, name, create=create)
+        if got is None:
             return None
-        if raw is None:
-            raw = client.create_sandbox(
-                name=name, idle_ttl_seconds=3600, delete_after_stop_seconds=3600
-            )
+        raw, created = got
         backend = LangSmithSandbox(raw)
         if created:
             _seed_data(backend)
         _SANDBOX_CACHE[key] = backend
+        _SANDBOX_SEEN[key] = now
         return backend
     except Exception:  # noqa: BLE001 - never hard-fail a run on sandbox trouble
         return None
