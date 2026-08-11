@@ -42,6 +42,7 @@ from langsmith import Client
 
 from .config import MODEL, model_provider, require_model_key
 from .ctx import ctx_get as _ctx
+from .mocking import enable_mocking
 from .prompt import pull_agent_prompt, pull_system_prompt
 from .tools import (
     all_tools,
@@ -667,7 +668,9 @@ def _build(model: str | None, checkpointer):
         model=llm,
         # Every catalogue tool is registered; ToolSelection hides the ones this
         # assistant hasn't enabled. Built-in deepagents tools are unaffected.
-        tools=all_tools(),
+        # Wrapped so a dataset row can mock any tool per invocation. Inert unless
+        # `mocking.using_mocks` installed a spec, so the deployment is unaffected.
+        tools=enable_mocking(all_tools()),
         # cast: our middleware list is typed with ContextT=None, but create_deep_agent
         # binds ContextT to our context_schema (Context). Assignable at runtime; the
         # variance mismatch is a typing-only interop gap.
