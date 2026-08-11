@@ -455,6 +455,131 @@ def test_backfill_survives_feedback_failures(trace):
     assert client.runs
 
 
+# --- annotation queue -----------------------------------------------------------
+#
+# The human half of the demo: the same fabrications Insights clusters in aggregate,
+# one trace at a time, with a rubric that says what to look for.
+
+
+class _QueueClient:
+    """Records the annotation-queue calls, answering as the SDK does."""
+
+    def __init__(self, existing: str = "", add_fails: int = 0):
+        self.configs: dict = {}
+        self.created: dict = {}
+        self.added: list = []
+        self.existing = existing
+        self.add_fails = add_fails
+
+    def create_feedback_config(self, *, feedback_key, feedback_config, is_lower_score_better=False):
+        self.configs[feedback_key] = (feedback_config, is_lower_score_better)
+        return types.SimpleNamespace(feedback_key=feedback_key)
+
+    def list_annotation_queues(self, *, name=None, limit=None):
+        return [types.SimpleNamespace(id=self.existing, name=name)] if self.existing else []
+
+    def create_annotation_queue(
+        self, *, name, description=None, rubric_instructions=None, rubric_items=None
+    ):
+        self.created = {
+            "name": name,
+            "description": description,
+            "rubric_instructions": rubric_instructions,
+            "rubric_items": rubric_items,
+        }
+        return types.SimpleNamespace(id="queue-1", name=name)
+
+    def add_runs_to_annotation_queue(self, queue_id, *, run_ids=None, runs=None):
+        if self.add_fails:
+            self.add_fails -= 1
+            raise RuntimeError("404 run not found yet")
+        self.added.append((queue_id, list(run_ids or [])))
+
+
+def _reviewable(gaps: int, clean: int) -> list[dict]:
+    return [{"run_id": f"g{i}", "is_gap": True} for i in range(gaps)] + [
+        {"run_id": f"c{i}", "is_gap": False} for i in range(clean)
+    ]
+
+
+def test_queue_carries_a_rubric_for_hallucination_and_a_note():
+    client = _QueueClient()
+    out = DT.ensure_annotation_queue(
+        client, "Acme", reviewable=_reviewable(6, 4), customer="Acme", data_gap="churn"
+    )
+
+    assert out["queue"] == "Acme - hallucination review"
+    assert out["added"] == 10
+    keys = [item["feedback_key"] for item in client.created["rubric_items"]]
+    assert keys == [DT.QUEUE_HALLUCINATION_KEY, DT.QUEUE_NOTES_KEY]
+    # A verdict is required; the note is where the invented figure gets quoted.
+    required = {i["feedback_key"]: i.get("is_required") for i in client.created["rubric_items"]}
+    assert required[DT.QUEUE_HALLUCINATION_KEY] is True
+    assert required[DT.QUEUE_NOTES_KEY] is False
+    # The rubric names this customer's withheld topic, or a reviewer cannot tell a
+    # fabrication from an answer they simply do not know the data for.
+    assert "churn" in client.created["rubric_instructions"]
+    assert "Acme" in client.created["rubric_instructions"]
+    # Buttons, not a slider — and 1 (fabricated) is the bad end.
+    config, lower_better = client.configs[DT.QUEUE_HALLUCINATION_KEY]
+    assert config["type"] == "categorical" and lower_better is True
+    assert client.configs[DT.QUEUE_NOTES_KEY][0]["type"] == "freeform"
+
+
+def test_queue_tops_up_an_existing_queue_instead_of_stacking_one(monkeypatch):
+    client = _QueueClient(existing="queue-old")
+    out = DT.ensure_annotation_queue(client, "Acme", reviewable=_reviewable(2, 1))
+    assert out["queue_id"] == "queue-old"
+    assert client.created == {}  # reused, not recreated
+    assert client.added[0][0] == "queue-old"
+
+
+def test_queue_waits_for_runs_that_are_not_addressable_yet(monkeypatch):
+    # Runs were ingested seconds ago; the same visibility race fetch_trace handles.
+    monkeypatch.setattr(DT.time, "sleep", lambda _s: None)
+    client = _QueueClient(add_fails=2)
+    out = DT.ensure_annotation_queue(client, "Acme", reviewable=_reviewable(3, 2))
+    assert out["added"] == 5
+
+
+def test_queue_reports_an_empty_queue_rather_than_pretending(monkeypatch):
+    monkeypatch.setattr(DT.time, "sleep", lambda _s: None)
+    client = _QueueClient(add_fails=99)
+    out = DT.ensure_annotation_queue(client, "Acme", reviewable=_reviewable(3, 2))
+    assert out["added"] == 0
+    assert "queue created but empty" in out["error"]
+
+
+def test_review_sample_mixes_fabrications_with_clean_answers():
+    picked = DT._review_sample(_reviewable(40, 160), random.Random(0))
+    assert len(picked) == DT.QUEUE_SIZE
+    gaps = sum(1 for p in picked if p["is_gap"])
+    # Mostly fabrications so the pattern is visible, but not uniformly so — a queue of
+    # one repeated verdict teaches an annotator to stop reading the rubric.
+    assert gaps == round(DT.QUEUE_SIZE * DT.QUEUE_GAP_SHARE)
+    assert 0 < gaps < DT.QUEUE_SIZE
+
+
+def test_review_sample_takes_what_it_can_when_gaps_are_scarce():
+    picked = DT._review_sample(_reviewable(1, 30), random.Random(1))
+    assert len(picked) == DT.QUEUE_SIZE
+    assert sum(1 for p in picked if p["is_gap"]) == 1
+
+
+def test_backfill_offers_only_answerable_traces_for_review(trace):
+    # "Did it invent figures" is unanswerable for a run that errored before answering.
+    summary = DT.backfill(
+        _FakeClient(),
+        "P",
+        [{"trace_id": "g", "is_gap": True, "runs": trace}, {"trace_id": "n", "runs": trace}],
+        count=60,
+        error_share=0.5,
+        rng=random.Random(3),
+    )
+    assert 0 < len(summary["reviewable"]) <= DT.QUEUE_SIZE
+    assert summary["errored_traces"] > 0  # errors existed to be excluded
+
+
 # --- insights ------------------------------------------------------------------
 #
 # The job used to 422 on every fresh customer workspace, asking for an

@@ -82,6 +82,12 @@ export interface LsArtifacts {
   eval_evaluator_id?: string;
   /** Prompt Hub prompt holding the judge that `eval_evaluator_id` references. */
   eval_judge_prompt?: string;
+  /**
+   * Name (not id) of the human-review queue over the trace project — the backfill
+   * creates it minutes after setup, so the deterministic name is the handle recorded
+   * here. /cleanup resolves it to an id and deletes it.
+   */
+  annotation_queue?: string;
 }
 
 /** A server-side assistant: a stored configuration instance of the graph. */

@@ -239,6 +239,14 @@ async def cleanup(request):
         body.get("eval_evaluator_id"),
         lambda: _delete_judge_evaluator(body.get("workspace"), body["eval_evaluator_id"]),
     )
+    # The human-review queue over the trace project. Recorded by name (it is created on
+    # the backfill thread, after the assistant's metadata is written), so this resolves
+    # the name to an id first. Deleting the project does not take the queue with it.
+    _try(
+        "annotation queue",
+        body.get("annotation_queue"),
+        lambda: _delete_annotation_queue(body.get("workspace"), body["annotation_queue"]),
+    )
     # The judge prompt the evaluator referenced. Deleted after it, since a prompt with a
     # live reference may refuse to go.
     _try(
@@ -264,6 +272,18 @@ def _delete_judge_evaluator(workspace: str | None, evaluator_id: str) -> None:
     from dashboard_agent.assistant_evals import delete_judge_evaluator
 
     delete_judge_evaluator(workspace, evaluator_id)
+
+
+def _delete_annotation_queue(workspace: str | None, name: str) -> None:
+    """Delete the annotation queue called `name`. Raises so `_try` records it.
+
+    A queue that was never created (the backfill failed, or the assistant predates the
+    feature) is not a failure: there is nothing to delete and the report stays quiet.
+    """
+    client = _scoped_client(workspace)
+    queue = next((q for q in client.list_annotation_queues(name=name, limit=1) or []), None)
+    if queue is not None:
+        client.delete_annotation_queue(queue.id)
 
 
 async def trace_url(request):

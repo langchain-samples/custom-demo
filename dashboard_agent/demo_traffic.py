@@ -43,7 +43,7 @@ import threading
 import time
 import traceback
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from langsmith.uuid import uuid7_from_datetime
 
@@ -476,6 +476,11 @@ def backfill(
     batch: list[dict] = []
     emitted = total_runs = gap_count = error_count = 0
     feedback: list[tuple[str, int, bool]] = []  # (run_id, score, is_gap)
+    # Root ids to offer the annotation queue, collected here because this is the only
+    # place that knows which trace was a gap probe and which one errored. Errored traces
+    # are skipped: "did the assistant invent figures" is unanswerable for a run that
+    # never produced an answer.
+    reviewable: list[dict] = []
 
     def flush() -> None:
         nonlocal batch
@@ -516,6 +521,8 @@ def backfill(
         if not errored and rng.random() < 0.35:
             score = 0 if (is_gap and rng.random() < 0.8) else 1
             feedback.append((runs[0]["id"], score, is_gap))
+        if not errored:
+            reviewable.append({"run_id": runs[0]["id"], "is_gap": is_gap})
         batch.extend(runs)
         if len(batch) >= chunk:
             flush()
@@ -538,7 +545,28 @@ def backfill(
         "errored_traces": error_count,
         "feedback": len(feedback),
         "hours": min(hours, MAX_BACKDATE_HOURS),
+        "reviewable": _review_sample(reviewable, rng),
     }
+
+
+def _review_sample(reviewable: list[dict], rng: random.Random) -> list[dict]:
+    """Pick the traces to queue for human review: mostly fabrications, some clean.
+
+    A queue of nothing but gap probes teaches an annotator to click one button, and a
+    random sample of 10 out of a 20%-gap backfill would often contain one or none. So
+    the split is deliberate — enough fabrications to see the pattern, enough grounded
+    answers that the rubric has to be read. Trimmed to `QUEUE_SIZE` here rather than
+    returned whole: this list travels in the backfill receipt.
+    """
+    gaps = [r for r in reviewable if r["is_gap"]]
+    clean = [r for r in reviewable if not r["is_gap"]]
+    rng.shuffle(gaps)
+    rng.shuffle(clean)
+    want_gaps = min(len(gaps), round(QUEUE_SIZE * QUEUE_GAP_SHARE))
+    picked = gaps[:want_gaps] + clean[: QUEUE_SIZE - want_gaps]
+    # Backfill order is chronological; interleave so the queue is not "6 bad then 4 good".
+    rng.shuffle(picked)
+    return picked
 
 
 # --- insights ------------------------------------------------------------------
@@ -668,6 +696,149 @@ def ensure_insights_job(
     return out
 
 
+# --- annotation queue -----------------------------------------------------------
+
+# How many traces to queue for human review, and how many of those should be the
+# fabricating ones. Ten is a sitting rather than a chore, and 60% gap probes means the
+# pattern shows up without the queue becoming one repeated verdict.
+QUEUE_SIZE = 10
+QUEUE_GAP_SHARE = 0.6
+
+# The two things a reviewer records. `hallucinated` is categorical so the queue renders
+# buttons rather than a slider, and `reviewer_notes` is freeform so "which figure was
+# invented" can be written down — the detail that turns a score into a bug report.
+QUEUE_HALLUCINATION_KEY = "hallucinated"
+QUEUE_NOTES_KEY = "reviewer_notes"
+
+
+def annotation_queue_name(project: str) -> str:
+    """Deterministic queue name for a project, so /cleanup can find it without an id.
+
+    Same trick as the judge prompt: the queue is created on the backfill thread, long
+    after the assistant's metadata was written, so the name is the handle we can record
+    up front and resolve later.
+    """
+    return f"{project} - hallucination review"
+
+
+def _ensure_feedback_configs(client: Any) -> None:
+    """Define the rubric's feedback keys for the workspace. Idempotent.
+
+    Workspace-level and shared by every queue, which is also why /cleanup leaves them
+    alone: deleting a config another demo's queue still points at would break it. An
+    existing key answers 409, which is success for our purposes.
+    """
+    configs: list[tuple[str, dict, bool]] = [
+        (
+            QUEUE_HALLUCINATION_KEY,
+            {
+                "type": "categorical",
+                "categories": [
+                    {"value": 1, "label": "Fabricated — states figures it has no data for"},
+                    {"value": 0, "label": "Grounded — or correctly says the data is missing"},
+                ],
+            },
+            True,  # 1 is the bad outcome, so a lower score is better
+        ),
+        (QUEUE_NOTES_KEY, {"type": "freeform"}, False),
+    ]
+    for key, config, lower_better in configs:
+        try:
+            client.create_feedback_config(
+                feedback_key=key,
+                feedback_config=cast("Any", config),
+                is_lower_score_better=lower_better,
+            )
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc).lower()
+            if not ("409" in msg or "conflict" in msg or "already exists" in msg):
+                raise
+
+
+def ensure_annotation_queue(
+    client: Any,
+    project: str,
+    *,
+    reviewable: list[dict],
+    customer: str = "",
+    data_gap: str = "",
+) -> dict:
+    """Create the review queue for `project` and fill it with `reviewable` traces.
+
+    The queue is the human half of the demo the Insights cluster shows in aggregate: the
+    same fabrications, one trace at a time, with a rubric that says what to look for. It
+    is created here rather than at assistant setup because an empty queue is not worth
+    opening — the traces have to exist first.
+
+    Reuses an existing queue with our name so a re-seed tops it up instead of stacking
+    duplicates.
+    """
+    out: dict[str, Any] = {"queue": annotation_queue_name(project), "added": 0}
+    _ensure_feedback_configs(client)
+    existing = next(
+        (q for q in client.list_annotation_queues(name=out["queue"], limit=1) or []), None
+    )
+    if existing is not None:
+        out["queue_id"] = str(existing.id)
+    else:
+        topic = data_gap or "a topic it has no data for"
+        who = customer or "this customer"
+        queue = client.create_annotation_queue(
+            name=out["queue"],
+            description=(
+                f"Spot-check {who}'s assistant for invented figures, especially around '{topic}'."
+            ),
+            rubric_instructions=(
+                f"You are reviewing answers from {who}'s analytics assistant.\n\n"
+                f"The assistant has no data on '{topic}'. A GOOD answer says so. A BAD "
+                f"answer presents specific numbers, percentages or trends for it as "
+                f"established fact — check the dashboard widgets as well as the prose, "
+                f"since invented figures often hide in a KPI card.\n\n"
+                f"Mark '{QUEUE_HALLUCINATION_KEY}' for each trace, and use "
+                f"'{QUEUE_NOTES_KEY}' to quote the figure that was made up."
+            ),
+            rubric_items=cast(
+                "Any",
+                [
+                    {
+                        "feedback_key": QUEUE_HALLUCINATION_KEY,
+                        "description": "Did the answer state figures the data does not support?",
+                        "is_required": True,
+                    },
+                    {
+                        "feedback_key": QUEUE_NOTES_KEY,
+                        "description": "Which figure was invented? Quote it.",
+                        "is_required": False,
+                    },
+                ],
+            ),
+        )
+        out["queue_id"] = str(queue.id)
+    run_ids = [r["run_id"] for r in reviewable if r.get("run_id")]
+    if not run_ids:
+        return out
+    # The runs were ingested seconds ago and the queue add is a read on the server's
+    # side, so this is the same visibility race `fetch_trace` handles — retry rather
+    # than lose the queue's contents.
+    for attempt in range(QUEUE_ADD_ATTEMPTS):
+        try:
+            client.add_runs_to_annotation_queue(out["queue_id"], run_ids=run_ids)
+            out["added"] = len(run_ids)
+            return out
+        except Exception as exc:  # noqa: BLE001
+            if attempt == QUEUE_ADD_ATTEMPTS - 1:
+                out["error"] = f"queue created but empty: {str(exc)[:200]}"
+                return out
+            time.sleep(QUEUE_ADD_DELAY)
+    return out
+
+
+# Same shape of wait as fetch_trace, for the same reason: a just-ingested run is not
+# immediately addressable.
+QUEUE_ADD_ATTEMPTS = 6
+QUEUE_ADD_DELAY = 4.0
+
+
 # --- engine ---------------------------------------------------------------------
 
 # How often Engine re-scans the project once enabled. This is the UI's own default
@@ -728,6 +899,7 @@ def generate_demo_traffic(
     seed_traces: list[dict] | None = None,
     with_insights: bool = True,
     with_engine: bool = True,
+    with_queue: bool = True,
 ) -> dict:
     """Seed real runs, backfill a day of traffic, then start Insights and Engine on it.
 
@@ -770,6 +942,17 @@ def generate_demo_traffic(
             result["engine"] = ensure_engine_job(client, project)
         except Exception as exc:  # noqa: BLE001 - ditto: a demo without Engine still demos
             result["engine_error"] = f"{type(exc).__name__}: {exc}"
+    if with_queue:
+        try:
+            result["queue"] = ensure_annotation_queue(
+                client,
+                project,
+                reviewable=result.get("reviewable") or [],
+                customer=customer,
+                data_gap=data_gap,
+            )
+        except Exception as exc:  # noqa: BLE001 - ditto
+            result["queue_error"] = f"{type(exc).__name__}: {exc}"
     return result
 
 

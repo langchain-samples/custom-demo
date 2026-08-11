@@ -962,12 +962,19 @@ def prepare_assistant(payload: dict) -> dict:
     # `POST /demo-traffic` and `GET /demo-traffic/status` look: the panel shows it as
     # running, and a presenter clicking Generate mid-backfill is refused instead of
     # doubling the traffic.
+    # Deterministic, so the manifest below can name the review queue the backfill will
+    # create minutes from now (function-local import: demo_traffic imports THIS module,
+    # so a module-level import here would be a cycle).
+    from .demo_traffic import annotation_queue_name
+
+    traffic_project = context.get("ls_project") or customer
+    queue_name = annotation_queue_name(traffic_project)
     if push:
         from .demo_traffic import start_demo_traffic
 
         start_demo_traffic(
             workspace,
-            context.get("ls_project") or customer,
+            traffic_project,
             context=context,
             actions=actions,
             data_gap=context.get("data_gap", ""),
@@ -1034,6 +1041,12 @@ def prepare_assistant(payload: dict) -> dict:
             # Also deleted by /cleanup — a reference from the evaluator is not what keeps
             # the prompt alive, so removing only the rule would leave it behind.
             "eval_judge_prompt": eval_judge_prompt,
+            # The human-review queue over this project's traffic. Recorded by NAME, not
+            # id: it is created on the backfill thread minutes after this metadata is
+            # written, and the name is deterministic (see `annotation_queue_name`).
+            # Unconditional, because the backfill is fire-and-forget — a name for a queue
+            # that never got created is a no-op in the cascade.
+            "annotation_queue": queue_name,
         },
     }
     # Presenter brief + recommended flow, surfaced in a popup once setup finishes.
