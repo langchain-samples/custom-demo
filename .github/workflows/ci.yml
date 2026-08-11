@@ -79,6 +79,9 @@ jobs:
           ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_CUSTOM_HEADERS: ${{ secrets.ANTHROPIC_CUSTOM_HEADERS }}
+          # `web_search` calls Tavily and errors out (never invents results) without
+          # this, so a deployment missing it has a visibly broken research tool.
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
         run: |
           {
             echo "LS_CROSS_WORKSPACE_KEY=$LS_CROSS_WORKSPACE_KEY"
@@ -87,6 +90,7 @@ jobs:
             echo "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"
             echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"
             echo "ANTHROPIC_CUSTOM_HEADERS=$ANTHROPIC_CUSTOM_HEADERS"
+            echo "TAVILY_API_KEY=$TAVILY_API_KEY"
             # Turn on deepagents dynamic subagents (QuickJS interpreter + task() fan-out).
             echo "DA_DYNAMIC_SUBAGENTS=1"
           } > .env
