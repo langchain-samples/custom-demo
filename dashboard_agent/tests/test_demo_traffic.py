@@ -455,6 +455,101 @@ def test_backfill_survives_feedback_failures(trace):
     assert client.runs
 
 
+# --- engine ---------------------------------------------------------------------
+#
+# Enabling Engine is one POST to `/v1/platform/sessions/{id}/issues-agent` with a
+# cron schedule (captured from the UI's own toggle). Creating the config IS enabling
+# it, and the first scan starts immediately — which is the whole reason to do it at
+# seed time rather than leaving the presenter to click it and wait.
+
+
+class _EngineClient:
+    """Records the requests `ensure_engine_job` makes, answering as the API does."""
+
+    def __init__(self, fail: Exception | None = None, cron_enabled: bool = True):
+        self.calls: list[tuple[str, str, dict]] = []
+        self.fail = fail
+        self.cron_enabled = cron_enabled
+
+    def read_project(self, project_name: str):
+        return types.SimpleNamespace(id="sess-1", name=project_name)
+
+    def request_with_retries(self, method: str, path: str, json: dict | None = None):
+        self.calls.append((method, path, json or {}))
+        if self.fail is not None:
+            raise self.fail
+        # The server jitters the minute to spread load, so what comes back is never
+        # the string we sent.
+        return types.SimpleNamespace(
+            json=lambda: {
+                "id": "cfg-1",
+                "cron_enabled": self.cron_enabled,
+                "cron_schedule": "51 0/6 * * *",
+                "session_id": "sess-1",
+            }
+        )
+
+
+def test_ensure_engine_job_enables_the_issues_agent_for_the_session():
+    client = _EngineClient()
+    out = DT.ensure_engine_job(client, "P")
+
+    assert client.calls == [
+        ("POST", "/v1/platform/sessions/sess-1/issues-agent", {"cron_schedule": DT.ENGINE_CRON})
+    ]
+    assert out["enabled"] is True
+    assert out["config_id"] == "cfg-1"
+    # Reported as the server stored it, not as we asked for it.
+    assert out["cron_schedule"] == "51 0/6 * * *"
+
+
+def test_ensure_engine_job_treats_already_enabled_as_success():
+    # Re-seeding a project that already has Engine on is a no-op, not a failure.
+    out = DT.ensure_engine_job(_EngineClient(fail=RuntimeError("409 Conflict")), "P")
+    assert out["already_enabled"] is True
+    assert "error" not in out
+
+
+def test_ensure_engine_job_reports_a_refusal_without_raising():
+    out = DT.ensure_engine_job(_EngineClient(fail=RuntimeError("403 not entitled")), "P")
+    assert "403" in out["error"]
+
+
+def test_engine_and_insights_failures_do_not_take_each_other_or_the_traffic_down(
+    monkeypatch, trace
+):
+    # The traffic is the payload. Both extras run, and each one's failure is recorded
+    # on its own so a demo never loses the backfill over a garnish.
+    monkeypatch.setattr(DT.time, "sleep", lambda _s: None)  # fetch_trace's settle wait
+    monkeypatch.setattr(DT, "_ws_client", lambda _ws: _FakeClient(traces=[trace]))
+    monkeypatch.setattr(DT, "run_seeds", lambda *a, **k: [{"trace_id": "t", "is_gap": True}])
+    monkeypatch.setattr(
+        DT, "ensure_insights_job", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no secret"))
+    )
+    monkeypatch.setattr(
+        DT, "ensure_engine_job", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no entitle"))
+    )
+
+    out = DT.generate_demo_traffic("ws", "P", count=5)
+
+    assert out["traces"] == 5
+    assert "no secret" in out["insights_error"]
+    assert "no entitle" in out["engine_error"]
+
+
+def test_engine_can_be_switched_off_by_the_caller(monkeypatch, trace):
+    monkeypatch.setattr(DT.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(DT, "_ws_client", lambda _ws: _FakeClient(traces=[trace]))
+    monkeypatch.setattr(DT, "run_seeds", lambda *a, **k: [{"trace_id": "t"}])
+    monkeypatch.setattr(DT, "ensure_insights_job", lambda *a, **k: {})
+    called: list[int] = []
+    monkeypatch.setattr(DT, "ensure_engine_job", lambda *a, **k: called.append(1) or {})
+
+    DT.generate_demo_traffic("ws", "P", count=5, with_engine=False)
+
+    assert called == []
+
+
 def test_generate_demo_traffic_reports_failures_instead_of_raising(monkeypatch):
     # Called from a daemon thread during assistant setup — it must never raise.
     monkeypatch.setattr(DT, "_ws_client", lambda ws: (_ for _ in ()).throw(RuntimeError("nope")))

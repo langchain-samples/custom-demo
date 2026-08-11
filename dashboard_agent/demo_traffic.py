@@ -614,6 +614,50 @@ def ensure_insights_job(
     return out
 
 
+# --- engine ---------------------------------------------------------------------
+
+# How often Engine re-scans the project once enabled. This is the UI's own default
+# ("0 */6 * * *") and the server rewrites the minute to spread load, so an enabled
+# project reads back with a jittered schedule (`51 0/6 * * *`) rather than this
+# string — not a mismatch. Every scan spends LCU (see
+# `/v1/platform/orgs/current/issues-agent/lcu-spend` for the org's budget), so this
+# is the one knob to turn down if demo projects start adding up.
+ENGINE_CRON = "0 */6 * * *"
+
+
+def ensure_engine_job(client: Any, project: str, *, cron: str = ENGINE_CRON) -> dict:
+    """Turn Engine (the issues agent) on for `project`, as the UI's toggle does.
+
+    A single `POST /v1/platform/sessions/{id}/issues-agent` with a cron schedule —
+    creating the config IS enabling it (`cron_enabled` comes back true) and the first
+    scan starts immediately, which is what makes this worth doing at seed time: by the
+    time a presenter opens the Engine tab, the agent has already run over the traffic
+    we just backfilled instead of showing an empty page and a 6-hour wait.
+
+    Enabling twice is treated as success: the config is per session, so a re-seed of a
+    project that already has Engine on answers with a conflict and there is nothing to
+    fix.
+    """
+    session_id = str(client.read_project(project_name=project).id)
+    path = f"/v1/platform/sessions/{session_id}/issues-agent"
+    out: dict[str, Any] = {"session_id": session_id}
+    try:
+        created = client.request_with_retries("POST", path, json={"cron_schedule": cron}).json()
+    except Exception as exc:  # noqa: BLE001 - Engine is a garnish; never fail the traffic
+        detail = str(exc)
+        if "409" in detail or "conflict" in detail.lower() or "already" in detail.lower():
+            out["already_enabled"] = True
+            return out
+        out["error"] = f"engine could not be enabled: {detail[:200]}"
+        return out
+    out["config_id"] = created.get("id", "")
+    # Read back rather than assume: `cron_enabled` is the field the UI's toggle
+    # reflects, and the schedule is the server's jittered version of `cron`.
+    out["enabled"] = bool(created.get("cron_enabled"))
+    out["cron_schedule"] = created.get("cron_schedule", "")
+    return out
+
+
 # --- entry point ---------------------------------------------------------------
 
 
@@ -629,8 +673,9 @@ def generate_demo_traffic(
     count: int = DEFAULT_COUNT,
     seed_traces: list[dict] | None = None,
     with_insights: bool = True,
+    with_engine: bool = True,
 ) -> dict:
-    """Seed real runs, backfill a day of synthetic traffic, and kick an Insights job.
+    """Seed real runs, backfill a day of traffic, then start Insights and Engine on it.
 
     Best-effort by contract: every failure is swallowed and reported in the return
     value. Called from a daemon thread at assistant creation and from
@@ -657,6 +702,8 @@ def generate_demo_traffic(
     except Exception as exc:  # noqa: BLE001 - never break the caller
         result["error"] = f"{type(exc).__name__}: {exc}"
         return result
+    # Insights and Engine both key off the traffic above, and both are extras: the
+    # payload is the traffic, so each failure is recorded and the other still runs.
     if with_insights:
         try:
             result["insights"] = ensure_insights_job(
@@ -664,6 +711,11 @@ def generate_demo_traffic(
             )
         except Exception as exc:  # noqa: BLE001 - the traffic is the payload; insights is extra
             result["insights_error"] = f"{type(exc).__name__}: {exc}"
+    if with_engine:
+        try:
+            result["engine"] = ensure_engine_job(client, project)
+        except Exception as exc:  # noqa: BLE001 - ditto: a demo without Engine still demos
+            result["engine_error"] = f"{type(exc).__name__}: {exc}"
     return result
 
 
