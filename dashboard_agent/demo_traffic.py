@@ -543,6 +543,52 @@ def backfill(
 
 # --- insights ------------------------------------------------------------------
 
+# Share of the project's runs Insights reads, and the run filter — both the values the
+# UI writes when you save a config. `eq(is_root, true)` matters here: one trace of this
+# agent is 50-151 runs, so clustering without it would compare middleware chain runs
+# against each other instead of comparing conversations.
+INSIGHTS_SAMPLE = 100
+INSIGHTS_FILTER = "eq(is_root, true)"
+
+# Appended to the summary prompt. Insights templates the prompt per run, and without a
+# `{{run.*}}` variable the model is asked to summarize a conversation it was never
+# shown. The UI's prompt editor adds exactly this.
+INSIGHTS_PROMPT_VARIABLE = "\n\n{{run.inputs}}"
+
+
+def insights_model_id(client: Any) -> str:
+    """A workspace model Insights is allowed to use, or "" if there is none.
+
+    THE reason a job used to fail. A config with `model: "anthropic"` and no
+    per-workspace ANTHROPIC_API_KEY answers `422 {"detail": "['ANTHROPIC_API_KEY']"}`,
+    which is what every fresh customer workspace looked like. The UI does not ask for a
+    key: it points `cluster_model`/`summary_model` at a *playground model setting* — a
+    record in `GET /playground-settings` — and the ones backed by LangSmith's own LLM
+    gateway (`LC_GATEWAY_KEY`) need no customer credentials at all.
+
+    Prefers a gateway-backed model for that reason, and requires both
+    `available_in_insights_heavy` (clustering) and `available_in_insights_light`
+    (per-run summaries), since one id is used for both.
+    """
+    settings = client.request_with_retries("GET", "/playground-settings").json()
+    usable = [
+        s
+        for s in (settings if isinstance(settings, list) else [])
+        if isinstance(s, dict)
+        and s.get("id")
+        and s.get("available_in_insights_heavy")
+        and s.get("available_in_insights_light")
+    ]
+    if not usable:
+        return ""
+
+    def _gateway_first(setting: dict) -> int:
+        # A gateway model bills through LangSmith; anything else needs a key the
+        # customer's workspace may not have, which is the failure we are here to avoid.
+        return 0 if "LC_GATEWAY_KEY" in str(setting.get("settings", "")) else 1
+
+    return str(sorted(usable, key=_gateway_first)[0]["id"])
+
 
 def ensure_insights_job(
     client: Any, project: str, *, customer: str = "", data_gap: str = "", run: bool = True
@@ -555,59 +601,83 @@ def ensure_insights_job(
     legible: extracting `fabricated_figures` per trace pushes the clustering to split
     the invented-numbers runs out rather than lumping them in with normal analytics
     questions.
+
+    The config mirrors what the UI writes, field for field (captured from a HAR of the
+    UI saving one), because the differences were not cosmetic: without
+    `cluster_model`/`summary_model` the job needs a per-workspace API key, without
+    `filter` it clusters middleware runs instead of conversations, and without
+    `{{run.inputs}}` the summariser never sees the conversation.
     """
     session_id = str(client.read_project(project_name=project).id)
     topic = data_gap or "a topic the assistant has no data for"
-    config = {
-        "name": "Demo: answer quality",
-        "config": {
-            "summary_prompt": (
-                f"Summarize what the user asked {customer or 'this'} assistant for and how well "
-                f"it answered. Call out explicitly when the assistant presented specific figures "
-                f"as fact for topics it has no data on — especially '{topic}' — versus when it "
-                f"correctly said the data was unavailable."
-            ),
-            "attribute_schemas": {
-                "fabricated_figures": {
-                    "type": "boolean",
-                    "description": (
-                        "True if the answer states specific numbers as established fact without "
-                        "them being present in the retrieved data."
-                    ),
-                },
-                "user_satisfied": {
-                    "type": "boolean",
-                    "description": "True if the user appears satisfied with the answer.",
-                },
+    name = "Demo: answer quality"
+    # Best-effort: a workspace with no insights-capable model still gets a saved
+    # config, and the job below reports why it could not run.
+    try:
+        model_id = insights_model_id(client)
+    except Exception:  # noqa: BLE001 - an unreadable model list is the same as none
+        model_id = ""
+    inner: dict[str, Any] = {
+        "name": name,
+        "summary_prompt": (
+            f"Summarize what the user asked {customer or 'this'} assistant for and how well "
+            f"it answered. Call out explicitly when the assistant presented specific figures "
+            f"as fact for topics it has no data on — especially '{topic}' — versus when it "
+            f"correctly said the data was unavailable." + INSIGHTS_PROMPT_VARIABLE
+        ),
+        "attribute_schemas": {
+            "fabricated_figures": {
+                "type": "boolean",
+                "filter_by": False,
+                "description": (
+                    "True if the answer states specific numbers as established fact without "
+                    "them being present in the retrieved data."
+                ),
             },
-            "last_n_hours": MAX_BACKDATE_HOURS,
-            "model": "anthropic",
+            "user_satisfied": {
+                "type": "boolean",
+                "filter_by": False,
+                "description": "True if the user appears satisfied with the answer.",
+            },
         },
+        "last_n_hours": MAX_BACKDATE_HOURS,
+        "sample": INSIGHTS_SAMPLE,
+        "filter": INSIGHTS_FILTER,
+        "model": "anthropic",
     }
+    if model_id:
+        # Heavy = clustering, light = per-run summaries. The UI points both at one
+        # model, and these take precedence over the `model` above.
+        inner["cluster_model"] = model_id
+        inner["summary_model"] = model_id
     created = client.request_with_retries(
-        "POST", f"/sessions/{session_id}/insights/configs", json=config
+        "POST", f"/sessions/{session_id}/insights/configs", json={"name": name, "config": inner}
     ).json()
-    out: dict[str, Any] = {"session_id": session_id, "config_id": created.get("id", "")}
+    out: dict[str, Any] = {
+        "session_id": session_id,
+        "config_id": created.get("id", ""),
+        "model": model_id,
+    }
     if not (run and out["config_id"]):
         return out
     try:
+        # Just the config_id, as the UI sends: the window (`last_n_hours`) is part of
+        # the config, and the job inherits it.
         job = client.request_with_retries(
-            "POST",
-            f"/sessions/{session_id}/insights",
-            json={"config_id": out["config_id"], "last_n_hours": MAX_BACKDATE_HOURS},
+            "POST", f"/sessions/{session_id}/insights", json={"config_id": out["config_id"]}
         ).json()
         out["job_id"] = job.get("id", "")
         out["status"] = job.get("status", "")
     except Exception as exc:  # noqa: BLE001
-        # Running a job needs a model secret on the WORKSPACE (Settings -> Model
-        # secrets); the API answers a bare 422 listing the missing key, e.g.
-        # {"detail": "['ANTHROPIC_API_KEY']"}. The config we just saved is still
-        # good and the presenter can hit Run in the UI, so translate rather than
-        # raise — this is the likeliest failure on a fresh customer workspace.
+        # Reachable when the workspace exposes no model Insights may use, in which case
+        # the config falls back to `model: "anthropic"` and the API answers a bare 422
+        # listing the missing key, e.g. {"detail": "['ANTHROPIC_API_KEY']"}. The config
+        # we just saved is still good and the presenter can pick a model and hit Run.
         detail = str(exc)
         out["job_error"] = (
-            "insights config saved, but the job needs a model secret in this "
-            "workspace (Settings -> Model secrets): " + detail[:200]
+            "insights config saved, but no model in this workspace is available to "
+            "Insights — add one (Settings -> Model secrets, or an LLM Gateway model) "
+            "and hit Run: " + detail[:200]
             if "API_KEY" in detail
             else f"insights job failed: {detail[:200]}"
         )

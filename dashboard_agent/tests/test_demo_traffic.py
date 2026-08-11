@@ -455,6 +455,123 @@ def test_backfill_survives_feedback_failures(trace):
     assert client.runs
 
 
+# --- insights ------------------------------------------------------------------
+#
+# The job used to 422 on every fresh customer workspace, asking for an
+# ANTHROPIC_API_KEY nobody had put there. The UI never asks for a key: it points
+# `cluster_model`/`summary_model` at a playground model setting, and the LangSmith
+# gateway ones need no customer credentials. These lock in the config shape captured
+# from a HAR of the UI saving a config, since every field in it turned out to matter.
+
+_GATEWAY = {
+    "id": "gw-1",
+    "name": "LLM Gateway GPT-5.5",
+    "settings": {"kwargs": {"openai_api_key": {"id": ["LC_GATEWAY_KEY"], "type": "secret"}}},
+    "available_in_insights_heavy": True,
+    "available_in_insights_light": True,
+}
+_BYO_KEY = {
+    "id": "byo-1",
+    "name": "Customer Anthropic",
+    "settings": {"kwargs": {"anthropic_api_key": {"id": ["ANTHROPIC_API_KEY"]}}},
+    "available_in_insights_heavy": True,
+    "available_in_insights_light": True,
+}
+_PLAYGROUND_ONLY = {
+    "id": "pg-1",
+    "name": "Playground only",
+    "settings": {},
+    "available_in_insights_heavy": False,
+    "available_in_insights_light": True,
+}
+
+
+class _InsightsClient:
+    """Answers the three calls `ensure_insights_job` makes, recording the payloads."""
+
+    def __init__(self, models: list[dict] | None = None, job_error: Exception | None = None):
+        self.models = models if models is not None else [_GATEWAY]
+        self.job_error = job_error
+        self.posted: dict = {}
+
+    def read_project(self, project_name: str):
+        return types.SimpleNamespace(id="sess-1", name=project_name)
+
+    def request_with_retries(self, method: str, path: str, json: dict | None = None):
+        if path == "/playground-settings":
+            return types.SimpleNamespace(json=lambda: self.models)
+        if path.endswith("/insights/configs"):
+            self.posted["config"] = json
+            return types.SimpleNamespace(json=lambda: {"id": "cfg-1"})
+        self.posted["job"] = json
+        if self.job_error is not None:
+            raise self.job_error
+        return types.SimpleNamespace(json=lambda: {"id": "job-1", "status": "queued"})
+
+
+def test_insights_config_points_at_a_model_so_the_job_can_actually_run():
+    client = _InsightsClient()
+    out = DT.ensure_insights_job(client, "P", customer="Acme", data_gap="churn")
+
+    inner = client.posted["config"]["config"]
+    # Both, from one model: heavy clusters, light summarises.
+    assert inner["cluster_model"] == "gw-1"
+    assert inner["summary_model"] == "gw-1"
+    assert out["model"] == "gw-1"
+    assert out["status"] == "queued"
+    # The window lives in the config; the job body carries only the config id.
+    assert client.posted["job"] == {"config_id": "cfg-1"}
+
+
+def test_insights_prefers_a_gateway_model_over_one_needing_a_customer_key():
+    # A BYO-key model in a workspace without that key is the 422 all over again.
+    client = _InsightsClient(models=[_BYO_KEY, _GATEWAY])
+    DT.ensure_insights_job(client, "P")
+    assert client.posted["config"]["config"]["cluster_model"] == "gw-1"
+
+
+def test_insights_ignores_a_model_insights_may_not_use():
+    client = _InsightsClient(models=[_PLAYGROUND_ONLY])
+    DT.ensure_insights_job(client, "P")
+    # Not usable for clustering, so no model is pinned and the config falls back.
+    assert "cluster_model" not in client.posted["config"]["config"]
+
+
+def test_insights_config_clusters_conversations_not_middleware_runs():
+    client = _InsightsClient()
+    DT.ensure_insights_job(client, "P", customer="Acme", data_gap="churn")
+    inner = client.posted["config"]["config"]
+
+    # One trace here is 50-151 runs; without this the clusters are chain runs.
+    assert inner["filter"] == "eq(is_root, true)"
+    assert inner["sample"] == DT.INSIGHTS_SAMPLE
+    # Insights templates the prompt per run: no variable, nothing to summarise.
+    assert inner["summary_prompt"].endswith("{{run.inputs}}")
+    assert "churn" in inner["summary_prompt"] and "Acme" in inner["summary_prompt"]
+    assert all(schema["filter_by"] is False for schema in inner["attribute_schemas"].values())
+
+
+def test_insights_reports_a_missing_key_without_losing_the_config():
+    client = _InsightsClient(
+        models=[], job_error=RuntimeError("422 unknown: {'detail': \"['ANTHROPIC_API_KEY']\"}")
+    )
+    out = DT.ensure_insights_job(client, "P")
+
+    assert out["config_id"] == "cfg-1"  # saved, so Run in the UI still works
+    assert "no model in this workspace" in out["job_error"]
+
+
+def test_insights_survives_an_unreadable_model_list():
+    class _NoModels(_InsightsClient):
+        def request_with_retries(self, method, path, json=None):
+            if path == "/playground-settings":
+                raise RuntimeError("403 forbidden")
+            return super().request_with_retries(method, path, json)
+
+    out = DT.ensure_insights_job(_NoModels(), "P")
+    assert out["config_id"] == "cfg-1" and out["model"] == ""
+
+
 # --- engine ---------------------------------------------------------------------
 #
 # Enabling Engine is one POST to `/v1/platform/sessions/{id}/issues-agent` with a
