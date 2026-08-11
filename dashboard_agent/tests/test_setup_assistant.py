@@ -131,6 +131,31 @@ def test_metadata_records_ls_artifacts_manifest(rec, monkeypatch):
     assert art["agent_repo"] == "acme-co-agent"
     assert art["skills_repo"] == "acme-co-skills"  # bundle repo, deleted via delete_agent
     assert art["skills"] == []  # legacy per-skill list, unused now
+    # Every artifact the /cleanup cascade deletes has to have a slot here, or it leaks
+    # into the customer's workspace. These two are the attached evaluator and the
+    # Prompt Hub prompt holding its judge.
+    assert "eval_rule_id" in art
+    assert "eval_judge_prompt" in art
+
+
+def test_judge_prompt_is_recorded_only_when_the_evaluator_attached(rec, monkeypatch):
+    """No rule means no judge prompt to delete, and a blank keeps /cleanup quiet.
+
+    `_try` no-ops on a falsy handle, so recording a name for an assistant that never got
+    an evaluator would put a spurious 404 in every cleanup report.
+    """
+    from dashboard_agent import assistant_evals as AE
+
+    monkeypatch.setattr(AE, "ensure_eval_dataset", lambda *a, **k: "acme-ds")
+    monkeypatch.setattr(AE, "ensure_dataset_evaluator", lambda *a, **k: "")
+    art = _prep(monkeypatch, _analysis())["metadata"]["ls_artifacts"]
+    assert art["eval_rule_id"] == ""
+    assert art["eval_judge_prompt"] == ""
+
+    monkeypatch.setattr(AE, "ensure_dataset_evaluator", lambda *a, **k: "rule-7")
+    art = _prep(monkeypatch, _analysis())["metadata"]["ls_artifacts"]
+    assert art["eval_rule_id"] == "rule-7"
+    assert art["eval_judge_prompt"] == AE.judge_prompt_name("acme-ds")
 
 
 # --- tool selection (#4) ---
@@ -255,3 +280,49 @@ def test_skill_md_frontmatter_is_valid_yaml_with_colon_description():
     meta = yaml.safe_load(md.split("---")[1])
     assert meta["name"] == "returns-check"  # name == mount dir
     assert "returns" in meta["description"]  # colon didn't truncate/break it
+
+
+# --- the automatic demo-traffic backfill ---
+
+
+@pytest.fixture(autouse=True)
+def traffic(monkeypatch):
+    """Capture the backfill instead of spawning it.
+
+    Autouse because EVERY `prepare_assistant` call in this file would otherwise spawn
+    a real backfill thread — several live agent runs and a few thousand LangSmith
+    ingests — which contradicts this module's no-network contract and leaves threads
+    racing the rest of the suite. Tests that assert on it just request the fixture.
+    """
+    from dashboard_agent import demo_traffic as DT
+
+    started: list[tuple] = []
+    monkeypatch.setattr(
+        DT, "start_demo_traffic", lambda ws, project, **kw: started.append((ws, project, kw))
+    )
+    return started
+
+
+def test_setup_starts_the_backfill_in_the_assistants_own_trace_project(rec, monkeypatch, traffic):
+    """Traffic goes through start_demo_traffic, so the panel and Generate can see it.
+
+    Spawned bare, the setup backfill was invisible to `POST /demo-traffic`: the panel
+    showed the pre-backfill empty state while it ran, and Generate would start a second
+    one on top of it.
+    """
+    out = _prep(monkeypatch, _analysis(), failure_mode="hallucination")
+    assert len(traffic) == 1
+    workspace, project, kwargs = traffic[0]
+    assert workspace == "ws1"
+    assert project == out["context"]["ls_project"]
+    # The gap probe is what Insights clusters on, so it has to reach the backfill.
+    assert kwargs["data_gap"] == out["context"]["data_gap"]
+    assert kwargs["customer"] == "Acme Co"
+    assert len(kwargs["actions"]) == 3
+
+
+def test_no_push_means_no_backfill(rec, monkeypatch, traffic):
+    # push_prompts=False is the dry-run setup: no prompt, no dataset, and no traffic
+    # (a project nothing was pushed to is not the one the demo will use).
+    _prep(monkeypatch, _analysis(), push_prompts=False)
+    assert traffic == []

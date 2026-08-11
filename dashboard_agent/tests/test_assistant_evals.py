@@ -723,6 +723,206 @@ def test_ensure_eval_dataset_skips_langsmith_when_there_is_nothing_to_grade(monk
     assert called == []
 
 
+# --- the LangSmith-side judge (the dataset's attached evaluator) ----------------------
+#
+# Setup attaches an LLM-as-judge to the dataset so the evaluator is configured in
+# LangSmith rather than living only as a Python function here. These stay offline: the
+# payload builders are pure, and the two that talk to LangSmith are driven through fakes.
+
+
+class _FakeRulesClient(_FakeClient):
+    """_FakeClient plus the Prompt Hub push the attached judge needs."""
+
+    def __init__(self, existing: dict[str, list] | None = None):
+        super().__init__(existing)
+        self.pushed: list[str] = []
+
+    def push_prompt(self, name: str, object: Any = None, **_) -> str:  # noqa: A002
+        self.pushed.append(name)
+        return f"http://hub/{name}"
+
+    # Declared so tests can swap in their own; the real client's `evaluate` is what
+    # run_experiment calls, and assigning it onto an instance is otherwise untyped.
+    evaluate: Any = None
+
+
+class _FakeJudgeModel:
+    """Stand-in for the judge model, so the push needs no API key.
+
+    `StructuredPrompt | model` refuses anything that is not a language model, but it
+    duck-types the check: `pipe` only needs `with_structured_output`, which is also the
+    call that binds our output schema (and therefore the feedback key) to the model.
+    """
+
+    def __init__(self):
+        self.schemas: list[dict] = []
+
+    def with_structured_output(self, schema, **_kw):
+        from langchain_core.runnables import RunnableLambda
+
+        self.schemas.append(schema)
+        return RunnableLambda(lambda x: x)
+
+
+def _fake_model(*_a, **_k):
+    return _FakeJudgeModel()
+
+
+def _post_ok(rule_id: str, sink: dict):
+    def _post(url, headers=None, json=None, timeout=None):  # noqa: A002
+        sink.update({"url": url, "headers": headers, "json": json})
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"id": rule_id})
+
+    return _post
+
+
+def test_judge_output_schema_property_is_the_feedback_key():
+    """The schema's non-`comment` property IS the feedback key LangSmith writes.
+
+    So it has to be EVAL_FEEDBACK_KEY: that string is what `GET /evals/status` turns
+    into the badge. A stray extra property would silently become a second key.
+    """
+    schema = AE.judge_output_schema()
+    assert set(schema["properties"]) == {"comment", AE.EVAL_FEEDBACK_KEY}
+    assert schema["required"] == [AE.EVAL_FEEDBACK_KEY]
+    assert schema["properties"][AE.EVAL_FEEDBACK_KEY]["type"] == "boolean"
+
+
+def test_judge_prompt_carries_both_criteria_and_every_mapped_variable():
+    """One prompt grades both kinds, using the SAME criteria as the in-process judge.
+
+    Interpolated rather than restated, so the attached judge and `demo_behavior` cannot
+    drift apart. Every mapped variable must appear or the mapping feeds nothing.
+    """
+    text = AE.judge_prompt_text(CUSTOMER)
+    assert CUSTOMER in text
+    assert AE._GROUNDED_CRITERION in text
+    # The gap criterion, with its `{topic}` slot pointed at the mustache variable.
+    assert 'about "{{topic}}"' in text
+    for var in AE._JUDGE_VARIABLE_MAPPING:
+        assert "{{" + var + "}}" in text, f"{var} is mapped but never used in the prompt"
+    # Mustache, not str.format: a leftover single-brace slot renders literally.
+    assert "{customer}" not in text.replace("{{", "").replace("}}", "")
+
+
+def test_judge_rule_payload_targets_the_dataset_and_only_root_runs():
+    payload = AE._judge_rule_payload("ds-1", "repo:latest", "grounded")
+    assert payload["dataset_id"] == "ds-1"
+    # Without this the judge fires on every nested middleware/model run in the tree —
+    # a real trace of this agent is 50-151 runs deep.
+    assert payload["filter"] == "eq(is_root, true)"
+    structured = payload["evaluators"][0]["structured"]
+    assert structured["hub_ref"] == "repo:latest"
+    mapping = structured["variable_mapping"]
+    # Widgets have to reach the judge: this agent is told to keep figures in the
+    # dashboard, so prose-only grading passes fabrications hidden in KPI cards.
+    assert mapping["widgets"] == "output.widgets"
+    assert mapping["kind"] == "input.kind"
+    # Singular roots. The `inputs.`/`outputs.` form maps to nothing on this surface.
+    assert not any(v.startswith(("inputs.", "outputs.")) for v in mapping.values())
+
+
+def test_ensure_dataset_evaluator_pushes_the_judge_then_attaches_it(monkeypatch):
+    fake = _FakeRulesClient({_name(): []})
+    posted: dict = {}
+    monkeypatch.setattr(AE, "_ws_client", lambda *a, **k: fake)
+    monkeypatch.setattr(AE, "init_chat_model", _fake_model)
+    monkeypatch.setattr(AE, "dataset_rules", lambda *_a, **_k: [])
+    monkeypatch.setattr(AE.httpx, "post", _post_ok("rule-9", posted))
+
+    assert AE.ensure_dataset_evaluator("ws-1", _name(), CUSTOMER) == "rule-9"
+    # The rule references the prompt we just pushed, by the deterministic handle.
+    assert fake.pushed == [AE.judge_prompt_name(_name())]
+    assert posted["json"]["evaluators"][0]["structured"]["hub_ref"].startswith(fake.pushed[0])
+    assert posted["json"]["dataset_id"] == f"ds-{_name()}"
+    assert posted["url"].endswith("/api/v1/runs/rules")
+    # Cross-workspace scoping, or the rule lands in the key's default workspace.
+    assert posted["headers"]["X-Tenant-Id"] == "ws-1"
+
+
+def test_ensure_dataset_evaluator_reuses_an_existing_rule(monkeypatch):
+    """Re-running setup for the same customer must not stack duplicate evaluators."""
+    fake = _FakeRulesClient({_name(): []})
+    monkeypatch.setattr(AE, "_ws_client", lambda *a, **k: fake)
+    monkeypatch.setattr(AE, "init_chat_model", _fake_model)
+    monkeypatch.setattr(
+        AE,
+        "dataset_rules",
+        lambda *_a, **_k: [{"id": "rule-1", "display_name": AE.EVAL_FEEDBACK_KEY}],
+    )
+
+    def _no_post(*_a, **_k):
+        raise AssertionError("a second rule must not be created")
+
+    monkeypatch.setattr(AE.httpx, "post", _no_post)
+    assert AE.ensure_dataset_evaluator("ws-1", _name(), CUSTOMER) == "rule-1"
+    assert fake.pushed == []
+
+
+def test_ensure_dataset_evaluator_swallows_a_langsmith_failure(monkeypatch):
+    """Same best-effort contract as the dataset: "" means "nothing attached"."""
+    monkeypatch.setattr(
+        AE, "_ws_client", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("503"))
+    )
+    assert AE.ensure_dataset_evaluator("ws-1", _name(), CUSTOMER) == ""
+
+
+def test_ensure_dataset_evaluator_skips_when_there_is_no_dataset(monkeypatch):
+    called: list = []
+    monkeypatch.setattr(AE, "_ws_client", lambda *a, **k: called.append(1))
+    assert AE.ensure_dataset_evaluator("ws-1", "", CUSTOMER) == ""
+    assert called == []
+
+
+def test_dataset_rules_reads_as_no_rules_when_langsmith_is_unreachable(monkeypatch):
+    """Cannot-tell and none-attached are the same answer — and never a raise."""
+    monkeypatch.setattr(
+        AE.httpx, "get", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+    assert AE.dataset_rules("ws-1", "ds-1") == []
+
+
+def _run_experiment_with(monkeypatch, *, attached: bool):
+    """Run `run_experiment` against fakes; return (evaluators passed, result)."""
+    fake = _FakeRulesClient({_name(): []})
+    seen: dict = {}
+
+    def _evaluate(target, data=None, evaluators=None, **_k):
+        seen["evaluators"] = evaluators
+        return SimpleNamespace(experiment_name="exp-1")
+
+    fake.evaluate = _evaluate
+    monkeypatch.setattr(AE, "_ws_client", lambda *a, **k: fake)
+    monkeypatch.setattr(AE, "_agent_target", lambda _ctx: lambda inputs: {})
+    monkeypatch.setattr(AE, "dataset_rules", lambda *_a, **_k: [{"id": "r"}] if attached else [])
+    return seen, AE.run_experiment("ws-1", _name(), {})
+
+
+def test_run_experiment_does_not_double_grade_when_the_evaluator_is_attached(monkeypatch):
+    """The guard that keeps the badge honest.
+
+    LangSmith grades every experiment created after the evaluator is attached. Passing
+    `demo_behavior` as well would score each row twice, and `_score_from_feedback` sums
+    all feedback keys — a 3-example dataset would read "6/3".
+    """
+    seen, out = _run_experiment_with(monkeypatch, attached=True)
+    assert seen["evaluators"] == []
+    assert out["graded_by"] == "langsmith"
+    # Nothing to tally yet: the attached judge scores asynchronously.
+    assert (out["passed"], out["total"]) == (0, 0)
+
+
+def test_run_experiment_falls_back_to_the_in_process_judge(monkeypatch):
+    """The fallback path stays intact.
+
+    Assistants created before the evaluator existed, and workspaces where attaching
+    failed, must keep grading exactly as they did before.
+    """
+    seen, out = _run_experiment_with(monkeypatch, attached=False)
+    assert seen["evaluators"] == [AE.demo_behavior]
+    assert out["graded_by"] == "in_process"
+
+
 # --- layering (D4): dashboard_agent must never import the repo-level evals -----------------
 
 

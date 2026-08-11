@@ -314,7 +314,7 @@ def analyze_customer(
     the personas, the data gap, and the tool selection.
     """
     load_env()
-    llm = init_chat_model(model or setup_model(), **sampling_kwargs(0.5))
+    llm = init_chat_model(model or setup_model(), **sampling_kwargs(0.5))  # ty: ignore[no-matching-overload]
     site = f" (website: {website})" if website else ""
     scenario = (
         f"\nUSE CASE — build the ENTIRE assistant around this scenario (its users, "
@@ -893,37 +893,52 @@ def prepare_assistant(payload: dict) -> dict:
     # a cycle. Best-effort by contract — ensure_eval_dataset returns "" on any
     # LangSmith failure, and "" simply means this assistant has no eval panel.
     eval_dataset = ""
+    eval_rule_id = ""
+    eval_judge_prompt = ""
     if push:
-        from .assistant_evals import ensure_eval_dataset
+        from .assistant_evals import ensure_dataset_evaluator, ensure_eval_dataset
 
         eval_dataset = ensure_eval_dataset(
             workspace, customer, failure_mode, actions, context.get("data_gap", "")
         )
+        # Attach the judge to that dataset, so the evaluator is configured in LangSmith
+        # (visible on the dataset's Evaluators tab) instead of living only as a Python
+        # function in this process. Also best-effort: "" means nothing was attached, and
+        # `run_experiment` falls back to grading in-process.
+        eval_rule_id = ensure_dataset_evaluator(workspace, eval_dataset, customer)
+        # The judge itself is a Prompt Hub prompt in the customer's workspace, named
+        # deterministically from the dataset, so /cleanup can delete it without another
+        # round trip. Recorded only when the attach succeeded — otherwise there is
+        # nothing to delete and a blank entry keeps the cascade quiet.
+        if eval_rule_id:
+            from .assistant_evals import judge_prompt_name
+
+            eval_judge_prompt = judge_prompt_name(eval_dataset)
 
     # A day of synthetic traffic in the assistant's trace project, so the LangSmith
     # Monitoring and Insights tabs have something to show the moment the demo starts
-    # (otherwise every chart is empty and Insights has nothing to cluster). Spawned on
-    # a daemon thread like the sandbox prewarm above: it runs several REAL agent turns
-    # to get seed traces and then ingests a few thousand backdated runs, which is
-    # minutes of work that setup must not wait on. Fire-and-forget and best-effort —
-    # `generate_demo_traffic` reports failures in its return value rather than raising,
-    # and nothing downstream depends on it having succeeded.
+    # (otherwise every chart is empty and Insights has nothing to cluster). Threaded
+    # like the sandbox prewarm above: it runs several REAL agent turns to get seed
+    # traces and then ingests a few thousand backdated runs, which is minutes of work
+    # that setup must not wait on. Fire-and-forget and best-effort — failures are
+    # reported in the receipt rather than raised, and nothing downstream depends on it
+    # having succeeded.
+    #
+    # Via `start_demo_traffic` rather than a bare thread so this run registers where
+    # `POST /demo-traffic` and `GET /demo-traffic/status` look: the panel shows it as
+    # running, and a presenter clicking Generate mid-backfill is refused instead of
+    # doubling the traffic.
     if push:
-        import threading
+        from .demo_traffic import start_demo_traffic
 
-        from .demo_traffic import generate_demo_traffic
-
-        threading.Thread(
-            target=generate_demo_traffic,
-            args=(workspace, context.get("ls_project") or customer),
-            kwargs={
-                "context": context,
-                "actions": actions,
-                "data_gap": context.get("data_gap", ""),
-                "customer": customer,
-            },
-            daemon=True,
-        ).start()
+        start_demo_traffic(
+            workspace,
+            context.get("ls_project") or customer,
+            context=context,
+            actions=actions,
+            data_gap=context.get("data_gap", ""),
+            customer=customer,
+        )
 
     # Brand colors — priority: Brandfetch (accurate/current) → LLM known-brand
     # guess → scraped site theme-color → default. Secondary drives the 2nd series.
@@ -973,6 +988,14 @@ def prepare_assistant(payload: dict) -> dict:
             # Per-assistant demo eval dataset ("" when it couldn't be created, or for
             # an assistant provisioned before this feature existed).
             "eval_dataset": eval_dataset,
+            # The run rule attaching the judge to that dataset. Deleting the dataset may
+            # not cascade to it, so /cleanup removes it explicitly rather than leaving an
+            # orphan evaluator in the customer's workspace.
+            "eval_rule_id": eval_rule_id,
+            # The judge's Prompt Hub prompt, which the rule references by handle. Also
+            # deleted by /cleanup — the rule holding a reference is not what keeps the
+            # prompt alive, so removing only the rule would leave it behind.
+            "eval_judge_prompt": eval_judge_prompt,
         },
     }
     # Presenter brief + recommended flow, surfaced in a popup once setup finishes.

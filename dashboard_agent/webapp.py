@@ -222,8 +222,32 @@ async def cleanup(request):
         body.get("eval_dataset"),
         lambda: client.delete_dataset(dataset_name=body["eval_dataset"]),
     )
+    # The run rule that attached the judge to that dataset. Deleted explicitly because
+    # dropping the dataset is not documented to cascade to it, and a leftover rule shows
+    # up as a stray evaluator in the customer's workspace.
+    _try(
+        "eval evaluator",
+        body.get("eval_rule_id"),
+        lambda: _delete_eval_rule(body.get("workspace"), body["eval_rule_id"]),
+    )
+    # The judge prompt the rule pointed at. Deleted after the rule, since a prompt with
+    # a live reference may refuse to go.
+    _try(
+        "eval judge prompt",
+        body.get("eval_judge_prompt"),
+        lambda: client.delete_prompt(body["eval_judge_prompt"]),
+    )
 
     return JSONResponse({"deleted": deleted, "failed": failed})
+
+
+def _delete_eval_rule(workspace: str | None, rule_id: str) -> None:
+    """DELETE the run rule `rule_id`. Raises on failure, so `_try` records it."""
+    from dashboard_agent.assistant_evals import _rules_api
+
+    url, headers = _rules_api(workspace)
+    res = httpx.delete(f"{url}/{rule_id}", headers=headers, timeout=30)
+    res.raise_for_status()
 
 
 async def trace_url(request):
@@ -901,43 +925,20 @@ async def sandbox_file(request):
 
 # --- demo traffic --------------------------------------------------------------
 
-# One backfill per project at a time. Each is hundreds of traces and several thousand
-# run ingests; two racing would double the traffic and blow through the hourly ingest
-# quota. Same hint-not-truth contract as _INFLIGHT above.
-_TRAFFIC_INFLIGHT: dict[str, float] = {}
-_TRAFFIC_RESULT: dict[str, dict] = {}
-
-
-def _demo_traffic_bg(workspace: str, project: str, payload: dict) -> None:
-    """Thread body for POST /demo-traffic. Never raises."""
-    try:
-        from dashboard_agent.demo_traffic import generate_demo_traffic
-
-        _TRAFFIC_RESULT[project] = generate_demo_traffic(
-            workspace,
-            project,
-            context=payload.get("context") or {},
-            actions=payload.get("actions") or [],
-            data_gap=payload.get("data_gap") or "",
-            customer=payload.get("customer") or "",
-            seed_traces=payload.get("seed_traces") or None,
-            with_insights=bool(payload.get("with_insights", True)),
-        )
-    except Exception as exc:  # noqa: BLE001
-        traceback.print_exc()
-        _TRAFFIC_RESULT[project] = {"error": f"{type(exc).__name__}: {exc}"}
-    finally:
-        with _RUN_LOCK:
-            _TRAFFIC_INFLIGHT.pop(project, None)
+# The "one backfill per project" guard and the receipt live in demo_traffic, not here,
+# because the automatic backfill at assistant creation does not come through this route
+# (see the registry comment there). Reading them from that module is what makes the two
+# paths interlock: this route refuses to start a second backfill over setup's, and the
+# status route below reports setup's while it runs.
 
 
 async def demo_traffic(request):
     """Backfill a day of synthetic traffic into an assistant's trace project.
 
     POST {project, workspace?, context?, actions?, data_gap?, customer?} → a receipt.
-    Slow (real seed runs + a few thousand run ingests), so it is spawned on a thread
-    like /evals/run. Exists mainly so assistants created BEFORE this feature can be
-    given traffic without recreating them.
+    Slow (real seed runs + a few thousand run ingests), so `start_demo_traffic` puts it
+    on a thread. Exists mainly so assistants created BEFORE the automatic backfill can
+    be given traffic without recreating them.
     """
     try:
         body = await request.json()
@@ -947,22 +948,20 @@ async def demo_traffic(request):
     project = (body.get("project") or body.get("ls_project") or "").strip()
     if not project:
         return JSONResponse({"error": "project is required"}, status_code=400)
-    if project in _TRAFFIC_INFLIGHT:
-        return JSONResponse({"ok": True, "project": project, "already_running": True})
-    with _RUN_LOCK:
-        _TRAFFIC_INFLIGHT[project] = time.time()
 
-    try:
-        threading.Thread(
-            target=_demo_traffic_bg,
-            args=(body.get("workspace") or "", project, body),
-            daemon=True,
-        ).start()
-    except Exception as exc:
-        with _RUN_LOCK:
-            _TRAFFIC_INFLIGHT.pop(project, None)
-        return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
-    return JSONResponse({"ok": True, "project": project, "running": True})
+    from dashboard_agent.demo_traffic import start_demo_traffic
+
+    ack = start_demo_traffic(
+        body.get("workspace") or "",
+        project,
+        context=body.get("context") or {},
+        actions=body.get("actions") or [],
+        data_gap=body.get("data_gap") or "",
+        customer=body.get("customer") or "",
+        seed_traces=body.get("seed_traces") or None,
+        with_insights=bool(body.get("with_insights", True)),
+    )
+    return JSONResponse(ack, status_code=200 if ack.get("ok") else 500)
 
 
 # Tabs hanging off a tracing project's URL. The SDK gives us the project URL; the
@@ -992,15 +991,17 @@ async def demo_traffic_status(request):
     In-process only — unlike /evals/status there is nothing in LangSmith that says
     "a backfill happened", so a redeploy loses this. That is acceptable: the traffic
     itself is durable and visible in the project; only the receipt is ephemeral.
+
+    Covers the automatic backfill at assistant creation as well as this route's, since
+    both register in the same place.
     """
     project = (request.query_params.get("project") or "").strip()
     if not project:
         return JSONResponse({"project": "", "running": False, "links": {}})
-    out = {
-        "project": project,
-        "running": project in _TRAFFIC_INFLIGHT,
-        "result": _TRAFFIC_RESULT.get(project) or {},
-    }
+
+    from dashboard_agent.demo_traffic import demo_traffic_state
+
+    out = {"project": project, **demo_traffic_state(project)}
     try:
         out["links"] = await asyncio.to_thread(
             _project_links, request.query_params.get("workspace"), project

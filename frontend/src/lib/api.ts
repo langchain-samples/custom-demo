@@ -69,6 +69,14 @@ export interface LsArtifacts {
    * the other artifacts, so it only has to be present in this object.
    */
   eval_dataset?: string;
+  /**
+   * Run rule attaching the LLM-as-judge evaluator to `eval_dataset`. Absent when
+   * attaching failed or for assistants created before it existed — in which case the
+   * experiment falls back to grading in-process. /cleanup deletes it explicitly.
+   */
+  eval_rule_id?: string;
+  /** Prompt Hub prompt holding the judge that `eval_rule_id` references. */
+  eval_judge_prompt?: string;
 }
 
 /** A server-side assistant: a stored configuration instance of the graph. */

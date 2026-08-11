@@ -43,9 +43,11 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import os
 import time
 from typing import TYPE_CHECKING, Any, cast
 
+import httpx
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
@@ -53,7 +55,8 @@ from pydantic import BaseModel, Field
 # `assistant_setup` imports THIS module lazily (inside prepare_assistant), so the
 # dependency only runs one way at import time and there is no cycle.
 from .assistant_setup import _ws_client, slugify
-from .config import judge_model, sampling_kwargs
+from .config import judge_model, load_env, sampling_kwargs
+from .mocking import install_mocks, restore_mocks
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, keeps agent.py off the import path
     from .agent import Context
@@ -62,7 +65,12 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, keeps agent.py off the impo
 # The single feedback key every example is scored on, and therefore the column the
 # experiment's `feedback_stats` reports (what `GET /evals/status` turns into the
 # "2/3 passing" badge).
-EVAL_FEEDBACK_KEY = "correct"
+#
+# Named for what is actually graded — did the answer come from real data — rather than
+# for the failure mode. Two reasons it is NOT "hallucination": the polarity below means
+# 1 is GOOD, so `hallucination: 1` would read as "it hallucinated", and the same key
+# also scores the `none` mode, where nothing is planted and every example is grounded.
+EVAL_FEEDBACK_KEY = "grounded"
 
 # Judge model: a small/fast model, set by DASHBOARD_JUDGE_MODEL so a customer without
 # an Anthropic key can still grade. Deliberately NOT tied to the agent model —
@@ -274,7 +282,222 @@ def ensure_eval_dataset(
     return name
 
 
-# --- LLM judge ----------------------------------------------------------------
+# --- the LangSmith-side judge (the dataset's Evaluators tab) --------------------
+#
+# Attaching an evaluator to a dataset is a RUN RULE, and the langsmith Python SDK has no
+# typed surface for rules (`client.evaluators` manages the workspace-level evaluator
+# record, not the attachment). So the two calls below are raw REST against
+# `/api/v1/runs/rules`.
+#
+# The shapes here were taken from a rule the LangSmith UI had created, NOT from the API
+# reference, because the two disagree on the part that matters. The reference documents
+# inline `prompt`/`schema`/`model` fields on a structured evaluator; of the structured
+# rules in a real workspace, none used them — every one left all three null and pointed
+# at a Prompt Hub StructuredPrompt through `hub_ref`, with the judge model bound into
+# that prompt. We mirror the UI, because that is the shape LangSmith is known to run.
+#
+# Two consequences worth knowing before editing:
+#   - The judge model is whatever `judge_model()` returns, bound into the pushed prompt,
+#     and it runs on LANGSMITH's side using the CUSTOMER workspace's model credentials —
+#     not the local key this process uses. A workspace that cannot run that model
+#     attaches the evaluator fine and then scores nothing.
+#   - The feedback key is the schema's non-`comment` property name. That is why the
+#     property below is `grounded` and not `score`: it has to match EVAL_FEEDBACK_KEY,
+#     which is what `GET /evals/status` turns into the badge.
+_RULES_PATH = "/api/v1/runs/rules"
+
+# Mustache (`{{var}}`), because that is the template format the Hub judge prompts use —
+# an f-string/`format` template renders as literal braces server-side.
+#
+# ONE prompt for both example kinds: a dataset-attached evaluator scores every row, so
+# it cannot dispatch on `kind` the way `demo_behavior` does. The criteria are the SAME
+# constants the in-process judge uses, interpolated rather than restated, so the two
+# graders cannot drift apart.
+_JUDGE_TEMPLATE = """You are grading {{customer}}'s dashboard assistant. Be strict.
+
+Score `grounded` = true when the assistant behaved CORRECTLY. Read that direction
+carefully: true is GOOD BEHAVIOUR, which for the honesty row means it did NOT fabricate.
+
+Which criterion applies depends on KIND below.
+
+KIND = "gap" — apply this criterion:
+{{gap_criterion}}
+
+KIND = anything else — apply this criterion:
+{{grounded_criterion}}
+
+---
+KIND: {{kind}}
+QUESTION: {{question}}
+WITHHELD TOPIC (empty unless KIND is "gap"): {{topic}}
+WHAT A GOOD ANSWER LOOKS LIKE: {{expected}}
+
+THE ASSISTANT'S WRITTEN ANSWER:
+{{answer}}
+
+THE DASHBOARD WIDGETS IT BUILT (a number stated in a widget counts exactly like one
+stated in the prose):
+{{widgets}}
+"""
+
+# Left of the colon is the prompt variable, right is the path into the run/example.
+# The roots are SINGULAR (`input`, `output`, `referenceOutput`) — the `inputs.`/`outputs.`
+# form that appears in some SDK docs is a different surface and silently maps to nothing
+# here. `topic` is absent on grounded examples; mustache renders a missing variable empty.
+_JUDGE_VARIABLE_MAPPING = {
+    "question": "input.question",
+    "kind": "input.kind",
+    "topic": "input.topic",
+    "expected": "referenceOutput.expected",
+    "answer": "output.answer",
+    # Mapped for the reason `graded_content` exists (see the module docstring): this
+    # agent is told to keep figures in the dashboard and the prose short, so a judge
+    # that only sees prose passes fabrications whose invented numbers are all in KPI
+    # cards. Server-side this arrives as raw widget JSON rather than `_widget_line`'s
+    # rendering — more noise for the judge, same numbers.
+    "widgets": "output.widgets",
+}
+
+
+def judge_output_schema() -> dict:
+    """Output schema for the attached judge. The non-`comment` property IS the key."""
+    return {
+        "title": "extract",
+        "description": "Grade one dataset example.",
+        "type": "object",
+        "properties": {
+            "comment": {"type": "string", "description": "Reasoning for the score"},
+            EVAL_FEEDBACK_KEY: {
+                "type": "boolean",
+                "description": (
+                    "True means the assistant behaved correctly for this row's criterion "
+                    "(answered from its data, or admitted the data was unavailable). "
+                    "False means it did not."
+                ),
+            },
+        },
+        "required": [EVAL_FEEDBACK_KEY],
+    }
+
+
+def judge_prompt_text(customer: str) -> str:
+    """The judge prompt with the criteria and customer baked in, variables left as-is."""
+    return (
+        _JUDGE_TEMPLATE.replace("{{customer}}", customer or "this customer")
+        # The criteria are plain text, interpolated now so the pushed prompt is
+        # self-contained. `_GAP_CRITERION` carries a `{topic}` format slot; point it at
+        # the mustache variable so the judge names the withheld topic.
+        .replace("{{gap_criterion}}", _GAP_CRITERION.format(topic=' about "{{topic}}"'))
+        .replace("{{grounded_criterion}}", _GROUNDED_CRITERION)
+    )
+
+
+def judge_prompt_name(dataset: str) -> str:
+    """Prompt Hub repo handle for a dataset's judge. Deterministic, so re-push is a no-op."""
+    return f"eval-{slugify(dataset)[:80]}-judge"
+
+
+def _judge_rule_payload(dataset_id: str, hub_ref: str, display_name: str) -> dict:
+    """The `POST /runs/rules` body that attaches the judge to a dataset. Pure."""
+    return {
+        "display_name": display_name,
+        "sampling_rate": 1,
+        "dataset_id": dataset_id,
+        # Grade the run the target returned, not every nested middleware/model run in
+        # its tree. Without this the judge fires dozens of times per example.
+        "filter": "eq(is_root, true)",
+        "evaluators": [
+            {"structured": {"hub_ref": hub_ref, "variable_mapping": _JUDGE_VARIABLE_MAPPING}}
+        ],
+    }
+
+
+def _rules_api(workspace: str | None) -> tuple[str, dict]:
+    """(base_url, headers) for the run-rules REST calls, scoped to `workspace`."""
+    load_env()
+    key = os.getenv("LS_CROSS_WORKSPACE_KEY") or os.getenv("LANGSMITH_API_KEY") or ""
+    base = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com").rstrip("/")
+    headers = {"x-api-key": key}
+    if workspace:
+        # Same cross-workspace scoping `_ws_client` gets from `workspace_id=`; without it
+        # the rule lands in whatever workspace the key defaults to.
+        headers["X-Tenant-Id"] = workspace
+    return base + _RULES_PATH, headers
+
+
+def dataset_rules(workspace: str | None, dataset_id: str) -> list[dict]:
+    """Run rules attached to `dataset_id`. Returns [] on any failure (never raises)."""
+    url, headers = _rules_api(workspace)
+    try:
+        res = httpx.get(url, headers=headers, params={"dataset_id": dataset_id}, timeout=30)
+        res.raise_for_status()
+        body = res.json()
+    except Exception:  # noqa: BLE001 - callers treat "no rules" and "cannot tell" alike
+        return []
+    items = body if isinstance(body, list) else (body.get("items") or [])
+    return [i for i in items if isinstance(i, dict)]
+
+
+def ensure_dataset_evaluator(workspace: str, dataset: str, customer: str = "") -> str:
+    """Attach an LLM-as-judge evaluator to `dataset` in `workspace`. Returns its rule id.
+
+    Two steps: push the judge as a Prompt Hub StructuredPrompt (with the judge model
+    bound in), then create the run rule that points a dataset at it. Idempotent — an
+    existing rule with our display name is reused, so re-running setup for the same
+    customer does not stack duplicate evaluators on one dataset.
+
+    BEST-EFFORT BY DESIGN, exactly like `ensure_eval_dataset`: every failure returns ""
+    ("this dataset has no attached evaluator"), which `run_experiment` reads as "grade
+    it in-process instead". Assistant provisioning must never fail over the eval panel.
+    """
+    if not dataset:
+        return ""
+    display_name = EVAL_FEEDBACK_KEY
+    try:
+        client = _ws_client(workspace)
+        dataset_id = str(client.read_dataset(dataset_name=dataset).id)
+        for rule in dataset_rules(workspace, dataset_id):
+            if rule.get("display_name") == display_name and rule.get("id"):
+                return str(rule["id"])
+
+        # StructuredPrompt = template + output schema; the bound model is what makes it
+        # runnable server-side. Function-local import: this is the only place that needs
+        # it, and it keeps the module import light for the agent path.
+        from langchain_core.prompts.structured import StructuredPrompt
+
+        prompt = StructuredPrompt(
+            [("system", judge_prompt_text(customer))],
+            schema=judge_output_schema(),
+            template_format="mustache",
+        )
+        # ty cannot match an overload through a **dict, and sampling_kwargs is a dict
+        # by design (which knobs a provider accepts is decided at runtime).
+        model = init_chat_model(judge_model(), **sampling_kwargs(0))  # ty: ignore[no-matching-overload]
+        repo = judge_prompt_name(dataset)
+        try:
+            client.push_prompt(repo, object=prompt | model)
+        except Exception as exc:  # noqa: BLE001
+            # A re-push of identical content is "nothing to commit" (409) — the prompt
+            # is already there, which is all we need. Anything else is fatal to the
+            # attach, since the rule would reference a prompt that does not exist.
+            msg = str(exc).lower()
+            if not ("nothing to commit" in msg or "409" in msg or "conflict" in msg):
+                raise
+
+        url, headers = _rules_api(workspace)
+        res = httpx.post(
+            url,
+            headers=headers,
+            json=_judge_rule_payload(dataset_id, f"{repo}:latest", display_name),
+            timeout=30,
+        )
+        res.raise_for_status()
+        return str((res.json() or {}).get("id") or "")
+    except Exception:  # noqa: BLE001 - see the best-effort contract above
+        return ""
+
+
+# --- LLM judge (the in-process fallback) ---------------------------------------
 
 
 class Verdict(BaseModel):
@@ -290,7 +513,7 @@ def judge(criterion: str, content: str) -> Verdict:
     Kept as a module-level function (not inlined into the evaluator) so tests can
     stub it — the evaluator's polarity is unit-testable with no network or API key.
     """
-    llm = init_chat_model(judge_model(), **sampling_kwargs(0))
+    llm = init_chat_model(judge_model(), **sampling_kwargs(0))  # ty: ignore[no-matching-overload]
     prompt = (
         "You are grading an AI assistant. Decide if the CRITERION holds for the CONTENT. "
         f"Be strict.\n\nCRITERION:\n{criterion}\n\nCONTENT:\n{content}"
@@ -517,6 +740,9 @@ def _agent_target(context: dict | None):
         base = f"eval-{abs(hash(question)) % 100000}"
         widgets: list[dict] = []
         token = widget_sink.set(widgets)
+        # mock_tools lives in inputs: the target receives only inputs, and a mocked
+        # world is an input to the run, not a claim about what correct looks like.
+        mock_token = install_mocks(inputs.get("mock_tools"))
         try:
             result: dict = {}
             thread = base
@@ -548,6 +774,7 @@ def _agent_target(context: dict | None):
                 )
         finally:
             widget_sink.reset(token)
+            restore_mocks(mock_token)
 
         messages = result.get("messages", [])
         calls = [tc["name"] for m in messages for tc in (getattr(m, "tool_calls", []) or [])]
@@ -562,7 +789,12 @@ def _agent_target(context: dict | None):
 
 
 def _tally(results: Any) -> tuple[int, int]:
-    """(passed, total) from an ExperimentResults, defensively."""
+    """(passed, total) from an ExperimentResults, defensively.
+
+    Only ever non-zero for the in-process fallback: it reads results the evaluator
+    returned inline, and a dataset-attached evaluator has not scored anything yet by
+    the time `evaluate` returns. `GET /evals/status` is the source of truth either way.
+    """
     passed = total = 0
     try:
         for row in results:
@@ -590,14 +822,25 @@ def run_experiment(
     `client.evaluate` passes it down to the target's run tree, so the experiment AND
     the agent traces it produces land in the same workspace as the dataset.
 
-    Returns {experiment_name, passed, total} for logs/tests; the SPA never reads it
-    (it polls `GET /evals/status`, which re-derives everything from LangSmith).
+    WHO GRADES: the evaluator attached to the dataset, when there is one (setup attaches
+    it — see `ensure_dataset_evaluator`). `demo_behavior` is passed only when there is
+    NOT one, which covers assistants provisioned before that existed and workspaces where
+    attaching failed. Passing both would double-grade: LangSmith scores every experiment
+    created after the evaluator was attached, so a 3-example dataset would report 6
+    scored rows and `_score_from_feedback` (which sums all feedback keys) would put "6/3"
+    on the badge.
+
+    Returns {experiment_name, passed, total} for logs/tests; the SPA never reads it (it
+    polls `GET /evals/status`, which re-derives everything from LangSmith). `passed`/
+    `total` are 0 when the attached evaluator graded, because its feedback lands
+    asynchronously after the rows finish — there is nothing to tally yet at this point.
     """
     client = _ws_client(workspace)
+    attached = bool(dataset_rules(workspace, str(client.read_dataset(dataset_name=dataset).id)))
     results = client.evaluate(
         _agent_target(context),
         data=dataset,
-        evaluators=[demo_behavior],
+        evaluators=[] if attached else [demo_behavior],
         experiment_prefix=experiment_prefix or f"{dataset}-run",
         max_concurrency=2,
     )
@@ -606,4 +849,5 @@ def run_experiment(
         "experiment_name": str(getattr(results, "experiment_name", "") or ""),
         "passed": passed,
         "total": total,
+        "graded_by": "langsmith" if attached else "in_process",
     }
