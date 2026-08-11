@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import datetime as dt
 import random
+import threading
+import time
 import types
 import uuid
 
@@ -256,15 +258,143 @@ def test_seed_questions_skips_actions_without_a_question():
 class _FakeClient:
     """Captures ingested runs instead of talking to LangSmith."""
 
-    def __init__(self):
+    def __init__(self, traces: list | None = None):
         self.runs: list[dict] = []
         self.feedback: list[dict] = []
+        self.flushed = 0
+        # Successive answers for list_runs, so a test can make a trace show up late.
+        self._traces = list(traces or [])
+        self.reads = 0
 
     def multipart_ingest(self, create=None, **_):
         self.runs.extend(create or [])
 
     def create_feedback(self, **kw):
         self.feedback.append(kw)
+
+    def flush(self):
+        self.flushed += 1
+
+    def list_runs(self, **_):
+        # Holds on the last answer once the script runs out, so a caller that reads
+        # until the trace stops growing sees it stay put rather than vanish.
+        self.reads += 1
+        if not self._traces:
+            return []
+        return self._traces.pop(0) if len(self._traces) > 1 else list(self._traces[0])
+
+
+# --- seeding --------------------------------------------------------------------
+#
+# The seed runs and the read-back have to agree on a WORKSPACE. A LangSmith key picks
+# one, so tracing without an explicit client sends the seeds to the ambient key's
+# workspace while the backfill reads the customer's — the seeds are then invisible and
+# the whole backfill fails as "no seed traces" after paying for the runs.
+
+
+def _collected(start_offset_s: float):
+    """A collect_runs entry: locally rootlike, as every one of them is."""
+    rid = uuid.uuid4()
+    return types.SimpleNamespace(
+        id=rid,
+        trace_id=rid,
+        parent_run_id=None,
+        start_time=dt.datetime(2026, 8, 1, 12, tzinfo=dt.UTC)
+        + dt.timedelta(seconds=start_offset_s),
+    )
+
+
+def test_collected_trace_id_picks_the_outermost_run():
+    # Ordered by COMPLETION: the inner model call finishes first, so the real root
+    # (started first, ended last) is at the END. Taking [0] gave a child id that
+    # matches no trace server-side, which is what emptied every backfill.
+    root = _collected(0)
+    inner = [_collected(1.2), _collected(3.5)]
+    assert DT.collected_trace_id([*inner, root]) == str(root.id)
+
+
+def test_collected_trace_id_handles_one_run_and_none():
+    root = _collected(0)
+    assert DT.collected_trace_id([root]) == str(root.id)
+    assert DT.collected_trace_id([]) == ""
+
+
+def test_collected_trace_id_survives_a_run_without_a_start_time():
+    root, broken = _collected(0), types.SimpleNamespace(id=uuid.uuid4(), start_time=None)
+    assert DT.collected_trace_id([broken, root]) == str(root.id)
+
+
+def test_run_seeds_traces_with_the_workspace_client(monkeypatch):
+    from langsmith import get_tracing_context
+
+    seen: dict = {}
+
+    class _Agent:
+        def invoke(self, payload, config=None, context=None):
+            # Read the live context rather than a mock of tracing_context: what matters
+            # is the client langchain_core would hand the tracer, which is this one.
+            seen.update(get_tracing_context())
+            return {}
+
+    monkeypatch.setattr("dashboard_agent.agent.build_agent", lambda: _Agent())
+    monkeypatch.setattr("dashboard_agent.assistant_evals.make_run_context", lambda c: c)
+    client = _FakeClient()
+
+    DT.run_seeds({}, [{"question": "q", "is_gap": False}], project="P", client=client)
+
+    assert seen["client"] is client
+    assert seen["project_name"] == "P"
+    # Flushed before the caller reads the traces back — the tracer uploads async.
+    assert client.flushed == 1
+
+
+def test_run_seeds_keeps_going_when_one_question_raises(monkeypatch):
+    class _Agent:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, payload, config=None, context=None):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("model is down")
+            return {}
+
+    agent = _Agent()
+    monkeypatch.setattr("dashboard_agent.agent.build_agent", lambda: agent)
+    monkeypatch.setattr("dashboard_agent.assistant_evals.make_run_context", lambda c: c)
+
+    DT.run_seeds({}, [{"question": "a"}, {"question": "b"}], project="P", client=_FakeClient())
+
+    assert agent.calls == 2
+
+
+def test_fetch_trace_waits_for_a_trace_that_is_not_indexed_yet(monkeypatch, trace):
+    # A seed is read seconds after it finished, so the first reads legitimately come
+    # back empty; giving up on the first one loses the trace we just paid to produce.
+    monkeypatch.setattr(DT.time, "sleep", lambda _s: None)
+    client = _FakeClient(traces=[[], [], trace])
+
+    assert DT.fetch_trace(client, "P", "t") == sorted(trace, key=lambda r: r.dotted_order)
+    # Two empty reads, the trace, then the confirming read that it stopped growing.
+    assert client.reads == 4
+
+
+def test_fetch_trace_waits_for_a_half_indexed_trace_to_settle(trace, monkeypatch):
+    # The runs of one trace are indexed in batches, so a read can catch a root with
+    # only some of its children — cloning THAT would replay as a truncated trace.
+    monkeypatch.setattr(DT.time, "sleep", lambda _s: None)
+    client = _FakeClient(traces=[trace[:1], trace[:2], trace])
+
+    assert len(DT.fetch_trace(client, "P", "t")) == len(trace)
+    assert client.reads == 4
+
+
+def test_fetch_trace_gives_up_after_the_last_attempt(monkeypatch):
+    monkeypatch.setattr(DT.time, "sleep", lambda _s: None)
+    client = _FakeClient()
+
+    assert DT.fetch_trace(client, "P", "t", attempts=3) == []
+    assert client.reads == 3
 
 
 def test_backfill_emits_marked_traces_and_reports_a_summary(trace):
@@ -330,3 +460,88 @@ def test_generate_demo_traffic_reports_failures_instead_of_raising(monkeypatch):
     monkeypatch.setattr(DT, "_ws_client", lambda ws: (_ for _ in ()).throw(RuntimeError("nope")))
     out = DT.generate_demo_traffic("ws", "P", context={}, actions=[])
     assert "error" in out and "nope" in out["error"]
+
+
+# --- one backfill per project --------------------------------------------------
+#
+# The registry is what makes the setup-path backfill and POST /demo-traffic interlock.
+# Both entry points share it, so a presenter clicking Generate while setup's backfill
+# is still running must be refused rather than doubling the traffic.
+
+
+@pytest.fixture
+def registry():
+    """A clean registry, restored after the test (module-level, process-wide state)."""
+    DT._INFLIGHT.clear()
+    DT._RESULT.clear()
+    yield DT
+    DT._INFLIGHT.clear()
+    DT._RESULT.clear()
+
+
+def _await_idle(project, timeout=5.0):
+    """Wait for the backfill thread to leave _INFLIGHT (its `finally`)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if project not in DT._INFLIGHT:
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_start_demo_traffic_records_the_receipt(registry, monkeypatch):
+    monkeypatch.setattr(
+        DT, "generate_demo_traffic", lambda ws, p, **kw: {"project": p, "traces": 7}
+    )
+    ack = DT.start_demo_traffic("ws", "P", customer="Acme")
+    assert ack["ok"] and ack["running"]
+    assert _await_idle("P")
+    # The receipt is what the panel reads back through GET /demo-traffic/status.
+    assert DT.demo_traffic_state("P") == {"running": False, "result": {"project": "P", "traces": 7}}
+
+
+def test_start_demo_traffic_refuses_a_second_run_for_the_same_project(registry, monkeypatch):
+    release = threading.Event()
+    calls = []
+
+    def _slow(ws, p, **kw):
+        calls.append(p)
+        release.wait(5)
+        return {"traces": 1}
+
+    monkeypatch.setattr(DT, "generate_demo_traffic", _slow)
+    first = DT.start_demo_traffic("ws", "P")
+    second = DT.start_demo_traffic("ws", "P")
+    other = DT.start_demo_traffic("ws", "Q")
+    try:
+        assert first["running"] is True
+        # The case this guards: double the traffic and the hourly ingest quota.
+        assert second == {"ok": True, "project": "P", "already_running": True}
+        assert DT.demo_traffic_state("P")["running"] is True
+        # A different project is unrelated — the guard is per project, not global.
+        assert other["running"] is True
+    finally:
+        release.set()
+    assert _await_idle("P") and _await_idle("Q")
+    # Two threads ran, not three: the refused call never reached generate_demo_traffic.
+    assert sorted(calls) == ["P", "Q"]
+
+
+def test_a_stale_slot_does_not_disable_generate_forever(registry, monkeypatch):
+    monkeypatch.setattr(DT, "generate_demo_traffic", lambda ws, p, **kw: {"traces": 1})
+    # A process restart mid-backfill leaves a slot claimed by a thread that is gone.
+    DT._INFLIGHT["P"] = time.time() - DT._STALE_SECS - 1
+    assert DT.demo_traffic_state("P")["running"] is False
+    assert DT.start_demo_traffic("ws", "P")["running"] is True
+    assert _await_idle("P")
+
+
+def test_start_demo_traffic_never_raises_when_the_thread_will_not_start(registry, monkeypatch):
+    def _no_threads(*a, **kw):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(DT.threading, "Thread", _no_threads)
+    ack = DT.start_demo_traffic("ws", "P")
+    assert ack["ok"] is False and "can't start new thread" in ack["error"]
+    # The slot must be released, or the failure locks the project out until redeploy.
+    assert "P" not in DT._INFLIGHT

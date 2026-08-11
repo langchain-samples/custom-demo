@@ -39,6 +39,9 @@ from __future__ import annotations
 
 import datetime as dt
 import random
+import threading
+import time
+import traceback
 import uuid
 from typing import Any
 
@@ -156,13 +159,35 @@ def _jitter_usage(usage: dict, scale: float) -> dict:
     return out
 
 
-def fetch_trace(client: Any, project: str, trace_id: Any) -> list[Any]:
+def fetch_trace(
+    client: Any, project: str, trace_id: Any, *, attempts: int = 20, delay: float = 4.0
+) -> list[Any]:
     """Every run in one trace, ordered root-first by dotted_order.
 
     `list_runs`' default select already carries `extra` (metadata + invocation_params),
     `inputs`/`outputs` and the usage fields, so the result is enough to replay from.
+
+    Polls until the run count STOPS GROWING, because a seed trace is read seconds after
+    the run that produced it and arrives in pieces: the tracer uploads on a background
+    thread, the server indexes after that, and a 50-151 run trace becomes visible a
+    batch at a time. Measured against a live workspace, even a one-run trace posted
+    directly takes ~10s to become queryable — so an accept-on-first-hit read either
+    finds nothing (the whole backfill then dies as "no seed traces", having already
+    paid for the runs) or clones a root with half its children into 240 thin traces.
+    Two identical non-empty reads means the trace has settled.
+
+    The wait is bounded at `attempts * delay` and costs nothing on the happy path: this
+    runs on the backfill's daemon thread, behind several minutes of real agent turns.
     """
-    runs = list(client.list_runs(project_name=project, trace_id=trace_id))
+    runs: list[Any] = []
+    seen = 0
+    for attempt in range(attempts):
+        runs = list(client.list_runs(project_name=project, trace_id=trace_id))
+        if runs and len(runs) == seen:
+            break
+        seen = len(runs)
+        if attempt < attempts - 1:
+            time.sleep(delay)
     return sorted(runs, key=lambda r: str(getattr(r, "dotted_order", "") or ""))
 
 
@@ -334,12 +359,44 @@ def seed_questions(actions: list[dict] | None, data_gap: str = "") -> list[dict]
     return out
 
 
-def run_seeds(context: dict | None, questions: list[dict], *, project: str = "") -> list[dict]:
+def collected_trace_id(traced_runs: list[Any]) -> str:
+    """The id of the trace a `collect_runs()` block produced: its OUTERMOST run.
+
+    Not `traced_runs[0]`, and not `.trace_id`. Measured against a real run of this
+    agent, `collect_runs` hands back ~11 objects, each of which looks like a root
+    locally — `parent_run_id is None`, `trace_id == id`, self-referential
+    `dotted_order` — because LangGraph runs tools and model calls under fresh callback
+    managers that never saw the parent. Only ONE of them is a root server-side (the
+    `LangGraph` chain run); the rest are reconciled into its trace on ingest and their
+    local ids exist nowhere, so `list_runs(trace_id=...)` on one returns nothing no
+    matter how long you wait. That is what emptied every backfill: the list is ordered
+    by COMPLETION, so [0] was the first `ChatAnthropic` call to return.
+
+    The outermost run is the one that STARTED first — a child cannot begin before its
+    parent — which holds for a flat single-run trace too.
+    """
+    if not traced_runs:
+        return ""
+    far_future = dt.datetime.max.replace(tzinfo=dt.UTC)
+    outermost = min(traced_runs, key=lambda r: _as_dt(getattr(r, "start_time", None)) or far_future)
+    return str(getattr(outermost, "id", "") or "")
+
+
+def run_seeds(
+    context: dict | None, questions: list[dict], *, project: str = "", client: Any = None
+) -> list[dict]:
     """Run the agent for real, once per question. Blocking and expensive (~$0.05 each).
 
     These runs ARE traffic — they trace into the assistant's project like any other
     run — and they double as the replay seeds, so nothing is paid for twice. Returns
     [{trace_id, is_gap}] for the ones that produced a trace.
+
+    `client` MUST be the same workspace-scoped client the backfill reads with. A
+    LangSmith key selects a workspace, and `tracing_context` without a client builds
+    the tracer from the ambient env key — so for a customer in another workspace the
+    seed runs land in a same-named project over THERE, `fetch_trace` finds nothing in
+    the real project, and the backfill dies with "no seed traces" having already paid
+    for the runs. `graph.py` routes per-run traces the same way, for the same reason.
     """
     from langchain_core.tracers.context import collect_runs
     from langsmith import tracing_context
@@ -355,12 +412,13 @@ def run_seeds(context: dict | None, questions: list[dict], *, project: str = "")
                 from .agent import build_agent
 
                 agent = build_agent()
-            # `collect_runs` captures the root run synchronously as it completes.
+            # `collect_runs` captures the runs of this call synchronously as they
+            # complete (see `collected_trace_id` for which one to read).
             # `get_current_run_tree()` does NOT work here: it reads a context var that
             # is only set INSIDE a traced call, so after `invoke` returns it is always
             # None and every seed is silently discarded.
             with (
-                tracing_context(enabled=True, project_name=project or None),
+                tracing_context(enabled=True, client=client, project_name=project or None),
                 collect_runs() as collected,
             ):
                 agent.invoke(
@@ -368,12 +426,22 @@ def run_seeds(context: dict | None, questions: list[dict], *, project: str = "")
                     config={"configurable": {"thread_id": str(uuid.uuid4())}},
                     context=ctx,
                 )
-            traced = getattr(collected, "traced_runs", None) or []
-            trace_id = str(getattr(traced[0], "id", "") or "") if traced else ""
+            trace_id = collected_trace_id(getattr(collected, "traced_runs", None) or [])
             if trace_id:
                 out.append({"trace_id": trace_id, "is_gap": item.get("is_gap", False)})
         except Exception:  # noqa: BLE001 - one bad seed must not lose the others
+            # Printed because the caller only ever sees a count: a seed that raises
+            # every time (bad model key, bad context) otherwise reads downstream as the
+            # same bare "no seed traces" as a trace that merely wasn't visible yet.
+            traceback.print_exc()
             continue
+    # The tracer uploads on a background thread, so without this the caller can start
+    # reading the traces back before they have been sent at all.
+    if client is not None:
+        try:
+            client.flush()
+        except Exception:  # noqa: BLE001 - a failed flush only costs us the retries below
+            traceback.print_exc()
     return out
 
 
@@ -576,7 +644,9 @@ def generate_demo_traffic(
         client = _ws_client(workspace)
         seeds = list(seed_traces or [])
         if not seeds:
-            seeds = run_seeds(context, seed_questions(actions, data_gap), project=project)
+            seeds = run_seeds(
+                context, seed_questions(actions, data_gap), project=project, client=client
+            )
             result["seeded"] = len(seeds)
         if not seeds:
             result["error"] = "no seed traces produced"
@@ -595,3 +665,70 @@ def generate_demo_traffic(
         except Exception as exc:  # noqa: BLE001 - the traffic is the payload; insights is extra
             result["insights_error"] = f"{type(exc).__name__}: {exc}"
     return result
+
+
+# --- one backfill per project --------------------------------------------------
+#
+# Both entry points go through `start_demo_traffic`: the daemon thread
+# `prepare_assistant` spawns at setup, and `POST /demo-traffic` (which exists so an
+# assistant created before the automatic backfill can still be given traffic). The
+# bookkeeping lives HERE rather than in webapp.py so the two share it — while the
+# route owned it, the setup run was invisible to the route, which meant the panel
+# showed the pre-backfill empty state through a running backfill and Generate would
+# cheerfully start a second one on top of it. Two at once on one project doubles the
+# traffic and burns the hourly ingest quota, which is the thing this guards.
+#
+# Hints, not truth: the traffic itself is durable and visible in the project, and a
+# redeploy losing the receipt costs nothing (see `GET /demo-traffic/status`).
+_LOCK = threading.Lock()
+_INFLIGHT: dict[str, float] = {}
+_RESULT: dict[str, dict] = {}
+
+# A backfill is minutes of work on a DAEMON thread, so a process restart mid-run
+# leaves a slot claimed by a thread that no longer exists. Past this the slot is
+# treated as dead and the next caller may have it — otherwise one killed backfill
+# disables Generate for that project until the next redeploy.
+_STALE_SECS = 1800
+
+
+def start_demo_traffic(workspace: str, project: str, **kwargs: Any) -> dict:
+    """Spawn a backfill for `project` on a daemon thread. Never raises.
+
+    Returns a receipt — `{ok, project, running}`, or `{ok, already_running}` when one
+    is already live for this project. `kwargs` are forwarded to
+    `generate_demo_traffic`; progress is read back with `demo_traffic_state`.
+    """
+    with _LOCK:
+        started = _INFLIGHT.get(project, 0.0)
+        if started and (time.time() - started) < _STALE_SECS:
+            return {"ok": True, "project": project, "already_running": True}
+        _INFLIGHT[project] = time.time()
+
+    def _body() -> None:
+        try:
+            _RESULT[project] = generate_demo_traffic(workspace, project, **kwargs)
+        except Exception as exc:  # noqa: BLE001 - unreachable by contract, kept anyway
+            # `generate_demo_traffic` reports failures in its return value, so getting
+            # here means it broke its own contract. Print the traceback: this thread is
+            # fire-and-forget and the stored string is all anyone would otherwise see.
+            traceback.print_exc()
+            _RESULT[project] = {"error": f"{type(exc).__name__}: {exc}"}
+        finally:
+            with _LOCK:
+                _INFLIGHT.pop(project, None)
+
+    try:
+        threading.Thread(target=_body, daemon=True).start()
+    except Exception as exc:  # noqa: BLE001 - a thread we could not start is the caller's news
+        with _LOCK:
+            _INFLIGHT.pop(project, None)
+        return {"ok": False, "project": project, "error": f"{type(exc).__name__}: {exc}"}
+    return {"ok": True, "project": project, "running": True}
+
+
+def demo_traffic_state(project: str) -> dict:
+    """`{running, result}` for `project` — the two things LangSmith cannot tell us."""
+    with _LOCK:
+        started = _INFLIGHT.get(project, 0.0)
+        running = bool(started) and (time.time() - started) < _STALE_SECS
+    return {"running": running, "result": _RESULT.get(project) or {}}
