@@ -147,14 +147,26 @@ def test_judge_prompt_is_recorded_only_when_the_evaluator_attached(rec, monkeypa
     from dashboard_agent import assistant_evals as AE
 
     monkeypatch.setattr(AE, "ensure_eval_dataset", lambda *a, **k: "acme-ds")
-    monkeypatch.setattr(AE, "ensure_dataset_evaluator", lambda *a, **k: "")
+    monkeypatch.setattr(
+        AE,
+        "ensure_dataset_evaluator",
+        lambda *a, **k: {"rule_id": "", "evaluator_id": "", "error": "503"},
+    )
     art = _prep(monkeypatch, _analysis())["metadata"]["ls_artifacts"]
     assert art["eval_rule_id"] == ""
+    assert art["eval_evaluator_id"] == ""
     assert art["eval_judge_prompt"] == ""
 
-    monkeypatch.setattr(AE, "ensure_dataset_evaluator", lambda *a, **k: "rule-7")
+    monkeypatch.setattr(
+        AE,
+        "ensure_dataset_evaluator",
+        lambda *a, **k: {"rule_id": "rule-7", "evaluator_id": "ev-7", "error": ""},
+    )
     art = _prep(monkeypatch, _analysis())["metadata"]["ls_artifacts"]
     assert art["eval_rule_id"] == "rule-7"
+    # The evaluator is a separate object from the rule; /cleanup needs both ids or it
+    # leaves a row on the customer's Evaluators page forever.
+    assert art["eval_evaluator_id"] == "ev-7"
     assert art["eval_judge_prompt"] == AE.judge_prompt_name("acme-ds")
 
 

@@ -510,6 +510,41 @@ def test_cleanup_deletes_the_eval_dataset(monkeypatch):
     assert body["failed"] == []
 
 
+def test_cleanup_deletes_the_evaluator_as_well_as_its_rule(monkeypatch):
+    # Two objects: deleting the attachment leaves the evaluator on the customer's
+    # Evaluators page, which is precisely the orphan this cascade exists to prevent.
+    _install_client(monkeypatch, _FakeClient())
+    deleted: list[str] = []
+    monkeypatch.setattr(
+        W, "_delete_eval_rule", lambda _ws, rule_id: deleted.append(f"rule:{rule_id}")
+    )
+    monkeypatch.setattr(
+        W, "_delete_judge_evaluator", lambda _ws, ev_id: deleted.append(f"evaluator:{ev_id}")
+    )
+
+    body = client.post(
+        "/cleanup",
+        json={"workspace": WORKSPACE, "eval_rule_id": "rule-1", "eval_evaluator_id": "ev-1"},
+    ).json()
+
+    # Rule first: an evaluator with a live attachment may refuse to go.
+    assert deleted == ["rule:rule-1", "evaluator:ev-1"]
+    assert body["failed"] == []
+
+
+def test_cleanup_skips_the_evaluator_for_assistants_that_never_got_one(monkeypatch):
+    # Every assistant created before this worked has a blank id; a spurious 404 in the
+    # report is what the falsy-handle guard is for.
+    _install_client(monkeypatch, _FakeClient())
+    called: list = []
+    monkeypatch.setattr(W, "_delete_judge_evaluator", lambda *_a: called.append(1))
+    body = client.post(
+        "/cleanup", json={"workspace": WORKSPACE, "eval_evaluator_id": "", "project": "P"}
+    ).json()
+    assert called == []
+    assert body["failed"] == []
+
+
 def test_cleanup_without_a_dataset_deletes_nothing_extra(monkeypatch):
     """Pre-feature assistants carry no `eval_dataset`; the cascade must not invent one."""
     fake = _install_client(monkeypatch, _FakeClient())

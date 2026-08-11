@@ -75,7 +75,12 @@ export interface LsArtifacts {
    * experiment falls back to grading in-process. /cleanup deletes it explicitly.
    */
   eval_rule_id?: string;
-  /** Prompt Hub prompt holding the judge that `eval_rule_id` references. */
+  /**
+   * The workspace evaluator that rule points at — the row on LangSmith's Evaluators
+   * page. A separate object from the rule, so /cleanup deletes both.
+   */
+  eval_evaluator_id?: string;
+  /** Prompt Hub prompt holding the judge that `eval_evaluator_id` references. */
   eval_judge_prompt?: string;
 }
 

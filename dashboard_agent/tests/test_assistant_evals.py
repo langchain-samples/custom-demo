@@ -806,14 +806,20 @@ def test_judge_prompt_carries_both_criteria_and_every_mapped_variable():
 
 
 def test_judge_rule_payload_targets_the_dataset_and_only_root_runs():
-    payload = AE._judge_rule_payload("ds-1", "repo:latest", "grounded")
+    payload = AE._judge_rule_payload("ds-1", "ev-1", "grounded")
     assert payload["dataset_id"] == "ds-1"
     # Without this the judge fires on every nested middleware/model run in the tree —
     # a real trace of this agent is 50-151 runs deep.
     assert payload["filter"] == "eq(is_root, true)"
-    structured = payload["evaluators"][0]["structured"]
-    assert structured["hub_ref"] == "repo:latest"
-    mapping = structured["variable_mapping"]
+    # BY ID. The inline `{"structured": {"hub_ref": ...}}` form this used to send is
+    # rejected outright: a hub_ref resolves to the bare StructuredPrompt, and the server
+    # answers "RunnableSequence must have at least 2 steps, got 0".
+    assert payload["evaluator_id"] == "ev-1"
+    assert "evaluators" not in payload
+
+
+def test_judge_variable_mapping_reaches_the_widgets():
+    mapping = AE._JUDGE_VARIABLE_MAPPING
     # Widgets have to reach the judge: this agent is told to keep figures in the
     # dashboard, so prose-only grading passes fabrications hidden in KPI cards.
     assert mapping["widgets"] == "output.widgets"
@@ -822,55 +828,120 @@ def test_judge_rule_payload_targets_the_dataset_and_only_root_runs():
     assert not any(v.startswith(("inputs.", "outputs.")) for v in mapping.values())
 
 
-def test_ensure_dataset_evaluator_pushes_the_judge_then_attaches_it(monkeypatch):
-    fake = _FakeRulesClient({_name(): []})
-    posted: dict = {}
-    monkeypatch.setattr(AE, "_ws_client", lambda *a, **k: fake)
-    monkeypatch.setattr(AE, "init_chat_model", _fake_model)
-    monkeypatch.setattr(AE, "dataset_rules", lambda *_a, **_k: [])
-    monkeypatch.setattr(AE.httpx, "post", _post_ok("rule-9", posted))
+def _attach_posts(sink: dict, evaluator_id: str = "ev-9", rule_id: str = "rule-9"):
+    """Stand in for both POSTs: create the evaluator, then create the rule."""
 
-    assert AE.ensure_dataset_evaluator("ws-1", _name(), CUSTOMER) == "rule-9"
-    # The rule references the prompt we just pushed, by the deterministic handle.
+    def _post(url, headers=None, json=None, timeout=None):  # noqa: A002
+        sink.setdefault("calls", []).append({"url": url, "headers": headers, "json": json})
+        body = (
+            {"evaluator": {"id": evaluator_id, "feedback_keys": [AE.EVAL_FEEDBACK_KEY]}}
+            if url.endswith(AE._EVALUATORS_PATH)
+            else {"id": rule_id}
+        )
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: body)
+
+    return _post
+
+
+def test_ensure_dataset_evaluator_creates_the_evaluator_then_attaches_it(monkeypatch):
+    fake = _FakeRulesClient({_name(): []})
+    sink: dict = {}
+    monkeypatch.setattr(AE, "_ws_client", lambda *a, **k: fake)
+    monkeypatch.setattr(AE, "playground_model_id", lambda *_a, **_k: "model-1")
+    monkeypatch.setattr(AE, "dataset_rules", lambda *_a, **_k: [])
+    monkeypatch.setattr(AE.httpx, "post", _attach_posts(sink))
+
+    out = AE.ensure_dataset_evaluator("ws-1", _name(), CUSTOMER)
+
+    assert out == {"rule_id": "rule-9", "evaluator_id": "ev-9", "error": ""}
     assert fake.pushed == [AE.judge_prompt_name(_name())]
-    assert posted["json"]["evaluators"][0]["structured"]["hub_ref"].startswith(fake.pushed[0])
-    assert posted["json"]["dataset_id"] == f"ds-{_name()}"
-    assert posted["url"].endswith("/api/v1/runs/rules")
-    # Cross-workspace scoping, or the rule lands in the key's default workspace.
-    assert posted["headers"]["X-Tenant-Id"] == "ws-1"
+    evaluator, rule = sink["calls"]
+    # 1. the workspace evaluator — the row on LangSmith's Evaluators page, which the
+    #    old inline-payload version never created at all.
+    assert evaluator["url"].endswith("/api/v1/platform/evaluators")
+    assert evaluator["json"]["llm_evaluator"]["prompt_repo_handle"] == fake.pushed[0]
+    assert evaluator["json"]["llm_evaluator"]["playground_settings_id"] == "model-1"
+    assert evaluator["json"]["type"] == "llm"
+    # 2. the attachment, pointing at that evaluator.
+    assert rule["url"].endswith("/api/v1/runs/rules")
+    assert rule["json"]["evaluator_id"] == "ev-9"
+    assert rule["json"]["dataset_id"] == f"ds-{_name()}"
+    # Cross-workspace scoping on both, or they land in the key's default workspace.
+    assert all(c["headers"]["X-Tenant-Id"] == "ws-1" for c in sink["calls"])
+
+
+def test_the_pushed_judge_prompt_carries_no_model(monkeypatch):
+    # The evaluator supplies the model, so binding one into the prompt is what produced
+    # the 0-step chain the server rejected. Nothing here may call init_chat_model.
+    fake = _FakeRulesClient({_name(): []})
+    monkeypatch.setattr(AE, "_ws_client", lambda *a, **k: fake)
+    monkeypatch.setattr(AE, "playground_model_id", lambda *_a, **_k: "model-1")
+    monkeypatch.setattr(AE, "dataset_rules", lambda *_a, **_k: [])
+    monkeypatch.setattr(AE.httpx, "post", _attach_posts({}))
+    monkeypatch.setattr(
+        AE, "init_chat_model", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("no model"))
+    )
+
+    assert AE.ensure_dataset_evaluator("ws-1", _name(), CUSTOMER)["rule_id"] == "rule-9"
+
+
+def test_ensure_dataset_evaluator_says_so_when_no_model_can_score(monkeypatch):
+    # Creation succeeds without a model; scoring does not. Attaching an evaluator that
+    # silently produces no feedback is worth a word.
+    monkeypatch.setattr(AE, "_ws_client", lambda *a, **k: _FakeRulesClient({_name(): []}))
+    monkeypatch.setattr(AE, "playground_model_id", lambda *_a, **_k: "")
+    monkeypatch.setattr(AE, "dataset_rules", lambda *_a, **_k: [])
+    sink: dict = {}
+    monkeypatch.setattr(AE.httpx, "post", _attach_posts(sink))
+
+    out = AE.ensure_dataset_evaluator("ws-1", _name(), CUSTOMER)
+
+    assert out["rule_id"] == "rule-9"
+    assert "no model in this workspace" in out["error"]
+    assert "playground_settings_id" not in sink["calls"][0]["json"]["llm_evaluator"]
 
 
 def test_ensure_dataset_evaluator_reuses_an_existing_rule(monkeypatch):
     """Re-running setup for the same customer must not stack duplicate evaluators."""
     fake = _FakeRulesClient({_name(): []})
     monkeypatch.setattr(AE, "_ws_client", lambda *a, **k: fake)
-    monkeypatch.setattr(AE, "init_chat_model", _fake_model)
     monkeypatch.setattr(
         AE,
         "dataset_rules",
-        lambda *_a, **_k: [{"id": "rule-1", "display_name": AE.EVAL_FEEDBACK_KEY}],
+        lambda *_a, **_k: [
+            {"id": "rule-1", "display_name": AE.EVAL_FEEDBACK_KEY, "evaluator_id": "ev-1"}
+        ],
     )
 
     def _no_post(*_a, **_k):
         raise AssertionError("a second rule must not be created")
 
     monkeypatch.setattr(AE.httpx, "post", _no_post)
-    assert AE.ensure_dataset_evaluator("ws-1", _name(), CUSTOMER) == "rule-1"
+    out = AE.ensure_dataset_evaluator("ws-1", _name(), CUSTOMER)
+    assert out["rule_id"] == "rule-1"
+    # Carried through so /cleanup still knows which evaluator to delete.
+    assert out["evaluator_id"] == "ev-1"
     assert fake.pushed == []
 
 
-def test_ensure_dataset_evaluator_swallows_a_langsmith_failure(monkeypatch):
-    """Same best-effort contract as the dataset: "" means "nothing attached"."""
+def test_ensure_dataset_evaluator_reports_a_langsmith_failure_without_raising(monkeypatch):
+    """Best-effort as ever, but the reason is no longer thrown away.
+
+    The previous version returned a bare "" and this attach was rejected on EVERY
+    assistant for the life of the feature without anyone noticing, because grading fell
+    back in-process and the panel looked fine.
+    """
     monkeypatch.setattr(
         AE, "_ws_client", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("503"))
     )
-    assert AE.ensure_dataset_evaluator("ws-1", _name(), CUSTOMER) == ""
+    out = AE.ensure_dataset_evaluator("ws-1", _name(), CUSTOMER)
+    assert out["rule_id"] == "" and "503" in out["error"]
 
 
 def test_ensure_dataset_evaluator_skips_when_there_is_no_dataset(monkeypatch):
     called: list = []
     monkeypatch.setattr(AE, "_ws_client", lambda *a, **k: called.append(1))
-    assert AE.ensure_dataset_evaluator("ws-1", "", CUSTOMER) == ""
+    assert AE.ensure_dataset_evaluator("ws-1", "", CUSTOMER)["rule_id"] == ""
     assert called == []
 
 

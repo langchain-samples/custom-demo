@@ -49,7 +49,7 @@ from langsmith.uuid import uuid7_from_datetime
 
 # `assistant_setup` imports THIS module lazily (inside prepare_assistant), so the
 # dependency only runs one way at import time and there is no cycle.
-from .assistant_setup import _ws_client
+from .assistant_setup import _ws_client, playground_model_id
 
 # --- shape of a backfill -------------------------------------------------------
 
@@ -566,28 +566,12 @@ def insights_model_id(client: Any) -> str:
     record in `GET /playground-settings` — and the ones backed by LangSmith's own LLM
     gateway (`LC_GATEWAY_KEY`) need no customer credentials at all.
 
-    Prefers a gateway-backed model for that reason, and requires both
-    `available_in_insights_heavy` (clustering) and `available_in_insights_light`
-    (per-run summaries), since one id is used for both.
+    Requires BOTH `available_in_insights_heavy` (clustering) and
+    `available_in_insights_light` (per-run summaries), since one id fills both fields.
     """
-    settings = client.request_with_retries("GET", "/playground-settings").json()
-    usable = [
-        s
-        for s in (settings if isinstance(settings, list) else [])
-        if isinstance(s, dict)
-        and s.get("id")
-        and s.get("available_in_insights_heavy")
-        and s.get("available_in_insights_light")
-    ]
-    if not usable:
-        return ""
-
-    def _gateway_first(setting: dict) -> int:
-        # A gateway model bills through LangSmith; anything else needs a key the
-        # customer's workspace may not have, which is the failure we are here to avoid.
-        return 0 if "LC_GATEWAY_KEY" in str(setting.get("settings", "")) else 1
-
-    return str(sorted(usable, key=_gateway_first)[0]["id"])
+    return playground_model_id(
+        client, ("available_in_insights_heavy", "available_in_insights_light")
+    )
 
 
 def ensure_insights_job(

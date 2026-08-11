@@ -465,6 +465,31 @@ def analyze_customer(
     return out
 
 
+def playground_model_id(client, flags: tuple[str, ...]) -> str:
+    """A workspace model carrying every flag in `flags`, or "" if there is none.
+
+    `GET /playground-settings` lists the workspace's *model settings* — the records the
+    UI's model pickers offer. Each carries availability flags per feature
+    (`available_in_evaluators`, `available_in_insights_heavy`, ...), and every LangSmith
+    feature that runs an LLM for you takes one of these ids rather than an API key. That
+    is what lets a customer workspace with no model secret of its own still run an
+    Insights job or an LLM-as-judge: the records backed by LangSmith's own LLM gateway
+    (`LC_GATEWAY_KEY`) bill through LangSmith and need no customer credentials.
+
+    Gateway-backed models are preferred for exactly that reason — anything else needs a
+    key this workspace may not have, which is the failure being avoided.
+    """
+    settings = client.request_with_retries("GET", "/playground-settings").json()
+    usable = [
+        s
+        for s in (settings if isinstance(settings, list) else [])
+        if isinstance(s, dict) and s.get("id") and all(s.get(flag) for flag in flags)
+    ]
+    if not usable:
+        return ""
+    return str(sorted(usable, key=lambda s: 0 if "LC_GATEWAY_KEY" in str(s) else 1)[0]["id"])
+
+
 def _ws_client(workspace: str | None):
     load_env()
     key = os.getenv("LS_CROSS_WORKSPACE_KEY") or os.getenv("LANGSMITH_API_KEY")
@@ -894,6 +919,7 @@ def prepare_assistant(payload: dict) -> dict:
     # LangSmith failure, and "" simply means this assistant has no eval panel.
     eval_dataset = ""
     eval_rule_id = ""
+    eval_evaluator_id = ""
     eval_judge_prompt = ""
     if push:
         from .assistant_evals import ensure_dataset_evaluator, ensure_eval_dataset
@@ -902,10 +928,18 @@ def prepare_assistant(payload: dict) -> dict:
             workspace, customer, failure_mode, actions, context.get("data_gap", "")
         )
         # Attach the judge to that dataset, so the evaluator is configured in LangSmith
-        # (visible on the dataset's Evaluators tab) instead of living only as a Python
-        # function in this process. Also best-effort: "" means nothing was attached, and
-        # `run_experiment` falls back to grading in-process.
-        eval_rule_id = ensure_dataset_evaluator(workspace, eval_dataset, customer)
+        # (visible on the Evaluators page and the dataset's Evaluators tab) instead of
+        # living only as a Python function in this process. Also best-effort: a blank
+        # rule id means nothing was attached, and `run_experiment` falls back to grading
+        # in-process.
+        attached = ensure_dataset_evaluator(workspace, eval_dataset, customer)
+        eval_rule_id = attached["rule_id"]
+        eval_evaluator_id = attached["evaluator_id"]
+        if attached["error"]:
+            # Printed, not raised. This attach failed on every assistant for the life of
+            # the feature and reported nothing, because the in-process fallback kept the
+            # panel looking healthy — so a silent failure here has form.
+            print(f"[setup] eval evaluator not attached: {attached['error']}")
         # The judge itself is a Prompt Hub prompt in the customer's workspace, named
         # deterministically from the dataset, so /cleanup can delete it without another
         # round trip. Recorded only when the attach succeeded — otherwise there is
@@ -992,9 +1026,13 @@ def prepare_assistant(payload: dict) -> dict:
             # not cascade to it, so /cleanup removes it explicitly rather than leaving an
             # orphan evaluator in the customer's workspace.
             "eval_rule_id": eval_rule_id,
-            # The judge's Prompt Hub prompt, which the rule references by handle. Also
-            # deleted by /cleanup — the rule holding a reference is not what keeps the
-            # prompt alive, so removing only the rule would leave it behind.
+            # The workspace-level evaluator record the rule points at — the row on the
+            # Evaluators page. A separate object from the rule, so deleting the rule
+            # leaves it behind; /cleanup deletes both.
+            "eval_evaluator_id": eval_evaluator_id,
+            # The judge's Prompt Hub prompt, which the evaluator references by handle.
+            # Also deleted by /cleanup — a reference from the evaluator is not what keeps
+            # the prompt alive, so removing only the rule would leave it behind.
             "eval_judge_prompt": eval_judge_prompt,
         },
     }

@@ -226,12 +226,21 @@ async def cleanup(request):
     # dropping the dataset is not documented to cascade to it, and a leftover rule shows
     # up as a stray evaluator in the customer's workspace.
     _try(
-        "eval evaluator",
+        "eval rule",
         body.get("eval_rule_id"),
         lambda: _delete_eval_rule(body.get("workspace"), body["eval_rule_id"]),
     )
-    # The judge prompt the rule pointed at. Deleted after the rule, since a prompt with
-    # a live reference may refuse to go.
+    # The evaluator the rule pointed at — a separate workspace-level object, and the row
+    # on the Evaluators page. Deleting the rule does not remove it, so without this every
+    # torn-down demo leaves one behind in the customer's workspace. After the rule, since
+    # an evaluator with a live attachment may refuse to go.
+    _try(
+        "eval evaluator",
+        body.get("eval_evaluator_id"),
+        lambda: _delete_judge_evaluator(body.get("workspace"), body["eval_evaluator_id"]),
+    )
+    # The judge prompt the evaluator referenced. Deleted after it, since a prompt with a
+    # live reference may refuse to go.
     _try(
         "eval judge prompt",
         body.get("eval_judge_prompt"),
@@ -248,6 +257,13 @@ def _delete_eval_rule(workspace: str | None, rule_id: str) -> None:
     url, headers = _rules_api(workspace)
     res = httpx.delete(f"{url}/{rule_id}", headers=headers, timeout=30)
     res.raise_for_status()
+
+
+def _delete_judge_evaluator(workspace: str | None, evaluator_id: str) -> None:
+    """DELETE the workspace evaluator `evaluator_id`. Raises so `_try` records it."""
+    from dashboard_agent.assistant_evals import delete_judge_evaluator
+
+    delete_judge_evaluator(workspace, evaluator_id)
 
 
 async def trace_url(request):
