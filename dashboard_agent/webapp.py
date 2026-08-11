@@ -964,11 +964,12 @@ async def demo_traffic(request):
     return JSONResponse(ack, status_code=200 if ack.get("ok") else 500)
 
 
-# Tabs hanging off a tracing project's URL. The SDK gives us the project URL; the
-# per-tab suffixes are UI routes and are NOT documented, so they are isolated here —
-# if LangSmith renames one, this is the only line to change and the fallback is the
-# project page itself, which always works.
-_PROJECT_TABS = {"insights": "insights", "engine": "engine"}
+# Tabs hanging off a tracing project's URL. They are `?tab=<n>` query params on the
+# project page — Insights is 3, Engine is 4 — NOT path segments: `<project>/insights`
+# is not a route, so both deep links used to land on a broken page. Undocumented UI
+# internals, so they stay isolated here: if the indices move this is the only line to
+# change, and the fallback is the project page itself, which always works.
+_PROJECT_TABS = {"insights": 3, "engine": 4}
 
 
 def _project_links(workspace: str | None, project: str) -> dict:
@@ -980,8 +981,11 @@ def _project_links(workspace: str | None, project: str) -> dict:
     base = str(getattr(session, "url", "") or "").rstrip("/")
     if not base:
         return {}
+    # The SDK hands back a bare project URL today, but it is a URL and may grow a
+    # query string; appending a second `?` would break every tab link.
+    sep = "&" if "?" in base else "?"
     links = {"project": base}
-    links.update({name: f"{base}/{suffix}" for name, suffix in _PROJECT_TABS.items()})
+    links.update({name: f"{base}{sep}tab={tab}" for name, tab in _PROJECT_TABS.items()})
     return links
 
 

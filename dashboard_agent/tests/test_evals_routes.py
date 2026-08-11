@@ -31,6 +31,7 @@ from __future__ import annotations
 import threading
 import time
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -514,6 +515,45 @@ def test_cleanup_without_a_dataset_deletes_nothing_extra(monkeypatch):
     fake = _install_client(monkeypatch, _FakeClient())
     client.post("/cleanup", json={"workspace": WORKSPACE, "project": "Acme-corebot-demo"})
     assert [kind for kind, _ in fake.deleted] == ["project"]
+
+
+# --- deep links: the tabs are query params, not path segments -------------------
+#
+# The Insights and Engine links are the payoff of the whole demo-traffic feature —
+# "here is the cluster, on a projector". They were built as `<project>/insights` and
+# `<project>/engine`, which are not routes, so both landed on a broken page while
+# still looking like working links in the panel.
+
+_PROJECT_URL = "https://smith.langchain.com/o/ws-1/projects/p/proj-1"
+
+
+def _links(monkeypatch, url: str | None) -> dict:
+    monkeypatch.setattr(
+        W,
+        "_scoped_client",
+        lambda *_a, **_k: SimpleNamespace(
+            read_project=lambda **_kw: SimpleNamespace(url=url),
+        ),
+    )
+    return W._project_links(WORKSPACE, "Acme-corebot-demo")
+
+
+def test_tab_links_are_query_params_on_the_project_url(monkeypatch):
+    out = _links(monkeypatch, _PROJECT_URL)
+    assert out["project"] == _PROJECT_URL
+    assert out["insights"] == f"{_PROJECT_URL}?tab=3"
+    assert out["engine"] == f"{_PROJECT_URL}?tab=4"
+
+
+def test_a_project_url_that_already_has_a_query_keeps_it(monkeypatch):
+    # Appending a second "?" would break every tab link, and the SDK hands back a
+    # URL — a future one may well carry a param of its own.
+    out = _links(monkeypatch, f"{_PROJECT_URL}?peek=abc")
+    assert out["insights"] == f"{_PROJECT_URL}?peek=abc&tab=3"
+
+
+def test_no_project_url_means_no_links_rather_than_broken_ones(monkeypatch):
+    assert _links(monkeypatch, None) == {}
 
 
 def test_cleanup_dataset_failure_is_isolated(monkeypatch):
