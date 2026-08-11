@@ -517,6 +517,65 @@ def test_cleanup_without_a_dataset_deletes_nothing_extra(monkeypatch):
     assert [kind for kind, _ in fake.deleted] == ["project"]
 
 
+# --- demo traffic: the count comes from LangSmith, not from this process ---------
+#
+# The receipt lives in memory, so every redeploy used to leave the panel saying "no
+# backfill recorded this session" over a project full of traffic. The runs are tagged
+# `synthetic-demo`, so one stats call answers it durably; the in-process receipt stays
+# for the one thing LangSmith cannot know — a backfill still running on a thread here.
+
+
+def _traffic_client(monkeypatch, *, stats: dict | None = None, boom: bool = False) -> dict:
+    """Install a fake LangSmith client; returns the dict the stats query lands in."""
+    query: dict = {}
+
+    def _client(*_a, **_k):
+        def _get_run_stats(**kwargs):
+            if boom:
+                raise LangSmithNotFoundError("no such project")
+            query.update(kwargs)
+            return stats or {}
+
+        return SimpleNamespace(
+            get_run_stats=_get_run_stats,
+            read_project=lambda **_kw: SimpleNamespace(url=_PROJECT_URL),
+        )
+
+    monkeypatch.setattr(W, "_scoped_client", _client)
+    return query
+
+
+def _traffic_status(**params) -> dict:
+    return client.get("/demo-traffic/status", params=params).json()
+
+
+def test_traffic_count_is_read_from_the_synthetic_tag(monkeypatch):
+    query = _traffic_client(
+        monkeypatch,
+        stats={"run_count": 240, "last_run_start_time": "2026-08-10T22:23:11Z"},
+    )
+    body = _traffic_status(project="Acme-corebot-demo", workspace=WORKSPACE)
+
+    assert body["traffic"] == {"traces": 240, "newest": "2026-08-10T22:23:11Z"}
+    # Root runs only: 240 TRACES, not the ~50 runs each of them contains.
+    assert query["is_root"] is True
+    assert query["filter"] == 'has(tags, "synthetic-demo")'
+    assert query["project_names"] == ["Acme-corebot-demo"]
+
+
+def test_a_project_with_no_synthetic_runs_reads_as_zero(monkeypatch):
+    _traffic_client(monkeypatch, stats={"run_count": 0})
+    assert _traffic_status(project="Acme-corebot-demo")["traffic"] == {"traces": 0, "newest": ""}
+
+
+def test_an_unreadable_count_is_an_unknown_not_a_500(monkeypatch):
+    # A project that does not exist yet is the normal pre-backfill state.
+    _traffic_client(monkeypatch, boom=True)
+    body = _traffic_status(project="Acme-corebot-demo")
+    assert body["traffic"] == {}
+    assert body["running"] is False
+
+
 # --- deep links: the tabs are query params, not path segments -------------------
 #
 # The Insights and Engine links are the payoff of the whole demo-traffic feature —

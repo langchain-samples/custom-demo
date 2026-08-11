@@ -954,6 +954,18 @@ export interface DemoTrafficTarget {
 export interface DemoTrafficStatus {
   project: string;
   running: boolean;
+  /**
+   * What LangSmith itself reports about the backfill, counted from the
+   * `synthetic-demo` tag on every seeded run. Durable: unlike `result` below this
+   * survives a redeploy, a reload and a second browser, so prefer it whenever
+   * `traces` is set. `{}` when the project does not exist yet.
+   */
+  traffic?: { traces?: number; newest?: string };
+  /**
+   * The in-process receipt from the run that produced the traffic — richer (gap
+   * traces, the Insights job outcome) but ephemeral, and absent for a backfill any
+   * other process did.
+   */
   result?: {
     traces?: number;
     runs?: number;
@@ -961,6 +973,7 @@ export interface DemoTrafficStatus {
     hours?: number;
     error?: string;
     insights?: { job_error?: string };
+    engine?: { enabled?: boolean; already_enabled?: boolean; error?: string };
   };
   /**
    * LangSmith deep links for the trace project and its tabs. Empty when the

@@ -960,6 +960,7 @@ async def demo_traffic(request):
         customer=body.get("customer") or "",
         seed_traces=body.get("seed_traces") or None,
         with_insights=bool(body.get("with_insights", True)),
+        with_engine=bool(body.get("with_engine", True)),
     )
     return JSONResponse(ack, status_code=200 if ack.get("ok") else 500)
 
@@ -989,12 +990,38 @@ def _project_links(workspace: str | None, project: str) -> dict:
     return links
 
 
+def _synthetic_traffic(workspace: str | None, project: str) -> dict:
+    """What LangSmith knows about a project's backfill: `{traces, newest}`.
+
+    Every backfilled run carries the `synthetic-demo` tag (that is the contract in
+    demo_traffic's docstring), so one stats call answers "has this project been
+    seeded, and when" for real — no matter which process did it or how many times we
+    have redeployed since. Root runs only, so this counts TRACES rather than the ~50
+    runs each one contains.
+
+    Blocking — call it off the event loop.
+    """
+    from dashboard_agent.demo_traffic import SYNTHETIC_TAG
+
+    stats = _scoped_client(workspace).get_run_stats(
+        project_names=[project], is_root=True, filter=f'has(tags, "{SYNTHETIC_TAG}")'
+    )
+    return {
+        "traces": int(stats.get("run_count") or 0),
+        "newest": stats.get("last_run_start_time") or "",
+    }
+
+
 async def demo_traffic_status(request):
     """Progress of the last backfill for a project. GET ?project=<name>.
 
-    In-process only — unlike /evals/status there is nothing in LangSmith that says
-    "a backfill happened", so a redeploy loses this. That is acceptable: the traffic
-    itself is durable and visible in the project; only the receipt is ephemeral.
+    Two sources, because they answer different questions. `traffic` is derived from
+    LangSmith on every call (the `synthetic-demo` tag), so the panel survives a
+    reload, a second browser, and a redeploy — it used to read "no backfill recorded
+    this session" over a project full of traffic, because the receipt lived in this
+    process's memory and every deploy wiped it. `running` and `result` remain the
+    in-process receipt: a backfill still on a thread here is the one thing LangSmith
+    cannot know.
 
     Covers the automatic backfill at assistant creation as well as this route's, since
     both register in the same place.
@@ -1005,15 +1032,26 @@ async def demo_traffic_status(request):
 
     from dashboard_agent.demo_traffic import demo_traffic_state
 
-    out = {"project": project, **demo_traffic_state(project)}
-    try:
-        out["links"] = await asyncio.to_thread(
-            _project_links, request.query_params.get("workspace"), project
-        )
-    except Exception:  # noqa: BLE001 - links are navigation, not state
-        # A project that does not exist yet (no traffic, no runs) is the common
-        # case here, not an error — the panel just shows no links.
-        out["links"] = {}
+    workspace = request.query_params.get("workspace")
+    out: dict = {"project": project, **demo_traffic_state(project)}
+
+    async def _read(fn) -> dict:
+        """One blocking LangSmith read, off the loop, degrading to an empty answer.
+
+        A project that does not exist yet — no traffic generated — is the common case
+        here rather than an error: the count reads as unknown and the links as absent,
+        which is exactly the pre-backfill empty state the panel wants to show.
+        """
+        try:
+            return await asyncio.to_thread(fn, workspace, project)
+        except Exception:  # noqa: BLE001 - navigation and counts, never state
+            return {}
+
+    # Gathered: this route is polled every few seconds while a backfill runs, so the
+    # two round trips overlap instead of stacking.
+    out["traffic"], out["links"] = await asyncio.gather(
+        _read(_synthetic_traffic), _read(_project_links)
+    )
     return JSONResponse(out)
 
 

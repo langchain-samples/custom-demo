@@ -80,7 +80,12 @@ export function DemoTraffic({ target }: Props) {
               : result?.traces
                 ? `${result.traces} traces over the last ${result.hours ?? 23}h` +
                   (result.gap_traces ? ` · ${result.gap_traces} showing the failure mode` : "")
-                : `Backfill a day of traffic into "${project}" for Monitoring & Insights.`}
+                : // Counted from LangSmith, so a redeploy no longer makes a seeded
+                  // project look untouched. Generate stays available either way:
+                  // topping a project back up is legitimate.
+                  status?.traffic?.traces
+                  ? `${status.traffic.traces} synthetic traces already in "${project}"`
+                  : `Backfill a day of traffic into "${project}" for Monitoring & Insights.`}
           </div>
         </div>
         <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => void start()}>

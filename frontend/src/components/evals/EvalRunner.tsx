@@ -307,6 +307,9 @@ function DemoResources({ project, workspace }: { project: string; workspace?: st
   if (!project) return null;
   const links = traffic?.links || {};
   const result = traffic?.result;
+  // Durable count from LangSmith; the receipt above is richer but does not survive a
+  // redeploy, and this panel is often opened long after the backfill ran.
+  const seeded = traffic?.traffic?.traces;
   const hasLinks = links.project || links.insights || links.engine;
 
   return (
@@ -322,12 +325,15 @@ function DemoResources({ project, workspace }: { project: string; workspace?: st
             {result.traces} traces over the last {result.hours ?? 23}h
             {result.gap_traces ? ` · ${result.gap_traces} fabricating over the data gap` : ""}
           </span>
-        ) : (
+        ) : seeded ? (
+          /* No receipt in this process (a redeploy, or another replica ran it), but
+             LangSmith can still count the tagged runs — which beats telling the
+             presenter there is no traffic while they are looking at it. */
           <span className="text-[13px] text-muted-foreground">
-            {/* Only ever a receipt: it is held in memory, so a redeploy clears it
-                even though the traffic itself is still in the project. */}
-            No backfill recorded this session.
+            {seeded} synthetic traces in the project
           </span>
+        ) : (
+          <span className="text-[13px] text-muted-foreground">No demo traffic yet.</span>
         )}
       </Row>
 
