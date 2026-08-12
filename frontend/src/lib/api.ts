@@ -373,8 +373,11 @@ export interface RunStreamOptions {
   /**
    * The user turn(s) to send as run input. Omit when resuming — a resume must
    * NOT re-send input or the turn is duplicated.
+   *
+   * `content` is a plain string for a text-only turn, or LangChain content blocks
+   * when the turn carries an image (see `imageContent`).
    */
-  messages?: Array<{ role: string; content: string }>;
+  messages?: Array<{ role: string; content: string | Array<Record<string, unknown>> }>;
   /** Per-run runtime context; omitted from the body when empty. */
   context?: RunContext;
   /** Resume a run paused at an interrupt, with the human's reviewed value. */
@@ -851,6 +854,56 @@ export async function uploadSandboxFiles(
     written: body.written ?? [],
     failed: body.failed ?? [],
   };
+}
+
+/* ------------------------------ Image input ------------------------------ */
+
+/** An image the user attached to a chat turn, ready to send as a content block. */
+export interface ImageAttachment {
+  name: string;
+  /** e.g. "image/png" — Anthropic accepts png, jpeg, gif and webp. */
+  mime: string;
+  /** Base64 payload with no data: prefix. */
+  data: string;
+}
+
+/** What Anthropic will accept, so a .tiff is refused before it reaches a run. */
+export const IMAGE_MIME_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+/** Images are re-encoded as base64 into the thread, so keep them small. */
+export const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+
+/** Read a browser File into an attachment, or reject it with a reason. */
+export async function readImageAttachment(
+  file: File,
+): Promise<{ image?: ImageAttachment; error?: string }> {
+  if (!IMAGE_MIME_TYPES.includes(file.type)) {
+    return { error: `${file.name || "that file"} is not a PNG, JPEG, GIF or WebP.` };
+  }
+  if (file.size > IMAGE_MAX_BYTES) {
+    return { error: `${file.name} is over ${Math.round(IMAGE_MAX_BYTES / (1024 * 1024))}MB.` };
+  }
+  const data = bytesToBase64(new Uint8Array(await file.arrayBuffer()));
+  return { image: { name: file.name || "pasted image", mime: file.type, data } };
+}
+
+/**
+ * The `content` for a user turn: a bare string, or blocks when images are attached.
+ *
+ * Block shape is LangChain's standard image block (`{type, base64, mime_type}`), which
+ * langchain_anthropic rewrites into Anthropic's `source`/`media_type` form — verified
+ * against the installed version rather than assumed, since the older
+ * `{source_type, data}` spelling and OpenAI's `image_url` both also parse and it is not
+ * obvious from the outside which one survives.
+ */
+export function imageContent(
+  text: string,
+  images: ImageAttachment[],
+): string | Array<Record<string, unknown>> {
+  if (!images.length) return text;
+  return [
+    ...(text ? [{ type: "text", text }] : []),
+    ...images.map((img) => ({ type: "image", base64: img.data, mime_type: img.mime })),
+  ];
 }
 
 /** btoa in 32KB chunks: String.fromCharCode(...bytes) overflows the stack on big files. */

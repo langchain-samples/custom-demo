@@ -15,7 +15,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { Streamdown } from "streamdown";
-import { IconRobot, IconLoader2, IconUser } from "@tabler/icons-react";
+import { IconRobot, IconLoader2, IconPhoto, IconUser } from "@tabler/icons-react";
 import type { QuickAction, ReviewInterrupt, RunContext, ThreadMessage, Widget } from "@/lib/api";
 import { ensureThread, resetThread, runStream } from "@/lib/api";
 import { PROSE_CLS } from "@/lib/markdown";
@@ -37,6 +37,12 @@ import {
   widgetFromArgs,
   widgetLooksComplete,
 } from "@/components/chat/helpers";
+import {
+  IMAGE_MIME_TYPES,
+  imageContent,
+  readImageAttachment,
+  type ImageAttachment,
+} from "@/lib/api";
 import {
   effectiveNamespace,
   isSubagentNamespace,
@@ -86,6 +92,8 @@ interface UserItem {
   kind: "user";
   id: string;
   text: string;
+  /** Data URLs for images sent with this turn, so the log shows what the agent saw. */
+  images?: string[];
 }
 interface ActivityItem {
   kind: "activity";
@@ -209,8 +217,12 @@ export default function ChatPanel({
    * simply carries `resume` instead of `messages` and does not clear the
    * dashboard (it is a continuation of the same turn).
    */
-  const runTurn = async (opts: { question?: string; resume?: unknown }) => {
-    const { question, resume } = opts;
+  const runTurn = async (opts: {
+    question?: string;
+    resume?: unknown;
+    images?: ImageAttachment[];
+  }) => {
+    const { question, resume, images = [] } = opts;
     const isResume = resume !== undefined;
     if (busyRef.current) return;
     if (!isResume && !question) return;
@@ -225,7 +237,16 @@ export default function ChatPanel({
     const bubbleId = nextId();
     setItems((prev) => [
       ...prev,
-      ...(question ? [{ kind: "user" as const, id: nextId(), text: question }] : []),
+      ...(question
+        ? [
+            {
+              kind: "user" as const,
+              id: nextId(),
+              text: question,
+              images: images.map((img) => `data:${img.mime};base64,${img.data}`),
+            },
+          ]
+        : []),
       { kind: "activity", id: activityId, chips: [] },
       { kind: "subagents", id: subagentId, groups: [] },
       { kind: "assistant", id: bubbleId, text: "Working…", streaming: true, markdown: false },
@@ -426,7 +447,9 @@ export default function ChatPanel({
       for await (const { event, data, namespace } of runStream({
         threadId: tid,
         assistantId,
-        ...(isResume ? { resume } : { messages: [{ role: "user", content: question! }] }),
+        ...(isResume
+          ? { resume }
+          : { messages: [{ role: "user", content: imageContent(question!, images) }] }),
         context: runContext,
         signal: controller.signal,
       })) {
@@ -589,6 +612,27 @@ export default function ChatPanel({
     }
   };
 
+  /**
+   * Images attached to the NEXT turn. Held here rather than in the composer because
+   * the composer is a vendored beUI component and a turn's images have to travel with
+   * its text into `runTurn`.
+   */
+  const [attached, setAttached] = useState<ImageAttachment[]>([]);
+  const [attachError, setAttachError] = useState("");
+  const imagePicker = useRef<HTMLInputElement | null>(null);
+
+  /** Accept images from the picker, a drop, or a paste. Rejections are per-file. */
+  const attach = async (files: Iterable<File> | null) => {
+    const list = Array.from(files ?? []);
+    if (!list.length) return;
+    setAttachError("");
+    for (const file of list) {
+      const { image, error } = await readImageAttachment(file);
+      if (error) setAttachError(error);
+      else if (image) setAttached((prev) => [...prev, image]);
+    }
+  };
+
   /** New question from the composer or a quick action. */
   const send = (raw: string) => {
     const question = (raw || "").trim();
@@ -602,7 +646,10 @@ export default function ChatPanel({
       ]);
       return;
     }
-    void runTurn({ question });
+    const images = attached;
+    setAttached([]);
+    setAttachError("");
+    void runTurn({ question, images });
   };
 
   /** Human approved a paused artifact — resume the run with their version. */
@@ -637,6 +684,34 @@ export default function ChatPanel({
           : "border-t border-border px-3.5 py-3"
       }
     >
+      {/* Attached images ride with the next turn. The agent can SEE these, unlike a
+          file uploaded to its VM — which it can only open with code. */}
+      {attached.length || attachError ? (
+        <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+          {attached.map((img, i) => (
+            <span
+              key={`${img.name}-${i}`}
+              className="inline-flex items-center gap-1 rounded-md border border-border bg-panel-2 px-1.5 py-0.5 text-[11px]"
+            >
+              <img
+                src={`data:${img.mime};base64,${img.data}`}
+                alt=""
+                className="h-5 w-5 rounded object-cover"
+              />
+              <span className="max-w-[12rem] truncate">{img.name}</span>
+              <button
+                type="button"
+                aria-label={`Remove ${img.name}`}
+                className="text-muted-foreground hover:text-foreground"
+                onClick={() => setAttached((prev) => prev.filter((_, j) => j !== i))}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+          {attachError ? <span className="text-[11px] text-destructive">{attachError}</span> : null}
+        </div>
+      ) : null}
       <PromptInput
         value={input}
         onValueChange={setInput}
@@ -646,7 +721,36 @@ export default function ChatPanel({
         placeholder={variant === "hero" ? heroPlaceholder : "Ask a question…"}
         minRows={variant === "hero" ? 2 : 1}
         aria-label="Prompt"
+        // Paste is how a screenshot actually arrives; the picker below is the fallback.
+        onPaste={(e) => {
+          const files = Array.from(e.clipboardData?.files ?? []);
+          if (files.length) {
+            e.preventDefault();
+            void attach(files);
+          }
+        }}
       />
+      <div className="mt-1 flex items-center gap-2">
+        <input
+          ref={imagePicker}
+          type="file"
+          accept={IMAGE_MIME_TYPES.join(",")}
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            void attach(e.target.files);
+            e.target.value = "";
+          }}
+        />
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+          onClick={() => imagePicker.current?.click()}
+        >
+          <IconPhoto size={13} /> Attach image
+        </button>
+        <span className="text-[11px] text-muted-foreground">or paste a screenshot</span>
+      </div>
     </div>
   );
 
@@ -801,6 +905,18 @@ function ItemView({
   if (item.kind === "user") {
     return (
       <MessageBubble variant="tint" align="start" animateIn className="text-sm leading-relaxed">
+        {item.images?.length ? (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {item.images.map((src, i) => (
+              <img
+                key={i}
+                src={src}
+                alt="attachment"
+                className="max-h-28 rounded-md border border-border object-cover"
+              />
+            ))}
+          </div>
+        ) : null}
         <MessageBubbleContent>{item.text}</MessageBubbleContent>
       </MessageBubble>
     );
