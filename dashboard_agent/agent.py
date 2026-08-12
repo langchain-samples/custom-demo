@@ -84,6 +84,7 @@ class Context:
     industry: str | None = None  # customer industry — steers synthetic data
     ls_workspace: str | None = None  # workspace to pull Hub prompts from (matches trace routing)
     enabled_tools: list[str] | None = None  # catalogue tool ids to expose; None = defaults
+    sandbox_seed: list[dict] | None = None  # files to plant in the VM (see render_seed_script)
 
 
 # The system prompt is sourced from LangSmith Prompt Hub (see prompt.py). We pull
@@ -156,12 +157,25 @@ def _sandbox_note(runtime) -> str:
     """
     if os.getenv("DA_SANDBOX", "1") == "0":
         return ""
+    # What setup planted, named for the model. Generic guidance sent it to `ls` and hope;
+    # naming the files means the first turn can open the right one. Still told to look,
+    # because the VM may have been rebuilt or the user may have uploaded since.
+    seeded = _ctx(runtime, "sandbox_seed")
+    listing = ""
+    if isinstance(seeded, list):
+        lines = [
+            f"  - /workspace/data/{f.get('name')}: {f.get('description') or f.get('kind')}"
+            for f in seeded[:_SEED_MAX_FILES]
+            if isinstance(f, dict) and f.get("name")
+        ]
+        if lines:
+            listing = "It should contain:\n" + "\n".join(lines) + "\n"
     return (
         "\n\nCODE EXECUTION: You have an isolated Linux VM with an `execute` tool. Files live in "
         "/workspace/data/ — ALWAYS run `ls /workspace/data` and look at what is actually there "
-        "before you plan any work, and never assume a particular file exists. It holds a small "
-        "sample dataset, plus anything the user has uploaded.\n"
-        "FILES FROM THE USER: the user can upload documents and data (PDF, CSV, images) with the "
+        "before you plan any work, and never assume a particular file exists. "
+        + (listing or "It holds a small sample dataset, plus anything the user has uploaded.\n")
+        + "FILES FROM THE USER: the user can upload documents and data (PDF, CSV, images) with the "
         "upload button in the Files panel, and they appear in /workspace/data. If you need a "
         "document you do not have, say exactly that and ask them to upload it there. NEVER ask "
         "them to paste a file's contents, email it, or attach it to the chat — the Files panel is "
@@ -402,23 +416,27 @@ def _import_sandbox_client() -> Any:
 # Module-level, monkeypatchable name (tests swap this for a fake); None ⇒ no sandbox.
 SandboxClient: Any = _import_sandbox_client()
 
-# Prepared once when a fresh VM is created:
-#   1. pre-install the data-analysis stack so the first forecast turn is instant
-#      (the system Python is externally managed → --break-system-packages; a bare
-#      `pip install` refuses). `pypdf` is in there for uploads: a presenter drops a
-#      real PDF in and the agent must be able to read it without a 30s install first.
-#      Best-effort: `|| true` so a slow/failed install never blocks the dataset write —
-#      the agent can still install on demand.
-#   2. write a deterministic synthetic dataset with pure stdlib (no dependency on
-#      the install above): 24 months of sales with a trend + seasonality, so a
-#      forecast has real signal.
+# Pre-install the data-analysis stack so the first forecast turn is instant (the system
+# Python is externally managed → --break-system-packages; a bare `pip install` refuses).
+# `pypdf` is in there for uploads: a presenter drops a real PDF in and the agent must be
+# able to read it without a 30s install first. Best-effort `|| true` so a slow or failed
+# install never blocks the data write — the agent can still install on demand.
+_SEED_INSTALL = (
+    "pip install --break-system-packages -q pandas numpy statsmodels scikit-learn pypdf "
+    ">/dev/null 2>&1 || true\n"
+)
+
+# FALLBACK data, used only when an assistant has no seed spec of its own: 24 months of
+# sales with a trend + seasonality, written with pure stdlib so it does not depend on
+# the install above.
 #
-# KNOWN GAP: this dataset is sales-shaped for every assistant, whatever its use case.
-# A document or non-analytics use case gets a CSV it has no use for, which is why the
-# prompt above now says to `ls` and never to assume a file exists — and why uploads
-# matter. Making the seed follow the use case needs a per-assistant seed spec.
-_SEED_SCRIPT = """pip install --break-system-packages -q pandas numpy statsmodels scikit-learn pypdf >/dev/null 2>&1 || true
-mkdir -p /workspace/data && python3 - <<'PY'
+# This used to be what EVERY assistant got, which is how a medical-records demo ended up
+# being told to load a retail revenue CSV (reported by a user). `render_seed_script`
+# builds the per-use-case version; this remains for assistants created before that
+# existed, and for a setup run where the model returned nothing usable.
+_SEED_SCRIPT = (
+    _SEED_INSTALL
+    + """mkdir -p /workspace/data && python3 - <<'PY'
 import csv, math
 rows = []
 for i in range(24):
@@ -433,6 +451,134 @@ with open("/workspace/data/sales.csv", "w", newline="") as f:
     w.writerow(["month", "revenue_usd", "units"])
     w.writerows(rows)
 print("seeded", len(rows), "rows -> /workspace/data/sales.csv")
+PY"""
+)
+
+
+# Caps on a per-assistant seed. The spec comes from an LLM, so it is treated as
+# untrusted input for SIZE as much as for shape: a runaway `rows` would push a
+# multi-megabyte heredoc through the VM's stdin.
+_SEED_MAX_FILES = 4
+_SEED_MAX_ROWS = 40
+_SEED_MAX_TEXT = 8000
+_SEED_KINDS = frozenset({"csv", "json", "txt", "md", "pdf"})
+
+
+def _seed_file_name(raw: str) -> str:
+    """A safe basename for a seeded file, or "" to skip it.
+
+    The spec is model-authored, so a name is allowed to be wrong: strip it to a
+    basename inside /workspace/data and drop anything that still looks hostile. Same
+    rule as `_upload_name` in webapp.py, for the same reason.
+    """
+    name = os.path.basename((raw or "").strip().replace("\\", "/"))
+    if not name or name in {".", ".."} or name.lower().startswith(".env"):
+        return ""
+    return "".join(c for c in name if c.isalnum() or c in "._- ").strip() or ""
+
+
+def render_seed_script(files: list[dict]) -> str:
+    """A shell script that writes `files` into /workspace/data. "" if there is nothing.
+
+    Deterministic: the model supplies data, this supplies the code. Everything is passed
+    to the VM as a JSON document and written by a fixed python heredoc, so no
+    model-authored text is ever interpolated into shell.
+
+    PDFs need a library the base image lacks, so `fpdf2` is installed for them and a
+    failed install downgrades that file to `.txt` rather than losing its content — an
+    unreadable demo document is worse than a plainly readable one.
+    """
+    clean: list[dict] = []
+    for spec in files[:_SEED_MAX_FILES]:
+        if not isinstance(spec, dict):
+            continue
+        name = _seed_file_name(str(spec.get("name") or ""))
+        kind = str(spec.get("kind") or "").lower().lstrip(".")
+        if not name or kind not in _SEED_KINDS:
+            continue
+        rows = [
+            [str(cell) for cell in row]
+            for row in (spec.get("rows") or [])[:_SEED_MAX_ROWS]
+            if isinstance(row, list)
+        ]
+        clean.append(
+            {
+                "name": name,
+                "kind": kind,
+                "columns": [str(c) for c in (spec.get("columns") or [])],
+                "rows": rows,
+                "text": str(spec.get("text") or "")[:_SEED_MAX_TEXT],
+            }
+        )
+    if not clean:
+        return ""
+    payload = json.dumps({"files": clean}, ensure_ascii=True)
+    wants_pdf = any(f["kind"] == "pdf" for f in clean)
+    install = (
+        "pip install --break-system-packages -q fpdf2 >/dev/null 2>&1 || true\n"
+        if wants_pdf
+        else ""
+    )
+    # The JSON goes in as a quoted heredoc ('SPEC'), so the shell performs no
+    # substitution on it whatever the model wrote.
+    return (
+        _SEED_INSTALL
+        + install
+        + "mkdir -p /workspace/data\n"
+        + "cat > /tmp/seed.json <<'SPEC'\n"
+        + payload
+        + "\nSPEC\n"
+        + _SEED_WRITER
+    )
+
+
+# Writes /tmp/seed.json into /workspace/data. Pure stdlib apart from the optional
+# fpdf2 import, and every failure is per-file: one bad spec entry must not cost the
+# others.
+_SEED_WRITER = """python3 - <<'PY'
+import csv, json, pathlib
+spec = json.loads(pathlib.Path("/tmp/seed.json").read_text())
+out = pathlib.Path("/workspace/data")
+out.mkdir(parents=True, exist_ok=True)
+for f in spec["files"]:
+    path = written = out / f["name"]
+    try:
+        if f["kind"] == "csv":
+            with path.open("w", newline="") as fh:
+                w = csv.writer(fh)
+                if f["columns"]:
+                    w.writerow(f["columns"])
+                w.writerows(f["rows"])
+        elif f["kind"] == "json":
+            cols = f["columns"]
+            records = [dict(zip(cols, row)) for row in f["rows"]] if cols else f["rows"]
+            path.write_text(json.dumps(records, indent=2))
+        elif f["kind"] == "pdf":
+            try:
+                from fpdf import FPDF
+
+                pdf = FPDF()
+                pdf.add_page()
+                pdf.set_font("Helvetica", size=11)
+                for line in f["text"].splitlines() or [""]:
+                    # new_x/new_y are load-bearing: multi_cell(w=0) defaults to leaving
+                    # the cursor at the RIGHT margin, so a second line has zero width
+                    # and fpdf raises "Not enough horizontal space to render a single
+                    # character". Return to the left margin and step down instead.
+                    pdf.multi_cell(0, 6, line, new_x="LMARGIN", new_y="NEXT")
+                pdf.output(str(path))
+                written = path
+            except Exception as exc:
+                # Downgrade rather than lose the document — but SAY SO. A silent
+                # .pdf -> .txt is how a document demo ends up quietly not being one.
+                print("pdf unavailable, wrote text instead:", type(exc).__name__, exc)
+                written = path.with_suffix(".txt")
+                written.write_text(f["text"])
+        else:
+            path.write_text(f["text"])
+        print("seeded", written)
+    except Exception as exc:
+        print("seed failed", path, exc)
 PY"""
 
 
@@ -459,10 +605,16 @@ def _sandbox_enabled() -> bool:
     return bool(os.getenv("LANGSMITH_API_KEY") or os.getenv("LS_CROSS_WORKSPACE_KEY"))
 
 
-def _seed_data(backend: Any) -> None:
-    """Best-effort: prepare the synthetic dataset inside a freshly created VM."""
+def _seed_data(backend: Any, seed: list[dict] | None = None) -> None:
+    """Best-effort: plant this assistant's starting files inside a freshly created VM.
+
+    `seed` is the assistant's own spec (`Context.sandbox_seed`); without one — or when
+    nothing in it survives validation — the generic sales dataset is used, which is what
+    every assistant used to get regardless of its use case.
+    """
     try:
-        backend.execute(_SEED_SCRIPT)
+        script = render_seed_script(seed or []) or _SEED_SCRIPT
+        backend.execute(script)
     except Exception:  # noqa: BLE001 - a seed failure must not fail the run
         pass
 
@@ -512,7 +664,7 @@ def _acquire_raw(client: Any, name: str, *, create: bool) -> tuple[Any, bool] | 
     )
 
 
-def _ensure_sandbox(key: str, *, create: bool = True) -> Any | None:
+def _ensure_sandbox(key: str, *, create: bool = True, seed: list[dict] | None = None) -> Any | None:
     """Get/revalidate/reattach/create the sandbox VM named for `key`, seeding once.
 
     Reuses the process cache while it is fresh, then re-checks it against the service
@@ -524,6 +676,9 @@ def _ensure_sandbox(key: str, *, create: bool = True) -> Any | None:
     `create=False` is attach-only: read-only callers (the `/sandbox-files` file
     browser in webapp.py) must never provision infrastructure — creating costs a
     ~30s boot plus a pip install, which is not something a UI click may trigger.
+
+    `seed` is this assistant's starting files; it only matters on the call that creates
+    the VM, and an attach reuses whatever the filesystem already holds.
     """
     cached = _SANDBOX_CACHE.get(key)
     now = time.monotonic()
@@ -546,7 +701,7 @@ def _ensure_sandbox(key: str, *, create: bool = True) -> Any | None:
         raw, created = got
         backend = LangSmithSandbox(raw)
         if created:
-            _seed_data(backend)
+            _seed_data(backend, seed)
         _SANDBOX_CACHE[key] = backend
         _SANDBOX_SEEN[key] = now
         return backend
@@ -555,13 +710,22 @@ def _ensure_sandbox(key: str, *, create: bool = True) -> Any | None:
 
 
 def _get_or_create_sandbox(runtime) -> Any | None:
-    """The warm sandbox for this run's assistant, or None if unavailable."""
+    """The warm sandbox for this run's assistant, or None if unavailable.
+
+    Passes the assistant's seed spec so a VM created lazily on the first turn gets the
+    same files the setup prewarm would have planted.
+    """
     if not _sandbox_enabled():
         return None
-    return _ensure_sandbox(_sandbox_key(runtime))
+    seed = _ctx(runtime, "sandbox_seed")
+    return _ensure_sandbox(_sandbox_key(runtime), seed=seed if isinstance(seed, list) else None)
 
 
-def prewarm_sandbox(agent_repo: str | None = None, customer: str | None = None) -> None:
+def prewarm_sandbox(
+    agent_repo: str | None = None,
+    customer: str | None = None,
+    seed: list[dict] | None = None,
+) -> None:
     """Create + seed an assistant's VM ahead of its first chat (fire-and-forget).
 
     Called from assistant setup so the ~30s VM boot + data seed happens in the
@@ -573,7 +737,7 @@ def prewarm_sandbox(agent_repo: str | None = None, customer: str | None = None) 
     if not _sandbox_enabled():
         return
     try:
-        _ensure_sandbox(_sandbox_key_from(agent_repo, customer))
+        _ensure_sandbox(_sandbox_key_from(agent_repo, customer), seed=seed)
     except Exception:  # noqa: BLE001 - provisioning must never fail on a warm-up
         pass
 

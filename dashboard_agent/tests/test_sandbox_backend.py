@@ -27,6 +27,7 @@ The spec:
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -485,3 +486,117 @@ def test_sandbox_note_routes_file_requests_to_the_upload_button(monkeypatch):
 def test_sandbox_note_empty_when_disabled(monkeypatch):
     monkeypatch.setenv("DA_SANDBOX", "0")
     assert A._sandbox_note(_rt()) == ""
+
+
+# --- per-use-case seed: the VM gets THIS assistant's files ------------------------
+#
+# Reported by a user: a medical-PDF use case was handed 24 months of retail revenue,
+# because the seed was one hardcoded script for every assistant. The spec is now
+# model-authored data rendered by fixed code — never model-authored code.
+
+_MEDICAL_SEED = [
+    {
+        "name": "intake_2026-01.pdf",
+        "kind": "pdf",
+        "description": "Scanned patient intake form",
+        "text": "Patient 4172\nAdmitted 2026-01-04\nDiagnosis: pneumonia",
+    },
+    {
+        "name": "claims.csv",
+        "kind": "csv",
+        "description": "Claim lines by month",
+        "columns": ["claim_id", "amount_usd", "status"],
+        "rows": [["C-1", "1200", "denied"], ["C-2", "840", "paid"]],
+    },
+]
+
+
+def test_seed_script_writes_the_use_cases_own_files():
+    script = A.render_seed_script(_MEDICAL_SEED)
+    assert "intake_2026-01.pdf" in script and "claims.csv" in script
+    assert "sales.csv" not in script  # the retail default is gone, not merely reordered
+    # PDFs need a library the base image lacks.
+    assert "fpdf2" in script
+    # The data reaches the VM as JSON inside a QUOTED heredoc, so the shell expands
+    # nothing the model wrote.
+    assert "<<'SPEC'" in script
+    assert json.loads(script.split("<<'SPEC'\n", 1)[1].split("\nSPEC\n", 1)[0])["files"]
+
+
+def test_seed_script_installs_no_pdf_library_when_nothing_needs_one():
+    script = A.render_seed_script(
+        [{"name": "a.csv", "kind": "csv", "columns": ["x"], "rows": [["1"]]}]
+    )
+    assert "fpdf2" not in script
+
+
+def test_seed_spec_is_treated_as_untrusted_input():
+    script = A.render_seed_script(
+        [
+            {"name": "../../etc/passwd", "kind": "csv", "columns": ["a"], "rows": [["1"]]},
+            {"name": ".env", "kind": "txt", "text": "KEY=secret"},
+            {"name": "ok.txt", "kind": "exe", "text": "no"},  # unknown kind
+            {"name": "fine.txt", "kind": "txt", "text": "yes"},
+        ]
+    )
+    spec = json.loads(script.split("<<'SPEC'\n", 1)[1].split("\nSPEC\n", 1)[0])
+    names = [f["name"] for f in spec["files"]]
+    # Basename only, no dotenv, no unknown kinds — same rules as an upload.
+    assert names == ["passwd", "fine.txt"]
+
+
+def test_seed_spec_is_capped():
+    many = [
+        {"name": f"f{i}.csv", "kind": "csv", "columns": ["x"], "rows": [["1"]] * 99}
+        for i in range(9)
+    ]
+    spec = json.loads(A.render_seed_script(many).split("<<'SPEC'\n", 1)[1].split("\nSPEC\n", 1)[0])
+    assert len(spec["files"]) == A._SEED_MAX_FILES
+    assert all(len(f["rows"]) <= A._SEED_MAX_ROWS for f in spec["files"])
+
+
+def test_an_assistant_with_no_spec_still_gets_something_to_analyse():
+    # Assistants created before this feature, and any setup run whose spec was unusable.
+    assert A.render_seed_script([]) == ""
+    assert A.render_seed_script([{"name": "", "kind": "csv"}]) == ""
+
+
+def test_seeding_prefers_the_assistants_spec_over_the_default(monkeypatch):
+    ran: list[str] = []
+    backend = SimpleNamespace(execute=lambda script: ran.append(script))
+    A._seed_data(cast("Any", backend), _MEDICAL_SEED)
+    assert "claims.csv" in ran[0] and "sales.csv" not in ran[0]
+
+    ran.clear()
+    A._seed_data(cast("Any", backend), None)
+    assert "sales.csv" in ran[0]  # the fallback, unchanged
+
+
+def test_a_lazily_created_vm_seeds_from_the_runs_context(monkeypatch):
+    # The prewarm is fire-and-forget: if it lost the race, or the VM was reaped, the
+    # first turn must plant the same files rather than the retail default.
+    client = _install_client(monkeypatch)
+    A._resolve_backends(_rt(customer="Mercy Health", sandbox_seed=_MEDICAL_SEED))
+    seeded = [c for sb in client.existing for c in sb.runs]
+    assert len(seeded) == 1
+    assert "intake_2026-01.pdf" in seeded[0]
+
+
+def test_sandbox_note_names_the_seeded_files(monkeypatch):
+    monkeypatch.setenv("DA_SANDBOX", "1")
+    note = A._sandbox_note(_rt(sandbox_seed=_MEDICAL_SEED))
+    assert "/workspace/data/intake_2026-01.pdf: Scanned patient intake form" in note
+    assert "/workspace/data/claims.csv" in note
+
+
+def test_pdf_lines_step_down_the_page():
+    """Regression: the first live run of this wrote .txt for every PDF.
+
+    `multi_cell(w=0)` leaves the cursor at the RIGHT margin by default, so the second
+    line has zero width and fpdf raises "Not enough horizontal space to render a single
+    character" — which the fallback then swallowed into a silent .pdf -> .txt downgrade.
+    """
+    script = A.render_seed_script(_MEDICAL_SEED)
+    assert 'new_x="LMARGIN"' in script and 'new_y="NEXT"' in script
+    # And the downgrade is no longer silent.
+    assert "pdf unavailable, wrote text instead" in script

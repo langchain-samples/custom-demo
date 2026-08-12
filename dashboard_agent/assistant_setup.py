@@ -242,6 +242,31 @@ class _QuickAction(BaseModel):
     question: str = Field(description="A natural question that persona would ask this assistant")
 
 
+class _SeedFile(BaseModel):
+    """One file to plant in the assistant's code-execution VM.
+
+    DECLARATIVE on purpose: the LLM describes a file, and `render_seed_script` turns
+    that into the bytes. Asking a model for a shell script instead would mean running
+    generated code and debugging generated code — a demo that fails at provision time
+    with a stray quote is worse than a plain CSV.
+    """
+
+    name: str = Field(description="File name only, with extension, e.g. 'intake_2026-01.pdf'")
+    kind: str = Field(description="One of: csv, json, txt, md, pdf")
+    description: str = Field(description="One line on what it holds — shown to the agent")
+    columns: list[str] = Field(
+        default_factory=list, description="csv/json only: column names, 3-6 of them"
+    )
+    rows: list[list[str]] = Field(
+        default_factory=list,
+        description="csv/json only: up to 24 realistic rows, values as strings, "
+        "aligned to `columns`",
+    )
+    text: str = Field(
+        default="", description="txt/md/pdf only: the document body, realistic and specific"
+    )
+
+
 class _SkillSpec(BaseModel):
     """One reusable agent skill (a playbook/procedure), stored as a Context Hub skill."""
 
@@ -296,6 +321,13 @@ class AssistantSetupResponse(BaseModel):
     body_fallback: str = Field(default="", description="One curated fallback family")
     enabled_tools: list[str] = Field(
         default_factory=list, description="Optional catalogue tool ids to expose"
+    )
+    seed_files: list[_SeedFile] = Field(
+        default_factory=list,
+        description="2-4 files to plant in the agent's code-execution VM, in the FORMAT this "
+        "use case actually works with (a claims team gets PDFs and a claims CSV; a retail "
+        "team gets sales data). These are what the agent analyses when asked, so they must "
+        "carry the metrics and language of the use case",
     )
 
 
@@ -802,6 +834,11 @@ def prepare_assistant(payload: dict) -> dict:
     else:
         picked = set()
     context["enabled_tools"] = sorted(picked | set(DEFAULT_ENABLED))
+    # Starting files for the code-execution VM, in the formats THIS use case works with.
+    # Carried in the context (not just used at prewarm) so a VM created lazily on the
+    # first turn — or rebuilt after the old one was reaped — gets the same files.
+    if analysis.get("seed_files"):
+        context["sandbox_seed"] = analysis["seed_files"]
     prompt_urls: dict = {}
     # Where the PROMPT is stored: Prompt Hub (default) or the Context Hub (as an
     # agent repo's AGENTS.md). Legacy inline is used only when not pushing. Skills
@@ -859,7 +896,11 @@ def prepare_assistant(payload: dict) -> dict:
 
         threading.Thread(
             target=prewarm_sandbox,
-            kwargs={"agent_repo": context.get("agent_repo"), "customer": customer},
+            kwargs={
+                "agent_repo": context.get("agent_repo"),
+                "customer": customer,
+                "seed": context.get("sandbox_seed"),
+            },
             daemon=True,
         ).start()
 
