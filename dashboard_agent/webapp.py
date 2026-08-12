@@ -13,6 +13,7 @@ host as the deployment (`:2024` under `langgraph dev`).
 from __future__ import annotations
 
 import asyncio
+import base64
 import copy
 import os
 import posixpath
@@ -688,8 +689,11 @@ def _int_param(request, key: str, default: int) -> int:
         return default
 
 
-async def _resolve_backend(request):
+async def _resolve_backend(request, params: dict | None = None):
     """(backend, None) for this assistant's VM, or (None, JSONResponse) explaining why not.
+
+    `params` overrides the query string, for POST routes that carry the keys in a JSON
+    body instead.
 
     Keyed exactly like the runtime (`agent_repo` → `customer` → "default") so the
     browser sees the SAME VM a chat turn warmed — and, because webapp.py and the
@@ -707,8 +711,9 @@ async def _resolve_backend(request):
         )
     # assistant_setup writes `ls_artifacts.agent_repo = ""` when there is no Context Hub
     # repo, and the SPA forwards it verbatim → coerce "" to None like the runtime's `or`.
-    agent_repo = request.query_params.get("agent_repo") or None
-    customer = request.query_params.get("customer") or None
+    source = params if params is not None else request.query_params
+    agent_repo = source.get("agent_repo") or None
+    customer = source.get("customer") or None
     # attach-only: a toolbar click must never provision a VM (~30s boot + pip install).
     # Sync + network → to_thread so it can't block the event loop.
     backend = await asyncio.to_thread(
@@ -959,6 +964,122 @@ async def sandbox_file(request):
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
 
+# --- uploads into the VM --------------------------------------------------------
+#
+# The demo's missing half: the agent could always READ its VM, but a presenter had no
+# way to put anything IN it. So an assistant built for a document use case would ask
+# for the PDF it needs and then have nowhere to receive it — a dead end that reads as a
+# broken demo. This is the channel that makes "here is a real customer document" work.
+#
+# Base64 in a JSON body rather than multipart: starlette's `request.form()` needs
+# python-multipart, which is not a dependency here, and a new one is not worth it for
+# a handful of files a presenter drags in by hand.
+
+# Where uploads land by default: the directory the prompt tells the agent to look in.
+_UPLOAD_DIR = "/workspace/data"
+
+# Per-request caps. Generous enough for a scanned PDF deck, small enough that a
+# mis-drag cannot wedge the deployment on a base64 decode.
+_MAX_UPLOAD_FILES = 5
+_MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+
+
+def _upload_name(raw: str) -> str | None:
+    """A safe basename for an uploaded file, or None to reject it.
+
+    Basename only — an upload may choose its NAME, never its directory, so a crafted
+    "../../etc/passwd" or an absolute path cannot escape `_UPLOAD_DIR`. Dotenv names are
+    refused for the same reason `_file_kind` refuses to preview them: the browser next
+    door would happily serve one back.
+    """
+    name = posixpath.basename((raw or "").strip().replace("\\", "/"))
+    if not name or name in {".", ".."} or "\x00" in name or name.lower().startswith(".env"):
+        return None
+    return name
+
+
+async def sandbox_upload(request):
+    """Write files into the assistant's sandbox VM.
+
+    POST {agent_repo?, customer?, dir?, files:[{name, content_b64}]} →
+    {dir, written:[{name, path}], failed:[{name, error}], sandbox_id}.
+
+    Attach-only, like the two read routes: it uses the VM a chat turn or the setup
+    prewarm already created, and never provisions one. A cold start is a ~30s boot plus
+    a pip install, which would outlive this request — so an assistant whose VM is gone
+    is told to send a message first rather than left hanging.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _err(400, "invalid_body", "Body must be JSON.")
+    if not isinstance(body, dict):
+        return _err(400, "invalid_body", "Body must be a JSON object.")
+
+    files = body.get("files")
+    if not isinstance(files, list) or not files:
+        return _err(400, "no_files", "Send at least one file.")
+    if len(files) > _MAX_UPLOAD_FILES:
+        return _err(413, "too_many_files", f"At most {_MAX_UPLOAD_FILES} files per upload.")
+
+    root = _files_root()
+    target = _safe_path(str(body.get("dir") or _UPLOAD_DIR), root)
+    if target is None:
+        return _err(400, "invalid_path", f"dir must be an absolute path inside {root}")
+
+    decoded: list[tuple[str, bytes]] = []
+    failed: list[dict] = []
+    for item in files:
+        raw_name = (item or {}).get("name") if isinstance(item, dict) else None
+        name = _upload_name(str(raw_name or ""))
+        if name is None:
+            failed.append({"name": str(raw_name or ""), "error": "invalid_name"})
+            continue
+        try:
+            content = base64.b64decode(str((item or {}).get("content_b64") or ""), validate=True)
+        except Exception:  # noqa: BLE001 - a bad payload is the caller's problem, not a 500
+            failed.append({"name": name, "error": "invalid_base64"})
+            continue
+        if not content:
+            failed.append({"name": name, "error": "empty"})
+            continue
+        if len(content) > _MAX_UPLOAD_BYTES:
+            failed.append({"name": name, "error": "too_large"})
+            continue
+        decoded.append((posixpath.join(target, name), content))
+
+    if not decoded:
+        return JSONResponse({"dir": target, "written": [], "failed": failed}, status_code=400)
+
+    backend, failure = await _resolve_backend(request, params=body)
+    if failure is not None:
+        return failure
+
+    try:
+        async with _SANDBOX_SLOTS:
+            results = await asyncio.wait_for(
+                asyncio.to_thread(backend.upload_files, decoded),
+                timeout=SANDBOX_TIMEOUT,
+            )
+    except TimeoutError:
+        return _err(504, "timeout", "The sandbox did not respond.")
+    except Exception as exc:
+        return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+
+    written: list[dict] = []
+    for res in results or []:
+        path = str(getattr(res, "path", "") or "")
+        error = getattr(res, "error", None)
+        entry = {"name": posixpath.basename(path), "path": path}
+        if error:
+            failed.append({**entry, "error": str(error)})
+        else:
+            written.append(entry)
+    return JSONResponse(
+        {"dir": target, "written": written, "failed": failed, "sandbox_id": _sandbox_id(backend)}
+    )
+
+
 # --- demo traffic --------------------------------------------------------------
 
 # The "one backfill per project" guard and the receipt live in demo_traffic, not here,
@@ -1097,6 +1218,7 @@ app = Starlette(
         Route("/tools", tools, methods=["GET"]),
         Route("/sandbox-files", sandbox_files, methods=["GET"]),
         Route("/sandbox-file", sandbox_file, methods=["GET"]),
+        Route("/sandbox-upload", sandbox_upload, methods=["POST"]),
         Route("/projects", projects, methods=["GET", "POST"]),
         Route("/workspaces", workspaces, methods=["GET"]),
         Route("/hub-prompts", hub_prompts, methods=["GET"]),

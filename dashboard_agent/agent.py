@@ -157,15 +157,22 @@ def _sandbox_note(runtime) -> str:
     if os.getenv("DA_SANDBOX", "1") == "0":
         return ""
     return (
-        "\n\nCODE EXECUTION: You have an isolated Linux VM with an `execute` tool. A prepared "
-        "dataset is waiting at /workspace/data/ — start by running `ls /workspace/data` and "
-        "loading it. pandas, numpy, statsmodels, and scikit-learn are already installed. To add more "
-        "libraries, "
-        "install with `pip install --break-system-packages <packages>` (the system Python is "
-        "externally managed, so a bare `pip install` will refuse). Run Python for analysis or "
-        "forecasting and read/write files there. When you produce a result "
-        "worth showing (a forecast, a breakdown), visualize it with `push_widget`, don't only "
-        "describe it."
+        "\n\nCODE EXECUTION: You have an isolated Linux VM with an `execute` tool. Files live in "
+        "/workspace/data/ — ALWAYS run `ls /workspace/data` and look at what is actually there "
+        "before you plan any work, and never assume a particular file exists. It holds a small "
+        "sample dataset, plus anything the user has uploaded.\n"
+        "FILES FROM THE USER: the user can upload documents and data (PDF, CSV, images) with the "
+        "upload button in the Files panel, and they appear in /workspace/data. If you need a "
+        "document you do not have, say exactly that and ask them to upload it there. NEVER ask "
+        "them to paste a file's contents, email it, or attach it to the chat — the Files panel is "
+        "the only channel, and offering another one strands the conversation.\n"
+        "pandas, numpy, statsmodels, scikit-learn and pypdf are already installed, so you can "
+        "parse an uploaded PDF with code rather than asking the user to transcribe it. You cannot "
+        "see the pixels of an image file; identify it and work with the text or data you can "
+        "extract. To add libraries, `pip install --break-system-packages <packages>` (the system "
+        "Python is externally managed, so a bare `pip install` will refuse). When you produce a "
+        "result worth showing (a forecast, a breakdown, figures pulled out of a document), "
+        "visualize it with `push_widget`, don't only describe it."
     )
 
 
@@ -398,12 +405,19 @@ SandboxClient: Any = _import_sandbox_client()
 # Prepared once when a fresh VM is created:
 #   1. pre-install the data-analysis stack so the first forecast turn is instant
 #      (the system Python is externally managed → --break-system-packages; a bare
-#      `pip install` refuses). Best-effort: `|| true` so a slow/failed install never
-#      blocks the dataset write — the agent can still install on demand.
+#      `pip install` refuses). `pypdf` is in there for uploads: a presenter drops a
+#      real PDF in and the agent must be able to read it without a 30s install first.
+#      Best-effort: `|| true` so a slow/failed install never blocks the dataset write —
+#      the agent can still install on demand.
 #   2. write a deterministic synthetic dataset with pure stdlib (no dependency on
 #      the install above): 24 months of sales with a trend + seasonality, so a
 #      forecast has real signal.
-_SEED_SCRIPT = """pip install --break-system-packages -q pandas numpy statsmodels scikit-learn >/dev/null 2>&1 || true
+#
+# KNOWN GAP: this dataset is sales-shaped for every assistant, whatever its use case.
+# A document or non-analytics use case gets a CSV it has no use for, which is why the
+# prompt above now says to `ls` and never to assume a file exists — and why uploads
+# matter. Making the seed follow the use case needs a per-assistant seed spec.
+_SEED_SCRIPT = """pip install --break-system-packages -q pandas numpy statsmodels scikit-learn pypdf >/dev/null 2>&1 || true
 mkdir -p /workspace/data && python3 - <<'PY'
 import csv, math
 rows = []

@@ -10,7 +10,13 @@
  * starts from a fresh listing.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { IconAlertTriangle, IconFolderOff, IconLoader2, IconRefresh } from "@tabler/icons-react";
+import {
+  IconAlertTriangle,
+  IconFolderOff,
+  IconLoader2,
+  IconRefresh,
+  IconUpload,
+} from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import { PaneState } from "@/components/files/PaneState";
 import { SandboxFileView } from "@/components/files/SandboxFileView";
@@ -23,6 +29,9 @@ import {
 import {
   listSandboxFiles,
   readSandboxFile,
+  SANDBOX_UPLOAD_MAX_BYTES,
+  SANDBOX_UPLOAD_MAX_FILES,
+  uploadSandboxFiles,
   type SandboxListing,
   type SandboxTarget,
 } from "@/lib/api";
@@ -56,6 +65,12 @@ export function SandboxBrowser({ target, onReload }: SandboxBrowserProps) {
   const [failedDirs, setFailedDirs] = useState<ReadonlySet<string>>(() => new Set());
   // A "Show more" page is in flight (the viewer's button is disabled meanwhile).
   const [appending, setAppending] = useState(false);
+  // Upload state. A success remounts this component via `onReload`, which is also how
+  // the new file appears in the tree — no cache invalidation to get wrong.
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const filePicker = useRef<HTMLInputElement | null>(null);
 
   // One directory cache for this instance's lifetime.
   const loader = useMemo(() => createDirLoader(target), [target]);
@@ -98,6 +113,45 @@ export function SandboxBrowser({ target, onReload }: SandboxBrowserProps) {
       return result.nodes;
     },
     [loader],
+  );
+
+  /**
+   * Send dropped/picked files to the VM, then remount so the tree shows them.
+   *
+   * Checks the server's own limits client-side first: a 20MB PDF that is going to be
+   * refused is better refused before it is base64'd in the browser.
+   */
+  const upload = useCallback(
+    async (picked: FileList | null) => {
+      const files = Array.from(picked ?? []);
+      if (files.length === 0) return;
+      setUploadError(null);
+      if (files.length > SANDBOX_UPLOAD_MAX_FILES) {
+        setUploadError(`At most ${SANDBOX_UPLOAD_MAX_FILES} files at a time.`);
+        return;
+      }
+      const big = files.find((f) => f.size > SANDBOX_UPLOAD_MAX_BYTES);
+      if (big) {
+        const mb = Math.round(SANDBOX_UPLOAD_MAX_BYTES / (1024 * 1024));
+        setUploadError(`${big.name} is over ${mb}MB.`);
+        return;
+      }
+      setUploading(true);
+      try {
+        const result = await uploadSandboxFiles(target, files);
+        if (result.failed.length) {
+          setUploadError(
+            result.failed.map((f) => `${f.name}: ${f.error}`).join("; ") || "Upload failed.",
+          );
+        }
+        if (result.written.length) onReload();
+      } catch (e) {
+        setUploadError(errMsg(e));
+      } finally {
+        setUploading(false);
+      }
+    },
+    [target, onReload],
   );
 
   // Guards against an out-of-order response when files are clicked quickly.
@@ -181,10 +235,52 @@ export function SandboxBrowser({ target, onReload }: SandboxBrowserProps) {
   return (
     <>
       <div className="grid min-h-0 flex-1 grid-cols-[280px_1fr]">
-        <div className="min-h-0 overflow-auto border-r border-border bg-panel-2 p-1.5">
+        <div
+          className={`min-h-0 overflow-auto border-r bg-panel-2 p-1.5 ${
+            dragging ? "border-primary bg-primary/5" : "border-border"
+          }`}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragging(false);
+            void upload(e.dataTransfer?.files ?? null);
+          }}
+        >
+          <div className="mb-1.5 flex items-center gap-2 px-1">
+            {/* The agent cannot receive an attachment in chat, so this is the only way
+                to hand it a document — the prompt tells it to ask for uploads here. */}
+            <input
+              ref={filePicker}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                void upload(e.target.files);
+                e.target.value = "";
+              }}
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={uploading}
+              onClick={() => filePicker.current?.click()}
+            >
+              {uploading ? <IconLoader2 size={14} className="animate-spin" /> : <IconUpload size={14} />}
+              {uploading ? "Uploading…" : "Upload"}
+            </Button>
+            <span className="truncate text-[11px] text-muted-foreground">or drop files here</span>
+          </div>
+          {uploadError ? (
+            <p className="m-0 px-2 pb-2 text-[11px] text-destructive">{uploadError}</p>
+          ) : null}
           {entries.length === 0 ? (
             <p className="m-0 px-2 py-3 text-xs text-muted-foreground">
-              This sandbox has no files yet.
+              This sandbox has no files yet. Upload a document to give the agent something to
+              work with.
             </p>
           ) : (
             <SandboxTree

@@ -18,11 +18,18 @@ The contract:
 
 from __future__ import annotations
 
+import base64
 from typing import Any, cast
 
 import pytest
 from deepagents.backends import LangSmithSandbox
-from deepagents.backends.protocol import FileData, FileInfo, LsResult, ReadResult
+from deepagents.backends.protocol import (
+    FileData,
+    FileInfo,
+    FileUploadResponse,
+    LsResult,
+    ReadResult,
+)
 from starlette.testclient import TestClient
 
 import dashboard_agent.agent as A
@@ -590,3 +597,165 @@ def test_ensure_sandbox_still_creates_by_default(monkeypatch):
     monkeypatch.setattr(A, "SandboxClient", lambda **kw: ls_client)
     assert A._ensure_sandbox("acme") is not None
     assert ls_client.created == ["da-acme"]  # existing callers keep today's behaviour
+
+
+# --- upload: the channel that makes a document use case work ---------------------
+#
+# The browser could always read the VM; nothing could write to it. An assistant built
+# for "scan these PDFs" therefore asked for a file it had no way to receive, which
+# reads as a broken demo. These tests pin the parts that would be quietly dangerous:
+# an upload may choose its NAME but never its directory, and the caps are enforced
+# server-side rather than trusted from the browser.
+
+
+class _UploadBackend(_FakeBackend):
+    """Records what was written, and can fail a named file like the real API does."""
+
+    def __init__(self, fail: dict[str, str] | None = None):
+        super().__init__()
+        self.uploaded: list[tuple[str, bytes]] = []
+        self.fail = fail or {}
+
+    def upload_files(self, files):
+        self.uploaded.extend(files)
+        return [
+            FileUploadResponse(path=path, error=self.fail.get(path.rsplit("/", 1)[-1]))
+            for path, _content in files
+        ]
+
+
+def _b64(data: bytes) -> str:
+    return base64.b64encode(data).decode()
+
+
+def _post_upload(**body):
+    return client.post("/sandbox-upload", json=body)
+
+
+def test_upload_writes_files_into_the_data_dir(monkeypatch):
+    backend = _install(monkeypatch, _UploadBackend())
+    res = _post_upload(
+        customer="Acme",
+        files=[
+            {"name": "intake.pdf", "content_b64": _b64(b"%PDF-1.7 scan")},
+            {"name": "claims.csv", "content_b64": _b64(b"id,amount\n1,20\n")},
+        ],
+    )
+    body = res.json()
+    assert res.status_code == 200
+    assert [f["path"] for f in body["written"]] == [
+        "/workspace/data/intake.pdf",
+        "/workspace/data/claims.csv",
+    ]
+    assert body["failed"] == []
+    # Lands where the prompt tells the agent to look.
+    assert body["dir"] == "/workspace/data"
+    assert backend.uploaded[0] == ("/workspace/data/intake.pdf", b"%PDF-1.7 scan")
+
+
+def test_upload_takes_images_too(monkeypatch):
+    backend = _install(monkeypatch, _UploadBackend())
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    body = _post_upload(customer="Acme", files=[{"name": "scan.png", "content_b64": _b64(png)}])
+    assert body.json()["written"][0]["name"] == "scan.png"
+    # Binary survives the base64 round trip byte for byte.
+    assert backend.uploaded[0][1] == png
+
+
+def test_upload_may_choose_a_name_but_never_a_directory(monkeypatch):
+    backend = _install(monkeypatch, _UploadBackend())
+    body = _post_upload(
+        customer="Acme",
+        files=[
+            {"name": "../../etc/passwd", "content_b64": _b64(b"root:x:0:0")},
+            {"name": "/etc/shadow", "content_b64": _b64(b"nope")},
+            {"name": "sub/dir/report.pdf", "content_b64": _b64(b"ok")},
+        ],
+    ).json()
+    # Basename only: every path stays inside the upload dir.
+    assert [f["path"] for f in body["written"]] == [
+        "/workspace/data/passwd",
+        "/workspace/data/shadow",
+        "/workspace/data/report.pdf",
+    ]
+    assert all(p.startswith("/workspace/data/") for p, _ in backend.uploaded)
+
+
+def test_upload_refuses_a_dotenv_name(monkeypatch):
+    _install(monkeypatch, _UploadBackend())
+    body = _post_upload(customer="Acme", files=[{"name": ".env", "content_b64": _b64(b"K=v")}])
+    # The reader next door refuses to preview these; writing one would be a key-leak
+    # path into a browser-reachable cat.
+    assert body.status_code == 400
+    assert body.json()["failed"][0]["error"] == "invalid_name"
+
+
+def test_upload_enforces_the_caps_itself(monkeypatch):
+    _install(monkeypatch, _UploadBackend())
+    too_many = [{"name": f"f{i}.csv", "content_b64": _b64(b"x")} for i in range(6)]
+    assert _post_upload(customer="Acme", files=too_many).status_code == 413
+
+    monkeypatch.setattr(W, "_MAX_UPLOAD_BYTES", 8)
+    body = _post_upload(
+        customer="Acme", files=[{"name": "big.pdf", "content_b64": _b64(b"0123456789")}]
+    )
+    assert body.status_code == 400
+    assert body.json()["failed"][0]["error"] == "too_large"
+
+
+def test_upload_rejects_a_malformed_payload(monkeypatch):
+    _install(monkeypatch, _UploadBackend())
+    assert _post_upload(customer="Acme", files=[]).status_code == 400
+    bad = _post_upload(customer="Acme", files=[{"name": "x.csv", "content_b64": "not base64!!"}])
+    assert bad.status_code == 400
+    assert bad.json()["failed"][0]["error"] == "invalid_base64"
+
+
+def test_upload_reports_a_per_file_backend_failure(monkeypatch):
+    _install(monkeypatch, _UploadBackend(fail={"locked.csv": "permission_denied"}))
+    body = _post_upload(
+        customer="Acme",
+        files=[
+            {"name": "ok.csv", "content_b64": _b64(b"a")},
+            {"name": "locked.csv", "content_b64": _b64(b"b")},
+        ],
+    ).json()
+    assert [f["name"] for f in body["written"]] == ["ok.csv"]
+    assert body["failed"] == [
+        {"name": "locked.csv", "path": "/workspace/data/locked.csv", "error": "permission_denied"}
+    ]
+
+
+def test_upload_is_attach_only_and_says_what_to_do(monkeypatch):
+    # A cold start is a ~30s boot plus a pip install, which would outlive the request.
+    monkeypatch.setattr(A, "_sandbox_enabled", lambda: True)
+    seen: list = []
+
+    def _ensure(key, *, create=True):
+        seen.append(create)
+        return None
+
+    monkeypatch.setattr(A, "_ensure_sandbox", _ensure)
+    res = _post_upload(customer="Acme", files=[{"name": "a.csv", "content_b64": _b64(b"a")}])
+    assert res.status_code == 503
+    assert res.json()["reason"] == "sandbox_unavailable"
+    assert seen == [False]
+
+
+def test_upload_keys_the_vm_like_the_runtime(monkeypatch):
+    # agent_repo → customer, read from the JSON body rather than the query string.
+    monkeypatch.setattr(A, "_sandbox_enabled", lambda: True)
+    keys: list[str] = []
+    backend = _UploadBackend()
+
+    def _ensure(key, *, create=True):
+        keys.append(key)
+        return backend
+
+    monkeypatch.setattr(A, "_ensure_sandbox", _ensure)
+    _post_upload(
+        agent_repo="acme-agent",
+        customer="Acme",
+        files=[{"name": "a.csv", "content_b64": _b64(b"a")}],
+    )
+    assert keys == ["acme-agent"]

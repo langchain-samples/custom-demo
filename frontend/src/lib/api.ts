@@ -800,6 +800,69 @@ export async function readSandboxFile(
   return res.json();
 }
 
+/** Outcome of an upload (POST /sandbox-upload). Never throws; check `failed`. */
+export interface SandboxUploadResult {
+  dir: string;
+  written: { name: string; path: string }[];
+  failed: { name: string; error: string }[];
+}
+
+/** Files bigger than this are rejected server-side, so stop them here too. */
+export const SANDBOX_UPLOAD_MAX_BYTES = 15 * 1024 * 1024;
+export const SANDBOX_UPLOAD_MAX_FILES = 5;
+
+/**
+ * Upload files into the assistant's VM, where the agent can read them.
+ *
+ * This is the only channel for getting a document to the agent — it has no way to
+ * receive an attachment in chat — so the prompt tells it to ask for uploads here.
+ *
+ * Base64 in JSON rather than multipart, matching the server (no python-multipart in
+ * the deployment). Attach-only on the server side: an assistant whose VM has been
+ * reaped answers 503 and the caller is told to send a message first.
+ */
+export async function uploadSandboxFiles(
+  target: SandboxTarget,
+  files: File[],
+): Promise<SandboxUploadResult> {
+  const payload = await Promise.all(
+    files.map(async (file) => ({
+      name: file.name,
+      // FileReader would need a callback dance; arrayBuffer + chunked btoa keeps this
+      // synchronous-ish and avoids blowing the call stack on a multi-MB spread.
+      content_b64: bytesToBase64(new Uint8Array(await file.arrayBuffer())),
+    })),
+  );
+  const res = await fetch(`${getApiBase()}/sandbox-upload`, {
+    method: "POST",
+    headers: apiHeaders(),
+    body: JSON.stringify({
+      agent_repo: target.agent_repo || undefined,
+      customer: target.customer || undefined,
+      files: payload,
+    }),
+  });
+  const body = (await res.json().catch(() => ({}))) as Partial<SandboxUploadResult> & {
+    error?: string;
+  };
+  if (!res.ok && !body.failed?.length) throw await errorFrom(res);
+  return {
+    dir: body.dir ?? "",
+    written: body.written ?? [],
+    failed: body.failed ?? [],
+  };
+}
+
+/** btoa in 32KB chunks: String.fromCharCode(...bytes) overflows the stack on big files. */
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
 /* --------------------------------- Evals --------------------------------- */
 
 /**

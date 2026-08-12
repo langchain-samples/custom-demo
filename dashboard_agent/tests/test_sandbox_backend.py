@@ -455,6 +455,33 @@ def test_sandbox_note_points_at_seeded_data(monkeypatch):
     assert "execute" in note and "/workspace/data" in note and "push_widget" in note
 
 
+def test_sandbox_note_never_promises_a_particular_dataset(monkeypatch):
+    """Reported by a user: a medical-PDF use case was told to load a sales CSV.
+
+    The seed is sales-shaped for every assistant, so the prompt must send the model to
+    LOOK rather than assert what is there.
+    """
+    monkeypatch.setenv("DA_SANDBOX", "1")
+    note = A._sandbox_note(_rt())
+    assert "ls /workspace/data" in note
+    assert "never assume a particular file exists" in note
+    assert "sales" not in note.lower()
+
+
+def test_sandbox_note_routes_file_requests_to_the_upload_button(monkeypatch):
+    """Also reported: the agent asked for a PDF it had no way to receive.
+
+    There is exactly one channel now, and the prompt has to name it and rule out the
+    plausible-sounding alternatives that strand the conversation.
+    """
+    monkeypatch.setenv("DA_SANDBOX", "1")
+    note = A._sandbox_note(_rt())
+    assert "Files panel" in note
+    assert "paste" in note and "attach it to the chat" in note
+    # And it can actually read what arrives, without a 30s install mid-demo.
+    assert "pypdf" in note and "pypdf" in A._SEED_SCRIPT
+
+
 def test_sandbox_note_empty_when_disabled(monkeypatch):
     monkeypatch.setenv("DA_SANDBOX", "0")
     assert A._sandbox_note(_rt()) == ""
