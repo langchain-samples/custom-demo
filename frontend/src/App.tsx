@@ -268,6 +268,12 @@ export default function App() {
         >
           <ChatPanel
             assistantId={assistantId}
+            /* Same sandbox key the Files dialog and the agent itself use, so a file
+               dropped on the chat lands in the VM this assistant reads from. */
+            sandboxTarget={{
+              agent_repo: activeAssistant?.metadata?.ls_artifacts?.agent_repo || undefined,
+              customer: activeAssistant?.metadata?.customer || undefined,
+            }}
             presets={presets}
             getRunContext={getRunContext}
             onWidget={(w) => {

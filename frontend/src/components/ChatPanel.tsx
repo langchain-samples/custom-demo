@@ -15,7 +15,13 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { Streamdown } from "streamdown";
-import { IconRobot, IconLoader2, IconPhoto, IconUser } from "@tabler/icons-react";
+import {
+  IconFileText,
+  IconLoader2,
+  IconPaperclip,
+  IconRobot,
+  IconUser,
+} from "@tabler/icons-react";
 import type { QuickAction, ReviewInterrupt, RunContext, ThreadMessage, Widget } from "@/lib/api";
 import { ensureThread, resetThread, runStream } from "@/lib/api";
 import { PROSE_CLS } from "@/lib/markdown";
@@ -41,7 +47,9 @@ import {
   IMAGE_MIME_TYPES,
   imageContent,
   readImageAttachment,
+  uploadSandboxFiles,
   type ImageAttachment,
+  type SandboxTarget,
 } from "@/lib/api";
 import {
   effectiveNamespace,
@@ -84,6 +92,12 @@ export interface ChatPanelProps {
   hasAssistant?: boolean;
   /** Open the settings sheet (from the "Choose assistant" empty-state CTA). */
   onOpenSettings?: () => void;
+  /**
+   * Which assistant's VM a dropped document belongs in — the same key the Files
+   * dialog uses. Absent before an assistant is chosen, in which case a dropped
+   * document has nowhere to go and the drop is refused with a reason.
+   */
+  sandboxTarget?: SandboxTarget;
 }
 
 /* ---- Internal message-list model ---- */
@@ -159,6 +173,7 @@ export default function ChatPanel({
   resetKey,
   logo,
   industry,
+  sandboxTarget,
   hasAssistant,
   onOpenSettings,
 }: ChatPanelProps) {
@@ -619,6 +634,14 @@ export default function ChatPanel({
    */
   const [attached, setAttached] = useState<ImageAttachment[]>([]);
   const [attachError, setAttachError] = useState("");
+  /**
+   * Documents dropped on the chat. Unlike images these do NOT ride in the turn — the
+   * model cannot read a PDF from a message — they go into the VM, where `execute` and
+   * pypdf can open them. Kept as chips so the presenter can see where they landed.
+   */
+  const [docs, setDocs] = useState<{ name: string; path: string }[]>([]);
+  const [dropping, setDropping] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const imagePicker = useRef<HTMLInputElement | null>(null);
 
   /** Accept images from the picker, a drop, or a paste. Rejections are per-file. */
@@ -630,6 +653,40 @@ export default function ChatPanel({
       const { image, error } = await readImageAttachment(file);
       if (error) setAttachError(error);
       else if (image) setAttached((prev) => [...prev, image]);
+    }
+  };
+
+  /**
+   * A drop on the chat: images become part of the turn (the model sees them), and
+   * everything else goes to /workspace/data (the model opens it with code). Routing by
+   * type rather than asking, because dragging a PDF onto a conversation has exactly one
+   * sensible meaning.
+   */
+  const dropFiles = async (dropped: FileList | null) => {
+    const files = Array.from(dropped ?? []);
+    if (!files.length) return;
+    const images = files.filter((f) => IMAGE_MIME_TYPES.includes(f.type));
+    const documents = files.filter((f) => !IMAGE_MIME_TYPES.includes(f.type));
+    if (images.length) await attach(images);
+    if (!documents.length) return;
+    if (!sandboxTarget?.agent_repo && !sandboxTarget?.customer) {
+      setAttachError("Choose an assistant before sending it a document.");
+      return;
+    }
+    setUploading(true);
+    try {
+      const result = await uploadSandboxFiles(sandboxTarget, documents);
+      if (result.written.length) {
+        setDocs((prev) => [...prev, ...result.written]);
+        setAttachError("");
+      }
+      if (result.failed.length) {
+        setAttachError(result.failed.map((f) => `${f.name}: ${f.error}`).join("; "));
+      }
+    } catch (e) {
+      setAttachError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -648,6 +705,9 @@ export default function ChatPanel({
     }
     const images = attached;
     setAttached([]);
+    // Documents stay in the VM, but the chip is about the turn being sent — leaving it
+    // up would stack one per drop across a whole demo. The Files panel is the record.
+    setDocs([]);
     setAttachError("");
     void runTurn({ question, images });
   };
@@ -676,6 +736,43 @@ export default function ChatPanel({
   // before the first prompt) keeps a resting brand glow via a wrapper; the bottom
   // variant sits on a top border. `loading` swaps the send button for a stop that
   // aborts the in-flight stream.
+  /**
+   * The attach control lives in PromptInput's `leadingAction`, i.e. INSIDE its bordered
+   * form on the same row as send. It first sat in a row underneath, which read as
+   * bolted onto the card rather than part of it.
+   */
+  const attachButton = (
+    <>
+      <input
+        ref={imagePicker}
+        type="file"
+        accept={IMAGE_MIME_TYPES.join(",")}
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          void attach(e.target.files);
+          e.target.value = "";
+        }}
+      />
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        aria-label="Attach an image"
+        title="Attach an image, or drop a document to send it to the agent's files"
+        className="size-8 rounded-full"
+        disabled={busy}
+        onClick={() => imagePicker.current?.click()}
+      >
+        {uploading ? (
+          <IconLoader2 size={16} className="animate-spin" />
+        ) : (
+          <IconPaperclip size={16} />
+        )}
+      </Button>
+    </>
+  );
+
   const composer = (variant: "hero" | "bottom") => (
     <div
       className={
@@ -683,10 +780,21 @@ export default function ChatPanel({
           ? "w-full rounded-2xl shadow-[0_0_16px_-5px_color-mix(in_oklch,var(--brand-primary)_38%,transparent)]"
           : "border-t border-border px-3.5 py-3"
       }
+      // Drop anywhere on the composer. Images join the turn; documents go to the VM.
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDropping(true);
+      }}
+      onDragLeave={() => setDropping(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDropping(false);
+        void dropFiles(e.dataTransfer?.files ?? null);
+      }}
     >
-      {/* Attached images ride with the next turn. The agent can SEE these, unlike a
-          file uploaded to its VM — which it can only open with code. */}
-      {attached.length || attachError ? (
+      {/* What is riding with the next turn: images the model will see, documents now
+          sitting in its VM. Above the box because they are content, not controls. */}
+      {attached.length || docs.length || attachError ? (
         <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
           {attached.map((img, i) => (
             <span
@@ -709,6 +817,17 @@ export default function ChatPanel({
               </button>
             </span>
           ))}
+          {docs.map((doc, i) => (
+            <span
+              key={`${doc.path}-${i}`}
+              className="inline-flex items-center gap-1 rounded-md border border-border bg-panel-2 px-1.5 py-0.5 text-[11px] text-muted-foreground"
+              title={doc.path}
+            >
+              <IconFileText size={12} />
+              <span className="max-w-[12rem] truncate text-foreground">{doc.name}</span>
+              <span className="hidden sm:inline">in the agent&apos;s files</span>
+            </span>
+          ))}
           {attachError ? <span className="text-[11px] text-destructive">{attachError}</span> : null}
         </div>
       ) : null}
@@ -721,36 +840,17 @@ export default function ChatPanel({
         placeholder={variant === "hero" ? heroPlaceholder : "Ask a question…"}
         minRows={variant === "hero" ? 2 : 1}
         aria-label="Prompt"
-        // Paste is how a screenshot actually arrives; the picker below is the fallback.
+        leadingAction={attachButton}
+        className={dropping ? "border-[var(--brand-primary)]" : undefined}
+        // Paste is how a screenshot actually arrives; the button is the fallback.
         onPaste={(e) => {
           const files = Array.from(e.clipboardData?.files ?? []);
           if (files.length) {
             e.preventDefault();
-            void attach(files);
+            void dropFiles(e.clipboardData?.files ?? null);
           }
         }}
       />
-      <div className="mt-1 flex items-center gap-2">
-        <input
-          ref={imagePicker}
-          type="file"
-          accept={IMAGE_MIME_TYPES.join(",")}
-          multiple
-          className="hidden"
-          onChange={(e) => {
-            void attach(e.target.files);
-            e.target.value = "";
-          }}
-        />
-        <button
-          type="button"
-          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
-          onClick={() => imagePicker.current?.click()}
-        >
-          <IconPhoto size={13} /> Attach image
-        </button>
-        <span className="text-[11px] text-muted-foreground">or paste a screenshot</span>
-      </div>
     </div>
   );
 
