@@ -57,7 +57,9 @@ import {
 import { COMMANDS, parseGoalCommand, type GoalCommand } from "@/lib/commands";
 import {
   effectiveNamespace,
+  isMiddlewareNamespace,
   isSubagentNamespace,
+  parseCheckpointNs,
   parseTaskDispatches,
   subagentIdentity,
   subagentRoot,
@@ -341,6 +343,11 @@ export default function ChatPanel({
     const wOrder: string[] = [];
     const wLatest: Record<string, Widget> = {};
     const wFlushed = new Set<string>();
+    // Message ids belonging to a middleware's own model call (the goal grader),
+    // learned from metadata. Only needed on a server that does NOT suffix event
+    // names with the namespace: there the frames look like main-graph output and
+    // the checkpoint ns is the one place the middleware's name still shows.
+    const middlewareMsgIds = new Set<string>();
     // langgraph_node per MAIN-graph message id, from `messages/metadata` events.
     // The main agent's messages are node "model"; a tool's internal LLM calls
     // (e.g. the synthetic data source) are node "tools" — we must NOT render
@@ -614,6 +621,12 @@ export default function ChatPanel({
           }
           continue;
         }
+        // A middleware's own model call (the goal grader) streams on this channel
+        // too. Its frames are AI messages with no tool calls, i.e. shaped exactly
+        // like a final answer, so they must be dropped before any routing: the
+        // verdict JSON was landing in the chat as the assistant's reply. The
+        // grader's `custom` frames above are how its result reaches the UI.
+        if (isMiddlewareNamespace(namespace)) continue;
         if (event === "messages/metadata") {
           // { "<message_id>": { metadata: { langgraph_node, langgraph_checkpoint_ns, ... } } }
           const d = parsed as Record<
@@ -630,6 +643,10 @@ export default function ChatPanel({
             for (const [mid, info] of Object.entries(d)) {
               const meta = info?.metadata;
               const n = meta?.langgraph_node;
+              if (isMiddlewareNamespace(parseCheckpointNs(meta?.langgraph_checkpoint_ns))) {
+                middlewareMsgIds.add(mid);
+                continue;
+              }
               // Route by the EVENT-NAME namespace ONLY. Real subagents are streamed
               // subgraphs, so their frames carry a `tools:<call_id>` event-name
               // suffix. The metadata `checkpoint_ns` is NOT a reliable subagent
@@ -675,6 +692,7 @@ export default function ChatPanel({
         }
         if (event === "messages/partial" || event === "messages/complete") {
           const msg = (Array.isArray(parsed) ? parsed[0] : parsed) as ThreadMessage;
+          if (msg?.id && middlewareMsgIds.has(msg.id)) continue;
           // Partition strictly by namespace: ONLY root frames feed the main
           // pipeline; everything else is a subagent (kept out of answer/widgets).
           const ns = effectiveNamespace(namespace, msg?.id, nsById);

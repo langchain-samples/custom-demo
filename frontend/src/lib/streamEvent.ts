@@ -56,6 +56,25 @@ export function isSubagentNamespace(ns: string[]): boolean {
   return ns.length > 0 && ns[0].startsWith("tools:");
 }
 
+/**
+ * True when a namespace belongs to a MIDDLEWARE's own sub-run rather than to the
+ * agent: `RubricMiddleware.after_agent:<uuid>` is the goal grader's private model
+ * call, streamed on the parent's channel.
+ *
+ * It has to be filtered explicitly, because it is neither of the two cases the
+ * rest of this module sorts frames into. It is not a `tools:` subagent, and it is
+ * not the main graph — but its frames are AI messages with no tool calls, which is
+ * exactly the shape of a final answer, so the chat happily rendered the grader's
+ * verdict JSON as the assistant's reply.
+ *
+ * Discriminated on the DOT: a middleware sub-run's namespace head is
+ * `<Class>.<hook>`, while the agent's own segments are single names
+ * (`tools:<id>`, `model_request:<id>`).
+ */
+export function isMiddlewareNamespace(ns: string[]): boolean {
+  return ns.some((segment) => (segment.split(":")[0] || "").includes("."));
+}
+
 /** A subagent instance's stable bucket key and human-readable label. */
 export interface SubagentIdentity {
   key: string;

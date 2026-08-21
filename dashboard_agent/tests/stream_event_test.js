@@ -29,6 +29,7 @@ function ok(name, fn) {
     effectiveNamespace,
     taskBranch,
     parseTaskDispatches,
+    isMiddlewareNamespace,
   } = await import(MOD);
 
   ok("splitStreamEvent: plain event is the main graph (empty namespace)", () => {
@@ -129,6 +130,21 @@ function ok(name, fn) {
     // Empty event ns + unknown id -> main graph.
     assert.deepStrictEqual(effectiveNamespace([], "m2", nsById), []);
     assert.deepStrictEqual(effectiveNamespace([], undefined, nsById), []);
+  });
+
+  ok("isMiddlewareNamespace: a middleware's own model call is neither main nor sub", () => {
+    // The goal grader. Its frames are AI messages with no tool calls, so without
+    // this the chat renders the grader's verdict JSON as the assistant's answer.
+    assert.strictEqual(
+      isMiddlewareNamespace(["RubricMiddleware.after_agent:603ba34e-71df-57f6"]),
+      true,
+    );
+    assert.strictEqual(isMiddlewareNamespace(["SomeMiddleware.before_agent:abc"]), true);
+    // The agent's own segments have no dot in the head: main internals and subagents.
+    assert.strictEqual(isMiddlewareNamespace([]), false);
+    assert.strictEqual(isMiddlewareNamespace(["tools:abc"]), false);
+    assert.strictEqual(isMiddlewareNamespace(["model_request:abc"]), false);
+    assert.strictEqual(isMiddlewareNamespace(["tools:abc", "model:def"]), false);
   });
 
   ok("taskBranch: the numeric branch of a bucket key, 0 when there is none", () => {

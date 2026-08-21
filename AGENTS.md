@@ -149,6 +149,12 @@ model with per-criterion feedback until the grader is satisfied. Three things ma
 - The middleware is **always installed but inert** — both hooks no-op without a `rubric` — so it is
   not env-gated, and it is FIRST in the middleware list so its `after_agent` runs last (after hooks
   fire in reverse order), making it the final say on whether a turn is done.
+- The grader's own model call streams on the parent's channel under a
+  `RubricMiddleware.after_agent:<uuid>` namespace. Its frames are AI messages with no tool calls,
+  i.e. the exact shape of a final answer, so ChatPanel drops anything `isMiddlewareNamespace` before
+  routing — otherwise the verdict JSON renders in the chat as the assistant's reply. (The revision
+  feedback the middleware injects IS a real `HumanMessage` on the thread, by design: the agent has
+  to read it. The UI ignores human frames, so it stays invisible.)
 - The pill's states come from the grader's `rubric_evaluation_*` frames on the **`custom`** stream
   mode (hence its addition to `runStream`), not from state: the bookkeeping keys are `PrivateStateAttr`
   and never reach the client. `satisfied` clears the pill after a short linger; the iteration cap and
