@@ -116,7 +116,7 @@ TOOL_REGISTRY: tuple[ToolSpec, ...] = (
     ToolSpec(
         id="ask_user",
         label="Ask the user",
-        description="Pause to ask the user a clarifying question, then continue with their answer.",
+        description="Pause to ask the user a multiple-choice question, then continue with their pick.",
         group="Interaction",
         tool=ask_user,
         # Opt-in like the other optional tools (keeps DEFAULT_ENABLED = datasearch +
@@ -125,7 +125,10 @@ TOOL_REGISTRY: tuple[ToolSpec, ...] = (
         guidance=(
             "Use `ask_user` to ask ONE short clarifying question when the request is ambiguous or "
             "needs information only the user has; wait for their answer before proceeding. Don't "
-            "ask about things you can look up or reasonably assume."
+            "ask about things you can look up or reasonably assume. It is MULTIPLE CHOICE: always "
+            "pass 2-5 short, mutually exclusive `options` (plus an escape hatch like \"Something "
+            "else\" when they may not cover it) — the user can only pick one of them, so never "
+            "ask for a value they would have to type."
         ),
     ),
     ToolSpec(

@@ -797,12 +797,17 @@ def _resume_value(pending: Any) -> Any:
     human:
       - `review()` reads an empty dict as "approved, unchanged" (its `edited` check
         is falsy), which is the approve-and-continue we want.
-      - `ask_user` needs actual text back or it continues on a blank answer.
+      - `ask_user` needs actual text back or it continues on a blank answer, and
+        it is multiple choice — so answer with one of the options it offered
+        (the first), which is what a person clicking the card would send.
     """
     first = pending[0] if isinstance(pending, list | tuple) and pending else pending
     payload = getattr(first, "value", None)
     kind = payload.get("kind") if isinstance(payload, dict) else ""
     if kind == "user_question":
+        options = payload.get("options") if isinstance(payload, dict) else None
+        if isinstance(options, list) and options:
+            return {"answer": str(options[0])}
         return {"answer": "Use your best judgement and proceed with the data you have."}
     return {}
 

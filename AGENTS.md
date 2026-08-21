@@ -137,7 +137,7 @@ Refresh is a remount, so there is no cache-invalidation code.
 | `draft_email` | Comms | simulated draft, rendered as a chat card |
 | `suggest_meeting_times` | Comms | simulated slots, rendered as a chat card |
 | `web_search` | Research | REAL results via the Tavily API; returns an error (never invented results) if `TAVILY_API_KEY` is unset |
-| `ask_user` | Interaction | HITL: pauses via `interrupt()` to ask the user a question, resumes with their answer (renders a question card) |
+| `ask_user` | Interaction | HITL: pauses via `interrupt()` to ask the user a multiple-choice question (model supplies the `options`), resumes with the option they pick (renders a question card) |
 
 Capabilities are chosen in the **"+ New" form** when creating an assistant, and stay editable
 afterwards in **Settings → Tools** — changing them is a config edit on the existing assistant

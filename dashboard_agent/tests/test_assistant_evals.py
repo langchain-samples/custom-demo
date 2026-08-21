@@ -527,8 +527,31 @@ def test_target_answers_a_human_in_the_loop_interrupt_and_grades_what_follows(mo
     assert isinstance(agent.calls[1], Command), "the interrupt was never resumed"
 
 
-def test_target_answers_an_ask_user_interrupt_with_actual_text(monkeypatch):
-    """`ask_user` returns the resume value verbatim; an empty dict answers it blank."""
+def test_target_answers_an_ask_user_interrupt_with_one_of_its_options(monkeypatch):
+    """`ask_user` is multiple choice: answer with an option a person could click.
+
+    (An empty dict would answer it blank, and free text the card never offered
+    isn't an answer the human could have given.)
+    """
+    parked = {
+        "messages": [_ai("One question first.", [{"name": "ask_user", "args": {}, "id": "1"}])],
+        "__interrupt__": (
+            _Interrupt(
+                {
+                    "kind": "user_question",
+                    "question": "Which region?",
+                    "options": ["Southwest", "Northeast"],
+                }
+            ),
+        ),
+    }
+    _, agent = _run_target(monkeypatch, [parked, {"messages": [_ai("Southwest led at 12,400.")]}])
+    resume = agent.calls[1].resume
+    assert isinstance(resume, dict) and resume.get("answer") == "Southwest"
+
+
+def test_an_ask_user_interrupt_without_options_still_gets_text(monkeypatch):
+    """No options on the payload (older run, odd tool call) — still not a blank answer."""
     parked = {
         "messages": [_ai("One question first.", [{"name": "ask_user", "args": {}, "id": "1"}])],
         "__interrupt__": (_Interrupt({"kind": "user_question", "question": "Which region?"}),),

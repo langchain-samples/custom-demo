@@ -210,25 +210,58 @@ function MeetingReview({ review, busy, onApprove }: Props) {
 /* ---------------------------- Ask the user ------------------------------ */
 
 function QuestionReview({ review, busy, onApprove }: Props) {
-  // Payload is { kind:"user_question", question } — no draft; question rides the
-  // ReviewInterrupt index signature.
+  // Payload is { kind:"user_question", question, options } — no draft; both ride
+  // the ReviewInterrupt index signature.
   const draft = review.draft as Record<string, unknown> | undefined;
   const question = String((review.question as string) ?? draft?.question ?? "");
-  const [answer, setAnswer] = useState("");
+  const raw = (review.options ?? draft?.options) as unknown;
+  const options = (Array.isArray(raw) ? raw : [])
+    .map((o) => String(o).trim())
+    .filter(Boolean);
+  // `ask_user` is multiple choice, but an older/odd payload may carry no options —
+  // fall back to a text box rather than stranding the run with nothing to click.
+  const [picked, setPicked] = useState<string | null>(null);
+  const [typed, setTyped] = useState("");
+  const answer = options.length ? (picked ?? "") : typed.trim();
+
   return (
     <div className="flex flex-col gap-2.5">
       {question && <p className="m-0 text-sm leading-relaxed text-foreground">{question}</p>}
-      <Textarea
-        value={answer}
-        onChange={(e) => setAnswer(e.target.value)}
-        placeholder="Type your answer…"
-        className="min-h-[80px] font-normal leading-relaxed"
-        autoFocus
-      />
+      {options.length ? (
+        <div className="flex flex-col gap-1.5">
+          {options.map((option) => (
+            <label
+              key={option}
+              className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-[13px] leading-snug transition-colors ${
+                picked === option
+                  ? "border-brand bg-brand/10 text-foreground"
+                  : "border-border hover:bg-panel"
+              }`}
+            >
+              <input
+                type="radio"
+                name={`answer-${review.kind}-${question}`}
+                className="accent-brand"
+                checked={picked === option}
+                onChange={() => setPicked(option)}
+              />
+              {option}
+            </label>
+          ))}
+        </div>
+      ) : (
+        <Textarea
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          placeholder="Type your answer…"
+          className="min-h-[80px] font-normal leading-relaxed"
+          autoFocus
+        />
+      )}
       <Button
         size="sm"
-        disabled={busy || !answer.trim()}
-        onClick={() => onApprove({ answer: answer.trim() })}
+        disabled={busy || !answer}
+        onClick={() => onApprove({ answer })}
         className="self-start"
       >
         {busy ? "Sending…" : "Answer"}

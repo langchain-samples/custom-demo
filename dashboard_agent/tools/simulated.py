@@ -123,21 +123,29 @@ def review(runtime: ToolRuntime, kind: str, payload: dict, build) -> dict:
 
 
 @tool
-def ask_user(question: str) -> str:
-    """Ask the user ONE short clarifying question and wait for their reply.
+def ask_user(question: str, options: list[str]) -> str:
+    """Ask the user ONE short clarifying question as multiple choice and wait.
 
     Use when the request is ambiguous or needs information only the user has
-    (which time range? which product? a missing detail?). Pauses the run
-    (human-in-the-loop) and returns the user's typed answer as a string. Prefer
+    (which time range? which product? which account?). Pauses the run
+    (human-in-the-loop) and returns the option they picked as a string. Prefer
     asking over guessing when a single question removes the ambiguity — then
     continue with the answer.
+
+    `options` are the answers to choose between: 2-5 short, mutually exclusive
+    labels (a few words each, no numbering). They are the ONLY answers offered,
+    so they must cover the realistic cases — add an escape hatch such as
+    "Something else" when they might not. Never ask for a value only the user
+    can type (an account number, a specific date): ask a choosable question
+    instead, or look it up.
     """
     from langgraph.types import interrupt
 
+    choices = [str(o).strip() for o in (options or []) if str(o).strip()]
     # A no-artifact interrupt: nothing is generated or cached, so (unlike `review`)
     # no `_pending` guard is needed — `interrupt` raises on the first pass and, when
     # the node re-executes on resume, returns the client's value instead of raising.
-    answer = interrupt({"kind": "user_question", "question": question})
+    answer = interrupt({"kind": "user_question", "question": question, "options": choices})
     if isinstance(answer, dict):
         # Client sends {"answer": "..."} (or wraps it as {"draft": {"answer": ...}}).
         inner = answer.get("draft") if isinstance(answer.get("draft"), dict) else answer
