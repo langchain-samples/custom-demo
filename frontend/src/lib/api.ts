@@ -384,6 +384,13 @@ export interface RunStreamOptions {
   resume?: unknown;
   /** Optional abort signal to cancel the stream. */
   signal?: AbortSignal;
+  /**
+   * The active `/goal`, sent as deepagents' `rubric` state key. `RubricMiddleware`
+   * grades each finished turn against it and sends the agent back for another pass
+   * until it is satisfied; it no-ops when this is absent. Re-sent every turn — the
+   * goal is sticky until the user clears it or the grader passes it.
+   */
+  rubric?: string;
 }
 
 /**
@@ -393,12 +400,13 @@ export interface RunStreamOptions {
  * is the raw string (typically JSON) — the caller parses it.
  */
 export async function* runStream(opts: RunStreamOptions): AsyncGenerator<SSEEvent> {
-  const { threadId, assistantId, messages, context, resume, signal } = opts;
+  const { threadId, assistantId, messages, context, resume, signal, rubric } = opts;
   const body: Record<string, unknown> = {
     assistant_id: assistantId,
     // "updates" carries `__interrupt__` when a tool pauses for human review;
-    // "messages" is the token stream the chat + widgets are built from.
-    stream_mode: ["messages", "updates"],
+    // "messages" is the token stream the chat + widgets are built from; "custom"
+    // carries RubricMiddleware's `rubric_evaluation_*` frames (the goal verdict).
+    stream_mode: ["messages", "updates", "custom"],
     // Also stream frames emitted from inside subgraphs (task-dispatched
     // subagents) so we can peer into their work. Their event names carry a `|`
     // namespace suffix; the root graph's frames stay unsuffixed.
@@ -408,7 +416,12 @@ export async function* runStream(opts: RunStreamOptions): AsyncGenerator<SSEEven
     // A resume replaces input entirely — sending both would duplicate the turn.
     body.command = { resume };
   } else {
-    body.input = { messages: messages || [] };
+    // A rubric rides on the INPUT, not the context: it is agent state, and the
+    // middleware compares it to the previous turn's to decide whether this is the
+    // same grading run or a new one. ALWAYS sent, empty when there is no goal —
+    // state is checkpointed, so merely omitting the key would leave a cleared
+    // goal grading every future turn on the thread. Empty reads as "no rubric".
+    body.input = { messages: messages || [], rubric: rubric || "" };
   }
   if (context && Object.keys(context).length) body.context = context;
 

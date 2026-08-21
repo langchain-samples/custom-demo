@@ -93,6 +93,36 @@ def test_subagents_note_on_when_enabled(monkeypatch):
     assert "execute" in note  # ...from the Python data sandbox
 
 
+# --- goal grading (RubricMiddleware, drives the SPA's goal pill) ---
+
+
+def test_rubric_middleware_is_built_with_the_goal_model(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("DASHBOARD_GOAL_MAX_ITERATIONS", "2")
+    mw = A._rubric_middleware()
+    assert mw is not None
+    assert mw.max_iterations == 2
+
+
+def test_graph_accepts_a_rubric_on_its_input(monkeypatch):
+    """The SPA sends the user's `/goal` as the run's `rubric`.
+
+    If it isn't in the input schema the server drops it and nothing is graded.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("DA_DYNAMIC_SUBAGENTS", "0")
+    props = A.build_graph().get_input_jsonschema()["properties"]
+    assert "rubric" in props
+
+
+def test_graph_still_builds_when_the_rubric_middleware_cannot_be_made(monkeypatch):
+    """An optional capability must never take graph load down with it."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("DA_DYNAMIC_SUBAGENTS", "0")
+    monkeypatch.setattr(A, "_rubric_middleware", lambda: None)
+    assert "rubric" not in A.build_graph().get_input_jsonschema()["properties"]
+
+
 # --- no todo middleware (deepagents 0.7 makes it opt-in; we don't opt in) ---
 
 

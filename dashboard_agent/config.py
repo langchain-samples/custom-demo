@@ -134,6 +134,29 @@ def judge_model() -> str:
     return os.getenv("DASHBOARD_JUDGE_MODEL", "anthropic:claude-haiku-4-5-20251001")
 
 
+def goal_model() -> str:
+    """Model id that grades a `/goal` against the transcript (`RubricMiddleware`).
+
+    A separate, cheaper model than the agent's: grading runs after every turn a
+    goal is set, and the judgement is a short structured verdict, not the work.
+    """
+    load_env()
+    return os.getenv("DASHBOARD_GOAL_MODEL", "anthropic:claude-haiku-4-5-20251001")
+
+
+def goal_max_iterations() -> int:
+    """How many times a turn may be sent back for revision before the goal stands.
+
+    Two, not the library's three: each retry is a whole extra agent loop, and a
+    demo that silently re-runs three times reads as a hang.
+    """
+    load_env()
+    try:
+        return max(1, int(os.getenv("DASHBOARD_GOAL_MAX_ITERATIONS", "2")))
+    except ValueError:
+        return 2
+
+
 def setup_model() -> str:
     """Model id for the assistant-setup agent (`init_chat_model` form)."""
     load_env()

@@ -135,6 +135,22 @@ page of one file, `limit` lines, `next_offset` for "Show more"). Two rules shape
 reach the VM, and the browsable root is `DA_FILES_ROOT` (default `/workspace`). The dialog's
 Refresh is a remount, so there is no cache-invalidation code.
 
+**Goals (`/goal`) and rubric grading.** Typing `/goal <what done looks like>` in the composer is a
+CLIENT-SIDE command (ChatPanel `handleGoalCommand`) — never a message — that raises a pill above the
+composer and rides along with every subsequent turn as the run input's `rubric`. deepagents'
+`RubricMiddleware` (built in `agent._rubric_middleware`, graded by `config.goal_model()`, capped by
+`goal_max_iterations()`) then grades each finished turn against it and jumps the agent back to the
+model with per-criterion feedback until the grader is satisfied. Three things make this work:
+- The middleware is **always installed but inert** — both hooks no-op without a `rubric` — so it is
+  not env-gated, and it is FIRST in the middleware list so its `after_agent` runs last (after hooks
+  fire in reverse order), making it the final say on whether a turn is done.
+- The pill's states come from the grader's `rubric_evaluation_*` frames on the **`custom`** stream
+  mode (hence its addition to `runStream`), not from state: the bookkeeping keys are `PrivateStateAttr`
+  and never reach the client. `satisfied` clears the pill after a short linger; the iteration cap and
+  grader errors collapse into one "not met" state.
+- The rubric is sent on EVERY turn, **empty when there is no goal**. State is checkpointed, so merely
+  omitting the key after the user clears the pill would leave the thread grading forever.
+
 **The tool catalogue** (`tools/registry.py`). One `ToolSpec` table drives the settings UI
 (`GET /tools`), the run-time filter, and the per-tool call caps. Selection lives in
 `context.enabled_tools`.

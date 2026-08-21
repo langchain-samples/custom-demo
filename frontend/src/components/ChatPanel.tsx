@@ -16,10 +16,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Streamdown } from "streamdown";
 import {
+  IconAlertTriangle,
+  IconCircleCheck,
   IconFileText,
   IconLoader2,
   IconPaperclip,
   IconRobot,
+  IconTarget,
   IconUser,
 } from "@tabler/icons-react";
 import type { QuickAction, ReviewInterrupt, RunContext, ThreadMessage, Widget } from "@/lib/api";
@@ -163,6 +166,51 @@ interface ReviewItem {
 }
 type Item = UserItem | ActivityItem | SubagentItem | AssistantItem | FeedbackItem | ReviewItem;
 
+/* ------------------------------- Goals ---------------------------------- */
+
+/**
+ * A `/goal`: what the user is working towards, graded by `RubricMiddleware`.
+ *
+ * `text` goes over the wire as the run's `rubric`. `status` is UI-only, driven by
+ * the grader's `rubric_evaluation_*` custom stream frames:
+ *   active    — set, nothing graded yet (or the last turn wasn't graded)
+ *   grading   — a grader pass is running on the turn that just finished
+ *   revising  — the grader sent the agent back; it is having another go
+ *   met       — every criterion passed; the pill clears itself shortly after
+ *   stalled   — the grader gave up (iteration cap, malformed rubric, grader error)
+ */
+interface Goal {
+  text: string;
+  status: "active" | "grading" | "revising" | "met" | "stalled";
+  /** The grader's one-line reason, shown under a met/stalled pill. */
+  note?: string;
+}
+
+/** How long a met goal stays visible before it clears itself. */
+const GOAL_MET_LINGER_MS = 6000;
+
+/** RubricMiddleware's `custom` stream payload (the fields we use). */
+interface RubricFrame {
+  type?: string;
+  result?: string;
+  explanation?: string;
+}
+
+/**
+ * Map a grader verdict to the pill's status.
+ *
+ * Only `satisfied` is success. `needs_revision` means another agent pass is coming,
+ * and the three remaining values are all "grading stopped without a pass" —
+ * lumping them into one `stalled` state on purpose: the difference between an
+ * iteration cap and a grader error matters to us, not to someone watching a demo,
+ * and the explanation is shown either way.
+ */
+function statusFromVerdict(result: string | undefined): Goal["status"] {
+  if (result === "satisfied") return "met";
+  if (result === "needs_revision") return "revising";
+  return "stalled";
+}
+
 
 export default function ChatPanel({
   assistantId,
@@ -180,6 +228,15 @@ export default function ChatPanel({
   const [items, setItems] = useState<Item[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  /**
+   * The active `/goal`, shown as a pill above the composer and sent with every turn
+   * as deepagents' `rubric` state key. `status` is the last grader verdict, so the
+   * pill can show that a turn is being graded and then that the goal was met — at
+   * which point it clears itself (see `GOAL_MET_LINGER_MS`).
+   */
+  const [goal, setGoal] = useState<Goal | null>(null);
+  const goalRef = useRef<Goal | null>(null);
+  goalRef.current = goal;
 
   const idRef = useRef(0);
   const busyRef = useRef(false);
@@ -204,6 +261,8 @@ export default function ChatPanel({
     busyRef.current = false;
     setBusy(false);
     setItems([]);
+    // The goal lives on the thread's state, so a new thread has no goal.
+    setGoal(null);
   }, [resetKey]);
 
   // Keep the log pinned to the newest message — but only while the user is at
@@ -467,6 +526,9 @@ export default function ChatPanel({
           : { messages: [{ role: "user", content: imageContent(question!, images) }] }),
         context: runContext,
         signal: controller.signal,
+        // Sticky: re-sent every turn until the goal is met or cleared. A resume
+        // carries no input, but the rubric is already on the thread's state.
+        rubric: goalRef.current?.text,
       })) {
         let parsed: unknown;
         try {
@@ -480,6 +542,20 @@ export default function ChatPanel({
           if (!isSubagentNamespace(namespace)) {
             const d = parsed as { run_id?: string };
             if (d && d.run_id) runId = d.run_id;
+          }
+          continue;
+        }
+        if (event === "custom") {
+          // RubricMiddleware grading the turn against the active goal. Root frames
+          // only: a subagent cannot finish the user's goal.
+          const frame = parsed as RubricFrame;
+          if (!isSubagentNamespace(namespace) && frame?.type?.startsWith("rubric_evaluation")) {
+            if (frame.type === "rubric_evaluation_start") {
+              setGoal((g) => (g ? { ...g, status: "grading" } : g));
+            } else {
+              const status = statusFromVerdict(frame.result);
+              setGoal((g) => (g ? { ...g, status, note: frame.explanation || "" } : g));
+            }
           }
           continue;
         }
@@ -690,10 +766,52 @@ export default function ChatPanel({
     }
   };
 
+  // A met goal clears itself: the work it described is done, and a pill that stays
+  // up after that reads as "still going". Lingers first so the tick is seen.
+  useEffect(() => {
+    if (goal?.status !== "met") return;
+    const t = setTimeout(() => setGoal(null), GOAL_MET_LINGER_MS);
+    return () => clearTimeout(t);
+  }, [goal?.status]);
+
+  /** A line the user typed that the agent never sees (a `/goal` ack). */
+  const note = (text: string) =>
+    setItems((prev) => [
+      ...prev,
+      { kind: "assistant", id: nextId(), text, streaming: false, markdown: false },
+    ]);
+
+  /**
+   * `/goal …` — set, show, or clear the objective the agent is graded against.
+   *
+   * Handled entirely client-side: the goal is not a question, it is state that
+   * rides along with the NEXT turn (as `rubric`), so sending it as a message would
+   * just make the agent answer it. Returns true when the input was a command.
+   */
+  const handleGoalCommand = (raw: string): boolean => {
+    const m = /^\/goal\b\s*(.*)$/is.exec(raw);
+    if (!m) return false;
+    const rest = m[1].trim();
+    const current = goalRef.current;
+    if (!rest || /^(show|status)$/i.test(rest)) {
+      note(current ? `Current goal: ${current.text}` : "No goal set. Try `/goal <what done looks like>`.");
+      return true;
+    }
+    if (/^clear$/i.test(rest)) {
+      setGoal(null);
+      note(current ? "Goal cleared." : "No goal to clear.");
+      return true;
+    }
+    setGoal({ text: rest, status: "active" });
+    note(`Goal set: ${rest}\n\nI'll check every answer against it until it's met, or you clear it.`);
+    return true;
+  };
+
   /** New question from the composer or a quick action. */
   const send = (raw: string) => {
     const question = (raw || "").trim();
     if (!question || busyRef.current) return;
+    if (handleGoalCommand(question)) return;
     // App-owned guard: a returned string blocks the send (and App opens settings).
     const blocked = guard?.(question);
     if (blocked) {
@@ -792,6 +910,7 @@ export default function ChatPanel({
         void dropFiles(e.dataTransfer?.files ?? null);
       }}
     >
+      {goal && <GoalPill goal={goal} onClear={() => setGoal(null)} />}
       {/* What is riding with the next turn: images the model will see, documents now
           sitting in its VM. Above the box because they are content, not controls. */}
       {attached.length || docs.length || attachError ? (
@@ -917,6 +1036,55 @@ export default function ChatPanel({
 
       {/* Bottom composer once the conversation has started. */}
       {hasAssistant && items.length > 0 && composer("bottom")}
+    </div>
+  );
+}
+
+/**
+ * The goal pill above the composer: what the agent is being graded against, how
+ * that grading is going, and an × to drop it.
+ */
+function GoalPill({ goal, onClear }: { goal: Goal; onClear: () => void }) {
+  const look = {
+    active: { icon: IconTarget, label: "Goal", cls: "border-border text-muted-foreground" },
+    grading: { icon: IconLoader2, label: "Checking goal", cls: "border-brand/50 text-brand" },
+    revising: { icon: IconLoader2, label: "Another pass", cls: "border-brand/50 text-brand" },
+    // emerald/amber rather than tokens: the palette has a brand accent and a
+    // destructive, no pass/warn pair (same choice the vendored beUI rows make).
+    met: { icon: IconCircleCheck, label: "Goal met", cls: "border-emerald-500/60 text-emerald-500" },
+    stalled: {
+      icon: IconAlertTriangle,
+      label: "Goal not met",
+      cls: "border-amber-500/60 text-amber-500",
+    },
+  }[goal.status];
+  const Icon = look.icon;
+  const spinning = goal.status === "grading" || goal.status === "revising";
+
+  return (
+    <div className="mb-1.5 flex flex-col gap-0.5">
+      <span
+        className={`inline-flex max-w-full items-center gap-1.5 self-start rounded-full border bg-panel-2 py-0.5 pr-1 pl-2 text-[11px] ${look.cls}`}
+      >
+        <Icon size={12} className={spinning ? "animate-spin" : undefined} />
+        <span className="font-semibold uppercase tracking-wide">{look.label}</span>
+        <span className="min-w-0 truncate font-normal text-foreground" title={goal.text}>
+          {goal.text}
+        </span>
+        <button
+          type="button"
+          aria-label="Clear goal"
+          title="Clear goal"
+          className="rounded-full px-1 text-muted-foreground hover:text-foreground"
+          onClick={onClear}
+        >
+          ×
+        </button>
+      </span>
+      {/* Why it passed or stopped — only once there is a verdict to explain. */}
+      {goal.note && (goal.status === "met" || goal.status === "stalled") ? (
+        <span className="pl-2 text-[11px] text-muted-foreground">{goal.note}</span>
+      ) : null}
     </div>
   );
 }

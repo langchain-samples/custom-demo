@@ -41,7 +41,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.runtime import get_runtime
 from langsmith import Client
 
-from .config import MODEL, model_provider, require_model_key
+from .config import MODEL, goal_max_iterations, goal_model, model_provider, require_model_key
 from .ctx import ctx_get as _ctx
 from .mocking import enable_mocking
 from .prompt import pull_agent_prompt, pull_system_prompt
@@ -873,6 +873,26 @@ def _dynamic_subagents_enabled() -> bool:
     return os.getenv("DA_DYNAMIC_SUBAGENTS", "0") == "1"
 
 
+def _rubric_middleware():
+    """`RubricMiddleware`, or None when it can't be constructed.
+
+    Drives the SPA's goal pill: the client puts the user's `/goal` on the run as
+    `rubric`, and after each turn a grader model checks the transcript against it,
+    sending the agent back for another pass until it is satisfied (capped). Both of
+    its hooks no-op when no rubric is on the state, so an ordinary turn is
+    untouched — which is also why this is always on rather than env-gated.
+
+    Guarded like the QuickJS extra: a deepagents without it must not break graph
+    load. Beta API (deepagents>=0.6.5).
+    """
+    try:
+        from deepagents import RubricMiddleware
+
+        return RubricMiddleware(model=goal_model(), max_iterations=goal_max_iterations())
+    except Exception:  # noqa: BLE001 - an optional capability, never a load failure
+        return None
+
+
 def _build(model: str | None, checkpointer):
     """Shared deep-agent construction.
 
@@ -899,6 +919,13 @@ def _build(model: str | None, checkpointer):
             ToolSelection(),
         ],
     )
+
+    # Goal grading (`/goal` in the SPA). First in the list so its `after_agent`
+    # runs LAST — after hooks fire in reverse order, and this one is the gate that
+    # decides whether the turn is finished at all. Inert without a `rubric`.
+    rubric = _rubric_middleware()
+    if rubric is not None:
+        middleware = cast("list[AgentMiddleware]", [rubric, *middleware])
 
     # Dynamic subagents (opt-in): add the QuickJS interpreter middleware BEFORE
     # ToolSelection (last), and register the subagents. Lazy + guarded so a missing
