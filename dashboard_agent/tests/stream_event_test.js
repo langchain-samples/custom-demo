@@ -27,6 +27,8 @@ function ok(name, fn) {
     subagentIdentity,
     subagentRoot,
     effectiveNamespace,
+    taskBranch,
+    parseTaskDispatches,
   } = await import(MOD);
 
   ok("splitStreamEvent: plain event is the main graph (empty namespace)", () => {
@@ -127,6 +129,72 @@ function ok(name, fn) {
     // Empty event ns + unknown id -> main graph.
     assert.deepStrictEqual(effectiveNamespace([], "m2", nsById), []);
     assert.deepStrictEqual(effectiveNamespace([], undefined, nsById), []);
+  });
+
+  ok("taskBranch: the numeric branch of a bucket key, 0 when there is none", () => {
+    assert.strictEqual(taskBranch("tools:eval"), 0);
+    assert.strictEqual(taskBranch("tools:eval|1"), 1);
+    assert.strictEqual(taskBranch("tools:eval|2"), 2);
+    // Named node segments are not branches.
+    assert.strictEqual(taskBranch("tools:abc|model:def"), 0);
+    assert.strictEqual(taskBranch(""), 0);
+  });
+
+  ok("parseTaskDispatches: reads subagentType + description off an eval script", () => {
+    const code = [
+      "const result = await task({",
+      '  description: `Analyse /workspace/data/transactions.csv for account ${acct}`,',
+      '  subagentType: "analyst",',
+      "  responseSchema: { type: 'object' },",
+      "});",
+    ].join("\n");
+    assert.deepStrictEqual(parseTaskDispatches(code), [
+      {
+        subagentType: "analyst",
+        // `${...}` is code, not information — it reads as an ellipsis.
+        description: "Analyse /workspace/data/transactions.csv for account …",
+      },
+    ]);
+  });
+
+  ok("parseTaskDispatches: one entry per dispatch, fields kept with their own call", () => {
+    const code = `
+      const [a, b] = await Promise.all([
+        task({ subagentType: "researcher", description: "Find the policy" }),
+        task({ subagentType: "analyst", description: "Compute the rate" }),
+      ]);
+    `;
+    assert.deepStrictEqual(parseTaskDispatches(code), [
+      { subagentType: "researcher", description: "Find the policy" },
+      { subagentType: "analyst", description: "Compute the rate" },
+    ]);
+  });
+
+  ok("parseTaskDispatches: snake_case, and a dispatch missing one field", () => {
+    assert.deepStrictEqual(parseTaskDispatches('task({ subagent_type: "analyst" })'), [
+      { subagentType: "analyst", description: "" },
+    ]);
+    assert.deepStrictEqual(parseTaskDispatches('task({ description: "Just do it" })'), [
+      { subagentType: "", description: "Just do it" },
+    ]);
+  });
+
+  ok("parseTaskDispatches: a dispatch never borrows the next call's fields", () => {
+    const code = 'task({ description: "First" }); task({ subagentType: "analyst" });';
+    assert.deepStrictEqual(parseTaskDispatches(code), [
+      { subagentType: "", description: "First" },
+      { subagentType: "analyst", description: "" },
+    ]);
+  });
+
+  ok("parseTaskDispatches: a half-streamed call yields nothing, never a partial", () => {
+    // The chip's code arrives token by token; an unterminated literal must not
+    // render as a truncated instruction, it must simply not match yet.
+    assert.deepStrictEqual(parseTaskDispatches("const r = await task({ descrip"), []);
+    assert.deepStrictEqual(parseTaskDispatches('task({ description: "half'), []);
+    assert.deepStrictEqual(parseTaskDispatches(""), []);
+    // Something that merely mentions the word is not a dispatch.
+    assert.deepStrictEqual(parseTaskDispatches("// the task({}) helper fans out"), []);
   });
 
   console.log(`\n${passed} passed`);

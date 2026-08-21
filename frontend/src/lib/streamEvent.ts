@@ -113,3 +113,68 @@ export function effectiveNamespace(
   if (messageId && nsById[messageId]) return nsById[messageId];
   return [];
 }
+
+/**
+ * Which parallel dispatch a subagent bucket key is: the last numeric branch
+ * segment, or 0 when there is none. One `eval` that fans out lands as
+ * `tools:abc` (0), `tools:abc|1`, `tools:abc|2`, …
+ */
+export function taskBranch(key: string): number {
+  const numeric = (key || "")
+    .split("|")
+    .slice(1)
+    .filter((s) => /^\d+$/.test(s));
+  return numeric.length ? Number(numeric[numeric.length - 1]) : 0;
+}
+
+/** What one `task()` call in an interpreter script asked for. */
+export interface TaskDispatch {
+  /** The named subagent it was routed to ("analyst", "researcher"). */
+  subagentType: string;
+  /** The instruction it was dispatched with. */
+  description: string;
+}
+
+/** `${...}` interpolations carry code, not information a viewer wants. */
+function cleanDescription(raw: string): string {
+  return raw
+    .replace(/\$\{[^}]*\}/g, "…")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Pull the `task({subagentType, description})` dispatches out of an interpreter
+ * script.
+ *
+ * A subagent dispatched by the `task` TOOL announces itself in the tool call's
+ * args, so its card can name it. One dispatched from a JS workflow script — which
+ * is what the dynamic-subagent skills tell the agent to write — arrives as a bare
+ * `tools:<eval_id>` namespace with no args anywhere in the stream: the who and the
+ * what are inside the source the interpreter ran. Reading them back out of that
+ * source is the only way those cards can say more than "Subagent".
+ *
+ * Deliberately a scan and not a parse: this runs on partially-streamed source, so
+ * anything stricter would have to fail on every frame until the script completes.
+ * A call whose braces are still arriving simply doesn't match yet.
+ */
+export function parseTaskDispatches(code: string): TaskDispatch[] {
+  const out: TaskDispatch[] = [];
+  if (!code) return out;
+  const calls = [...code.matchAll(/\btask\s*\(\s*\{/g)];
+  for (let i = 0; i < calls.length; i++) {
+    const from = (calls[i].index ?? 0) + calls[i][0].length;
+    // Bounded window: a dispatch's own fields, never the next call's — a script
+    // whose first dispatch omits a field must not borrow it from the second.
+    const next = calls[i + 1]?.index ?? code.length;
+    const body = code.slice(from, Math.min(next, from + 1200));
+    const type = /subagent_?[tT]ype\s*:\s*(["'`])([^"'`]*)\1/.exec(body);
+    const desc = /description\s*:\s*(["'`])([\s\S]*?)\1/.exec(body);
+    if (!type && !desc) continue;
+    out.push({
+      subagentType: (type?.[2] || "").trim(),
+      description: cleanDescription(desc?.[2] || ""),
+    });
+  }
+  return out;
+}

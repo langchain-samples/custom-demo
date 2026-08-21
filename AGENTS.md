@@ -404,6 +404,13 @@ Implementation notes, each of which is load-bearing:
   `langchain-quickjs<0.3` to keep `deepagents<0.7`. Two code envs then coexist — the JS interpreter
   (orchestration only) and the Python `execute` sandbox (data analysis); `_subagents_note` tells the
   model which to use for what.
+- **Naming a subagent card is order-matching, not id-matching.** A subagent's stream namespace is
+  `tools:<uuid>` — a fresh subgraph id, NOT the id of the `task`/`eval` call that dispatched it
+  (verified against a live run). Nothing in the stream links the two, so ChatPanel's `dispatchFor`
+  pairs the Nth dispatch the agent emitted with the Nth subagent root that appeared. An interpreter
+  dispatch has no args in the stream at all; `parseTaskDispatches` reads `subagentType` /
+  `description` back off the JS source in the launching `eval` chip, and a fan-out (one root, many
+  numeric branches) indexes into that list by branch.
 - **No governance machinery.** No CI, no CODEOWNERS, no naming convention enforcement, no
   documented deployment owner — all still open questions from the plan.
 

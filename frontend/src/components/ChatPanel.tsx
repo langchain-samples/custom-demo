@@ -57,8 +57,11 @@ import {
 import {
   effectiveNamespace,
   isSubagentNamespace,
+  parseTaskDispatches,
   subagentIdentity,
   subagentRoot,
+  taskBranch,
+  type TaskDispatch,
 } from "@/lib/streamEvent";
 
 export interface ChatPanelProps {
@@ -121,8 +124,10 @@ interface ActivityItem {
 interface SubagentGroup {
   /** subagentIdentity(ns).key — the top-level `tools:<call_id>` segment. */
   key: string;
-  /** Human-readable name ("Subagent"). */
+  /** Human-readable name: the subagent's type ("Analyst"), else "Subagent". */
   label: string;
+  /** The registered subagent it was routed to ("analyst", "researcher"), if known. */
+  type?: string;
   chips: ChipData[];
   /** The subagent's own streamed text (non-tool AI output), if any. */
   text: string;
@@ -357,10 +362,13 @@ export default function ChatPanel({
         text: string;
       }
     > = {};
-    // Main-agent `task` tool-call args, keyed by tool_call id, so a subagent card
-    // can show what its parent dispatched it with (the task description). The
-    // subagent's namespace key is `tools:<that id>`.
-    const taskArgs: Record<string, string> = {};
+    // Main-graph tool calls that dispatch subagents (`task`, and an `eval` whose
+    // script calls `task()`), in the order the agent emitted them. That ORDER is
+    // what ties a dispatch to the card it produced — see `dispatchFor`.
+    const dispatchOrder: string[] = [];
+    // The `task` TOOL's own args, keyed by its tool_call id. An interpreter
+    // dispatch has no args in the stream at all; it is read back off the script.
+    const taskArgs: Record<string, TaskDispatch> = {};
     let answer = "";
     let runId: string | null = null;
     let errorMsg: string | null = null;
@@ -408,11 +416,17 @@ export default function ChatPanel({
             // forever (an ever-climbing timer), duplicating the real chip.
             const id = tc.id;
             if (!id) continue;
-            // Remember a task dispatch's description so its subagent card can show
-            // "what it was invoked with" (subagent namespace = tools:<this id>).
+            // Remember what each dispatch asked for, so its subagent card can name
+            // the specialist and show the instruction it was invoked with.
+            if (name === "task" || name === "eval") {
+              if (!dispatchOrder.includes(id)) dispatchOrder.push(id);
+            }
             if (name === "task") {
               const a = args as { description?: string; subagent_type?: string };
-              taskArgs[id] = a.description || a.subagent_type || "";
+              taskArgs[id] = {
+                subagentType: a.subagent_type || "",
+                description: a.description || "",
+              };
             }
             const summary = chipArgSummary(name, args);
             // Carry the source/command a code-running tool executed (eval's `code`,
@@ -459,6 +473,31 @@ export default function ChatPanel({
       return key;
     };
 
+    /**
+     * Who this subagent is and what it was told to do.
+     *
+     * Matched BY ORDER, which needs saying: a subagent's namespace is
+     * `tools:<uuid>` — a fresh subgraph id, NOT the id of the tool call that
+     * dispatched it (verified against a live run; the previous code assumed the
+     * call id and so never matched, which is why every card just read "Subagent").
+     * Nothing in the stream links the two, so the Nth dispatch the agent emitted is
+     * paired with the Nth subagent root that appeared.
+     *
+     * A dispatch source is either the `task` tool (one subagent, args in the call)
+     * or an `eval` whose script calls `task()` (read back off the script; a fan-out
+     * shares ONE root and separates by branch index). Sources that dispatch nothing
+     * are skipped so they can't shift the pairing.
+     */
+    const dispatchFor = (key: string): TaskDispatch | undefined => {
+      const sources = dispatchOrder
+        .map((id) => (taskArgs[id] ? [taskArgs[id]] : parseTaskDispatches(chipMap[id]?.code || "")))
+        .filter((list) => list.length);
+      const roots = [...new Set(subOrder.map(subagentRoot))];
+      const list = sources[roots.indexOf(subagentRoot(key))];
+      if (!list) return undefined;
+      return list[taskBranch(key)] || list[0];
+    };
+
     // Rebuild the SubagentItem from subState. `done` stays false while streaming;
     // the finally block freezes it (and any pending chip) once the run ends.
     const syncSubagents = () =>
@@ -466,15 +505,21 @@ export default function ChatPanel({
         it.kind === "subagents"
           ? {
               ...it,
-              groups: subOrder.map((k) => ({
-                key: k,
-                label: subState[k].label,
-                chips: subState[k].chipOrder.map((id) => ({ ...subState[k].chipMap[id] })),
-                text: subState[k].text,
-                // key is `tools:<task_call_id>`; look up what it was dispatched with.
-                invokedWith: taskArgs[k.startsWith("tools:") ? k.slice(6) : k] || undefined,
-                done: false,
-              })),
+              groups: subOrder.map((k) => {
+                const dispatch = dispatchFor(k);
+                const type = dispatch?.subagentType || "";
+                return {
+                  key: k,
+                  // The specialist's own name beats the generic "Subagent" — which
+                  // of the fleet ran is the point of showing the card at all.
+                  label: type ? type[0].toUpperCase() + type.slice(1) : subState[k].label,
+                  type: type || undefined,
+                  chips: subState[k].chipOrder.map((id) => ({ ...subState[k].chipMap[id] })),
+                  text: subState[k].text,
+                  invokedWith: dispatch?.description || undefined,
+                  done: false,
+                };
+              }),
             }
           : it,
       );
@@ -1338,6 +1383,9 @@ function SubagentFleet({ groups }: { groups: SubagentGroup[] }) {
   const n = groups.length;
   const running = groups.filter((g) => !g.done).length;
   const allDone = running === 0;
+  // A fan-out is usually one specialist run N ways; say which when they agree.
+  const types = [...new Set(groups.map((g) => g.type).filter(Boolean))];
+  const kind = types.length === 1 ? `${types[0]} ` : "";
   return (
     <div className="flex flex-col overflow-hidden rounded-lg border border-border bg-panel-2 text-xs text-muted-foreground">
       <button
@@ -1351,7 +1399,9 @@ function SubagentFleet({ groups }: { groups: SubagentGroup[] }) {
           <IconChevronRight size={14} className="shrink-0" />
         )}
         <IconRobot size={15} className="shrink-0" stroke={2} />
-        <span className="font-semibold text-foreground">Delegated to {n} subagents</span>
+        <span className="font-semibold text-foreground">
+          Delegated to {n} {kind}subagents
+        </span>
         <span className="ml-auto flex items-center gap-1.5">
           {allDone ? (
             <span className="text-[11px] text-muted-foreground">✓ all done</span>
