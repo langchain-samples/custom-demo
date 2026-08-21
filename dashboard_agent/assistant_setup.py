@@ -242,6 +242,11 @@ class _QuickAction(BaseModel):
     question: str = Field(description="A natural question that persona would ask this assistant")
 
 
+# Matches the "2-4 files" the schema asks for; `render_seed_script` caps again on
+# the way into the VM (this spec is model-written, so neither side trusts it).
+_MAX_SEED_FILES = 4
+
+
 class _SeedFile(BaseModel):
     """One file to plant in the assistant's code-execution VM.
 
@@ -290,11 +295,17 @@ class _SkillSpec(BaseModel):
         "(same as the persona quick-actions), e.g. 'Shopper: Return eligibility'.",
     )
     workflow: str = Field(
+        description="REQUIRED. The dynamic-subagent workflow pattern this skill runs, one of: "
+        "classify-and-act, fan-out-and-synthesize, adversarial-verification, generate-and-filter, "
+        "tournament, loop-until-done. Pick the one that best fits the task -- every skill gets "
+        "one, so frame the task as something with parts worth working in parallel.",
+    )
+    sandbox_step: str = Field(
         default="",
-        description="If this skill's task naturally spans MANY items/candidates, the best-fit "
-        "dynamic-subagent workflow pattern, one of: classify-and-act, fan-out-and-synthesize, "
-        "adversarial-verification, generate-and-filter, tournament, loop-until-done. Leave EMPTY "
-        "when a single step suffices (most skills). Don't force it.",
+        description="REQUIRED. One or two sentences naming the concrete analysis this skill runs "
+        "in the Python `execute` sandbox, and WHICH seeded file in /workspace/data it opens (use "
+        "the exact file names from `seed_files`), e.g. 'Load /workspace/data/claims.csv with "
+        "pandas and compute denial rate by procedure code'.",
     )
 
 
@@ -402,12 +413,19 @@ def analyze_customer(
         "so the assistant consults it (e.g. 'Use your returns policy to check if I can return a "
         "drill I bought 12 days ago'), and an 'action_label' for that question in the SAME "
         "'<Persona>: <2-4 word gist>' format as step 2's quick-actions (e.g. 'Shopper: Return "
-        "eligibility'). Also, when a skill's task naturally spans MANY items or candidates (e.g. "
-        "triage every open ticket, compare all suppliers, review each store), set a 'workflow' to "
-        "the best-fit dynamic-subagent pattern — one of: classify-and-act, fan-out-and-synthesize, "
-        "adversarial-verification, generate-and-filter, tournament, loop-until-done — so invoking "
-        "the skill orchestrates parallel subagents. Leave 'workflow' EMPTY for single-step skills; "
-        "don't force it. Skip skills that merely restate how to search data or build a dashboard.\n"
+        "eligibility'). Skip skills that merely restate how to search data or build a dashboard.\n"
+        "   EVERY skill must exercise BOTH of the assistant's headline capabilities, because "
+        "invoking one is how we demo them — so scope each skill to a task that genuinely needs "
+        "both, never a single lookup:\n"
+        "   - 'workflow' (REQUIRED): the dynamic-subagent pattern the skill orchestrates — one of "
+        f"{', '.join(WORKFLOW_PATTERNS)} — so the agent fans the work out to parallel subagents. "
+        "Pick the pattern that genuinely fits, and write the 'instructions' around work that has "
+        "parts worth running in parallel (per ticket, per supplier, per store, per candidate "
+        "answer), not a single lookup.\n"
+        "   - 'sandbox_step' (REQUIRED): the concrete analysis the skill runs with the Python "
+        "`execute` tool in its Linux VM, naming the file in /workspace/data it opens. It MUST be "
+        "one of the files you propose in step 9, by exact name, and it must be real computation "
+        "over that file (aggregate, rank, compare, parse the PDF), not 'read the file'.\n"
         "4) Give the customer's brand PRIMARY and SECONDARY colors as hex (real brand palette "
         "for well-known companies, e.g. Walmart #0071CE / #FFC220). Use the company's CURRENT "
         "branding (some companies have rebranded). Empty string if unsure.\n"
@@ -424,7 +442,13 @@ def analyze_customer(
         f"{', '.join(CURATED_FONTS)}.\n"
         "8) Choose which optional TOOLS this assistant should expose, as a list of ids from this "
         f"catalogue (pick only what the customer/use-case needs): {catalogue}. "
-        "The dashboard builder and data search are on by default and NOT in this list."
+        "The dashboard builder and data search are on by default and NOT in this list.\n"
+        "9) Propose 2-4 SEED FILES to plant in the assistant's code-execution VM "
+        "(/workspace/data), in the FORMAT this use case actually works with — a claims team gets "
+        "intake PDFs and a claims CSV, a retail team gets sales data. These are the files the "
+        "skills' 'sandbox_step's open, so name them consistently with those steps, and give the "
+        "csv/json ones enough rows (and the right columns) for the analysis you asked for there "
+        "to actually be computable."
     )
     out: dict = {
         "industry": industry or "",
@@ -441,6 +465,7 @@ def analyze_customer(
         "heading_fallback": DEFAULT_CURATED,
         "body_fallback": DEFAULT_CURATED,
         "enabled_tools": None,
+        "seed_files": [],
     }
     try:
         structured = llm.with_structured_output(AssistantSetupResponse)
@@ -466,10 +491,16 @@ def analyze_customer(
                 "example_question": s.example_question.strip(),
                 "action_label": s.action_label.strip(),
                 "workflow": s.workflow.strip(),
+                "sandbox_step": s.sandbox_step.strip(),
             }
             for s in resp.skills
             if s.name.strip() and s.instructions.strip()
         ][:3]
+        # The VM's starting files. Dropping these is how every assistant ends up
+        # with the generic sales CSV (`render_seed_script`'s fallback) — including
+        # the ones whose skills tell the agent to open a claims PDF. Passed through
+        # as plain dicts; `render_seed_script` is what validates and caps them.
+        out["seed_files"] = [f.model_dump() for f in resp.seed_files][:_MAX_SEED_FILES]
         for key, val in (
             ("primary_color", resp.primary_color),
             ("secondary_color", resp.secondary_color),
@@ -596,10 +627,10 @@ DASHBOARD_SKILL = {
 
 
 # The dynamic-subagent workflow "shapes" from the deepagents dynamic-subagents
-# blog. A generated skill names the one that fits its task, so when the skill is
-# invoked the agent orchestrates that pattern (writing a `task()` workflow script
-# in the code interpreter) — this is how we show off dynamic subagents. Each value
-# is the one-line "what it does" used in the skill body.
+# blog. EVERY generated skill names the one that fits its task, so invoking any
+# quick action orchestrates that pattern (writing a `task()` workflow script in the
+# code interpreter) — the skill body is where "this demo shows dynamic subagents"
+# is enforced. Each value is the one-line "what it does" used in that body.
 WORKFLOW_PATTERNS: dict[str, str] = {
     "classify-and-act": "route each input to the right specialist by type, then act on it",
     "fan-out-and-synthesize": "run the same step across many items in parallel, then combine the results",
@@ -610,38 +641,79 @@ WORKFLOW_PATTERNS: dict[str, str] = {
 }
 
 
+# What a skill falls back to when the model names no pattern (or one we don't know).
+# Every skill gets a workflow — the fan-out is the demo — and this is the pattern
+# that fits the widest range of tasks.
+_DEFAULT_WORKFLOW = "fan-out-and-synthesize"
+
+
 def _workflow_clause(workflow: str) -> str:
     """A SKILL.md section telling the agent which dynamic-subagent pattern to run.
 
-    Returns "" for an unset/unknown pattern. Written to degrade gracefully: it
-    orchestrates via `task()` when a code interpreter is available, else falls back
-    to the plain `task` tool or inline work for small inputs.
+    Always returns a section: an unset or unrecognised pattern falls back to
+    `_DEFAULT_WORKFLOW` rather than dropping the fan-out, since a skill that
+    quietly runs inline is a skill that demos nothing. Degrades gracefully at
+    runtime — it orchestrates via `task()` when the code interpreter is available,
+    else the plain `task` tool.
     """
     key = (workflow or "").strip().lower().replace("_", "-")
-    how = WORKFLOW_PATTERNS.get(key)
-    if not how:
-        return ""
+    if key not in WORKFLOW_PATTERNS:
+        key = _DEFAULT_WORKFLOW
+    how = WORKFLOW_PATTERNS[key]
     return (
         f"\n\n## Workflow: {key}\n"
-        f"When this task spans multiple items or candidates, orchestrate a **{key}** "
-        f"dynamic-subagent workflow — {how}. Write a short script that calls `task()` to fan the "
-        f"work out to subagents, then combine their results. For a small or single-step request, "
-        f"just do it directly (or one `task` call) — don't over-orchestrate."
+        f"Run this skill as a **{key}** dynamic-subagent workflow — {how}. Write a short "
+        f"JavaScript orchestration script that calls `task()` to fan the work out to subagents "
+        f"(`researcher` for lookups, `analyst` for computation), then combine what they return. "
+        f"Do this even when there are only a few items: split the work across at least two "
+        f"parallel `task()` calls rather than working through them yourself. Scale the fan-out to "
+        f"the work — one subagent per item up to about eight, batched beyond that. Keep the JS to "
+        f"orchestration only; the numbers come from the Python sandbox below. If this assistant "
+        f"has no JavaScript interpreter, fan out the same way with parallel `task` tool calls."
     )
 
 
-def _skill_md(name: str, description: str, instructions: str, workflow: str = "") -> str:
+def _sandbox_clause(step: str) -> str:
+    """A SKILL.md section pinning this skill's work to the code-execution VM.
+
+    Always present: the `execute` sandbox over the seeded files is the other half of
+    what these skills exist to show, and "compute it" is also the honest instruction
+    — a figure the agent derives from a file beats one it recalls. `step` is the
+    model's own concrete analysis (which file, what to compute); without one the
+    section still points at /workspace/data.
+    """
+    detail = step.strip()
+    return (
+        "\n\n## Data: compute it in the sandbox\n"
+        "Ground this skill in the files in `/workspace/data` rather than in memory. Run "
+        "`ls /workspace/data` first to see what is actually there, then use the `execute` tool "
+        "(Python — pandas, numpy, pypdf) to do the work:\n"
+        + (f"- {detail}\n" if detail else "")
+        + "- Derive every figure you report from that data; if the file you need is not there, "
+        "say so and ask the user to upload it to the Files panel.\n"
+        "- Show the result with `push_widget` — a table or chart — don't only describe it."
+    )
+
+
+def _skill_md(
+    name: str,
+    description: str,
+    instructions: str,
+    workflow: str = "",
+    sandbox_step: str = "",
+) -> str:
     """A spec-compliant SKILL.md: YAML frontmatter (name == mount dir) + body.
 
     The description is emitted as a double-quoted YAML scalar: descriptions often
     contain a colon (e.g. "Use when ...: builds ..."), which as a bare scalar makes
     the YAML parser read it as a nested mapping and SkillsMiddleware then silently
-    skips the whole skill. `workflow` (optional) appends a dynamic-subagent pattern
-    section so invoking the skill can showcase dynamic subagents.
+    skips the whole skill. Every skill also gets a dynamic-subagent section and a
+    code-sandbox section — invoking a quick action is how those two capabilities get
+    demoed, so they are appended whether or not the model filled the fields in.
     """
     title = name.replace("-", " ").title()
     desc = description.replace("\\", "\\\\").replace('"', '\\"')
-    body = f"{instructions}{_workflow_clause(workflow)}"
+    body = f"{instructions}{_workflow_clause(workflow)}{_sandbox_clause(sandbox_step)}"
     return f'---\nname: {name}\ndescription: "{desc}"\n---\n\n# {title}\n\n{body}\n'
 
 
@@ -659,7 +731,13 @@ def push_workflow_skills(workspace: str, slug: str, customer: str, skills) -> di
         if not name or not sk.get("instructions"):
             continue
         repo = f"{slug}-{name}-skill"
-        md = _skill_md(name, sk.get("description", ""), sk["instructions"], sk.get("workflow", ""))
+        md = _skill_md(
+            name,
+            sk.get("description", ""),
+            sk["instructions"],
+            sk.get("workflow", ""),
+            sk.get("sandbox_step", ""),
+        )
         try:
             _ws_client(workspace).push_skill(
                 repo,
@@ -696,7 +774,11 @@ def push_skills_bundle(workspace: str, slug: str, customer: str, skills) -> str:
             continue
         files[f"{name}/SKILL.md"] = FileEntry(
             content=_skill_md(
-                name, sk.get("description", ""), sk["instructions"], sk.get("workflow", "")
+                name,
+                sk.get("description", ""),
+                sk["instructions"],
+                sk.get("workflow", ""),
+                sk.get("sandbox_step", ""),
             )
         )
     if not files:

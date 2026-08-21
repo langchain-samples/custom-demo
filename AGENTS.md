@@ -102,6 +102,15 @@ skills-bundle repo** (live read/write). Two deepagents constraints force this sh
   (`<name>/SKILL.md`), not under `skills/`. Hence a dedicated per-assistant `*-skills` bundle repo
   (see `assistant_setup.push_skills_bundle`), not the agent repo.
 
+**Every generated skill uses both capabilities.** Setup's LLM call returns, per skill, a `workflow`
+(one of `WORKFLOW_PATTERNS` — the dynamic-subagent shapes) and a `sandbox_step` (which seeded file
+to open with `execute`, and what to compute); `_skill_md` appends a section for each. Both sections
+are emitted **unconditionally** — an unset/unknown `workflow` falls back to `_DEFAULT_WORKFLOW`
+rather than dropping the fan-out. This is deliberate: a quick action invokes a skill, so the skill
+body is where "this demo shows dynamic subagents and code execution" is actually enforced. Since
+`sandbox_step` names a file, the same call also proposes the `seed_files` planted in the VM, and the
+prompt tells it to keep the two consistent.
+
 **Skills are universal**: every assistant gets a `*-skills` bundle regardless of whether its prompt
 lives in Prompt Hub or Context Hub (that choice is only about prompt storage). `context.skills_repo`
 names the bundle; `context.agent_repo` (if set) only holds the prompt's AGENTS.md. For skills to
@@ -109,8 +118,9 @@ reach the model, `_hub_system_prompt` composes deepagents' middleware prompt (th
 catalogue + filesystem/execute instructions) whenever `skills_repo` or `agent_repo` is set.
 
 The VM is **assistant-scoped and cached** (`_SANDBOX_CACHE`), since the backend factory is resolved
-on every model/tool call; idle VMs self-reap via TTL, and a fresh VM is seeded with a synthetic
-24-month `sales.csv` at `/workspace/data/`. Degrades gracefully: no `[sandbox]` extra, no
+on every model/tool call; idle VMs self-reap via TTL, and a fresh VM is seeded from the
+assistant's own `context.sandbox_seed` spec at `/workspace/data/` (the synthetic 24-month
+`sales.csv` is only the fallback for an assistant with no spec). Degrades gracefully: no `[sandbox]` extra, no
 `LANGSMITH_API_KEY`, or `DA_SANDBOX=0` → StateBackend default (no `execute`), skills still mount.
 **Back-compat:** a pre-existing Context Hub assistant has `agent_repo` but no `skills_repo`; it
 keeps the whole-repo `ContextHubBackend` (skills under its `skills/`, no execute) until recreated.
@@ -372,11 +382,12 @@ Implementation notes, each of which is load-bearing:
   implemented — see the catalogue + "universal skills" above. `ask_user` gives HITL via a tool
   rather than `interrupt_on`.)
 - **Dynamic subagents** (`agent.py:_build`): behind `DA_DYNAMIC_SUBAGENTS` (build-time env, default
-  off), `create_deep_agent` gets `subagents=[researcher, analyst]` + `langchain-quickjs`'s
-  `CodeInterpreterMiddleware`, so the agent can write a JS workflow script that fans out via a
-  `task()` global. Pinned to `langchain-quickjs<0.3` to keep `deepagents<0.7`. Two code envs then
-  coexist — the JS interpreter (orchestration only) and the Python `execute` sandbox (data
-  analysis); `_subagents_note` tells the model which to use for what.
+  off locally, **`=1` in the deploy step** of `.github/workflows/ci.yml`), `create_deep_agent` gets
+  `subagents=[researcher, analyst]` + `langchain-quickjs`'s `CodeInterpreterMiddleware`, so the
+  agent can write a JS workflow script that fans out via a `task()` global. Pinned to
+  `langchain-quickjs<0.3` to keep `deepagents<0.7`. Two code envs then coexist — the JS interpreter
+  (orchestration only) and the Python `execute` sandbox (data analysis); `_subagents_note` tells the
+  model which to use for what.
 - **No governance machinery.** No CI, no CODEOWNERS, no naming convention enforcement, no
   documented deployment owner — all still open questions from the plan.
 

@@ -126,8 +126,8 @@ TOOL_REGISTRY: tuple[ToolSpec, ...] = (
             "Use `ask_user` to ask ONE short clarifying question when the request is ambiguous or "
             "needs information only the user has; wait for their answer before proceeding. Don't "
             "ask about things you can look up or reasonably assume. It is MULTIPLE CHOICE: always "
-            "pass 2-5 short, mutually exclusive `options` (plus an escape hatch like \"Something "
-            "else\" when they may not cover it) — the user can only pick one of them, so never "
+            'pass 2-5 short, mutually exclusive `options` (plus an escape hatch like "Something '
+            'else" when they may not cover it) — the user can only pick one of them, so never '
             "ask for a value they would have to type."
         ),
     ),

@@ -30,6 +30,7 @@ def _analysis(**over):
                 "example_question": "Can I return this?",
                 "action_label": "Shopper: Returns",
                 "workflow": "fan-out-and-synthesize",
+                "sandbox_step": "Load returns.csv and rate by SKU",
             }
         ],
         "data_gap": "customer satisfaction scores",
@@ -261,7 +262,7 @@ def test_demo_brief_has_no_em_dash():
     assert all("—" not in line for line in d["brief"] + d["flow"])
 
 
-# --- dynamic-subagent workflow pattern woven into skills ---
+# --- dynamic subagents + the code sandbox, woven into every skill ---
 
 
 def test_skill_md_appends_known_workflow_pattern():
@@ -273,15 +274,83 @@ def test_skill_md_appends_known_workflow_pattern():
     assert "Do the steps." in md  # original instructions preserved
 
 
-def test_skill_md_omits_workflow_when_empty_or_unknown():
-    assert "## Workflow" not in S._skill_md("s", "d", "body", "")
-    assert "## Workflow" not in S._skill_md("s", "d", "body", "not-a-pattern")
+def test_skill_md_falls_back_to_a_pattern_when_empty_or_unknown():
+    """A skill with no fan-out demos nothing, so an unset pattern gets the default."""
+    for workflow in ("", "not-a-pattern"):
+        md = S._skill_md("s", "d", "body", workflow)
+        assert f"## Workflow: {S._DEFAULT_WORKFLOW}" in md
+        assert "task()" in md
 
 
-def test_workflow_flows_from_analysis_into_pushed_skill(rec, monkeypatch):
+def test_skill_md_always_points_the_skill_at_the_sandbox():
+    md = S._skill_md("triage", "d", "body", "tournament", "Load claims.csv and rank denials")
+    assert "## Data: compute it in the sandbox" in md
+    assert "Load claims.csv and rank denials" in md  # the model's own concrete step
+    assert "/workspace/data" in md and "`execute`" in md
+
+
+def test_sandbox_section_survives_a_missing_step():
+    md = S._skill_md("triage", "d", "body", "tournament", "")
+    assert "## Data: compute it in the sandbox" in md
+    assert "/workspace/data" in md
+
+
+def test_workflow_and_sandbox_step_flow_from_analysis_into_pushed_skill(rec, monkeypatch):
     _prep(monkeypatch, _analysis())
-    names_workflows = {s["name"]: s.get("workflow") for s in rec["bundle"]}
-    assert names_workflows.get("returns-check") == "fan-out-and-synthesize"
+    pushed = {s["name"]: s for s in rec["bundle"]}
+    assert pushed["returns-check"]["workflow"] == "fan-out-and-synthesize"
+    assert pushed["returns-check"]["sandbox_step"] == "Load returns.csv and rate by SKU"
+
+
+# --- the VM's seed files reach the assistant ---
+
+
+def test_seed_files_survive_the_llm_call_into_the_context(rec, monkeypatch):
+    """The spec the model writes has to actually reach `Context.sandbox_seed`.
+
+    It is declared on the response schema and rendered by `render_seed_script`, but
+    between them it has to be copied out of the response — and when it isn't, every
+    assistant silently falls back to the generic sales CSV, including the ones whose
+    skills tell the agent to open a claims PDF.
+    """
+
+    class _FakeLLM:
+        def with_structured_output(self, _schema):
+            return self
+
+        def invoke(self, _messages):
+            return S.AssistantSetupResponse(
+                industry="Insurance",
+                actions=[],
+                data_gap="claim cycle time",
+                gap_action=S._QuickAction(label="A", question="Q?"),
+                seed_files=[
+                    S._SeedFile(
+                        name="claims.csv",
+                        kind="csv",
+                        description="Open claims",
+                        columns=["id", "amount"],
+                        rows=[["1", "200"]],
+                    )
+                ],
+            )
+
+    monkeypatch.setattr(S, "init_chat_model", lambda *a, **k: _FakeLLM())
+    analysis = S.analyze_customer("Acme Insurance")
+    assert [f["name"] for f in analysis["seed_files"]] == ["claims.csv"]
+
+    monkeypatch.setattr(S, "analyze_customer", lambda *a, **k: analysis)
+    ctx = S.prepare_assistant({"workspace": "ws1", "customer": "Acme Co"})["context"]
+    assert [f["name"] for f in ctx["sandbox_seed"]] == ["claims.csv"]
+
+
+def test_seed_files_are_capped(rec, monkeypatch):
+    """Model-written spec: capped here as well as at render time."""
+    many = [{"name": f"f{i}.csv", "kind": "csv", "description": "d"} for i in range(9)]
+    ctx = _prep(monkeypatch, _analysis(seed_files=many))["context"]
+    assert len(ctx["sandbox_seed"]) == 9  # prepare_assistant passes through...
+    # ...and analyze_customer is where the model's list gets trimmed.
+    assert S._MAX_SEED_FILES == 4
 
 
 # --- SKILL.md frontmatter survives a colon in the description (#13) ---
