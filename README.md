@@ -12,6 +12,8 @@ Setting up a new demo is a form, not a fork.
 The bundled corpus is humanitarian (three demo personas — donor, affected, technical/NGO),
 but the synthetic data mode below points the same agent at any industry.
 
+📹 **[Watch the walkthrough](https://www.loom.com/share/d5ce4bb5a2b5485baef75d0a1d84f825)** (Loom)
+
 ## Architecture
 
 ```
