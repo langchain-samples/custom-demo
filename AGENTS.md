@@ -136,8 +136,13 @@ reach the VM, and the browsable root is `DA_FILES_ROOT` (default `/workspace`). 
 Refresh is a remount, so there is no cache-invalidation code.
 
 **Goals (`/goal`) and rubric grading.** Typing `/goal <what done looks like>` in the composer is a
-CLIENT-SIDE command (ChatPanel `handleGoalCommand`) — never a message — that raises a pill above the
-composer and rides along with every subsequent turn as the run input's `rubric`. deepagents'
+CLIENT-SIDE command (`lib/commands.ts` parses it; ChatPanel `handleGoalCommand` acts on it) that
+raises a pill above the composer and rides along with every subsequent turn as the run input's
+`rubric`. Setting a goal ALSO runs it as that turn's question — "/goal build me a dashboard" means
+both "here is what done looks like" and "off you go". The parser accepts `/goal` mid-sentence
+("set a /goal to …"), which is how people type it; anchoring only at the start silently sent those
+through as ordinary questions. Typing `/` opens a command palette and a completed command shows as
+a token above the composer, so a mistyped one is visibly not a command before it is sent. deepagents'
 `RubricMiddleware` (built in `agent._rubric_middleware`, graded by `config.goal_model()`, capped by
 `goal_max_iterations()`) then grades each finished turn against it and jumps the agent back to the
 model with per-criterion feedback until the grader is satisfied. Three things make this work:

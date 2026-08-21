@@ -54,6 +54,7 @@ import {
   type ImageAttachment,
   type SandboxTarget,
 } from "@/lib/api";
+import { COMMANDS, parseGoalCommand, type GoalCommand } from "@/lib/commands";
 import {
   effectiveNamespace,
   isSubagentNamespace,
@@ -829,34 +830,45 @@ export default function ChatPanel({
   /**
    * `/goal …` — set, show, or clear the objective the agent is graded against.
    *
-   * Handled entirely client-side: the goal is not a question, it is state that
-   * rides along with the NEXT turn (as `rubric`), so sending it as a message would
-   * just make the agent answer it. Returns true when the input was a command.
+   * Returns the text to run as this turn, or null when the command consumed the
+   * input. SETTING a goal also runs it: "/goal build me a dashboard" means both
+   * "here is what done looks like" and "off you go" — parking the objective and
+   * waiting to be asked again is not what anyone types it expecting.
    */
-  const handleGoalCommand = (raw: string): boolean => {
-    const m = /^\/goal\b\s*(.*)$/is.exec(raw);
-    if (!m) return false;
-    const rest = m[1].trim();
+  const handleGoalCommand = (cmd: GoalCommand): string | null => {
     const current = goalRef.current;
-    if (!rest || /^(show|status)$/i.test(rest)) {
-      note(current ? `Current goal: ${current.text}` : "No goal set. Try `/goal <what done looks like>`.");
-      return true;
+    if (cmd.kind === "show") {
+      note(
+        current
+          ? `Current goal: ${current.text}`
+          : "No goal set. Try `/goal <what done looks like>`.",
+      );
+      return null;
     }
-    if (/^clear$/i.test(rest)) {
+    if (cmd.kind === "clear") {
       setGoal(null);
+      goalRef.current = null;
       note(current ? "Goal cleared." : "No goal to clear.");
-      return true;
+      return null;
     }
-    setGoal({ text: rest, status: "active" });
-    note(`Goal set: ${rest}\n\nI'll check every answer against it until it's met, or you clear it.`);
-    return true;
+    const next: Goal = { text: cmd.text, status: "active" };
+    setGoal(next);
+    // The ref, not just the state: this turn reads it for the run's rubric before
+    // React has re-rendered, so the goal would otherwise miss its own first turn.
+    goalRef.current = next;
+    return cmd.text;
   };
 
   /** New question from the composer or a quick action. */
   const send = (raw: string) => {
-    const question = (raw || "").trim();
+    let question = (raw || "").trim();
     if (!question || busyRef.current) return;
-    if (handleGoalCommand(question)) return;
+    const cmd = parseGoalCommand(question);
+    if (cmd) {
+      const objective = handleGoalCommand(cmd);
+      if (!objective) return;
+      question = objective;
+    }
     // App-owned guard: a returned string blocks the send (and App opens settings).
     const blocked = guard?.(question);
     if (blocked) {
@@ -936,6 +948,21 @@ export default function ChatPanel({
     </>
   );
 
+  // Slash-command affordances, derived from what is currently typed:
+  //   suggestions — the palette, while the first word is still an unfinished command
+  //   active      — the command is complete, so it shows as a token on the composer
+  const firstWord = input.split(/\s/)[0];
+  const active = input.startsWith("/")
+    ? COMMANDS.find((c) => new RegExp(`^${c.name}\\b`, "i").test(input))
+    : undefined;
+  const suggestions =
+    input.startsWith("/") && !active
+      ? COMMANDS.filter((c) => c.name.startsWith(firstWord.toLowerCase()))
+      : [];
+
+  /** Complete the composer to a command, ready for its argument. */
+  const completeCommand = (name: string) => setInput(name + " ");
+
   const composer = (variant: "hero" | "bottom") => (
     <div
       className={
@@ -955,6 +982,32 @@ export default function ChatPanel({
         void dropFiles(e.dataTransfer?.files ?? null);
       }}
     >
+      {/* Typing "/" offers the commands; once one is complete it becomes a token, so
+          a mistyped command is visibly NOT one before it is sent as a question. */}
+      {suggestions.length > 0 && (
+        <div className="mb-1.5 flex flex-col overflow-hidden rounded-lg border border-border bg-panel-2">
+          {suggestions.map((c) => (
+            <button
+              key={c.name}
+              type="button"
+              className="flex items-baseline gap-2 px-2.5 py-1.5 text-left text-[12px] hover:bg-brand/10"
+              onClick={() => completeCommand(c.name)}
+            >
+              <span className="font-mono font-semibold text-brand">{c.name}</span>
+              <span className="text-[11px] text-muted-foreground">{c.hint}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {active && (
+        <div className="mb-1.5">
+          <span className="inline-flex items-center gap-1 rounded-md border border-brand/50 bg-brand/10 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-brand">
+            <IconTarget size={12} />
+            {active.name}
+          </span>
+          <span className="ml-1.5 text-[11px] text-muted-foreground">{active.hint}</span>
+        </div>
+      )}
       {goal && <GoalPill goal={goal} onClear={() => setGoal(null)} />}
       {/* What is riding with the next turn: images the model will see, documents now
           sitting in its VM. Above the box because they are content, not controls. */}
@@ -1005,6 +1058,14 @@ export default function ChatPanel({
         minRows={variant === "hero" ? 2 : 1}
         aria-label="Prompt"
         leadingAction={attachButton}
+        onKeyDown={(e) => {
+          // PromptInput calls this BEFORE its own Enter-to-send and honours
+          // defaultPrevented, so completing here beats sending a half-typed command.
+          if (suggestions.length === 1 && (e.key === "Tab" || e.key === "Enter")) {
+            e.preventDefault();
+            completeCommand(suggestions[0].name);
+          }
+        }}
         className={dropping ? "border-[var(--brand-primary)]" : undefined}
         // Paste is how a screenshot actually arrives; the button is the fallback.
         onPaste={(e) => {
