@@ -281,8 +281,15 @@ deployed SPA path does not use it — it's for local/in-process use and the stre
 3. `build_system_prompt(customer, industry, hallucinate)` — a **deterministic template**, not
    LLM-written. Appends *either* `_GROUNDING_CLAUSE` *or* `HALLUCINATION_CLAUSE`, never both
    (stacking them makes the model obey the safety half and the demo bug won't fire).
-4. Optionally pushes the prompt to that workspace's Prompt Hub and references it by `prompt_name`.
+4. Pushes the prompt where `prompt_source` says: **Context Hub by default** (an agent repo's
+   AGENTS.md, referenced by `agent_repo`), or Prompt Hub (`prompt_name`) when asked for.
 5. Returns `{metadata, context, prompt_urls}` for the SPA to `POST /assistants`.
+
+**Demo traffic is opt-in** (`demo_traffic` in the setup payload, a switch in the create modal,
+default OFF). The backfill is thousands of backdated runs plus Insights, Engine and a review queue
+in the CUSTOMER's own project — LangSmith prices them like real runs, so an unbriefed customer
+finds traffic they never ran and a cost estimate in the hundreds. `POST /demo-traffic` still
+generates it later from Settings, so off by default defers it rather than losing it.
 
 With `hallucination: true` it also sets `dataset: "synthetic"` and reorders quick actions to
 **two grounded probes then the gap probe last** — so the demo shows two good answers, then a

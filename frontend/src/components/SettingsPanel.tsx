@@ -52,7 +52,7 @@ import {
 import { getAssistantId, isAssistantId, setAssistantId } from "@/lib/config";
 import { WorkspaceSelect } from "./settings/WorkspaceSelect";
 import { AssistantSelect } from "./settings/AssistantSelect";
-import { NewAssistantForm, type NewAssistantValues } from "./settings/NewAssistantForm";
+import { NewAssistantDialog, type NewAssistantValues } from "./settings/NewAssistantDialog";
 import { DemoBriefDialog, type DemoBrief } from "./settings/DemoBriefDialog";
 import { OnboardingDialog } from "./settings/OnboardingDialog";
 import { VisualSection } from "./settings/VisualSection";
@@ -579,8 +579,11 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           website: v.website,
           use_case: v.useCase,
           failure_mode: v.failureMode,
-          prompt_source: v.promptSource === "context_hub" ? "context_hub" : "prompt_hub",
+          prompt_source: v.promptSource === "prompt_hub" ? "prompt_hub" : "context_hub",
           push_prompts: true,
+          // Off unless the presenter asked for it: it fills the customer's project
+          // with runs they never made, priced like they did.
+          demo_traffic: v.demoTraffic,
         });
         // Hoisted so the baseline experiment below runs against the SAME context
         // the assistant was created with.
@@ -650,14 +653,24 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
 
     // First-run onboarding: capture the DE's name + workspace, create their first
     // demo, then dismiss. Reuses runCreate; website is left blank (LLM guesses)
-    // and the failure mode defaults to the hallucination demo.
+    // and the failure mode defaults to the hallucination demo. Demo traffic is off
+    // here as it is in the create form — this is someone's first minute in the app,
+    // which is the worst moment to silently fill a project with priced runs.
     const handleOnboardingCreate = useCallback(
       async (name: string, workspace: string, customer: string, useCase: string) => {
         handleWorkspace(workspace); // persist + load that workspace's prompts
         setCreating(true);
         try {
           await runCreate(
-            { owner: name, customer, website: "", useCase, failureMode: "hallucination", promptSource: "prompt_hub" },
+            {
+              owner: name,
+              customer,
+              website: "",
+              useCase,
+              failureMode: "hallucination",
+              promptSource: "context_hub",
+              demoTraffic: false,
+            },
             workspace,
           );
           setShowOnboarding(false);
@@ -728,6 +741,16 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
         onCreate={handleOnboardingCreate}
       />
       <DemoBriefDialog brief={demoBrief} onClose={() => setDemoBrief(null)} />
+      {/* Outside the Sheet on purpose: a modal here covers the settings panel and the
+          page, so the only editable thing on screen is the customer being created. */}
+      {showNewForm && (
+        <NewAssistantDialog
+          initialOwner={readLS(LAST_OWNER_LS_KEY)}
+          creating={creating}
+          onCreate={handleCreate}
+          onCancel={() => setShowNewForm(false)}
+        />
+      )}
       <Sheet open={open} onOpenChange={onOpenChange}>
         <SheetContent
           style={{ width: panelWidth, maxWidth: panelWidth }}
@@ -760,14 +783,6 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
               onChange={handleSelectAssistant}
               onNewClick={() => setShowNewForm((s) => !s)}
             />
-            {showNewForm && (
-              <NewAssistantForm
-                initialOwner={readLS(LAST_OWNER_LS_KEY)}
-                creating={creating}
-                onCreate={handleCreate}
-                onCancel={() => setShowNewForm(false)}
-              />
-            )}
 
             {/* 3–5. Config block — hidden until a real assistant is selected */}
             {hasAssistant && (

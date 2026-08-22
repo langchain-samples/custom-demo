@@ -243,8 +243,14 @@ export interface SetupInput {
   /** Legacy boolean; maps to failure_mode="hallucination" on the backend. */
   hallucination?: boolean;
   push_prompts?: boolean;
-  /** Where the prompt is stored: "prompt_hub" (default) or "context_hub" (AGENTS.md). */
+  /** Where the prompt is stored: "context_hub" (AGENTS.md, the default) or "prompt_hub". */
   prompt_source?: "prompt_hub" | "context_hub";
+  /**
+   * Backfill the new assistant's trace project with a day of synthetic traffic.
+   * OPT-IN: it is thousands of runs the customer never made, carrying a LangSmith
+   * cost estimate in the hundreds. Settings can generate it later instead.
+   */
+  demo_traffic?: boolean;
   /** Capabilities the new assistant starts with; editable afterwards. */
   enabled_tools?: string[];
 }

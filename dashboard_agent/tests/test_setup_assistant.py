@@ -88,7 +88,7 @@ def _prep(monkeypatch, analysis, **payload_over):
 
 
 def test_prompt_hub_sets_prompt_name_not_agent_repo(rec, monkeypatch):
-    ctx = _prep(monkeypatch, _analysis())["context"]
+    ctx = _prep(monkeypatch, _analysis(), prompt_source="prompt_hub")["context"]
     assert ctx.get("prompt_name") == "acme-co-system"
     assert "agent_repo" not in ctx
     # Skills are universal — even a Prompt Hub assistant gets a skills bundle mounted.
@@ -97,6 +97,13 @@ def test_prompt_hub_sets_prompt_name_not_agent_repo(rec, monkeypatch):
     assert rec["agent_prompt"] is None
     # ...and its prompt carries the skills clause (so the mounted skills get used).
     assert "SKILLS (IMPORTANT)" in rec["prompt"]["text"]
+
+
+def test_context_hub_is_the_default_prompt_store(rec, monkeypatch):
+    """No `prompt_source` in the payload means Context Hub, not Prompt Hub."""
+    ctx = _prep(monkeypatch, _analysis())["context"]
+    assert ctx.get("agent_repo") == "acme-co-agent"
+    assert "prompt_name" not in ctx
 
 
 def test_context_hub_sets_agent_repo_and_points_at_skill(rec, monkeypatch):
@@ -384,6 +391,17 @@ def traffic(monkeypatch):
     return started
 
 
+def test_backfill_is_opt_in(rec, monkeypatch, traffic):
+    """No `demo_traffic` in the payload means an empty project.
+
+    It is thousands of runs in the CUSTOMER's project, priced by LangSmith as if they
+    were real, which is a bad thing to find unannounced. The Settings panel can still
+    generate it later, so off by default defers it rather than losing it.
+    """
+    _prep(monkeypatch, _analysis(), failure_mode="hallucination")
+    assert traffic == []
+
+
 def test_setup_starts_the_backfill_in_the_assistants_own_trace_project(rec, monkeypatch, traffic):
     """Traffic goes through start_demo_traffic, so the panel and Generate can see it.
 
@@ -391,7 +409,7 @@ def test_setup_starts_the_backfill_in_the_assistants_own_trace_project(rec, monk
     showed the pre-backfill empty state while it ran, and Generate would start a second
     one on top of it.
     """
-    out = _prep(monkeypatch, _analysis(), failure_mode="hallucination")
+    out = _prep(monkeypatch, _analysis(), failure_mode="hallucination", demo_traffic=True)
     assert len(traffic) == 1
     workspace, project, kwargs = traffic[0]
     assert workspace == "ws1"
@@ -404,6 +422,7 @@ def test_setup_starts_the_backfill_in_the_assistants_own_trace_project(rec, monk
 
 def test_no_push_means_no_backfill(rec, monkeypatch, traffic):
     # push_prompts=False is the dry-run setup: no prompt, no dataset, and no traffic
-    # (a project nothing was pushed to is not the one the demo will use).
-    _prep(monkeypatch, _analysis(), push_prompts=False)
+    # (a project nothing was pushed to is not the one the demo will use) — even when
+    # the traffic was asked for.
+    _prep(monkeypatch, _analysis(), push_prompts=False, demo_traffic=True)
     assert traffic == []

@@ -922,10 +922,10 @@ def prepare_assistant(payload: dict) -> dict:
     if analysis.get("seed_files"):
         context["sandbox_seed"] = analysis["seed_files"]
     prompt_urls: dict = {}
-    # Where the PROMPT is stored: Prompt Hub (default) or the Context Hub (as an
-    # agent repo's AGENTS.md). Legacy inline is used only when not pushing. Skills
-    # are independent of this choice (see below).
-    prompt_source = str(payload.get("prompt_source") or "prompt_hub")
+    # Where the PROMPT is stored: the Context Hub (an agent repo's AGENTS.md) by
+    # DEFAULT, or Prompt Hub when the caller asks for it. Legacy inline is used only
+    # when not pushing. Skills are independent of this choice (see below).
+    prompt_source = str(payload.get("prompt_source") or "context_hub")
 
     # Skills are UNIVERSAL — every assistant gets them (the CH/PH choice only picks
     # where the prompt is stored). Assemble the LLM's per-customer workflow skills,
@@ -1088,11 +1088,19 @@ def prepare_assistant(payload: dict) -> dict:
     # Deterministic, so the manifest below can name the review queue the backfill will
     # create minutes from now (function-local import: demo_traffic imports THIS module,
     # so a module-level import here would be a cycle).
+    #
+    # OPT-IN (`demo_traffic` in the payload, default off). It is thousands of runs
+    # in the customer's own project, carrying a LangSmith cost estimate in the
+    # hundreds — a customer who was not told lands on a project full of traffic they
+    # never ran and a "$240" they think they owe. The Settings panel can still
+    # generate it later (`POST /demo-traffic`), so defaulting off defers it rather
+    # than losing it.
     from .demo_traffic import annotation_queue_name
 
     traffic_project = context.get("ls_project") or customer
     queue_name = annotation_queue_name(traffic_project)
-    if push:
+    want_traffic = bool(payload.get("demo_traffic"))
+    if push and want_traffic:
         from .demo_traffic import start_demo_traffic
 
         start_demo_traffic(
