@@ -203,12 +203,11 @@ export function NewAssistantDialog({
               <Hint>
                 Ingests roughly a day of <strong>synthetic</strong> traffic (a
                 few thousand backdated runs) into this customer's LangSmith
-                project, so Monitoring and Insights have something to show from
-                the first minute, and queues 10 traces for human review. Nothing
-                here was really run and the cost LangSmith estimates for it
-                (often a few hundred dollars) is not a real charge, so leave
-                this off unless you plan to say so. You can generate it later
-                from Settings.
+                project. This way, Monitoring, Insights and Engine have
+                something to show. Also it queues 10 traces in the AQ. These
+                traces weren't actually run so the cost LangSmith estimates for
+                it (often a few hundred dollars) is not a real charge. You can
+                also generate it later from Settings.
               </Hint>
             </span>
           </label>
