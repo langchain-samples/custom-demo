@@ -753,42 +753,65 @@ def test_ensure_eval_dataset_skips_langsmith_when_there_is_nothing_to_grade(monk
 # payload builders are pure, and the two that talk to LangSmith are driven through fakes.
 
 
-class _FakeRulesClient(_FakeClient):
-    """_FakeClient plus the Prompt Hub push the attached judge needs."""
+# A workspace model the judge can be bound to: a playground setting, whose `settings` is a
+# serialized chat model with its key left as a secret reference.
+_MODEL_SETTING = {
+    "id": "model-1",
+    "name": "gpt-5.4-mini-custom-0",
+    "available_in_evaluators": True,
+    "settings": {
+        "lc": 1,
+        "type": "constructor",
+        "id": ["langchain", "chat_models", "openai", "ChatOpenAI"],
+        "kwargs": {
+            "model": "gpt-5.4-mini",
+            "openai_api_key": {"lc": 1, "type": "secret", "id": ["OPENAI_API_KEY"]},
+        },
+    },
+}
 
-    def __init__(self, existing: dict[str, list] | None = None):
+
+class _FakeRulesClient(_FakeClient):
+    """_FakeClient plus the Prompt Hub and workspace reads the attached judge needs."""
+
+    def __init__(
+        self,
+        existing: dict[str, list] | None = None,
+        *,
+        settings: list[dict] | None = None,
+        secrets: list[str] | None = None,
+        commits: dict[str, dict] | None = None,
+    ):
         super().__init__(existing)
-        self.pushed: list[str] = []
+        self.pushed: list[tuple[str, Any]] = []
+        self.settings = [_MODEL_SETTING] if settings is None else settings
+        self.secrets = ["OPENAI_API_KEY"] if secrets is None else secrets
+        self.commits: dict[str, dict] = dict(commits or {})
 
     def push_prompt(self, name: str, object: Any = None, **_) -> str:  # noqa: A002
-        self.pushed.append(name)
+        self.pushed.append((name, object))
+        self.commits[name] = object if isinstance(object, dict) else {}
         return f"http://hub/{name}"
+
+    def pull_prompt_commit(self, name: str, include_model: bool = False, **_):
+        if name not in self.commits:
+            raise KeyError(name)
+        return SimpleNamespace(manifest=self.commits[name])
+
+    def request_with_retries(self, _method: str, path: str, **_):
+        body = (
+            [{"key": k} for k in self.secrets] if path.endswith("secrets") else list(self.settings)
+        )
+        return SimpleNamespace(json=lambda: body)
 
     # Declared so tests can swap in their own; the real client's `evaluate` is what
     # run_experiment calls, and assigning it onto an instance is otherwise untyped.
     evaluate: Any = None
 
 
-class _FakeJudgeModel:
-    """Stand-in for the judge model, so the push needs no API key.
-
-    `StructuredPrompt | model` refuses anything that is not a language model, but it
-    duck-types the check: `pipe` only needs `with_structured_output`, which is also the
-    call that binds our output schema (and therefore the feedback key) to the model.
-    """
-
-    def __init__(self):
-        self.schemas: list[dict] = []
-
-    def with_structured_output(self, schema, **_kw):
-        from langchain_core.runnables import RunnableLambda
-
-        self.schemas.append(schema)
-        return RunnableLambda(lambda x: x)
-
-
-def _fake_model(*_a, **_k):
-    return _FakeJudgeModel()
+def _bare_prompt_commit() -> dict:
+    """A judge commit from before the model was bound: a prompt, and nothing to run it."""
+    return AE.judge_prompt_manifest(CUSTOMER)
 
 
 def _post_ok(rule_id: str, sink: dict):
@@ -870,19 +893,18 @@ def test_ensure_dataset_evaluator_creates_the_evaluator_then_attaches_it(monkeyp
     fake = _FakeRulesClient({_name(): []})
     sink: dict = {}
     monkeypatch.setattr(AE, "_ws_client", lambda *a, **k: fake)
-    monkeypatch.setattr(AE, "playground_model_id", lambda *_a, **_k: "model-1")
     monkeypatch.setattr(AE, "dataset_rules", lambda *_a, **_k: [])
     monkeypatch.setattr(AE.httpx, "post", _attach_posts(sink))
 
     out = AE.ensure_dataset_evaluator("ws-1", _name(), CUSTOMER)
 
     assert out == {"rule_id": "rule-9", "evaluator_id": "ev-9", "error": ""}
-    assert fake.pushed == [AE.judge_prompt_name(_name())]
+    assert [name for name, _ in fake.pushed] == [AE.judge_prompt_name(_name())]
     evaluator, rule = sink["calls"]
     # 1. the workspace evaluator — the row on LangSmith's Evaluators page, which the
     #    old inline-payload version never created at all.
     assert evaluator["url"].endswith("/api/v1/platform/evaluators")
-    assert evaluator["json"]["llm_evaluator"]["prompt_repo_handle"] == fake.pushed[0]
+    assert evaluator["json"]["llm_evaluator"]["prompt_repo_handle"] == fake.pushed[0][0]
     assert evaluator["json"]["llm_evaluator"]["playground_settings_id"] == "model-1"
     assert evaluator["json"]["type"] == "llm"
     # 2. the attachment, pointing at that evaluator.
@@ -893,40 +915,105 @@ def test_ensure_dataset_evaluator_creates_the_evaluator_then_attaches_it(monkeyp
     assert all(c["headers"]["X-Tenant-Id"] == "ws-1" for c in sink["calls"])
 
 
-def test_the_pushed_judge_prompt_carries_no_model(monkeypatch):
-    # The evaluator supplies the model, so binding one into the prompt is what produced
-    # the 0-step chain the server rejected. Nothing here may call init_chat_model.
+def test_the_pushed_judge_prompt_carries_the_model(monkeypatch):
+    """`prompt | model`, or the judge errors on every row it is asked to score.
+
+    The chain the server runs is this commit pulled with `include_model=True`. A commit
+    holding the prompt alone has nothing to invoke, and grading answers
+    `RunnableSequence must have at least 2 steps, got 0` — which is what shipped for the
+    life of the feature, because `playground_settings_id` was assumed to supply the model.
+    """
     fake = _FakeRulesClient({_name(): []})
     monkeypatch.setattr(AE, "_ws_client", lambda *a, **k: fake)
-    monkeypatch.setattr(AE, "playground_model_id", lambda *_a, **_k: "model-1")
     monkeypatch.setattr(AE, "dataset_rules", lambda *_a, **_k: [])
     monkeypatch.setattr(AE.httpx, "post", _attach_posts({}))
-    monkeypatch.setattr(
-        AE, "init_chat_model", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("no model"))
-    )
 
     assert AE.ensure_dataset_evaluator("ws-1", _name(), CUSTOMER)["rule_id"] == "rule-9"
 
+    _, manifest = fake.pushed[0]
+    assert manifest["id"][-1] == "RunnableSequence"
+    assert manifest["kwargs"]["first"]["id"][-1] == "StructuredPrompt"
+    assert manifest["kwargs"]["last"] == _MODEL_SETTING["settings"]
+    # The feedback key rides on the prompt's schema, so it survives the wrapping.
+    assert AE.EVAL_FEEDBACK_KEY in str(manifest["kwargs"]["first"])
 
-def test_ensure_dataset_evaluator_says_so_when_no_model_can_score(monkeypatch):
-    # Creation succeeds without a model; scoring does not. Attaching an evaluator that
-    # silently produces no feedback is worth a word.
-    monkeypatch.setattr(AE, "_ws_client", lambda *a, **k: _FakeRulesClient({_name(): []}))
-    monkeypatch.setattr(AE, "playground_model_id", lambda *_a, **_k: "")
+
+def test_a_model_whose_secret_this_workspace_lacks_is_never_bound():
+    """Secret references are resolved as WORKSPACE secrets when the model is inlined.
+
+    Verified against the live API: binding the LLM-gateway setting, whose reference is the
+    platform's `LC_GATEWAY_KEY`, builds a valid chain and then grades every row
+    `Missing credentials`. A model this workspace cannot authenticate is not a candidate.
+    """
+    gateway = {
+        "id": "gw-1",
+        "name": "gateway-5o-nano",
+        "available_in_evaluators": True,
+        "settings": {
+            "lc": 1,
+            "type": "constructor",
+            "id": ["langchain", "chat_models", "openai", "ChatOpenAI"],
+            "kwargs": {"openai_api_key": {"lc": 1, "type": "secret", "id": ["LC_GATEWAY_KEY"]}},
+        },
+    }
+    fake = _FakeRulesClient(settings=[gateway, _MODEL_SETTING], secrets=["OPENAI_API_KEY"])
+    assert AE.judge_model_manifest(fake) == ("model-1", _MODEL_SETTING["settings"])
+
+    only_gateway = _FakeRulesClient(settings=[gateway], secrets=["OPENAI_API_KEY"])
+    assert AE.judge_model_manifest(only_gateway) == ("", {})
+
+
+def test_a_model_the_evaluators_cannot_use_is_never_bound():
+    off = {**_MODEL_SETTING, "id": "off-1", "available_in_evaluators": False}
+    assert AE.judge_model_manifest(_FakeRulesClient(settings=[off])) == ("", {})
+
+
+def test_the_cheapest_usable_model_wins():
+    """Every row of every re-run pays for the judge, and none of these criteria need more."""
+    big = {**_MODEL_SETTING, "id": "big-1", "name": "claude-opus-5-custom-0"}
+    wrapper = {
+        **_MODEL_SETTING,
+        "id": "wrap-1",
+        "name": "gpt-5.4-nano-custom-0",
+        "settings": {
+            **_MODEL_SETTING["settings"],
+            "id": ["langsmith", "playground", "CustomModelEndpoint"],
+        },
+    }
+    fake = _FakeRulesClient(settings=[big, wrapper, _MODEL_SETTING])
+    # The mini chat model, not the opus one — and not the playground wrapper, whose class
+    # the evaluator runner is not known to load, however cheap its name reads.
+    assert AE.judge_model_manifest(fake)[0] == "model-1"
+
+
+def test_ensure_dataset_evaluator_attaches_nothing_when_no_model_can_score(monkeypatch):
+    """No usable model means no evaluator at all, on purpose.
+
+    An attached judge that cannot run is worse than none: it errors on every row AND
+    suppresses the in-process fallback, since `run_experiment` grades in-process only when
+    the dataset has no rule. A working number beats an empty Evaluators page.
+    """
+    fake = _FakeRulesClient({_name(): []}, settings=[])
+    monkeypatch.setattr(AE, "_ws_client", lambda *a, **k: fake)
     monkeypatch.setattr(AE, "dataset_rules", lambda *_a, **_k: [])
-    sink: dict = {}
-    monkeypatch.setattr(AE.httpx, "post", _attach_posts(sink))
+
+    def _no_post(*_a, **_k):
+        raise AssertionError("nothing may be attached without a model to run it")
+
+    monkeypatch.setattr(AE.httpx, "post", _no_post)
 
     out = AE.ensure_dataset_evaluator("ws-1", _name(), CUSTOMER)
 
-    assert out["rule_id"] == "rule-9"
+    assert out["rule_id"] == "" and out["evaluator_id"] == ""
     assert "no model in this workspace" in out["error"]
-    assert "playground_settings_id" not in sink["calls"][0]["json"]["llm_evaluator"]
+    assert fake.pushed == []
 
 
 def test_ensure_dataset_evaluator_reuses_an_existing_rule(monkeypatch):
     """Re-running setup for the same customer must not stack duplicate evaluators."""
-    fake = _FakeRulesClient({_name(): []})
+    repo = AE.judge_prompt_name(_name())
+    runnable = AE.judge_chain_manifest(_bare_prompt_commit(), _MODEL_SETTING["settings"])
+    fake = _FakeRulesClient({_name(): []}, commits={repo: runnable})
     monkeypatch.setattr(AE, "_ws_client", lambda *a, **k: fake)
     monkeypatch.setattr(
         AE,
@@ -944,7 +1031,62 @@ def test_ensure_dataset_evaluator_reuses_an_existing_rule(monkeypatch):
     assert out["rule_id"] == "rule-1"
     # Carried through so /cleanup still knows which evaluator to delete.
     assert out["evaluator_id"] == "ev-1"
+    # Already runnable, so nothing is re-pushed.
     assert fake.pushed == []
+
+
+def test_reusing_a_rule_repairs_a_judge_that_has_no_model(monkeypatch):
+    """The fix for every judge already out there, including the ones mid-demo.
+
+    The evaluator references its prompt by `latest`, so a new commit with a model bound
+    makes it score again — no new evaluator, no new rule, nothing for a presenter to redo.
+    """
+    repo = AE.judge_prompt_name(_name())
+    fake = _FakeRulesClient({_name(): []}, commits={repo: _bare_prompt_commit()})
+    monkeypatch.setattr(AE, "_ws_client", lambda *a, **k: fake)
+    monkeypatch.setattr(
+        AE,
+        "dataset_rules",
+        lambda *_a, **_k: [
+            {"id": "rule-1", "display_name": AE.EVAL_FEEDBACK_KEY, "evaluator_id": "ev-1"}
+        ],
+    )
+
+    out = AE.ensure_dataset_evaluator("ws-1", _name(), CUSTOMER)
+
+    assert out == {"rule_id": "rule-1", "evaluator_id": "ev-1", "error": ""}
+    name, manifest = fake.pushed[0]
+    assert name == repo
+    assert manifest["id"][-1] == "RunnableSequence"
+    # The SAME prompt, re-committed with a model — not a rewritten one.
+    assert manifest["kwargs"]["first"] == _bare_prompt_commit()
+
+
+def test_a_judge_that_cannot_be_repaired_says_so(monkeypatch):
+    repo = AE.judge_prompt_name(_name())
+    fake = _FakeRulesClient({_name(): []}, settings=[], commits={repo: _bare_prompt_commit()})
+    monkeypatch.setattr(AE, "_ws_client", lambda *a, **k: fake)
+    monkeypatch.setattr(
+        AE,
+        "dataset_rules",
+        lambda *_a, **_k: [
+            {"id": "rule-1", "display_name": AE.EVAL_FEEDBACK_KEY, "evaluator_id": "ev-1"}
+        ],
+    )
+
+    out = AE.ensure_dataset_evaluator("ws-1", _name(), CUSTOMER)
+
+    assert out["rule_id"] == "rule-1"
+    assert "graded in-process" in out["error"]
+    assert fake.pushed == []
+
+
+def test_ensure_judge_runnable_never_raises(monkeypatch):
+    """Cannot-tell and cannot-run are the same answer: grade in-process."""
+    monkeypatch.setattr(
+        AE, "_ws_client", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("503"))
+    )
+    assert AE.ensure_judge_runnable("ws-1", _name()) is False
 
 
 def test_ensure_dataset_evaluator_reports_a_langsmith_failure_without_raising(monkeypatch):
@@ -976,9 +1118,17 @@ def test_dataset_rules_reads_as_no_rules_when_langsmith_is_unreachable(monkeypat
     assert AE.dataset_rules("ws-1", "ds-1") == []
 
 
-def _run_experiment_with(monkeypatch, *, attached: bool):
+def _run_experiment_with(monkeypatch, *, attached: bool, runnable: bool = True):
     """Run `run_experiment` against fakes; return (evaluators passed, result)."""
-    fake = _FakeRulesClient({_name(): []})
+    repo = AE.judge_prompt_name(_name())
+    commit = (
+        AE.judge_chain_manifest(_bare_prompt_commit(), _MODEL_SETTING["settings"])
+        if runnable
+        else _bare_prompt_commit()
+    )
+    fake = _FakeRulesClient(
+        {_name(): []}, settings=[] if not runnable else None, commits={repo: commit}
+    )
     seen: dict = {}
 
     def _evaluate(target, data=None, evaluators=None, **_k):
@@ -1013,6 +1163,18 @@ def test_run_experiment_falls_back_to_the_in_process_judge(monkeypatch):
     failed, must keep grading exactly as they did before.
     """
     seen, out = _run_experiment_with(monkeypatch, attached=False)
+    assert seen["evaluators"] == [AE.demo_behavior]
+    assert out["graded_by"] == "in_process"
+
+
+def test_a_judge_that_cannot_score_does_not_count_as_the_grader(monkeypatch):
+    """Attached is not the same as working.
+
+    A judge whose prompt carries no model leaves `Evaluator failed to batch invoke` on
+    every row. Deferring to it anyway is how an experiment ends with no score at all, so
+    an unrepairable judge falls back to the in-process one and the badge still reads.
+    """
+    seen, out = _run_experiment_with(monkeypatch, attached=True, runnable=False)
     assert seen["evaluators"] == [AE.demo_behavior]
     assert out["graded_by"] == "in_process"
 

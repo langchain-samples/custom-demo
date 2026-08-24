@@ -55,7 +55,7 @@ from pydantic import BaseModel, Field
 
 # `assistant_setup` imports THIS module lazily (inside prepare_assistant), so the
 # dependency only runs one way at import time and there is no cycle.
-from .assistant_setup import _ws_client, playground_model_id, slugify
+from .assistant_setup import _ws_client, slugify
 from .config import judge_model, load_env, sampling_kwargs
 from .mocking import install_mocks, restore_mocks
 
@@ -300,18 +300,34 @@ def ensure_eval_dataset(
 #     400 Evaluator failed validation: Failed to validate chain:
 #         400: RunnableSequence must have at least 2 steps, got 0
 #
-# because a hub_ref resolves to the stored `StructuredPrompt` alone — `pull_prompt(repo)`
-# returns a StructuredPrompt with no steps, and only `include_model=True` yields the
-# 3-step chain. The model is bound ALONGSIDE the prompt, not inside it, so the server
-# has no chain to run. Verified against the live API, both shapes, before and after.
+# THE SAME 400 comes back at GRADING time — `Evaluator failed to batch invoke`, on every
+# row, with no score anywhere — whenever the judge prompt resolves to a bare
+# `StructuredPrompt`. What the server runs is that prompt commit pulled with
+# `include_model=True`, so THE MODEL HAS TO BE IN THE COMMIT: without one the pull yields a
+# prompt with no steps and there is nothing to invoke. Passing `playground_settings_id`
+# when the evaluator is created does NOT supply it — the field is accepted, is not echoed
+# back by `GET /platform/evaluators/{id}`, and leaves the chain empty. So the judge is
+# pushed as `StructuredPrompt | model`, which is also the shape LangSmith's own evaluator
+# UI writes. Verified against the live API: same prompt, model bound, rows score 0/1.
 #
 # Consequences worth knowing before editing:
-#   - The judge model is a playground model setting id (`playground_model_id`), passed as
-#     `playground_settings_id` when the evaluator is created. It runs on LANGSMITH's side,
-#     so a gateway-backed model needs no credentials in the customer's workspace at all —
-#     which is the point. Creation succeeds without one and then scores nothing.
-#   - The pushed prompt therefore needs NO bound model, which is why nothing here calls
-#     `init_chat_model` any more.
+#   - The bound model is a workspace PLAYGROUND SETTING's serialized model
+#     (`judge_model_manifest`) — whatever this customer's workspace already offers its
+#     evaluators, run on LANGSMITH's side, with no key from us.
+#   - A playground setting carries SECRET REFERENCES (`{"type": "secret", "id":
+#     ["OPENAI_API_KEY"]}`), and inlining one into a prompt commit only works if the
+#     workspace actually holds that secret. Verified: the LLM-gateway setting, whose ref is
+#     `LC_GATEWAY_KEY` (a platform credential, not a workspace secret), builds a valid chain
+#     and then grades every row `Missing credentials`. Hence the pick is restricted to
+#     settings whose refs all appear in `GET /workspaces/current/secrets` — which is also
+#     why this path still calls no `init_chat_model` and needs no customer key.
+#   - No usable model means NOTHING IS ATTACHED, deliberately. An attached judge that
+#     cannot run is worse than no judge: it leaves an error on every row AND suppresses the
+#     in-process fallback, since `run_experiment` grades in-process only when the dataset
+#     has no rule. A working number beats an empty Evaluators page.
+#   - `ensure_judge_runnable` repairs the ones already out there. The evaluator references
+#     its prompt by `latest`, so a fresh commit with a model bound fixes an existing broken
+#     judge with no change to the evaluator or the rule.
 #   - The feedback key is the schema's non-`comment` property name. That is why the
 #     property below is `grounded` and not `score`: it has to match EVAL_FEEDBACK_KEY,
 #     which is what `GET /evals/status` turns into the badge. The created evaluator
@@ -410,6 +426,146 @@ def judge_prompt_name(dataset: str) -> str:
     return f"eval-{slugify(dataset)[:80]}-judge"
 
 
+# Cheap first: the judge runs on every row of every re-run, and none of these criteria
+# need a frontier model. Substring hints rather than a model list, because workspace
+# settings are named by whoever created them ("gpt-5.4-nano-custom-0").
+_CHEAP_MODEL_HINTS = ("nano", "mini", "flash", "haiku", "lite", "small")
+
+
+def _secret_refs(model: dict) -> set[str]:
+    """The secret names a serialized model needs, e.g. `{"OPENAI_API_KEY"}`."""
+    out: set[str] = set()
+    for value in (model.get("kwargs") or {}).values():
+        if isinstance(value, dict) and value.get("type") == "secret":
+            out.update(str(i) for i in (value.get("id") or []))
+    return out
+
+
+def judge_model_manifest(client) -> tuple[str, dict]:
+    """(playground setting id, serialized model) to bind the judge to, or `("", {})`.
+
+    The candidates are the workspace's own playground settings — the records its model
+    pickers offer, each one a serialized chat model with its API key left as a secret
+    reference — filtered to `available_in_evaluators` and then to the ones whose secrets
+    this workspace actually holds. That second filter is the load-bearing one: the model is
+    inlined into the judge's prompt commit, so its secret is resolved as a WORKSPACE secret,
+    and a gateway-backed setting (`LC_GATEWAY_KEY`) grades every row `Missing credentials`.
+    See the block above.
+    """
+    have = {
+        str(s.get("key"))
+        for s in client.request_with_retries("GET", "/workspaces/current/secrets").json()
+        if isinstance(s, dict)
+    }
+    settings = client.request_with_retries("GET", "/playground-settings").json()
+    usable = [
+        s
+        for s in (settings if isinstance(settings, list) else [])
+        if isinstance(s, dict)
+        and s.get("id")
+        and s.get("available_in_evaluators")
+        and isinstance(s.get("settings"), dict)
+        and _secret_refs(s["settings"]) <= have
+    ]
+    if not usable:
+        return "", {}
+
+    def rank(s: dict) -> tuple:
+        cls = str(((s.get("settings") or {}).get("id") or [""])[-1])
+        name = str(s.get("name") or "").lower()
+        # `CustomModelEndpoint` is a playground wrapper rather than a chat model, so it
+        # sorts last: a real chat-model class is what the evaluator runner is known to load.
+        return (
+            cls == "CustomModelEndpoint",
+            not any(h in name for h in _CHEAP_MODEL_HINTS),
+            name,
+        )
+
+    pick = sorted(usable, key=rank)[0]
+    return str(pick["id"]), cast("dict", pick["settings"])
+
+
+def judge_prompt_manifest(customer: str) -> dict:
+    """The judge's `StructuredPrompt` (template + output schema), serialized."""
+    # Function-local imports keep langchain_core off the agent path's import cost.
+    from langchain_core.load import dumpd
+    from langchain_core.prompts.structured import StructuredPrompt
+
+    prompt = StructuredPrompt(
+        [("system", judge_prompt_text(customer))],
+        schema=judge_output_schema(),
+        template_format="mustache",
+    )
+    return cast("dict", dumpd(prompt))
+
+
+def judge_chain_manifest(prompt: dict, model: dict) -> dict:
+    """`prompt | model` as a Prompt Hub manifest. Pure.
+
+    Hand-built rather than piped: the model comes back from LangSmith already serialized,
+    with its key an unresolved secret reference, and loading that locally would need the
+    customer's provider key — the thing this path exists to avoid.
+    """
+    return {
+        "lc": 1,
+        "type": "constructor",
+        "id": ["langchain", "schema", "runnable", "RunnableSequence"],
+        "kwargs": {"name": EVAL_FEEDBACK_KEY, "first": prompt, "last": model},
+    }
+
+
+def _push_judge(client, repo: str, manifest: dict) -> None:
+    """Push a judge manifest to `repo`, treating an identical re-push as success.
+
+    A re-push of identical content is "nothing to commit" (409) — the prompt is already
+    there, which is all we need. Anything else is fatal to the caller, since the evaluator
+    would reference a prompt that does not exist.
+    """
+    try:
+        client.push_prompt(repo, object=manifest)
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc).lower()
+        if not ("nothing to commit" in msg or "409" in msg or "conflict" in msg):
+            raise
+
+
+def judge_has_model(client, repo: str) -> bool:
+    """Does `repo`'s latest commit resolve to a runnable chain (prompt AND model)?
+
+    The same resolution the evaluator does server-side, so a False here is exactly the
+    `RunnableSequence must have at least 2 steps, got 0` the judge would answer with.
+    """
+    manifest = client.pull_prompt_commit(repo, include_model=True).manifest
+    return str((manifest.get("id") or [""])[-1]) == "RunnableSequence"
+
+
+def ensure_judge_runnable(workspace: str | None, dataset: str) -> bool:
+    """Bind a model to `dataset`'s judge prompt if it has none. True when it can score.
+
+    The REPAIR path, for every judge attached before the model lived in the commit: those
+    grade nothing and leave `Evaluator failed to batch invoke` on every row. Re-pushing the
+    SAME prompt with a model bound is the whole fix — the evaluator references `latest`, so
+    it picks the new commit up with no change to the evaluator or the rule.
+
+    Never raises: a False answer sends `run_experiment` back to grading in-process, which is
+    a working badge rather than a red one.
+    """
+    try:
+        client = _ws_client(workspace)
+        repo = judge_prompt_name(dataset)
+        if judge_has_model(client, repo):
+            return True
+        _, model = judge_model_manifest(client)
+        if not model:
+            return False
+        prompt = client.pull_prompt_commit(repo).manifest
+        _push_judge(client, repo, judge_chain_manifest(prompt, model))
+        return True
+    except Exception:  # noqa: BLE001 - cannot-tell and cannot-run are the same answer
+        traceback.print_exc()
+        return False
+
+
 def _judge_rule_payload(dataset_id: str, evaluator_id: str, display_name: str) -> dict:
     """The `POST /runs/rules` body that attaches an evaluator to a dataset. Pure.
 
@@ -441,9 +597,10 @@ def _create_judge_evaluator(
     the SDK's `client.evaluators` namespace is async-only in this version, and this runs
     on the synchronous setup path.
 
-    `model_id` is a playground model setting (see `playground_model_id`). Creation
-    succeeds without one, but succeeding is not running: the judge needs a model at
-    grading time, so pass one whenever the workspace has an evaluator-capable model.
+    `model_id` is the playground setting the judge's prompt was bound to. It is sent
+    because the field is documented and it records the choice on the evaluator, but it is
+    NOT what makes the judge runnable: the server neither echoes it back nor uses it to
+    build the chain. The model in the prompt commit is what runs (see the block above).
     """
     url, headers = _rules_api(workspace)
     llm: dict = {
@@ -504,11 +661,12 @@ def dataset_rules(workspace: str | None, dataset_id: str) -> list[dict]:
 def ensure_dataset_evaluator(workspace: str, dataset: str, customer: str = "") -> dict:
     """Attach an LLM-as-judge evaluator to `dataset` in `workspace`.
 
-    Returns `{rule_id, evaluator_id, error}`. Three steps: push the judge as a Prompt Hub
-    StructuredPrompt, create the workspace evaluator that references it, then create the
-    run rule that attaches that evaluator to the dataset. Idempotent — an existing rule
-    with our display name is reused, so re-running setup for the same customer does not
-    stack duplicate evaluators on one dataset.
+    Returns `{rule_id, evaluator_id, error}`. Four steps: pick a model this workspace can
+    actually run, push the judge to Prompt Hub as `StructuredPrompt | model`, create the
+    workspace evaluator that references that prompt, then create the run rule that attaches
+    the evaluator to the dataset. Idempotent — an existing rule with our display name is
+    reused (and repaired if its judge has no model), so re-running setup for the same
+    customer does not stack duplicate evaluators on one dataset.
 
     BEST-EFFORT BY DESIGN, exactly like `ensure_eval_dataset`: nothing raises, and a
     blank `rule_id` means "this dataset has no attached evaluator", which `run_experiment`
@@ -530,34 +688,32 @@ def ensure_dataset_evaluator(workspace: str, dataset: str, customer: str = "") -
             if rule.get("display_name") == display_name and rule.get("id"):
                 out["rule_id"] = str(rule["id"])
                 out["evaluator_id"] = str(rule.get("evaluator_id") or "")
+                # Reuse, but not blind reuse: an evaluator attached before the model was
+                # bound in the commit is attached and broken, and re-running setup for the
+                # same customer is the natural moment to fix it.
+                if not ensure_judge_runnable(workspace, dataset):
+                    out["error"] = (
+                        "an evaluator is attached but its judge prompt has no model this "
+                        "workspace can run — experiments will be graded in-process"
+                    )
                 return out
 
-        # StructuredPrompt = template + output schema. No model bound: the evaluator
-        # carries the model, and a bare prompt is what the server wants to resolve.
-        # Function-local import keeps the module light for the agent path.
-        from langchain_core.prompts.structured import StructuredPrompt
+        # The judge model FIRST: without one there is nothing worth attaching (see the
+        # block above), and creating the evaluator anyway is what left `grounded` erroring
+        # on every row of every experiment.
+        model_id, model = judge_model_manifest(client)
+        if not model:
+            out["error"] = (
+                "no model in this workspace is available to evaluators, so no judge was "
+                "attached — experiments are graded in-process instead"
+            )
+            return out
 
-        prompt = StructuredPrompt(
-            [("system", judge_prompt_text(customer))],
-            schema=judge_output_schema(),
-            template_format="mustache",
-        )
+        # `StructuredPrompt | model`: the schema (and therefore the feedback key) rides on
+        # the prompt, the model makes it a chain the server can actually invoke.
         repo = judge_prompt_name(dataset)
-        try:
-            client.push_prompt(repo, object=prompt)
-        except Exception as exc:  # noqa: BLE001
-            # A re-push of identical content is "nothing to commit" (409) — the prompt
-            # is already there, which is all we need. Anything else is fatal to the
-            # attach, since the evaluator would reference a prompt that does not exist.
-            msg = str(exc).lower()
-            if not ("nothing to commit" in msg or "409" in msg or "conflict" in msg):
-                raise
+        _push_judge(client, repo, judge_chain_manifest(judge_prompt_manifest(customer), model))
 
-        model_id = ""
-        try:
-            model_id = playground_model_id(client, ("available_in_evaluators",))
-        except Exception:  # noqa: BLE001 - an unreadable model list is the same as none
-            pass
         out["evaluator_id"] = _create_judge_evaluator(workspace, repo, display_name, model_id)
         if not out["evaluator_id"]:
             out["error"] = "evaluator was created but returned no id"
@@ -572,13 +728,6 @@ def ensure_dataset_evaluator(workspace: str, dataset: str, customer: str = "") -
         )
         res.raise_for_status()
         out["rule_id"] = str((res.json() or {}).get("id") or "")
-        if not model_id:
-            # Attached, but nothing will score: worth saying so, since the panel would
-            # otherwise show an evaluator that silently produces no feedback.
-            out["error"] = (
-                "evaluator attached, but no model in this workspace is available to "
-                "evaluators — pick one on the evaluator to make it score"
-            )
         return out
     except Exception as exc:  # noqa: BLE001 - see the best-effort contract above
         # Printed as well as returned: this runs on the setup path, where the return
@@ -932,7 +1081,12 @@ def run_experiment(
     asynchronously after the rows finish — there is nothing to tally yet at this point.
     """
     client = _ws_client(workspace)
-    attached = bool(dataset_rules(workspace, str(client.read_dataset(dataset_name=dataset).id)))
+    # Attached AND runnable. A judge whose prompt carries no model scores nothing and
+    # errors every row, so treating it as the grader would leave the panel with no number
+    # at all; `ensure_judge_runnable` repairs what it can and says so when it cannot.
+    attached = bool(
+        dataset_rules(workspace, str(client.read_dataset(dataset_name=dataset).id))
+    ) and ensure_judge_runnable(workspace, dataset)
     results = client.evaluate(
         _agent_target(context),
         data=dataset,
