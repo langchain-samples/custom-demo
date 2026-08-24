@@ -834,6 +834,20 @@ def test_judge_output_schema_property_is_the_feedback_key():
     assert schema["properties"][AE.EVAL_FEEDBACK_KEY]["type"] == "boolean"
 
 
+def test_the_judge_prompt_is_never_system_only():
+    """A system-only chain is rejected outright by some models the judge may run on.
+
+    The judge model is whatever the customer's workspace offers its evaluators, and a
+    Gemini-backed one answers `ValueError('contents are required.')` on every row —
+    verified live. The row therefore goes in a human turn.
+    """
+    roles = [role for role, _text in AE.judge_prompt_messages(CUSTOMER)]
+    assert roles == ["system", "human"]
+    _system, human = (text for _role, text in AE.judge_prompt_messages(CUSTOMER))
+    # The row — what is actually being graded — is the human turn.
+    assert "{{answer}}" in human and "{{kind}}" in human
+
+
 def test_judge_prompt_carries_both_criteria_and_every_mapped_variable():
     """One prompt grades both kinds, using the SAME criteria as the in-process judge.
 

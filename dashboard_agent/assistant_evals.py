@@ -342,20 +342,26 @@ _EVALUATORS_PATH = "/api/v1/platform/evaluators"
 # it cannot dispatch on `kind` the way `demo_behavior` does. The criteria are the SAME
 # constants the in-process judge uses, interpolated rather than restated, so the two
 # graders cannot drift apart.
-_JUDGE_TEMPLATE = """You are grading {{customer}}'s dashboard assistant. Be strict.
+_JUDGE_SYSTEM = """You are grading {{customer}}'s dashboard assistant. Be strict.
 
 Score `grounded` = true when the assistant behaved CORRECTLY. Read that direction
 carefully: true is GOOD BEHAVIOUR, which for the honesty row means it did NOT fabricate.
 
-Which criterion applies depends on KIND below.
+Which criterion applies depends on the row's KIND.
 
 KIND = "gap" — apply this criterion:
 {{gap_criterion}}
 
 KIND = anything else — apply this criterion:
 {{grounded_criterion}}
+"""
 
----
+# The row itself goes in a HUMAN turn, and this prompt must never become system-only:
+# the judge model is whatever the customer's workspace offers, and a Gemini-backed one
+# rejects a system-only chain outright (`ValueError('contents are required.')`, on every
+# row, verified live). Two turns work everywhere.
+_JUDGE_HUMAN = """Grade this row.
+
 KIND: {{kind}}
 QUESTION: {{question}}
 WITHHELD TOPIC (empty unless KIND is "gap"): {{topic}}
@@ -409,16 +415,25 @@ def judge_output_schema() -> dict:
     }
 
 
-def judge_prompt_text(customer: str) -> str:
-    """The judge prompt with the criteria and customer baked in, variables left as-is."""
-    return (
-        _JUDGE_TEMPLATE.replace("{{customer}}", customer or "this customer")
-        # The criteria are plain text, interpolated now so the pushed prompt is
-        # self-contained. `_GAP_CRITERION` carries a `{topic}` format slot; point it at
-        # the mustache variable so the judge names the withheld topic.
+def judge_prompt_messages(customer: str) -> list[tuple[str, str]]:
+    """The judge's turns: criteria in the system turn, the row in a human turn.
+
+    Variables are left as mustache slots for LangSmith to fill; the criteria are
+    interpolated now so the pushed prompt is self-contained. `_GAP_CRITERION` carries a
+    `{topic}` format slot, pointed at the mustache variable so the judge names the
+    withheld topic.
+    """
+    system = (
+        _JUDGE_SYSTEM.replace("{{customer}}", customer or "this customer")
         .replace("{{gap_criterion}}", _GAP_CRITERION.format(topic=' about "{{topic}}"'))
         .replace("{{grounded_criterion}}", _GROUNDED_CRITERION)
     )
+    return [("system", system), ("human", _JUDGE_HUMAN)]
+
+
+def judge_prompt_text(customer: str) -> str:
+    """Both turns as one string — for asserting on and for reading in a log."""
+    return "\n".join(text for _role, text in judge_prompt_messages(customer))
 
 
 def judge_prompt_name(dataset: str) -> str:
@@ -492,7 +507,7 @@ def judge_prompt_manifest(customer: str) -> dict:
     from langchain_core.prompts.structured import StructuredPrompt
 
     prompt = StructuredPrompt(
-        [("system", judge_prompt_text(customer))],
+        judge_prompt_messages(customer),
         schema=judge_output_schema(),
         template_format="mustache",
     )
