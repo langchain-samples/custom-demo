@@ -20,7 +20,7 @@ import {
   IconCode,
   IconTerminal2,
 } from "@tabler/icons-react";
-import type { MessageContent, ToolCall, Widget } from "@/lib/api";
+import type { MessageContent, ReviewInterrupt, ToolCall, Widget } from "@/lib/api";
 
 /** A Tabler icon component (size/stroke/className props). */
 export type TablerIcon = ComponentType<{ size?: number | string; className?: string; stroke?: number }>;
@@ -174,4 +174,22 @@ export function widgetFromArgs(args: Record<string, unknown>): Widget {
 /** Convenience: the tool_call id used to key chips/widgets, with a fallback. */
 export function toolCallKey(msgId: string | undefined, tc: ToolCall): string {
   return tc.id || `${msgId || ""}:${tc.name || ""}`;
+}
+
+/**
+ * One line describing what a paused run is waiting for, for reading aloud.
+ *
+ * The review CARD is the real interface; this exists because a voice caller has no eyes
+ * on it. `ask_user` is multiple choice, so its options have to be spoken or the listener
+ * cannot answer (the run only accepts one of them).
+ */
+export function describeInterrupt(review: ReviewInterrupt): string {
+  const draft = (review.draft as Record<string, unknown> | undefined) || {};
+  const question = String((review.question as string) ?? draft.question ?? "");
+  const raw = (review.options ?? draft.options) as unknown;
+  const options = (Array.isArray(raw) ? raw : []).map((o) => String(o).trim()).filter(Boolean);
+  if (question && options.length) return `${question} Options: ${options.join("; ")}.`;
+  if (question) return question;
+  // The artifact interrupts (draft_email, suggest_meeting_times) carry no question.
+  return `The agent is waiting for approval on a ${String(review.kind || "step").replace(/_/g, " ")}.`;
 }

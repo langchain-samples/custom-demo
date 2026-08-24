@@ -73,6 +73,11 @@ def safe_curated(name: str) -> str:
     return n if n in CURATED_FONTS else DEFAULT_CURATED
 
 
+def _wants_voice(value: object) -> bool:
+    """Did the builder turn voice mode on? Anything unexpected reads as off."""
+    return bool(value.get("enabled")) if isinstance(value, dict) else False
+
+
 def slugify(name: str) -> str:
     """Lowercase, hyphenate to a URL-safe slug (falls back to "customer")."""
     return re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-") or "customer"
@@ -871,7 +876,7 @@ def prepare_assistant(payload: dict) -> dict:
     """Turn setup inputs into a ready assistant payload (metadata + context).
 
     Inputs: workspace, customer, owner, industry, website, use_case, failure_mode
-    (or legacy `hallucination` bool), enabled_tools, push_prompts. Does brand fetch
+    (or legacy `hallucination` bool), enabled_tools, voice, push_prompts. Does brand fetch
     + LLM analysis (personas, data gap, tool selection) + optional prompt push, and
     upserts the assistant's demo eval dataset (best-effort; see assistant_evals).
     Returns {name, display_name, accent, logo, actions, metadata, context, prompt_urls}.
@@ -1146,6 +1151,14 @@ def prepare_assistant(payload: dict) -> dict:
         "font_body_fallback": analysis.get("body_fallback") or DEFAULT_CURATED,
         "font_source": "google",
         "failure_mode": failure_mode,
+        # Voice mode, off unless the builder asked for it. In METADATA and not in
+        # `context` on purpose: the agent knows nothing about voice (the whole feature
+        # is in the browser - see frontend/src/lib/voice.ts), and only the SPA reads it.
+        # Never inferred from the use case either, like the `explicit_only` tools: a
+        # microphone is the presenter's choice, not the setup LLM's. Read defensively
+        # (a non-dict `voice` must not raise): setup runs on assistant provisioning, and
+        # nothing about the eval/voice trimmings may fail a customer's assistant.
+        "voice": {"enabled": _wants_voice(payload.get("voice"))},
         # Manifest of LangSmith artifacts this assistant created, so deleting the
         # assistant can cascade-delete them (see webapp.py /cleanup).
         "ls_artifacts": {

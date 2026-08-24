@@ -8,9 +8,11 @@ scripts/seed_assistants.py.
 
 `graph` is a **factory**: Agent Server calls it with each run's config, so we can
 read `configurable.ls_workspace` / `ls_project` and route that run's LangSmith
-traces to a chosen workspace/project via `tracing_context`. The compiled graph
-itself is built once (`base_graph`) and reused — the factory only wraps the run in
-a tracing context.
+traces to a chosen workspace/project via `tracing_context`. It also reads
+`langsmith-trace` (the distributed-tracing header Agent Server surfaces into
+`configurable`) so a run started inside someone else's span nests under it rather
+than starting its own trace — see voice_trace.py. The compiled graph itself is built
+once (`base_graph`) and reused — the factory only wraps the run in a tracing context.
 """
 
 from __future__ import annotations
@@ -70,11 +72,24 @@ async def graph(config: Any):
     configurable = (config or {}).get("configurable", {}) or {}
     workspace_id = configurable.get("ls_workspace") or None
     project_name = configurable.get("ls_project") or None
+    # Distributed tracing: when the caller sends `langsmith-trace`, Agent Server
+    # surfaces it here and we can hang this run under the caller's span instead of
+    # starting a second, disconnected trace. That is what makes voice mode ONE tree
+    # (voice_session -> invoke_deep_agent -> this run) rather than two, and it is what
+    # `dashboard_agent/voice_trace.py` mints the header for.
+    #
+    # Trusted-caller note (LangSmith documents this): a dotted order from an inbound
+    # header decides where runs are recorded. The only caller that sends one here is
+    # our own SPA, over the deployment's own auth (auth.py), carrying a value this
+    # deployment minted. Do not widen that.
+    parent_trace = configurable.get("langsmith-trace") or None
 
-    if not workspace_id and not project_name:
+    if not workspace_id and not project_name and not parent_trace:
         yield base_graph
         return
 
     client = _client_for_workspace(workspace_id) if workspace_id else None
-    with tracing_context(enabled=True, client=client, project_name=project_name):
+    with tracing_context(
+        enabled=True, client=client, project_name=project_name, parent=parent_trace
+    ):
         yield base_graph

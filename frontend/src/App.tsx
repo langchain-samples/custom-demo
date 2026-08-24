@@ -25,7 +25,8 @@ import {
 } from "@tabler/icons-react";
 import { Button } from "@/components/motion/button";
 import { Tooltip } from "@/components/motion/tooltip";
-import ChatPanel from "@/components/ChatPanel";
+import ChatPanel, { type ChatPanelHandle } from "@/components/ChatPanel";
+import { VoiceButton } from "@/components/VoiceButton";
 import { DashboardCanvas } from "@/components/DashboardCanvas";
 import { EvalPanel } from "@/components/EvalPanel";
 import { FileBrowser } from "@/components/FileBrowser";
@@ -109,12 +110,20 @@ export default function App() {
   }, [resizing, chatWidth]);
 
   const settingsRef = useRef<SettingsHandle>(null);
+  /** Imperative handle voice mode drives (see VoiceButton). */
+  const chatRef = useRef<ChatPanelHandle | null>(null);
 
   // Branding for the header + chat presets (falls back to the app defaults).
   const meta = activeAssistant?.metadata;
   const displayName = meta?.display_name || DEFAULT_NAME;
   const logo = meta?.logo || DEFAULT_LOGO;
   const presets = meta?.actions ?? [];
+  /**
+   * Voice mode is per-assistant and OFF unless the builder turned it on. It lives in
+   * metadata rather than the runtime context because the agent knows nothing about it:
+   * the whole feature is in the browser (see lib/voice.ts).
+   */
+  const voiceEnabled = !!(meta?.voice as { enabled?: boolean } | undefined)?.enabled;
 
   // Effective theme: an active assistant's brand theme wins, else the manual
   // preference. Applied to <html> + remembered so a reload restores it.
@@ -190,10 +199,20 @@ export default function App() {
           <BrandLogo logo={logo} />
           <h1 className="m-0 font-heading text-2xl font-bold tracking-tight">{displayName}</h1>
         </button>
+        {voiceEnabled && (
+          <div className="ml-auto print:hidden">
+            <VoiceButton
+              chat={chatRef}
+              workspace={meta?.ls_artifacts?.workspace}
+              project={meta?.customer}
+              customer={meta?.customer}
+            />
+          </div>
+        )}
         <Tooltip content="Start a new chat (reset the conversation + dashboard)" side="bottom">
           <Button
             variant="secondary"
-            className="ml-auto gap-1.5 rounded-full px-4 print:hidden"
+            className={`${voiceEnabled ? "" : "ml-auto"} gap-1.5 rounded-full px-4 print:hidden`}
             aria-label="New Chat"
             onClick={handleResetConversation}
           >
@@ -267,6 +286,7 @@ export default function App() {
           }
         >
           <ChatPanel
+            handleRef={chatRef}
             assistantId={assistantId}
             /* Same sandbox key the Files dialog and the agent itself use, so a file
                dropped on the chat lands in the VM this assistant reads from. */

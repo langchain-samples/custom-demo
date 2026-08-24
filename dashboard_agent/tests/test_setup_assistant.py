@@ -426,3 +426,30 @@ def test_no_push_means_no_backfill(rec, monkeypatch, traffic):
     # the traffic was asked for.
     _prep(monkeypatch, _analysis(), push_prompts=False, demo_traffic=True)
     assert traffic == []
+
+
+# --- voice mode (a builder flag, not an inference) ---
+
+
+def test_voice_is_off_unless_the_builder_asks_for_it(rec, monkeypatch):
+    """A microphone is the presenter's choice. Nothing may turn it on by itself.
+
+    In metadata rather than context, because the agent knows nothing about voice: the
+    whole feature is in the browser (frontend/src/lib/voice.ts). Absent-means-off also
+    keeps every assistant created before this unchanged.
+    """
+    out = _prep(monkeypatch, _analysis())
+    assert out["metadata"]["voice"] == {"enabled": False}
+    assert "voice" not in out["context"]
+
+
+def test_voice_is_on_when_the_builder_asks(rec, monkeypatch):
+    out = _prep(monkeypatch, _analysis(), voice={"enabled": True})
+    assert out["metadata"]["voice"] == {"enabled": True}
+
+
+def test_a_malformed_voice_payload_is_off_rather_than_an_error(rec, monkeypatch):
+    """Setup must not fail over the voice flag: this runs on assistant provisioning."""
+    for bad in (None, "yes", {}, {"enabled": None}):
+        out = _prep(monkeypatch, _analysis(), voice=bad)
+        assert out["metadata"]["voice"] == {"enabled": False}, bad

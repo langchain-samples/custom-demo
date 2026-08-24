@@ -391,6 +391,13 @@ export interface RunStreamOptions {
   /** Optional abort signal to cancel the stream. */
   signal?: AbortSignal;
   /**
+   * Extra request headers. Used by voice mode for LangSmith distributed tracing:
+   * `langsmith-trace` + `baggage`, minted by POST /voice/trace, make this run nest
+   * under the conversation's tool span instead of starting its own trace (graph.py
+   * turns them back into a tracing parent).
+   */
+  headers?: Record<string, string>;
+  /**
    * The active `/goal`, sent as deepagents' `rubric` state key. `RubricMiddleware`
    * grades each finished turn against it and sends the agent back for another pass
    * until it is satisfied; it no-ops when this is absent. Re-sent every turn — the
@@ -406,7 +413,7 @@ export interface RunStreamOptions {
  * is the raw string (typically JSON) — the caller parses it.
  */
 export async function* runStream(opts: RunStreamOptions): AsyncGenerator<SSEEvent> {
-  const { threadId, assistantId, messages, context, resume, signal, rubric } = opts;
+  const { threadId, assistantId, messages, context, resume, signal, rubric, headers } = opts;
   const body: Record<string, unknown> = {
     assistant_id: assistantId,
     // "updates" carries `__interrupt__` when a tool pauses for human review;
@@ -433,7 +440,7 @@ export async function* runStream(opts: RunStreamOptions): AsyncGenerator<SSEEven
 
   const res = await fetch(`${getApiBase()}/threads/${threadId}/runs/stream`, {
     method: "POST",
-    headers: apiHeaders(),
+    headers: { ...apiHeaders(), ...(headers || {}) },
     body: JSON.stringify(body),
     signal,
   });
@@ -1196,4 +1203,49 @@ export async function postFeedback(body: FeedbackInput): Promise<FeedbackResult>
     body: JSON.stringify(body),
   });
   return res.json();
+}
+
+/* ---------------------------------- Voice ---------------------------------- */
+
+/** A minted Gemini Live token (see dashboard_agent/voice.py). */
+export interface VoiceToken {
+  token: string;
+  model: string;
+  expires_at: string;
+}
+
+/**
+ * Mint a short-lived token for a Live API session.
+ *
+ * The browser connects to Google directly with this instead of an API key, so
+ * `GEMINI_API_KEY` never leaves the server. Short-lived and single-use: mint one per
+ * session, not per app load.
+ */
+export async function voiceToken(): Promise<VoiceToken> {
+  const res = await fetch(`${getApiBase()}/voice/token`, {
+    method: "POST",
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw await errorFrom(res);
+  return res.json();
+}
+
+/**
+ * Record one step of the conversation's LangSmith trace (see voice_trace.py).
+ *
+ * Best-effort by design and never throws: a lost span is not worth interrupting a
+ * conversation for, so a failure resolves to `{}` and the caller carries on untraced.
+ */
+export async function voiceTrace(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  try {
+    const res = await fetch(`${getApiBase()}/voice/trace`, {
+      method: "POST",
+      headers: { ...apiHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return {};
+    return await res.json();
+  } catch {
+    return {};
+  }
 }

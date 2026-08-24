@@ -13,7 +13,8 @@
  * Routing/guards (assistant / workspace / system-prompt requirements) live in App;
  * this component only calls the `guard` prop before sending.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useImperativeHandle, useRef, useState } from "react";
+import type { Ref } from "react";
 import { Streamdown } from "streamdown";
 import {
   IconAlertTriangle,
@@ -45,6 +46,7 @@ import {
   toolCallKey,
   widgetFromArgs,
   widgetLooksComplete,
+  describeInterrupt,
 } from "@/components/chat/helpers";
 import {
   IMAGE_MIME_TYPES,
@@ -67,7 +69,38 @@ import {
   type TaskDispatch,
 } from "@/lib/streamEvent";
 
+/**
+ * What one turn produced, for a programmatic caller (voice mode). The chat panel and
+ * dashboard have already rendered it; this is only what needs SPEAKING.
+ */
+export interface TurnResult {
+  /** The final prose. Never widget JSON: the figures are on screen. */
+  answer: string;
+  /** Widgets this turn flushed, so a caller can read out the headline figures. */
+  widgets: Widget[];
+  /**
+   * Set when the run PAUSED for a human instead of finishing: a one-line description
+   * of the question plus its options, for reading aloud.
+   */
+  approval?: string;
+  error?: string;
+}
+
+/**
+ * The imperative surface voice mode drives. `ask` is the same code path the composer
+ * uses, so a spoken question produces the same widgets, chips, transcript and trace as a
+ * typed one - which is the entire reason voice mode runs the agent from the browser.
+ */
+export interface ChatPanelHandle {
+  ask(question: string, headers?: Record<string, string>): Promise<TurnResult>;
+  /** Answer whatever the last turn paused on. */
+  resumeWith(value: unknown): Promise<TurnResult>;
+  busy(): boolean;
+}
+
 export interface ChatPanelProps {
+  /** Imperative handle for voice mode (see ChatPanelHandle). */
+  handleRef?: Ref<ChatPanelHandle>;
   /** The assistant id to run against (a UUID once one is selected in settings). */
   assistantId: string;
   /** Quick-action presets rendered under "Try a quick prompt". */
@@ -221,6 +254,7 @@ function statusFromVerdict(result: string | undefined): Goal["status"] {
 
 
 export default function ChatPanel({
+  handleRef,
   assistantId,
   presets = [],
   getRunContext,
@@ -303,11 +337,15 @@ export default function ChatPanel({
     question?: string;
     resume?: unknown;
     images?: ImageAttachment[];
-  }) => {
-    const { question, resume, images = [] } = opts;
+    /** Distributed-tracing headers, so a voice-driven run nests under its tool span. */
+    headers?: Record<string, string>;
+  }): Promise<TurnResult> => {
+    const { question, resume, images = [], headers } = opts;
     const isResume = resume !== undefined;
-    if (busyRef.current) return;
-    if (!isResume && !question) return;
+    // Returned rather than thrown: a programmatic caller (voice) needs something to say,
+    // and "a turn was already running" is a normal race there, not a failure.
+    if (busyRef.current) return { answer: "", widgets: [], error: "already running" };
+    if (!isResume && !question) return { answer: "", widgets: [], error: "nothing to ask" };
 
     busyRef.current = true;
     setBusy(true);
@@ -389,10 +427,15 @@ export default function ChatPanel({
     const setBubble = (patch: Partial<Omit<AssistantItem, "kind" | "id">>) =>
       patchItem(bubbleId, (it) => (it.kind === "assistant" ? { ...it, ...patch } : it));
 
+    // Widgets this turn flushed. The dashboard accumulates across turns; a caller that
+    // has to SAY something only wants what this turn added.
+    const turnWidgets: Widget[] = [];
+
     const flushWidget = (id: string) => {
       const w = wLatest[id];
       if (w && !wFlushed.has(id) && widgetLooksComplete(w)) {
         wFlushed.add(id);
+        turnWidgets.push(w);
         // Widgets ACCUMULATE across turns — the dashboard is a persistent canvas for
         // the whole conversation, cleared only by New Chat / assistant switch. So an
         // "add a chart" follow-up appends (both charts stay), matching what the agent
@@ -579,6 +622,7 @@ export default function ChatPanel({
           : { messages: [{ role: "user", content: imageContent(question!, images) }] }),
         context: runContext,
         signal: controller.signal,
+        headers,
         // Sticky: re-sent every turn until the goal is met or cleared. A resume
         // carries no input, but the rubric is already on the thread's state.
         rubric: goalRef.current?.text,
@@ -717,7 +761,9 @@ export default function ChatPanel({
           ...prev.filter((it) => spoke || it.id !== bubbleId),
           { kind: "review", id: nextId(), review: pending, done: false },
         ]);
-        return;
+        // A caller driving this by voice cannot see the review card, so hand back a
+        // line it can read out. The card is still rendered for whoever is looking.
+        return { answer, widgets: turnWidgets, approval: describeInterrupt(pending) };
       }
 
       if (answer) setBubble({ streaming: false, markdown: true, text: answer });
@@ -731,6 +777,7 @@ export default function ChatPanel({
           ...prev,
           { kind: "feedback", id: nextId(), runId: runId!, workspace: runContext.ls_workspace },
         ]);
+      return { answer, widgets: turnWidgets, error: errorMsg || undefined };
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
         setBubble({
@@ -739,6 +786,7 @@ export default function ChatPanel({
           text: "⚠️ Request failed: " + (e as Error).message,
         });
       }
+      return { answer: "", widgets: turnWidgets, error: (e as Error).message };
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -904,6 +952,31 @@ export default function ChatPanel({
     setAttachError("");
     void runTurn({ question, images });
   };
+
+  /**
+   * The voice shell's way in. Deliberately the SAME `runTurn` the composer calls: a
+   * spoken question has to produce the same widgets, chips, transcript and trace as a
+   * typed one, and a second code path would drift from the first within a week.
+   *
+   * The App guard still applies (no assistant selected, etc.) so voice cannot start a
+   * run the typed path would have refused.
+   */
+  useImperativeHandle(
+    handleRef,
+    () => ({
+      ask: async (question: string, headers?: Record<string, string>) => {
+        const blocked = guard?.(question);
+        if (blocked) return { answer: blocked, widgets: [] };
+        return runTurn({ question, headers });
+      },
+      resumeWith: (value: unknown) => runTurn({ resume: value }),
+      busy: () => busyRef.current,
+    }),
+    // `runTurn` and `guard` are re-created every render; the handle reads them through
+    // the closure it is rebuilt with, so no dependency list is needed beyond the ref.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [handleRef],
+  );
 
   /** Human approved a paused artifact — resume the run with their version. */
   const approveReview = (itemId: string, value: Record<string, unknown>) => {

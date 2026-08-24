@@ -151,6 +151,13 @@ warns (but still starts) when `.env` is missing. Plain `./run.sh` works too once
 you've synced — the `uv run` prefix just guarantees the env is current first.
 Set `PORT` / `SPA_PORT` to override the ports.
 
+## Voice mode (spike)
+
+Talk to an assistant while the dashboard fills in: a Gemini Live shell in front of the
+deep agent, with the tool executed in the browser so the canvas, chips and trace all come
+from the normal run. Off unless an assistant's builder flag turns it on, and invisible
+without `GEMINI_API_KEY`. See [docs/voice-mode.md](docs/voice-mode.md).
+
 ## Tests
 
 ```bash
