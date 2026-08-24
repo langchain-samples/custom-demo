@@ -755,7 +755,9 @@ def test_ensure_eval_dataset_skips_langsmith_when_there_is_nothing_to_grade(monk
 
 # A workspace model the judge can be bound to: a playground setting, whose `settings` is a
 # serialized chat model with its key left as a secret reference.
-_MODEL_SETTING = {
+# Annotated: without it the literal's value type infers as a union, and the
+# `**settings` spreads plus `judge_chain_manifest(...)` calls below stop type-checking.
+_MODEL_SETTING: dict = {
     "id": "model-1",
     "name": "gpt-5.4-mini-custom-0",
     "available_in_evaluators": True,
