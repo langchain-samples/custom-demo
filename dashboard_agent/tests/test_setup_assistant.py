@@ -453,3 +453,21 @@ def test_a_malformed_voice_payload_is_off_rather_than_an_error(rec, monkeypatch)
     for bad in (None, "yes", {}, {"enabled": None}):
         out = _prep(monkeypatch, _analysis(), voice=bad)
         assert out["metadata"]["voice"] == {"enabled": False}, bad
+
+
+def test_the_setup_graph_forwards_the_voice_flag(monkeypatch):
+    """The graph drops any input key it does not list, silently.
+
+    So a switch wired end to end in the SPA can still arrive as "off" with nothing
+    visibly broken - which is exactly what happened to this one on the first pass.
+    """
+    from dashboard_agent import setup_graph
+
+    seen: dict = {}
+    monkeypatch.setattr(
+        setup_graph, "prepare_assistant", lambda payload: seen.update(payload) or {}
+    )
+    setup_graph._run(
+        {"workspace": "ws1", "customer": "Acme Co", "voice": {"enabled": True}}  # type: ignore[arg-type]
+    )
+    assert seen["voice"] == {"enabled": True}

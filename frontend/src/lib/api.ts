@@ -253,6 +253,12 @@ export interface SetupInput {
   demo_traffic?: boolean;
   /** Capabilities the new assistant starts with; editable afterwards. */
   enabled_tools?: string[];
+  /**
+   * Voice mode: adds the mic button on this assistant. OPT-IN, and never inferred from
+   * the use case. Lands in the assistant's metadata rather than its runtime context,
+   * because the agent knows nothing about voice (see lib/voice.ts).
+   */
+  voice?: { enabled: boolean };
 }
 
 /** Prepared payload the assistant_setup graph returns. */

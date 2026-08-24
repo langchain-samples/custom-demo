@@ -32,6 +32,7 @@ _INPUT_KEYS = (
     "push_prompts",
     "enabled_tools",
     "prompt_source",
+    "voice",
 )
 
 
@@ -49,6 +50,9 @@ class SetupState(TypedDict, total=False):
     push_prompts: bool
     enabled_tools: list[str]
     prompt_source: Literal["prompt_hub", "context_hub"]
+    # Voice mode, `{"enabled": bool}`. A dict rather than a bare bool so a voice name or
+    # model can join it later without another key on this graph's surface.
+    voice: dict
     result: dict
     status: str
     error: str

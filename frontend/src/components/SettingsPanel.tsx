@@ -584,6 +584,9 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           // Off unless the presenter asked for it: it fills the customer's project
           // with runs they never made, priced like they did.
           demo_traffic: v.demoTraffic,
+          // Voice mode. Lands in the assistant's METADATA, not its context: the agent
+          // knows nothing about voice, only the SPA does (see lib/voice.ts).
+          voice: { enabled: v.voice },
         });
         // Hoisted so the baseline experiment below runs against the SAME context
         // the assistant was created with.
@@ -670,6 +673,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
               failureMode: "hallucination",
               promptSource: "context_hub",
               demoTraffic: false,
+              voice: false,
             },
             workspace,
           );

@@ -84,14 +84,20 @@ opt in — if you change one, change the other.
 GEMINI_API_KEY=<from https://aistudio.google.com/apikey>
 ```
 
-Then create an assistant with `voice: {enabled: true}` in the setup payload, or flip
-`metadata.voice.enabled` on an existing one.
+Then create an assistant with **Voice mode** switched on in the New customer demo dialog,
+or flip `metadata.voice.enabled` on one that already exists.
+
+The flag travels SPA -> `SetupInput.voice` -> the setup graph's `_INPUT_KEYS` ->
+`prepare_assistant` -> `metadata.voice`. That graph silently drops any input key it does
+not list, so a switch can be wired all the way through the UI and still arrive as "off"
+with nothing visibly broken. There is a test pinning that link.
 
 ## Known gaps
 
-- **No UI to flip the flag.** It is honoured everywhere but only settable in the setup
-  payload; the Settings panel already patches assistant metadata live, so a switch there
-  is the obvious next step.
+- **The switch is create-time only.** "Voice mode" sits in the New customer demo dialog
+  next to "Backfill demo traffic". Turning it on for an assistant that already exists
+  means patching `metadata.voice.enabled`; the Settings panel already patches assistant
+  metadata live, so a toggle there is the obvious next step.
 - **Not verified against a live session.** Every pure part is unit-tested
   (`voice_test.js`, `test_voice.py`, `test_voice_trace.py`) and the token, trace and
   nesting paths are wired end to end, but nobody has spoken to it yet. The two things

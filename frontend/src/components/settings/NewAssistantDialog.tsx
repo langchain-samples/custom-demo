@@ -78,6 +78,8 @@ export interface NewAssistantValues {
   promptSource: string;
   /** Backfill the trace project with synthetic traffic (off unless asked for). */
   demoTraffic: boolean;
+  /** Show the mic button on this assistant (off unless asked for). */
+  voice: boolean;
 }
 
 interface Props {
@@ -106,6 +108,7 @@ export function NewAssistantDialog({
   const [failureMode, setFailureMode] = useState("hallucination");
   const [promptSource, setPromptSource] = useState("context_hub");
   const [demoTraffic, setDemoTraffic] = useState(false);
+  const [voice, setVoice] = useState(false);
 
   const canCreate = !!customer.trim() && !creating;
 
@@ -211,6 +214,21 @@ export function NewAssistantDialog({
               </Hint>
             </span>
           </label>
+
+          <label className="flex cursor-pointer items-center gap-2">
+            <Switch checked={voice} onCheckedChange={setVoice} />
+            <span className="flex items-center gap-1.5 text-[12.5px] font-medium text-foreground">
+              Voice mode
+              <Hint>
+                Adds a mic button so you can talk to this assistant. A
+                speech-to-speech model runs the conversation and asks the agent
+                your question as a tool call, so the dashboard fills in exactly
+                as it does when you type, and the whole thing lands in one
+                LangSmith trace. Needs GEMINI_API_KEY on the deployment; without
+                it the button stays hidden.
+              </Hint>
+            </span>
+          </label>
         </div>
 
         <DialogFooter>
@@ -228,6 +246,7 @@ export function NewAssistantDialog({
                 failureMode,
                 promptSource,
                 demoTraffic,
+                voice,
               })
             }
           >

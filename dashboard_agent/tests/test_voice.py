@@ -22,20 +22,28 @@ def _no_env(monkeypatch):
 
 
 def test_token_request_pins_the_model_and_modality():
+    """Wire names, not the guide's SDK names.
+
+    `liveConnectConstraints` / `lockAdditionalFields` read naturally and are what the
+    guide shows, but the REST resource answers `Unknown name "liveConnectConstraints" at
+    'auth_token'` - which is a 400 nobody sees until someone tries to talk. Verified
+    against the v1beta discovery document's `AuthToken`.
+    """
     body = voice.token_request("gemini-2.5-flash-native-audio-preview-12-2025")
-    llm = body["liveConnectConstraints"]
+    assert "liveConnectConstraints" not in body and "lockAdditionalFields" not in body
+    setup = body["bidiGenerateContentSetup"]
     # `models/` prefix: the Live API's model field is a resource name, not a bare id.
-    assert llm["model"] == "models/gemini-2.5-flash-native-audio-preview-12-2025"
-    assert llm["config"]["responseModalities"] == ["AUDIO"]
+    assert setup["model"] == "models/gemini-2.5-flash-native-audio-preview-12-2025"
+    # Modality lives under generationConfig on the wire, not beside the model.
+    assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
     # Single use, so a leaked token buys one session at most.
     assert body["uses"] == 1
-    # PRESENT and empty: this field is what stops the client widening the constraints
-    # above. Omitting it would leave them advisory.
-    assert body["lockAdditionalFields"] == []
+    # PRESENT and empty: an empty field mask is what makes the pinning binding.
+    assert body["fieldMask"] == ""
 
 
 def test_token_request_enables_resumption_and_both_transcripts():
-    cfg = voice.token_request("m")["liveConnectConstraints"]["config"]
+    cfg = voice.token_request("m")["bidiGenerateContentSetup"]
     # A Live connection dies at ~10 minutes; a demo does not. Resumption has to be
     # pinned into the token's config or a reconnect is refused.
     assert "sessionResumption" in cfg

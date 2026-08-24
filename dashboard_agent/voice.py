@@ -45,27 +45,32 @@ def voice_configured() -> bool:
 def token_request(model: str) -> dict:
     """The `POST /v1beta/auth_tokens` body. Pure, so the pinning is testable.
 
-    `sessionResumption` is enabled in the pinned config because it is not optional in
-    practice: a Live connection dies at ~10 minutes and an audio session caps at 15,
-    so a demo that outlasts either needs to reconnect on the same token.
+    Field names come from the REST resource (the v1beta discovery document's `AuthToken`),
+    NOT from the guide: the guide shows the SDK's `liveConnectConstraints` /
+    `lockAdditionalFields`, and posting those verbatim is rejected with
+    `Unknown name "liveConnectConstraints" at 'auth_token'`. The wire names are
+    `bidiGenerateContentSetup` and `fieldMask`, and the pinned config is the Live setup
+    message itself rather than a nested `config` object.
+
+    `sessionResumption` is pinned because it is not optional in practice: a Live
+    connection dies at ~10 minutes and an audio session caps at 15, so a demo that
+    outlasts either has to reconnect on the same token.
     """
     return {
         "uses": 1,
-        "liveConnectConstraints": {
+        "bidiGenerateContentSetup": {
             "model": f"models/{model}",
-            "config": {
-                "responseModalities": _MODALITIES,
-                "sessionResumption": {},
-                # Both directions: the input transcript is what the chat panel shows as
-                # the user's turn, and the output transcript is the assistant bubble
-                # (a native-audio model returns no text of its own).
-                "inputAudioTranscription": {},
-                "outputAudioTranscription": {},
-            },
+            "generationConfig": {"responseModalities": _MODALITIES},
+            "sessionResumption": {},
+            # Both directions: the input transcript is what the chat panel shows as the
+            # user's turn, and the output transcript is the assistant bubble (a
+            # native-audio model returns no text of its own).
+            "inputAudioTranscription": {},
+            "outputAudioTranscription": {},
         },
-        # Empty = lock exactly what is pinned above and nothing more. Present rather
-        # than omitted: this field is what stops the client widening the constraints.
-        "lockAdditionalFields": [],
+        # Empty field mask = the setup above is locked and the client cannot widen it.
+        # Present rather than omitted: this field is what makes the pinning binding.
+        "fieldMask": "",
     }
 
 
