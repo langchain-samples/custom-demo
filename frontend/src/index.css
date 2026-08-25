@@ -272,17 +272,19 @@ input[type="color"]::-moz-color-swatch {
   0%, 100% { transform: translateY(-8px); }
   50%      { transform: translateY(8px); }
 }
+/* The drift owns `transform` on the sphere, so the audio-driven scale multiplies INTO the
+   keyframes rather than fighting them for the property. */
 @keyframes orb-drift {
-  0%   { transform: rotate(0deg)   scale(1.04); }
-  50%  { transform: rotate(180deg) scale(1.1); }
-  100% { transform: rotate(360deg) scale(1.04); }
+  0%   { transform: rotate(0deg)   scale(calc(1.04 * var(--sphere-scale))); }
+  50%  { transform: rotate(180deg) scale(calc(1.10 * var(--sphere-scale))); }
+  100% { transform: rotate(360deg) scale(calc(1.04 * var(--sphere-scale))); }
 }
 
 .voice-orb {
-  --level: 0;
-  /* Written from an animation frame by VoiceOrb; see `haloTransform` for the geometry. */
+  /* Written from an animation frame by VoiceOrb; see `orbTransform` for the geometry. */
   --halo-scale: 1;
   --halo-opacity: 0.22;
+  --sphere-scale: 1;
   --orb-size: 260px;
   /* The brand hue leads, but the other two stops are DERIVED rather than taken straight
      from the brand: a secondary can legitimately be near-black (Progressive's is), and
@@ -334,7 +336,6 @@ input[type="color"]::-moz-color-swatch {
        than as a hole. */
     radial-gradient(circle at 50% 42%, #ffffff 0%, color-mix(in srgb, var(--orb-a) 22%, #fff) 100%);
   animation: orb-drift 18s linear infinite;
-  transform: scale(calc(1 + 0.05 * var(--level)));
   transition: transform 90ms linear;
 }
 

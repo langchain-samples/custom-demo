@@ -201,13 +201,17 @@ it through `onLevel`, and `VoiceOrb` reads it from an animation frame and writes
 custom property. Two consequences worth keeping: the level is a REF rather than React state
 (it updates at audio rate, and state would re-render the tree dozens of times a second), and
 the easing is asymmetric - fast attack, slow release - which is what makes it read as
-breathing rather than flickering. The two sides move in OPPOSITE directions: the halo sits
-at full size and swells outward on the model's speech (the assistant projecting), and drops
-to 80% and draws inward on the user's (listening, leaning in rather than talking over).
-Whoever is louder wins, so crosstalk resolves instead of fighting, and it never collapses to
-nothing - an orb that vanishes reads as broken. That geometry is `haloTransform`, a pure
-function with tests, because "what the halo does" should not be checkable only by talking
-to it. Colours are DERIVED from the brand hue rather than taken
+breathing rather than flickering. BOTH layers move, in opposite directions per side: sphere
+and halo swell outward on the model's speech (the assistant projecting), and draw inward
+from a smaller baseline on the user's (listening, leaning in rather than talking over).
+Whoever is louder wins, so crosstalk resolves instead of fighting, and neither collapses to
+nothing - an orb that vanishes reads as broken. That geometry is `orbTransform`, a pure
+function with tests, because "what the orb does" should not be checkable only by talking
+to it.
+
+One CSS detail: the sphere's drift keyframes own `transform`, so the audio-driven scale
+multiplies INTO the keyframes (`scale(calc(1.04 * var(--sphere-scale)))`) rather than
+fighting them for the property - set it separately and the animation simply wins. Colours are DERIVED from the brand hue rather than taken
 straight from it: a brand secondary can legitimately be near-black (Progressive's is), and
 mixing that into a sphere reads as a bruise, so each stop is lightened toward white and
 pulled toward violet or pink. The result is recognisably the customer's colour and reliably

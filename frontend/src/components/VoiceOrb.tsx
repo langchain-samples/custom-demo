@@ -6,9 +6,9 @@
  * actually talking and sits still when nobody is. That is the whole difference between this
  * and a pulsing div.
  *
- * It also moves in opposite directions for the two sides: outward on the model's speech,
- * inward from a smaller baseline on the user's. The geometry lives in `haloTransform` so it
- * is testable; this file only smooths and applies it.
+ * Both layers move, in opposite directions for the two sides: sphere and halo swell outward
+ * on the model's speech, and draw inward from a smaller baseline on the user's. The geometry
+ * lives in `orbTransform` so it is testable; this file only smooths and applies it.
  *
  * Level arrives dozens of times a second, so it is read from an animation frame and
  * written straight to CSS custom properties. Putting it in React state would re-render the
@@ -17,7 +17,7 @@
 
 import { useEffect, useRef } from "react";
 import type { VoiceSessionView } from "@/lib/hooks/use-voice-session";
-import { haloTransform } from "@/lib/voice";
+import { orbTransform } from "@/lib/voice";
 
 export interface VoiceOrbProps {
   voice: VoiceSessionView;
@@ -30,7 +30,7 @@ export interface VoiceOrbProps {
 const ATTACK = 0.35;
 const RELEASE = 0.08;
 
-export function VoiceOrb({ voice, onClick, size = 260 }: VoiceOrbProps) {
+export function VoiceOrb({ voice, onClick, size = 156 }: VoiceOrbProps) {
   const root = useRef<HTMLButtonElement>(null);
   const { running, state } = voice;
 
@@ -48,14 +48,15 @@ export function VoiceOrb({ voice, onClick, size = 260 }: VoiceOrbProps) {
         const k = target > eased[side] ? ATTACK : RELEASE;
         eased[side] += (target - eased[side]) * k;
       }
-      const { scale, opacity, speaker } = haloTransform(eased.user, eased.model);
+      const { halo, sphere, speaker } = orbTransform(eased.user, eased.model);
       const el = root.current;
       if (el) {
-        el.style.setProperty("--halo-scale", scale.toFixed(3));
-        el.style.setProperty("--halo-opacity", (running ? opacity : opacity * 0.35).toFixed(3));
-        // The sphere itself only ever grows, and only a little: the direction is the halo's
-        // job, and a shrinking sphere reads as the orb receding rather than listening.
-        el.style.setProperty("--level", Math.max(eased.user, eased.model).toFixed(3));
+        el.style.setProperty("--halo-scale", halo.scale.toFixed(3));
+        el.style.setProperty(
+          "--halo-opacity",
+          (running ? halo.opacity : halo.opacity * 0.35).toFixed(3),
+        );
+        el.style.setProperty("--sphere-scale", sphere.scale.toFixed(3));
         el.dataset.speaker = running ? speaker : "idle";
       }
       raf = requestAnimationFrame(tick);

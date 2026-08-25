@@ -99,9 +99,9 @@ export function VoiceStage({
           type="button"
           onClick={() => voice.start()}
           aria-label="Start talking"
-          className="grid size-36 place-items-center rounded-full border border-border bg-panel text-muted-foreground transition-colors hover:border-brand/50 hover:text-brand"
+          className="grid size-28 place-items-center rounded-full border border-border bg-panel text-muted-foreground transition-colors hover:border-brand/50 hover:text-brand"
         >
-          <IconMicrophone className="size-12" />
+          <IconMicrophone className="size-9" />
         </button>
       )}
 

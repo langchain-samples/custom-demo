@@ -166,41 +166,55 @@ export function frameLevel(samples: Float32Array): number {
   return Math.min(1, Math.sqrt(sum / samples.length) * 4);
 }
 
-/** Halo baseline while the model talks or nobody does. */
-const HALO_BASE = 1;
-/** Baseline while the USER talks: 20% smaller, so the orb visibly makes room for them. */
-const HALO_USER_BASE = 0.8;
-/** How far it swells outward (model) and draws inward (user) at full volume. */
+/** Baselines while the model talks or nobody does. */
+const BASE = 1;
+/** Baselines while the USER talks: the orb visibly makes room for them. */
+const USER_HALO_BASE = 0.8;
+const USER_SPHERE_BASE = 0.9;
+/** How far each layer travels at full volume. */
 const HALO_OUT = 0.3;
 const HALO_IN = 0.18;
+const SPHERE_OUT = 0.12;
+const SPHERE_IN = 0.1;
 
 /**
- * Where the halo sits, given how loud each side is.
+ * Where the orb sits, given how loud each side is.
  *
- * The two sides are deliberately NOT symmetric. While the model speaks the halo sits at
- * full size and pulses OUTWARD on its speech, which reads as the assistant projecting.
- * While the user speaks it drops to 80% and pulses INWARD, which reads as listening -
- * leaning in rather than talking over. Whoever is louder wins, so a moment of crosstalk
- * resolves rather than fighting.
+ * BOTH layers move, and in opposite directions per side. While the model speaks the sphere
+ * and halo swell OUTWARD, which reads as projecting. While the user speaks both draw
+ * INWARD from a smaller baseline, which reads as listening - leaning in rather than talking
+ * over. Whoever is louder wins, so a moment of crosstalk resolves rather than fighting.
  *
- * Pure, because "what the halo does" is the design and it should not be something you can
+ * Pure, because "what the orb does" is the design and it should not be something you can
  * only check by talking to it.
  */
-export function haloTransform(
+export function orbTransform(
   userLevel: number,
   modelLevel: number,
-): { scale: number; opacity: number; speaker: "user" | "model" | "idle" } {
+): {
+  halo: { scale: number; opacity: number };
+  sphere: { scale: number };
+  speaker: "user" | "model" | "idle";
+} {
   const user = Math.max(0, Math.min(1, userLevel));
   const model = Math.max(0, Math.min(1, modelLevel));
   const speaker = user > model ? "user" : model > 0.01 ? "model" : "idle";
   if (speaker === "user") {
-    // Never all the way to nothing: an orb that vanishes reads as broken, not attentive.
-    return { scale: Math.max(0.55, HALO_USER_BASE - HALO_IN * user), opacity: 0.3 + 0.5 * user, speaker };
+    return {
+      // Never all the way to nothing: an orb that vanishes reads as broken, not attentive.
+      halo: { scale: Math.max(0.55, USER_HALO_BASE - HALO_IN * user), opacity: 0.3 + 0.5 * user },
+      sphere: { scale: Math.max(0.7, USER_SPHERE_BASE - SPHERE_IN * user) },
+      speaker,
+    };
   }
-  return { scale: HALO_BASE + HALO_OUT * model, opacity: 0.22 + 0.7 * model, speaker };
+  return {
+    halo: { scale: BASE + HALO_OUT * model, opacity: 0.22 + 0.7 * model },
+    sphere: { scale: BASE + SPHERE_OUT * model },
+    speaker,
+  };
 }
 
-/** Base64 to bytes (the Live API sends audio as base64 inline data). */
+/** Base64 to bytes (the Live API sends audio as base64 inline data). *//** Base64 to bytes (the Live API sends audio as base64 inline data). */
 export function decodeBase64(b64: string): ArrayBuffer {
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);

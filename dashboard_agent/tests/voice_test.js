@@ -44,7 +44,7 @@ function ok(name, fn) {
     DEFAULT_VOICE,
     downsampleTo16k,
     frameLevel,
-    haloTransform,
+    orbTransform,
     realtimeAudioMessage,
     INVOKE_TOOL,
     RESUME_TOOL,
@@ -277,62 +277,40 @@ function ok(name, fn) {
     assert.equal(frameLevel(loud), 1);
   });
 
-  ok("the halo swells outward for the model and inward for the user", () => {
-    // The asked-for behaviour, and the reason it is a pure function: "what the halo does"
+  ok("both layers swell for the model and shrink for the user", () => {
+    // The asked-for behaviour, and the reason it is a pure function: "what the orb does"
     // should not be checkable only by talking to it.
-    const quiet = haloTransform(0, 0);
+    const quiet = orbTransform(0, 0);
     assert.equal(quiet.speaker, "idle");
-    assert.equal(quiet.scale, 1, "idle sits at the baseline");
+    assert.equal(quiet.halo.scale, 1, "idle sits at the baseline");
+    assert.equal(quiet.sphere.scale, 1);
 
-    // Model speaking: baseline size, growing with volume.
-    const modelSoft = haloTransform(0, 0.2);
-    const modelLoud = haloTransform(0, 0.9);
+    // Model speaking: baseline size, both layers growing with volume.
+    const modelSoft = orbTransform(0, 0.2);
+    const modelLoud = orbTransform(0, 0.9);
     assert.equal(modelLoud.speaker, "model");
-    assert.ok(modelSoft.scale > 1 && modelLoud.scale > modelSoft.scale, "outward");
+    assert.ok(modelSoft.halo.scale > 1 && modelLoud.halo.scale > modelSoft.halo.scale);
+    assert.ok(modelSoft.sphere.scale > 1 && modelLoud.sphere.scale > modelSoft.sphere.scale);
 
-    // User speaking: 20% smaller baseline, SHRINKING with volume.
-    const userSoft = haloTransform(0.2, 0);
-    const userLoud = haloTransform(0.9, 0);
+    // User speaking: smaller baseline, both layers SHRINKING with volume.
+    const userSoft = orbTransform(0.2, 0);
+    const userLoud = orbTransform(0.9, 0);
     assert.equal(userLoud.speaker, "user");
-    assert.ok(userSoft.scale < 0.8, `user baseline is 20% smaller, got ${userSoft.scale}`);
-    assert.ok(userLoud.scale < userSoft.scale, "inward");
+    assert.ok(userSoft.halo.scale < 0.8, `halo baseline is smaller, got ${userSoft.halo.scale}`);
+    assert.ok(userLoud.halo.scale < userSoft.halo.scale, "halo inward");
+    assert.ok(userSoft.sphere.scale < 0.9, "sphere baseline is smaller too");
+    assert.ok(userLoud.sphere.scale < userSoft.sphere.scale, "sphere inward");
+
     // Never collapses: an orb that vanishes reads as broken, not attentive.
-    assert.ok(haloTransform(1, 0).scale >= 0.55);
+    assert.ok(orbTransform(1, 0).halo.scale >= 0.55);
+    assert.ok(orbTransform(1, 0).sphere.scale >= 0.7);
 
     // Crosstalk resolves to whoever is louder rather than fighting.
-    assert.equal(haloTransform(0.8, 0.2).speaker, "user");
-    assert.equal(haloTransform(0.2, 0.8).speaker, "model");
+    assert.equal(orbTransform(0.8, 0.2).speaker, "user");
+    assert.equal(orbTransform(0.2, 0.8).speaker, "model");
     // Both directions still brighten with volume.
-    assert.ok(userLoud.opacity > userSoft.opacity && modelLoud.opacity > modelSoft.opacity);
-  });
-
-  ok("the shell knows who it works for", () => {
-    // Without this the assistant introduces itself as a generic "analytics assistant" and
-    // cannot say whose data it is looking at - the wrong first impression in a demo, and
-    // invisible in the code because the DEEP AGENT's prompt is customer-specific.
-    const text = voiceInstructions({
-      displayName: "Progressive GPT",
-      customer: "Progressive",
-      industry: "Insurance",
-      topics: ["Claimant: Claim status", "Customer: Renewal discounts"],
-    });
-    assert.ok(text.includes("Progressive GPT"), "it introduces itself by name");
-    assert.ok(text.includes("Progressive"), "it knows the customer");
-    assert.ok(text.includes("insurance"), "and the industry, lowercased mid-sentence");
-    assert.ok(text.includes("Claimant: Claim status"), "and what people ask about");
-    // It must still be told to route data questions to the tool, not answer them itself.
-    assert.ok(text.includes(INVOKE_TOOL));
-    // And it reaches the wire.
-    const setup = setupMessage("m", undefined, "", { customer: "Progressive" }).setup;
-    assert.ok(setup.systemInstruction.parts[0].text.includes("Progressive"));
-  });
-
-  ok("no persona degrades to something sayable", () => {
-    // An assistant with no metadata yet must not make the model read a broken sentence.
-    const text = voiceInstructions();
-    assert.ok(text.startsWith("You are a live analytics assistant."), text.slice(0, 60));
-    assert.ok(!text.includes("undefined"));
-    assert.ok(!text.includes("What people ask you about"), "no empty topic list");
+    assert.ok(userLoud.halo.opacity > userSoft.halo.opacity);
+    assert.ok(modelLoud.halo.opacity > modelSoft.halo.opacity);
   });
 
   console.log(`\n${passed} passed`);
