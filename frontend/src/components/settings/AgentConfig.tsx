@@ -7,13 +7,16 @@
  *
  * These edits feed the per-run context only — they are NOT saved back onto the
  * assistant (matching the SPA); they reload from the assistant's context on
- * select.
+ * select. The one exception is the "Voice mode" switch, which persists to the
+ * assistant's metadata like branding does, because it has to survive a reload to
+ * be worth anything: it is what puts the mic button in the header.
  */
 import { IconArrowUpRight } from "@tabler/icons-react";
 import type { PromptMode } from "./types";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Combobox } from "@/components/ui/combobox";
 import { CollapseSection } from "./CollapseSection";
@@ -27,6 +30,7 @@ interface Props {
   systemPrompt: string;
   dataGap: string;
   dataPrompt: string;
+  voiceEnabled: boolean;
   hubPrompts: string[];
   agents: string[];
   onPromptMode: (m: PromptMode) => void;
@@ -35,6 +39,7 @@ interface Props {
   onSystemPrompt: (v: string) => void;
   onDataGap: (v: string) => void;
   onDataPrompt: (v: string) => void;
+  onVoiceEnabled: (v: boolean) => void;
 }
 
 export function AgentConfig({
@@ -44,6 +49,7 @@ export function AgentConfig({
   systemPrompt,
   dataGap,
   dataPrompt,
+  voiceEnabled,
   hubPrompts,
   agents,
   onPromptMode,
@@ -52,6 +58,7 @@ export function AgentConfig({
   onSystemPrompt,
   onDataGap,
   onDataPrompt,
+  onVoiceEnabled,
 }: Props) {
   // Keep the assistant's saved handle selectable even if absent from the list.
   const extraPrompt = promptName && !hubPrompts.includes(promptName) ? [promptName] : [];
@@ -137,6 +144,25 @@ export function AgentConfig({
           autoComplete="off"
           data-1p-ignore="true"
         />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <label className="flex w-fit cursor-pointer items-center gap-2">
+          <Switch checked={voiceEnabled} onCheckedChange={onVoiceEnabled} />
+          <span className="flex items-center gap-1.5">
+            <span className={LABEL_CLS}>Voice mode</span>
+            {/* Flagged, not hidden: it works, but it rides on a Live API that Google
+                labels preview (no GA model, two weeks' deprecation notice), and the
+                microphone path has had the fewest miles of anything here. */}
+            <span className="rounded-full border border-border px-1.5 py-px text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+              Experimental
+            </span>
+          </span>
+        </label>
+        <p className={HINT_CLS + " m-0 leading-snug"}>
+          Adds a mic button so you can talk to this assistant. Which voice it speaks
+          with is under Brand → Advanced brand.
+        </p>
       </div>
 
       <CollapseSection title="Synthetic data prompt">

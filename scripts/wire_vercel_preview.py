@@ -144,7 +144,10 @@ def redeploy(branch: str, token: str, project: str, team: str) -> None:
                 "/v13/deployments",
                 token,
                 team,
-                json={"name": d.get("name"), "deploymentId": d.get("uid"), "target": "preview"},
+                # No `target`: POST /v13/deployments only accepts "production", "staging" or
+                # a custom environment there, and rejects "preview" outright (400). An
+                # absent target IS a preview, which is the one we want.
+                json={"name": d.get("name"), "deploymentId": d.get("uid")},
             )
             print(
                 f"redeploy requested for {branch}: {again.status_code}"

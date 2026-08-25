@@ -176,6 +176,7 @@ function configFromAssistant(a: Assistant, workspace: string): PanelConfig {
     logo: m.logo || DEFAULT_LOGO,
     actions: Array.isArray(m.actions) && m.actions.length ? m.actions : DEFAULT_ACTIONS,
     theme: coerceTheme(m.theme),
+    voiceEnabled: !!(m.voice as { enabled?: boolean } | undefined)?.enabled,
     voiceName: ((m.voice as { voice_name?: string } | undefined)?.voice_name as string) || "",
     fontHeading: (m.font_heading as string) || "",
     fontHeadingFallback: (m.font_heading_fallback as string) || DEFAULT_CURATED,
@@ -203,6 +204,7 @@ function blankConfig(workspace: string): PanelConfig {
     accent2: "",
     brandNeutral: "",
     brandTint: DEFAULT_TINT,
+    voiceEnabled: false,
     voiceName: "",
     logo: "",
     actions: [],
@@ -405,6 +407,13 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
             logo: cfg.logo,
             actions: cfg.actions,
             theme: cfg.theme,
+            // From `cfg`, not `base`: the switch below should put the mic button in the
+            // header on the click, not 600ms later when the PATCH lands.
+            voice: {
+              ...((base.metadata?.voice as object) || {}),
+              enabled: cfg.voiceEnabled,
+              voice_name: cfg.voiceName,
+            },
           },
         };
         // One call writes every brand token (seeds, contrast foreground, derived
@@ -420,7 +429,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
         applyBrand(null); // clear overrides → the unbranded defaults in index.css
         onActiveAssistantChange?.(null);
       }
-    }, [selectedId, assistants, cfg.name, cfg.accent, cfg.accent2, cfg.brandNeutral, cfg.brandTint, cfg.logo, cfg.actions, cfg.theme, onActiveAssistantChange]);
+    }, [selectedId, assistants, cfg.name, cfg.accent, cfg.accent2, cfg.brandNeutral, cfg.brandTint, cfg.logo, cfg.actions, cfg.theme, cfg.voiceEnabled, cfg.voiceName, onActiveAssistantChange]);
 
     /* ---- Typography: async (may hit the font CDN), so kept separate ---- */
     useEffect(() => {
@@ -445,17 +454,6 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
 
     /* ---- Imperative handle: defined below, after editBranding ---- */
 
-    /**
-     * Whether the SELECTED assistant can speak. Read from its metadata rather than from
-     * `cfg`, because voice mode is the builder's switch (set at setup) and nothing in this
-     * panel edits it - only the voice it uses.
-     */
-    const voiceEnabled = !!(
-      assistants.find((a) => a.assistant_id === selectedId)?.metadata?.voice as
-        | { enabled?: boolean }
-        | undefined
-    )?.enabled;
-
     /* ---- Branding edits: update state + debounced metadata PATCH ---- */
     const scheduleBrandingSave = useCallback((next: PanelConfig) => {
       const id = selectedIdRef.current;
@@ -478,9 +476,13 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           logo: next.logo,
           actions: next.actions,
           theme: next.theme,
-          // Merge, never replace: `enabled` is the builder's switch and the picker has no
-          // business changing it.
-          voice: { ...((src?.metadata?.voice as object) || {}), voice_name: next.voiceName },
+          // Merge, never replace: whatever else setup wrote under `voice` (nothing today,
+          // but this is the one metadata key another writer is likely to extend) survives.
+          voice: {
+            ...((src?.metadata?.voice as object) || {}),
+            enabled: next.voiceEnabled,
+            voice_name: next.voiceName,
+          },
         };
         try {
           const updated = await updateAssistant(id, { metadata: meta });
@@ -831,7 +833,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
                 >
                   {/* Only for an assistant that can speak: a voice picker on a text-only
                       assistant is a setting with no effect. */}
-                  {voiceEnabled && (
+                  {cfg.voiceEnabled && (
                     <VoicePicker
                       value={cfg.voiceName}
                       onChange={(v) => editBranding({ voiceName: v })}
@@ -867,6 +869,9 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
                   onSystemPrompt={(v) => editConfig({ systemPrompt: v })}
                   onDataGap={(v) => editConfig({ dataGap: v })}
                   onDataPrompt={(v) => editConfig({ dataPrompt: v })}
+                  // editBranding, not editConfig: this one is saved onto the assistant.
+                  voiceEnabled={cfg.voiceEnabled}
+                  onVoiceEnabled={(v) => editBranding({ voiceEnabled: v })}
                 />
 
                 <ToolsSection

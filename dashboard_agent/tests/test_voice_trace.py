@@ -71,9 +71,12 @@ def test_a_session_is_one_root_span_tagged_as_audio():
 
 
 def test_the_session_carries_the_thread_id_it_was_given():
-    """`thread_id` is what puts the run in a THREAD, and the thread view is where LangSmith
-    renders a conversation with a scrubbable audio player. Without it the attachment is just
-    a file card on an isolated run, which is what shipped first."""
+    """Put the run in a thread, or the audio has nowhere useful to render.
+
+    The thread view is where LangSmith draws a conversation with a scrubbable audio
+    player. Without `thread_id` the attachment is just a file card on an isolated
+    run, which is what shipped first.
+    """
     sid = voice_trace.start_session("ws-1", "proj-1", {"thread_id": "thread-abc"})
     meta = _root(sid).kwargs["extra"]["metadata"]
     assert meta["thread_id"] == "thread-abc"
