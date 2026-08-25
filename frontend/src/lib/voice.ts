@@ -913,6 +913,9 @@ export class VoiceSession {
     // `willContinue`: acknowledged, not answered. This is what stops the model waiting.
     ws.send(JSON.stringify(toolResponseMessage(call, ack, "SILENT", true)));
     this.hooks.onState("thinking");
+    // The wait starts HERE - the model has stopped talking and the agent has the question.
+    // Typing runs until the finally below, however many tool calls that spans.
+    this.keys?.start();
 
     // Progress, throttled. The agent calls a dozen tools in a turn and narrating each one
     // would be worse than silence; one line every few seconds reads as thinking aloud.
@@ -923,8 +926,6 @@ export class VoiceSession {
       // every tool we know is named. The MODEL gets a conversational phrase to say out
       // loud, which is a different sentence shape entirely.
       this.hooks.onActivity(activeLabel(toolName));
-      // One burst per real tool call, so the rhythm tracks the work rather than a timer.
-      this.keys?.burst();
       const now = Date.now();
       if (now - lastProgress < PROGRESS_MIN_GAP_MS) return;
       lastProgress = now;
@@ -970,6 +971,7 @@ export class VoiceSession {
         ),
       );
     } finally {
+      this.keys?.idle();
       this.hooks.onActivity("");
       this.hooks.onState("listening");
     }
