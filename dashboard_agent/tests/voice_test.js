@@ -43,6 +43,7 @@ function ok(name, fn) {
     DEFAULT_VOICE,
     downsampleTo16k,
     frameLevel,
+    haloTransform,
     realtimeAudioMessage,
     INVOKE_TOOL,
     RESUME_TOOL,
@@ -273,6 +274,35 @@ function ok(name, fn) {
     // A loud frame saturates rather than exceeding the range the CSS expects.
     const loud = new Float32Array(512).map((_, i) => (i % 2 ? 1 : -1));
     assert.equal(frameLevel(loud), 1);
+  });
+
+  ok("the halo swells outward for the model and inward for the user", () => {
+    // The asked-for behaviour, and the reason it is a pure function: "what the halo does"
+    // should not be checkable only by talking to it.
+    const quiet = haloTransform(0, 0);
+    assert.equal(quiet.speaker, "idle");
+    assert.equal(quiet.scale, 1, "idle sits at the baseline");
+
+    // Model speaking: baseline size, growing with volume.
+    const modelSoft = haloTransform(0, 0.2);
+    const modelLoud = haloTransform(0, 0.9);
+    assert.equal(modelLoud.speaker, "model");
+    assert.ok(modelSoft.scale > 1 && modelLoud.scale > modelSoft.scale, "outward");
+
+    // User speaking: 20% smaller baseline, SHRINKING with volume.
+    const userSoft = haloTransform(0.2, 0);
+    const userLoud = haloTransform(0.9, 0);
+    assert.equal(userLoud.speaker, "user");
+    assert.ok(userSoft.scale < 0.8, `user baseline is 20% smaller, got ${userSoft.scale}`);
+    assert.ok(userLoud.scale < userSoft.scale, "inward");
+    // Never collapses: an orb that vanishes reads as broken, not attentive.
+    assert.ok(haloTransform(1, 0).scale >= 0.55);
+
+    // Crosstalk resolves to whoever is louder rather than fighting.
+    assert.equal(haloTransform(0.8, 0.2).speaker, "user");
+    assert.equal(haloTransform(0.2, 0.8).speaker, "model");
+    // Both directions still brighten with volume.
+    assert.ok(userLoud.opacity > userSoft.opacity && modelLoud.opacity > modelSoft.opacity);
   });
 
   console.log(`\n${passed} passed`);

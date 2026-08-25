@@ -126,6 +126,40 @@ export function frameLevel(samples: Float32Array): number {
   return Math.min(1, Math.sqrt(sum / samples.length) * 4);
 }
 
+/** Halo baseline while the model talks or nobody does. */
+const HALO_BASE = 1;
+/** Baseline while the USER talks: 20% smaller, so the orb visibly makes room for them. */
+const HALO_USER_BASE = 0.8;
+/** How far it swells outward (model) and draws inward (user) at full volume. */
+const HALO_OUT = 0.3;
+const HALO_IN = 0.18;
+
+/**
+ * Where the halo sits, given how loud each side is.
+ *
+ * The two sides are deliberately NOT symmetric. While the model speaks the halo sits at
+ * full size and pulses OUTWARD on its speech, which reads as the assistant projecting.
+ * While the user speaks it drops to 80% and pulses INWARD, which reads as listening -
+ * leaning in rather than talking over. Whoever is louder wins, so a moment of crosstalk
+ * resolves rather than fighting.
+ *
+ * Pure, because "what the halo does" is the design and it should not be something you can
+ * only check by talking to it.
+ */
+export function haloTransform(
+  userLevel: number,
+  modelLevel: number,
+): { scale: number; opacity: number; speaker: "user" | "model" | "idle" } {
+  const user = Math.max(0, Math.min(1, userLevel));
+  const model = Math.max(0, Math.min(1, modelLevel));
+  const speaker = user > model ? "user" : model > 0.01 ? "model" : "idle";
+  if (speaker === "user") {
+    // Never all the way to nothing: an orb that vanishes reads as broken, not attentive.
+    return { scale: Math.max(0.55, HALO_USER_BASE - HALO_IN * user), opacity: 0.3 + 0.5 * user, speaker };
+  }
+  return { scale: HALO_BASE + HALO_OUT * model, opacity: 0.22 + 0.7 * model, speaker };
+}
+
 /** Base64 to bytes (the Live API sends audio as base64 inline data). */
 export function decodeBase64(b64: string): ArrayBuffer {
   const bin = atob(b64);
@@ -486,11 +520,14 @@ export interface VoiceSessionHooks {
   /** True while model audio is arriving, so the UI can look alive while it talks. */
   onSpeaking(active: boolean): void;
   /**
-   * Loudness right now, 0..1, from whichever side is making sound. Called per audio frame
-   * (dozens of times a second), so a consumer must NOT hold it in React state - write it
-   * to a ref and read it from an animation frame.
+   * Loudness right now, 0..1, and WHICH SIDE made it. Called per audio frame (dozens of
+   * times a second), so a consumer must NOT hold it in React state - write it to a ref and
+   * read it from an animation frame.
+   *
+   * The side matters because the orb reacts in opposite directions: it draws inward while
+   * the user speaks and swells outward while the model does (see `haloTransform`).
    */
-  onLevel(level: number): void;
+  onLevel(level: number, from: "user" | "model"): void;
   /**
    * Why a session failed, in the server's own words. Without this a bad URL, a rejected
    * token and a normal hang-up are indistinguishable: the socket just closes and the
@@ -562,7 +599,8 @@ export class VoiceSession {
   stop(): void {
     this.closed = true;
     if (this.speakingTimer) clearTimeout(this.speakingTimer);
-    this.hooks.onLevel(0);
+    this.hooks.onLevel(0, "model");
+    this.hooks.onLevel(0, "user");
     this.ws?.close();
     this.ws = null;
     this.recorder?.disconnect();
@@ -642,7 +680,7 @@ export class VoiceSession {
     const out = downsampleTo16k(frame, this.ctx.sampleRate);
     // The halo should react to the USER too, not just the model: half a conversation is
     // them talking, and a flat orb while you speak feels deaf.
-    this.hooks.onLevel(frameLevel(out));
+    this.hooks.onLevel(frameLevel(out), "user");
     this.ws.send(JSON.stringify(realtimeAudioMessage(floatToPcm16(out))));
   }
 
@@ -678,7 +716,7 @@ export class VoiceSession {
       this.player?.port.postMessage(samples);
       // Measured here rather than in the worklet: the worklet drains on the audio thread
       // and would need a message back, and this is the same audio a beat earlier.
-      this.hooks.onLevel(frameLevel(samples));
+      this.hooks.onLevel(frameLevel(samples), "model");
     }
     // Audio arrives in a burst per turn, so "still speaking" is a timer rather than a
     // flag: it stays true until the chunks stop for a moment.

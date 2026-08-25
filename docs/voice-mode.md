@@ -150,7 +150,13 @@ it through `onLevel`, and `VoiceOrb` reads it from an animation frame and writes
 custom property. Two consequences worth keeping: the level is a REF rather than React state
 (it updates at audio rate, and state would re-render the tree dozens of times a second), and
 the easing is asymmetric - fast attack, slow release - which is what makes it read as
-breathing rather than flickering. Colours are DERIVED from the brand hue rather than taken
+breathing rather than flickering. The two sides move in OPPOSITE directions: the halo sits
+at full size and swells outward on the model's speech (the assistant projecting), and drops
+to 80% and draws inward on the user's (listening, leaning in rather than talking over).
+Whoever is louder wins, so crosstalk resolves instead of fighting, and it never collapses to
+nothing - an orb that vanishes reads as broken. That geometry is `haloTransform`, a pure
+function with tests, because "what the halo does" should not be checkable only by talking
+to it. Colours are DERIVED from the brand hue rather than taken
 straight from it: a brand secondary can legitimately be near-black (Progressive's is), and
 mixing that into a sphere reads as a bruise, so each stop is lightened toward white and
 pulled toward violet or pink. The result is recognisably the customer's colour and reliably
@@ -170,7 +176,11 @@ Three more things are load-bearing rather than decorative:
   (`onActivity`, unthrottled - unlike the spoken narration).
 - **Quick actions are a teleprompter.** Tapping one opens the question to READ ALOUD rather
   than submitting it. Sending it as text would make the orb answer something the microphone
-  never heard.
+  never heard. It collapses on an outside click and on the next finished user turn
+  (`userTurns`), since once the question has been read the card is covering the orb.
+- **The orb only appears once a session is live.** Before the first tap there is no audio to
+  react to, so an orb would be animating over nothing and implying it is already listening;
+  a plain mic button says "not yet" honestly.
 
 The X returns to the chat view without hanging up; a compact control then appears in the
 header showing state plus the activity line, with a way back.

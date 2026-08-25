@@ -10,8 +10,8 @@
  * from a hung one.
  */
 
-import { useState } from "react";
-import { IconX } from "@tabler/icons-react";
+import { useEffect, useRef, useState } from "react";
+import { IconX, IconMicrophone } from "@tabler/icons-react";
 import type { QuickAction } from "@/lib/api";
 import type { VoiceSessionView } from "@/lib/hooks/use-voice-session";
 import { VoiceOrb } from "@/components/VoiceOrb";
@@ -52,6 +52,25 @@ export function VoiceStage({
 }: VoiceStageProps) {
   const { running } = voice;
   const [reading, setReading] = useState<number | null>(null);
+  const card = useRef<HTMLDivElement>(null);
+
+  // Collapse when the question has been read: the card has done its job and is now
+  // covering the orb. `userTurns` is a counter, so this fires per finished turn.
+  useEffect(() => {
+    setReading(null);
+  }, [voice.userTurns]);
+
+  // Collapse on a click anywhere else. `pointerdown` rather than `click` so it closes on
+  // the way down, which feels immediate; a click INSIDE is ignored, since brushing the card
+  // while reading from it should not dismiss it.
+  useEffect(() => {
+    if (reading === null) return;
+    const onDown = (e: PointerEvent) => {
+      if (!card.current?.contains(e.target as Node)) setReading(null);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [reading]);
 
   return (
     <div className="relative flex h-full flex-col items-center justify-center gap-8 px-8">
@@ -70,7 +89,21 @@ export function VoiceStage({
         <h2 className="m-0 font-heading text-xl font-semibold tracking-tight">{displayName}</h2>
       </div>
 
-      <VoiceOrb voice={voice} onClick={() => (running ? voice.stop() : voice.start())} />
+      {/* The orb belongs to a LIVE conversation. Before the first tap there is no audio to
+          react to, so an orb would be animating over nothing and implying it is already
+          listening: a plain mic button says "not yet" honestly. */}
+      {running ? (
+        <VoiceOrb voice={voice} onClick={() => voice.stop()} />
+      ) : (
+        <button
+          type="button"
+          onClick={() => voice.start()}
+          aria-label="Start talking"
+          className="grid size-36 place-items-center rounded-full border border-border bg-panel text-muted-foreground transition-colors hover:border-brand/50 hover:text-brand"
+        >
+          <IconMicrophone className="size-12" />
+        </button>
+      )}
 
       {/* Status only. No transcript: the whole point of this view is not reading, and a
           live caption of what was just said pulls the eye off the dashboard. The words are
@@ -98,10 +131,8 @@ export function VoiceStage({
               </div>
             </>
           ) : (
-            <button
-              type="button"
-              onClick={() => setReading(null)}
-              title="Close"
+            <div
+              ref={card}
               className="w-full rounded-xl border border-brand/40 bg-brand/5 px-4 py-3 text-left"
             >
               <span className="mb-1 block text-[10.5px] tracking-wide text-muted-foreground uppercase">
@@ -112,7 +143,7 @@ export function VoiceStage({
               <span className="block text-[15px] leading-relaxed text-foreground">
                 {presets[reading].question}
               </span>
-            </button>
+            </div>
           )}
         </div>
       )}

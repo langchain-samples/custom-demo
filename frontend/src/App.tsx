@@ -215,15 +215,17 @@ export default function App() {
           <BrandLogo logo={logo} />
           <h1 className="m-0 font-heading text-2xl font-bold tracking-tight">{displayName}</h1>
         </button>
+        {/* One right-anchored action bar. `ml-auto` belongs to the BAR, not to whichever
+            button happens to come first: hanging it off the first child means the whole row
+            slides left the moment that child is conditional (which the voice control is). */}
+        <div className="ml-auto flex items-center gap-3.5 print:hidden">
         {voiceEnabled && !showStage && (
-          <div className="ml-auto print:hidden">
-            <VoiceButton voice={voice} onExpand={() => setVoiceStage(true)} />
-          </div>
+          <VoiceButton voice={voice} onExpand={() => setVoiceStage(true)} />
         )}
         <Tooltip content="Start a new chat (reset the conversation + dashboard)" side="bottom">
           <Button
             variant="secondary"
-            className={`${voiceEnabled && !showStage ? "" : "ml-auto"} gap-1.5 rounded-full px-4 print:hidden`}
+            className="gap-1.5 rounded-full px-4 print:hidden"
             aria-label="New Chat"
             onClick={handleResetConversation}
           >
@@ -277,6 +279,7 @@ export default function App() {
             <IconSettings size={18} />
           </Button>
         </Tooltip>
+        </div>
       </header>
 
       <div

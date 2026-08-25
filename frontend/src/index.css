@@ -280,7 +280,9 @@ input[type="color"]::-moz-color-swatch {
 
 .voice-orb {
   --level: 0;
-  --idle: 0.35;
+  /* Written from an animation frame by VoiceOrb; see `haloTransform` for the geometry. */
+  --halo-scale: 1;
+  --halo-opacity: 0.22;
   --orb-size: 260px;
   /* The brand hue leads, but the other two stops are DERIVED rather than taken straight
      from the brand: a secondary can legitimately be near-black (Progressive's is), and
@@ -313,8 +315,8 @@ input[type="color"]::-moz-color-swatch {
     transparent 70%
   );
   filter: blur(30px);
-  opacity: calc(0.22 * var(--idle) + 0.75 * var(--level));
-  transform: scale(calc(0.9 + 0.28 * var(--level)));
+  opacity: var(--halo-opacity);
+  transform: scale(var(--halo-scale));
   transition: opacity 90ms linear, transform 90ms linear;
 }
 
@@ -346,5 +348,6 @@ input[type="color"]::-moz-color-swatch {
 }
 
 /* Connecting: no audio yet, so say so with motion rather than leaving it inert. */
+.voice-orb[data-speaker="user"] .voice-orb__halo { filter: blur(22px); }
 .voice-orb[data-state="connecting"] .voice-orb__halo { animation: orb-float 1.6s ease-in-out infinite; }
 .voice-orb[data-state="error"] .voice-orb__sphere { filter: grayscale(0.7); }

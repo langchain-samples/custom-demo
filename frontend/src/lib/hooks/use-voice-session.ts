@@ -27,10 +27,17 @@ export interface VoiceSessionView {
   /** True while the model is talking, for the orb's animation. */
   speaking: boolean;
   /**
-   * Live loudness, 0..1. A REF and not state on purpose: it updates dozens of times a
-   * second, so the orb reads it from an animation frame instead of re-rendering.
+   * How many turns the USER has finished. A counter rather than a boolean because it is
+   * consumed as an event ("a turn just ended") - the teleprompter collapses on it, since
+   * once the question has been read the card is in the way.
    */
-  level: React.MutableRefObject<number>;
+  userTurns: number;
+  /**
+   * Live loudness per side, 0..1. A REF and not state on purpose: it updates dozens of
+   * times a second, so the orb reads it from an animation frame instead of re-rendering.
+   * Split by side because the halo moves in opposite directions for each (`haloTransform`).
+   */
+  level: React.MutableRefObject<{ user: number; model: number }>;
   error: string;
   running: boolean;
   start: () => void;
@@ -42,9 +49,10 @@ export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
   const [state, setState] = useState<VoiceState>("idle");
   const [activity, setActivity] = useState("");
   const [speaking, setSpeaking] = useState(false);
+  const [userTurns, setUserTurns] = useState(0);
   const [error, setError] = useState("");
   const session = useRef<VoiceSession | null>(null);
-  const level = useRef(0);
+  const level = useRef({ user: 0, model: 0 });
   const traceId = useRef("");
 
   // A live microphone and an open socket must not outlive the page.
@@ -65,7 +73,7 @@ export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
     }
     setActivity("");
     setSpeaking(false);
-    level.current = 0;
+    level.current = { user: 0, model: 0 };
     setState("idle");
   }, []);
 
@@ -108,8 +116,9 @@ export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
             };
           },
           onTranscript: (role, text) => {
-            // Not rendered anywhere: the stage shows status, not a caption. Kept because
-            // the utterances are what make the conversation legible in the trace.
+            // The text itself is not rendered - the stage shows status, not a caption - but
+            // the BOUNDARY matters: a finished user turn is what collapses the teleprompter.
+            if (role === "user") setUserTurns((n) => n + 1);
             if (traceId.current) {
               void voiceTrace({ action: "utterance", session_id: traceId.current, role, text });
             }
@@ -117,8 +126,8 @@ export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
           onState: setState,
           onActivity: setActivity,
           onSpeaking: setSpeaking,
-          onLevel: (v) => {
-            level.current = v;
+          onLevel: (v, from) => {
+            level.current[from] = v;
           },
           onError: (detail) => {
             // Logged as well as shown: the server's reason is usually the whole answer.
@@ -161,6 +170,7 @@ export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
     state,
     activity,
     speaking,
+    userTurns,
     level,
     error,
     running: state !== "idle" && state !== "error",
