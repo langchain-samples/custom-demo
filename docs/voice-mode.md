@@ -133,6 +133,9 @@ agent run's id and resolved URL (`agent_trace` in its outputs) and the agent run
 normally in the same project: two trees, one click apart. `graph.py` carries the same note,
 because the docs make re-adding that parent look obviously correct.
 
+Tested on Agent Server **0.11.1 and 0.13.0** - the newer build behaves identically, so this
+is not a version lag waiting to be fixed by an upgrade.
+
 **Why the ADK example nests and this does not.** It invokes the deep agent IN PROCESS -
 `agent.ainvoke(...)` inside `tracing_context(parent=tool_run)` - so the parent is an
 ordinary in-process one and nesting is automatic. Ours runs through Agent Server, in another
@@ -271,3 +274,6 @@ with nothing visibly broken. There is a test pinning that link.
   past, which is not set up yet.
 - **Cost is ours.** Everything else in the demo runs on the customer workspace's
   credentials; voice bills to `GEMINI_API_KEY` regardless of whose assistant it is.
+- **`.dockerignore` does not exclude `.env`.** Unrelated to voice, but `langgraph deploy`
+  builds from the working tree, so a deploy from a developer's machine ships whatever keys
+  are in their local `.env` into the image. Worth fixing before anyone deploys by hand.

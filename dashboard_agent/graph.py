@@ -77,7 +77,7 @@ async def graph(config: Any):
     # span (see voice_trace.py), and LangSmith documents exactly that: send `langsmith-trace`,
     # read it off `configurable`, wrap the run in `tracing_context(parent=...)`.
     #
-    # Measured against this deployment, every form of it LOSES THE RUN. Bare dotted order,
+    # Measured on Agent Server 0.11.1 AND 0.13.0, every form of it LOSES THE RUN. Bare dotted order,
     # a headers mapping, and a `RunTree.from_headers(..., ls_client=client)` built with the
     # right workspace client all produce the same outcome: the agent answers, and no run is
     # recorded anywhere - not nested, not at its own root. A control run with the header
