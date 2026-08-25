@@ -942,7 +942,13 @@ export class VoiceSession {
 
     // Progress, throttled. The agent calls a dozen tools in a turn and narrating each one
     // would be worse than silence; one line every few seconds reads as thinking aloud.
-    let lastProgress = 0;
+    // Clock starts NOW, at dispatch, not at zero. A progress line is a complete client
+    // turn, which INTERRUPTS whatever the model is saying - and at zero the very first
+    // tool call always passed the gate, landing about a second in and cutting off the
+    // acknowledgement the system instruction asks for ("Let me pull that up") to say
+    // "still working on that" instead. That read as a long pause followed by a non sequitur:
+    // the acknowledgement was killed, so the model had to generate a fresh reply.
+    let lastProgress = Date.now();
     const narrate = (toolName: string) => {
       // Two audiences, two vocabularies. The SCREEN gets the same present-tense label the
       // chat log uses for that tool ("Listing files"), so the orb and the log agree and
