@@ -25,8 +25,8 @@
  */
 
 const SAMPLE_URL = "/sfx/keyboard-typing.mp3";
-/** Playback gain. The asset peaks at -5.3dB, so there is headroom to 1.0 if wanted. */
-const GAIN = 0.7;
+/** Playback gain. The asset peaks at -5.3dB, so 1.0 cannot clip. */
+const GAIN = 1;
 /** Ramp on start/stop. Without it, cutting a loop dead is an audible click. */
 const RAMP = 0.06;
 /** Model speech above this (0..1) mutes the keys entirely, so they never talk over it. */
