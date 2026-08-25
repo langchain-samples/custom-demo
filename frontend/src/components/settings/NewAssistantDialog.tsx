@@ -219,6 +219,12 @@ export function NewAssistantDialog({
             <Switch checked={voice} onCheckedChange={setVoice} />
             <span className="flex items-center gap-1.5 text-[12.5px] font-medium text-foreground">
               Voice mode
+              {/* Flagged, not hidden: it works, but it rides on a Live API that Google
+                  labels preview (no GA model, two weeks' deprecation notice), and the
+                  microphone path has had the fewest miles of anything here. */}
+              <span className="rounded-full border border-border px-1.5 py-px text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+                Experimental
+              </span>
               <Hint>
                 Adds a mic button so you can talk to this assistant. A
                 speech-to-speech model runs the conversation and asks the agent
