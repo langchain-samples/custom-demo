@@ -72,6 +72,57 @@ export interface VoicePersona {
    * carry both the personas it serves and their topics in a few words each.
    */
   topics?: string[];
+  /**
+   * The last few exchanges on the thread, so starting voice MID-conversation is not a cold
+   * start. The agent has this history either way (same thread); the shell does not, and
+   * without it a spoken "what about last month?" refers to something the voice model has
+   * never heard. See `conversationDigest`.
+   */
+  history?: string[];
+}
+
+/** A thread message, loosely typed: only the fields the digest reads. */
+export interface DigestMessage {
+  type?: string;
+  content?: unknown;
+}
+
+/** Flatten one message's content, which Anthropic returns as blocks when it mixes text. */
+function messageText(content: unknown): string {
+  if (typeof content === "string") return content.trim();
+  if (Array.isArray(content)) {
+    return content
+      .map((b) => (b && typeof b === "object" && (b as { text?: string }).text) || "")
+      .join("")
+      .trim();
+  }
+  return "";
+}
+
+/**
+ * The last few exchanges, as short lines the shell can be told about.
+ *
+ * Walks BACKWARD so a long thread costs nothing and the most recent turns always survive
+ * the limit. Tool messages and tool-call-only assistant turns are skipped: they are the
+ * agent's plumbing, and reading them to a voice model invites it to narrate them.
+ * Assistant lines are labelled "You" because from the listener's side it is one assistant,
+ * even though those words came from the deep agent rather than the shell.
+ */
+export function conversationDigest(
+  messages: DigestMessage[],
+  turns = 3,
+  maxChars = 160,
+): string[] {
+  const lines: string[] = [];
+  for (let i = messages.length - 1; i >= 0 && lines.length < turns * 2; i--) {
+    const m = messages[i];
+    const kind = m?.type === "human" ? "User" : m?.type === "ai" ? "You" : "";
+    if (!kind) continue;
+    const text = messageText(m.content);
+    if (!text) continue;
+    lines.push(`${kind}: ${text.length > maxChars ? text.slice(0, maxChars) + "…" : text}`);
+  }
+  return lines.reverse();
 }
 
 /**
@@ -96,8 +147,16 @@ export function voiceInstructions(persona: VoicePersona = {}): string {
   const covers = persona.topics?.length
     ? `\n\nWhat people ask you about: ${persona.topics.slice(0, 6).join("; ")}.`
     : "";
+  // Framed as "before you joined" rather than as your own memory, because it is: these
+  // turns were typed, and pretending to remember hearing them invites confident nonsense
+  // about what was said.
+  const earlier = persona.history?.length
+    ? `\n\nEarlier in this conversation, before you joined:\n${persona.history
+        .map((line) => `- ${line}`)
+        .join("\n")}\nPick it up naturally if they refer back to it.`
+    : "";
 
-  return `${who}${covers}
+  return `${who}${covers}${earlier}
 
 You are being HEARD, not read: keep replies to a sentence or two, never speak markdown, and
 never read out a list of numbers.

@@ -8,8 +8,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatPanelHandle } from "@/components/ChatPanel";
-import { ensureThread, voiceToken, voiceTrace } from "@/lib/api";
-import { INVOKE_TOOL, VoiceSession, type VoicePersona, type VoiceState } from "@/lib/voice";
+import { ensureThread, getThreadState, voiceToken, voiceTrace } from "@/lib/api";
+import {
+  conversationDigest,
+  INVOKE_TOOL,
+  VoiceSession,
+  type VoicePersona,
+  type VoiceState,
+} from "@/lib/voice";
 
 export interface VoiceSessionOptions {
   chat: React.RefObject<ChatPanelHandle | null>;
@@ -112,6 +118,18 @@ export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
         // the agent's turns are one thing in the UI. `ensureThread` mints it now if the
         // first question has not been asked yet.
         const threadId = await ensureThread().catch(() => "");
+
+        // What has already been said on this thread, so joining mid-conversation is not a
+        // cold start for the shell. Best-effort and non-blocking to the point of being
+        // skippable: a session that starts without it is merely forgetful, and failing to
+        // start because the history could not be read would be worse.
+        let history: string[] = [];
+        try {
+          const state = await getThreadState(threadId);
+          history = conversationDigest(state?.values?.messages ?? []);
+        } catch {
+          /* a fresh thread has no state yet, which is the common case */
+        }
         const started = await voiceTrace({
           action: "session",
           workspace,
@@ -180,7 +198,7 @@ export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
               outputs,
             });
           },
-        }, voiceName, persona);
+        }, voiceName, { ...persona, history });
         session.current = live;
         await live.start();
       } catch (e) {

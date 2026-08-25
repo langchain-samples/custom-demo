@@ -27,6 +27,7 @@ function ok(name, fn) {
     decodeBase64,
     setupMessage,
     voiceInstructions,
+    conversationDigest,
     supportsNonBlocking,
     toolResponseMessage,
     systemTurnMessage,
@@ -311,6 +312,55 @@ function ok(name, fn) {
     // Both directions still brighten with volume.
     assert.ok(userLoud.halo.opacity > userSoft.halo.opacity);
     assert.ok(modelLoud.halo.opacity > modelSoft.halo.opacity);
+  });
+
+  ok("the digest keeps the last exchanges and drops the plumbing", () => {
+    // Starting voice mid-conversation should not be a cold start for the shell: the agent
+    // has this history (same thread), the shell does not.
+    const messages = [
+      { type: "human", content: "How did the Atlanta store do?" },
+      { type: "ai", content: [{ type: "text", text: "Revenue was up 8 percent." }] },
+      // Plumbing: a tool result and a tool-call-only assistant turn. Reading these to a
+      // voice model invites it to narrate the agent's internals out loud.
+      { type: "tool", content: "rows: 42" },
+      { type: "ai", content: "" },
+      { type: "human", content: "And customer satisfaction?" },
+    ];
+    const lines = conversationDigest(messages);
+    assert.deepEqual(lines, [
+      "User: How did the Atlanta store do?",
+      "You: Revenue was up 8 percent.",
+      "User: And customer satisfaction?",
+    ]);
+  });
+
+  ok("the digest is bounded at both ends", () => {
+    // Backward walk, so a long thread costs nothing and the NEWEST turns survive the limit.
+    const many = Array.from({ length: 40 }, (_, i) => ({
+      type: i % 2 ? "ai" : "human",
+      content: `turn ${i}`,
+    }));
+    const lines = conversationDigest(many, 2);
+    assert.equal(lines.length, 4);
+    assert.ok(lines[lines.length - 1].includes("turn 39"), lines.join(" | "));
+    // And each line is truncated, so one pasted essay cannot swamp the instruction.
+    const long = conversationDigest([{ type: "human", content: "x".repeat(500) }], 3, 40);
+    assert.ok(long[0].length < 60, long[0]);
+    assert.ok(long[0].endsWith("…"));
+    assert.deepEqual(conversationDigest([]), []);
+  });
+
+  ok("the history reaches the instruction, framed as someone else's words", () => {
+    const text = voiceInstructions({
+      customer: "Progressive",
+      history: ["User: How did Atlanta do?", "You: Revenue was up 8 percent."],
+    });
+    assert.ok(text.includes("How did Atlanta do?"));
+    // "before you joined" rather than presented as its own memory: those turns were TYPED,
+    // and a model told it remembers hearing them will invent how they sounded.
+    assert.ok(text.includes("before you joined"), text);
+    // Absent history must not leave an empty heading behind.
+    assert.ok(!voiceInstructions({ customer: "Progressive" }).includes("Earlier in this"));
   });
 
   console.log(`\n${passed} passed`);

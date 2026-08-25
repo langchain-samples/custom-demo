@@ -51,6 +51,19 @@ With it, "who are you?" gets answered from a live session as: *"I'm Progressive 
 analytics assistant for Progressive. I can help you with questions about claims, renewals,
 or pretty much anything about your customers' data."*
 
+It also carries the last few exchanges on the thread (`conversationDigest`), so starting voice
+MID-conversation is not a cold start. The agent has that history either way - same thread -
+but the shell does not, so without it a spoken "what about last month?" refers to something
+the voice model has never heard. Verified live: seeded with two typed turns about the Atlanta
+store, "remind me what we were just looking at?" gets *"We were discussing which departments
+drove the most revenue in the Atlanta store today, with Garden and Appliances leading."*
+
+Three details in the digest are deliberate: it walks BACKWARD (a long thread costs nothing and
+the newest turns always survive the limit), it drops tool messages and tool-call-only turns
+(agent plumbing, which a voice model will happily narrate), and it is framed as "before you
+joined" rather than as the shell's own memory - those turns were typed, and a model told it
+remembers hearing them will invent how they sounded.
+
 Kept short on purpose - this is a realtime speech model, and a long system instruction costs
 latency and adherence - and it degrades to a sayable sentence when an assistant has no
 metadata yet.
