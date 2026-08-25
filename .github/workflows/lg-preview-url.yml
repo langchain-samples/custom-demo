@@ -1,0 +1,84 @@
+# Point a pull request's VERCEL preview at that pull request's LANGSMITH preview.
+#
+# Both platforms build a preview per PR and neither knows about the other, so by default a
+# Vercel preview talks to the production deployment - you review a PR's UI against main's
+# backend. See scripts/wire_vercel_preview.py for why this runs here rather than inside the
+# Vercel build (short version: only CI can WAIT for the LangSmith preview to exist, and
+# VITE_LG_URL is baked in at build time, so the redeploy is the load-bearing step).
+#
+# Gated on the `LG-update` label, applied automatically when a PR touches the backend. A
+# frontend-only PR does not need its own Agent Server, and wiring one costs a build on each
+# side for nothing.
+name: LangGraph preview URL
+
+on:
+  pull_request:
+    # `labeled` so adding LG-update by hand wires an existing PR without an empty commit.
+    types: [opened, synchronize, reopened, labeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    name: Label backend PRs
+    runs-on: ubuntu-latest
+    outputs:
+      wire: ${{ steps.decide.outputs.wire }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply LG-update when the backend changed
+        id: decide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          # What actually changes the deployed agent. Everything ships in the image
+          # (dependencies = ["."]), but only these change how the Agent Server behaves, so
+          # a docs or frontend PR does not trigger a deployment pair.
+          changed=$(gh pr diff "$PR" --name-only | grep -E '^(dashboard_agent/|langgraph\.json|pyproject\.toml|uv\.lock)' || true)
+
+          has_label=$(echo "$LABELS" | grep -c '"LG-update"' || true)
+          if [ -n "$changed" ] && [ "$has_label" = "0" ]; then
+            echo "backend changed; applying LG-update"
+            echo "$changed" | sed 's/^/  /'
+            # The label may not exist in a fresh fork of this repo.
+            gh label create LG-update --color 1D76DB \
+              --description "PR changes the Agent Server; wire its Vercel preview to its LangSmith preview" \
+              2>/dev/null || true
+            gh pr edit "$PR" --add-label LG-update
+            has_label=1
+          fi
+
+          # Read from the decision above rather than from the event payload: a label applied
+          # in this run is not reflected in the payload that triggered it.
+          if [ "$has_label" != "0" ]; then
+            echo "wire=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "wire=false" >> "$GITHUB_OUTPUT"
+            echo "no backend changes and no LG-update label; nothing to wire"
+          fi
+
+  wire:
+    name: Wire the Vercel preview
+    needs: label
+    if: needs.label.outputs.wire == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Resolve the LangSmith preview and set VITE_LG_URL for this branch
+        env:
+          LS_CROSS_WORKSPACE_KEY: ${{ secrets.LS_CROSS_WORKSPACE_KEY }}
+          LANGSMITH_TENANT_ID: 4582c584-4ea8-48aa-a5bc-ba36237b4735
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          # Only needed when the Vercel project belongs to a team rather than a user.
+          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+        run: uv run python scripts/wire_vercel_preview.py
