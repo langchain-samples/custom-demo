@@ -77,8 +77,8 @@ export function VoiceStage({
       <button
         type="button"
         onClick={onExit}
-        title="Back to the chat view (the conversation keeps going)"
-        aria-label="Back to the chat view"
+        title="End the conversation and go back to the chat view"
+        aria-label="End the conversation and go back to the chat view"
         className="absolute top-4 right-4 grid size-9 place-items-center rounded-full border border-border bg-panel text-muted-foreground transition-colors hover:text-foreground"
       >
         <IconX className="size-4" />

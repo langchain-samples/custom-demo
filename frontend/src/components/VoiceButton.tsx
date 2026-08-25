@@ -6,15 +6,17 @@
  * switch somewhere off to the side, and it competed with New Chat for the one part of the
  * header the eye treats as "actions".
  *
- * Shown once the immersive view (VoiceStage) has been exited, so a running conversation is
- * never invisible. `useVoiceSession` owns the session; this only renders it, which is why
- * leaving the stage does not hang up.
+ * ONE button, because listening and the orb are now the same state: the orb covers the chat
+ * rail while a conversation is live, and leaving the orb hangs up (see App). So by the time
+ * this is on screen the session is always idle, and there is nothing to stop. It used to sit
+ * beside a second, stop button - the cost of letting "running, but not on the orb" exist.
  *
- * Clicking it goes TO the voice view - starting a session if there is not one - because
- * starting a conversation and then hunting for the orb was two clicks for one intention.
+ * The state-driven icon and tooltip stay anyway: they cost nothing, and if a future change
+ * ever makes a live session visible from here again, this degrades to something honest
+ * rather than a mic button that lies about what is happening.
  */
 
-import { IconMicrophone, IconMicrophoneOff, IconLoader2 } from "@tabler/icons-react";
+import { IconMicrophone, IconLoader2 } from "@tabler/icons-react";
 import { Button } from "@/components/motion/button";
 import type { VoiceSessionView } from "@/lib/hooks/use-voice-session";
 import type { VoiceState } from "@/lib/voice";
@@ -45,10 +47,8 @@ export function VoiceButton({ voice, onOpen }: VoiceButtonProps) {
   const Icon = spin ? IconLoader2 : IconMicrophone;
 
   /**
-   * One button, one meaning: GO TO THE VOICE VIEW. Starting a conversation from the chat
-   * view used to leave you in the chat view with a session running somewhere off screen, and
-   * a separate expander to find the orb - two clicks for the obvious thing. Now this takes
-   * you there and the orb itself is what starts and stops.
+   * One button, one meaning: START TALKING. Which is also GO TO THE ORB, because those are
+   * the same act now - the session and the view begin and end together.
    */
   const open = () => {
     if (!running) voice.start();
@@ -78,22 +78,6 @@ export function VoiceButton({ voice, onOpen }: VoiceButtonProps) {
       >
         <Icon className={spin ? "size-4 animate-spin" : "size-4"} />
       </Button>
-      {/* Stop stays reachable from the chat view, so ending a conversation does not require
-          going back to the orb first. Only while running, so the resting composer keeps to
-          one voice control. */}
-      {running && (
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          title="Stop the conversation"
-          aria-label="Stop the conversation"
-          onClick={voice.stop}
-          className="size-8 rounded-full"
-        >
-          <IconMicrophoneOff className="size-4" />
-        </Button>
-      )}
     </>
   );
 }

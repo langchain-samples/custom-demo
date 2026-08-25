@@ -341,7 +341,14 @@ export default function App() {
             <div className="absolute inset-0 z-20 bg-background">
               <VoiceStage
                 voice={voice}
-                onExit={() => setVoiceStage(false)}
+                // Leaving the orb HANGS UP. Orb and listening are one thing: the alternative
+                // made "running, but not on the orb" a reachable state, which is why the
+                // composer needed its own stop button next to the mic - two controls for one
+                // conversation, and a live microphone with nothing on screen saying so.
+                onExit={() => {
+                  voice.stop();
+                  setVoiceStage(false);
+                }}
                 displayName={displayName}
                 logo={logo}
                 presets={presets}

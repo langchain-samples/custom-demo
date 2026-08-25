@@ -28,6 +28,7 @@
 // happy with the explicit form, so it is the one that works in both.
 import { ConversationRecorder } from "./voiceRecorder.ts";
 import { activeLabel } from "./toolLabels.ts";
+import { TypingSound } from "./typingSound.ts";
 
 const LIVE_HOST = "generativelanguage.googleapis.com";
 // The CONSTRAINED method, and it has to be. Verified against the live API: an ephemeral
@@ -683,6 +684,8 @@ export class VoiceSession {
   private ctx: AudioContext | null = null;
   private mic: MediaStream | null = null;
   private player: AudioWorkletNode | null = null;
+  /** Keyboard texture over the dead air while the agent works (see typingSound.ts). */
+  private keys: TypingSound | null = null;
   private recorder: AudioWorkletNode | null = null;
   private resumeHandle = "";
   private pendingApproval = "";
@@ -728,6 +731,8 @@ export class VoiceSession {
     if (this.speakingTimer) clearTimeout(this.speakingTimer);
     this.hooks.onLevel(0, "model");
     this.hooks.onLevel(0, "user");
+    this.keys?.stop();
+    this.keys = null;
     this.ws?.close();
     this.ws = null;
     this.recorder?.disconnect();
@@ -749,6 +754,9 @@ export class VoiceSession {
 
     this.player = new AudioWorkletNode(ctx, "pcm-player-processor");
     this.player.connect(ctx.destination);
+    // Shares this context: browsers cap concurrent AudioContexts, and it needs to duck
+    // against the same output the player writes to.
+    this.keys = new TypingSound(ctx);
 
     this.mic = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
@@ -850,14 +858,23 @@ export class VoiceSession {
       this.tape.add("model", samples);
       // Measured here rather than in the worklet: the worklet drains on the audio thread
       // and would need a message back, and this is the same audio a beat earlier.
-      this.hooks.onLevel(frameLevel(samples), "model");
+      const modelLevel = frameLevel(samples);
+      this.hooks.onLevel(modelLevel, "model");
+      // Keys follow the voice: a burst must never clatter under the assistant talking.
+      this.keys?.duck(modelLevel);
     }
     // Audio arrives in a burst per turn, so "still speaking" is a timer rather than a
     // flag: it stays true until the chunks stop for a moment.
     if (chunks.length) {
       this.hooks.onSpeaking(true);
       if (this.speakingTimer) clearTimeout(this.speakingTimer);
-      this.speakingTimer = setTimeout(() => this.hooks.onSpeaking(false), SPEAKING_IDLE_MS);
+      this.speakingTimer = setTimeout(() => {
+        this.hooks.onSpeaking(false);
+        // Release the duck here, not on a level frame: when the model stops talking the
+        // chunks simply stop arriving, so there is no quiet frame to un-duck on and the
+        // keys would stay muted for the rest of the session after its first word.
+        this.keys?.duck(0);
+      }, SPEAKING_IDLE_MS);
     }
 
     const { input, output } = transcriptsFrom(frame);
@@ -906,6 +923,8 @@ export class VoiceSession {
       // every tool we know is named. The MODEL gets a conversational phrase to say out
       // loud, which is a different sentence shape entirely.
       this.hooks.onActivity(activeLabel(toolName));
+      // One burst per real tool call, so the rhythm tracks the work rather than a timer.
+      this.keys?.burst();
       const now = Date.now();
       if (now - lastProgress < PROGRESS_MIN_GAP_MS) return;
       lastProgress = now;
