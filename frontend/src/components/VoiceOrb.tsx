@@ -75,11 +75,15 @@ export function VoiceOrb({ voice, onClick, size = 156 }: VoiceOrbProps) {
       style={{ ["--orb-size" as string]: `${size}px` }}
       data-state={state}
     >
-      {/* Three layers, back to front: the halo that reacts, the sphere, and a highlight
-          that gives it a lit-from-above roundness. */}
+      {/* Layers back to front: the reactive halo, then the sphere and its highlight inside a
+          body wrapper. The wrapper exists so every element owns exactly ONE transform - the
+          sphere's drift animation owns its own, and an audio-driven scale set on the same
+          element would simply lose to the animation. */}
       <span className="voice-orb__halo" aria-hidden="true" />
-      <span className="voice-orb__sphere" aria-hidden="true" />
-      <span className="voice-orb__sheen" aria-hidden="true" />
+      <span className="voice-orb__body" aria-hidden="true">
+        <span className="voice-orb__sphere" />
+        <span className="voice-orb__sheen" />
+      </span>
     </button>
   );
 }

@@ -272,12 +272,10 @@ input[type="color"]::-moz-color-swatch {
   0%, 100% { transform: translateY(-8px); }
   50%      { transform: translateY(8px); }
 }
-/* The drift owns `transform` on the sphere, so the audio-driven scale multiplies INTO the
-   keyframes rather than fighting them for the property. */
 @keyframes orb-drift {
-  0%   { transform: rotate(0deg)   scale(calc(1.04 * var(--sphere-scale))); }
-  50%  { transform: rotate(180deg) scale(calc(1.10 * var(--sphere-scale))); }
-  100% { transform: rotate(360deg) scale(calc(1.04 * var(--sphere-scale))); }
+  0%   { transform: rotate(0deg)   scale(1.04); }
+  50%  { transform: rotate(180deg) scale(1.1); }
+  100% { transform: rotate(360deg) scale(1.04); }
 }
 
 .voice-orb {
@@ -286,14 +284,15 @@ input[type="color"]::-moz-color-swatch {
   --halo-opacity: 0.22;
   --sphere-scale: 1;
   --orb-size: 260px;
-  /* The brand hue leads, but the other two stops are DERIVED rather than taken straight
-     from the brand: a secondary can legitimately be near-black (Progressive's is), and
-     mixing that into a sphere reads as a bruise rather than iridescence. Each stop is
-     lightened toward white and pulled toward violet/pink, so any brand lands somewhere
-     between "its colour" and "luminous". */
+  /* Fallbacks only. The real stops are written by `applyOrb` (branding.ts), derived from the
+     brand colour in OKLCH: L and C clamped into a luminous band, the other two stops
+     obtained by ROTATING hue. Rotation is the point - mixing toward a fixed violet or pink
+     in sRGB passes near the grey axis, which is what used to put a grey bruise on a blue
+     brand's sphere. */
   --orb-a: color-mix(in srgb, var(--brand-primary) 78%, #ffffff);
-  --orb-b: color-mix(in srgb, var(--brand-primary) 45%, #8b6cff);
-  --orb-c: color-mix(in srgb, var(--brand-primary) 25%, #ff6ec7);
+  --orb-b: color-mix(in srgb, var(--brand-primary) 60%, #ffffff);
+  --orb-c: color-mix(in srgb, var(--brand-primary) 40%, #ffffff);
+  --orb-base: #f7f8fc;
   position: relative;
   display: grid;
   place-items: center;
@@ -322,6 +321,16 @@ input[type="color"]::-moz-color-swatch {
   transition: opacity 90ms linear, transform 90ms linear;
 }
 
+/* The body wrapper: the audio-driven scale lives HERE, alone. Put it on the sphere and the
+   drift animation wins the `transform` property and the orb never moves with the voice. */
+.voice-orb__body {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  transform: scale(var(--sphere-scale));
+  transition: transform 90ms linear;
+}
+
 /* The sphere: several off-centre radial gradients, slowly rotating so the colours drift. */
 .voice-orb__sphere {
   position: absolute;
@@ -329,12 +338,14 @@ input[type="color"]::-moz-color-swatch {
   border-radius: 50%;
   overflow: hidden;
   background:
-    radial-gradient(circle at 30% 64%, color-mix(in srgb, var(--orb-a) 85%, #fff) 0%, transparent 60%),
-    radial-gradient(circle at 74% 32%, color-mix(in srgb, var(--orb-b) 80%, #fff) 0%, transparent 62%),
-    radial-gradient(circle at 58% 80%, color-mix(in srgb, var(--orb-c) 72%, #fff) 0%, transparent 58%),
-    /* The base layer is nearly white, so any gap between the stops reads as light rather
-       than as a hole. */
-    radial-gradient(circle at 50% 42%, #ffffff 0%, color-mix(in srgb, var(--orb-a) 22%, #fff) 100%);
+    /* The stops arrive luminous already (L and C clamped in `orbPalette`), so they are used
+       as-is: re-mixing them with white here is what flattened the whole sphere toward grey. */
+    radial-gradient(circle at 30% 64%, var(--orb-a) 0%, transparent 62%),
+    radial-gradient(circle at 74% 32%, var(--orb-b) 0%, transparent 64%),
+    radial-gradient(circle at 58% 80%, var(--orb-c) 0%, transparent 60%),
+    /* The base is nearly white with a trace of the brand hue, so any gap between the stops
+       reads as light rather than as a hole. */
+    radial-gradient(circle at 50% 42%, #ffffff 0%, var(--orb-base) 100%);
   animation: orb-drift 18s linear infinite;
   transition: transform 90ms linear;
 }

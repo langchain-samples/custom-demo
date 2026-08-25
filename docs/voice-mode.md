@@ -201,7 +201,12 @@ it through `onLevel`, and `VoiceOrb` reads it from an animation frame and writes
 custom property. Two consequences worth keeping: the level is a REF rather than React state
 (it updates at audio rate, and state would re-render the tree dozens of times a second), and
 the easing is asymmetric - fast attack, slow release - which is what makes it read as
-breathing rather than flickering. BOTH layers move, in opposite directions per side: sphere
+breathing rather than flickering. Each layer owns exactly ONE transform, which is not a
+style preference: the sphere's drift animation and an audio-driven scale on the same element
+means the animation wins and the orb never moves with the voice (it did, for a while). Hence
+the body wrapper.
+
+BOTH layers move, in opposite directions per side: sphere
 and halo swell outward on the model's speech (the assistant projecting), and draw inward
 from a smaller baseline on the user's (listening, leaning in rather than talking over).
 Whoever is louder wins, so crosstalk resolves instead of fighting, and neither collapses to
@@ -239,6 +244,30 @@ Three more things are load-bearing rather than decorative:
 
 The X returns to the chat view without hanging up; a compact control then appears in the
 header showing state plus the activity line, with a way back.
+
+## Choosing the colours
+
+`orbPalette` (lib/orbPalette.ts) derives three stops from the brand colour in OKLCH:
+
+1. brand colour to OKLCH, and pick the CHROMATIC seed - a surprising number of brands keep a
+   near-black as their primary and the real colour as the secondary (Progressive's own seeds
+   are `#2d2d2d` and `#0077b3`, and Nike, Apple and Vizient are the same shape), so an
+   achromatic primary borrows the secondary's hue rather than a house one
+2. clamp L and C into a luminous band, which is what stops a near-black seed reading as a
+   storm cloud and a saturated one as a headlight
+3. derive the other stops by ROTATING hue, never by mixing toward a fixed colour
+4. an almost-white base carrying a trace of the hue, so gaps between stops read as light
+5. give the third stop to the brand's real secondary when its hue is far enough away to add
+   something (Walmart's yellow earns it; Home Depot's white does not)
+
+Rotation is the load-bearing choice. The first version mixed toward a fixed violet and pink
+with `color-mix(in srgb, ...)`, and interpolating two hues in sRGB cuts a chord near the grey
+axis: where the stops overlapped they desaturated, which is why a blue brand grew a grey
+bruise. Rotating in a perceptual space travels AROUND the axis and cannot.
+
+Progressive comes out `#64c1ff / #9cbeff / #32cbeb` on a near-white blue base. The corpus test
+(`orb_palette_test.js`) asserts the whole claim over this repo's real brand seeds plus the
+awkward shapes: every stop luminous, chromatic, and at least 15 degrees from its neighbours.
 
 ## Choosing the voice
 
