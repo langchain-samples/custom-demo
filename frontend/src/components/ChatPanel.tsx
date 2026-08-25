@@ -478,7 +478,15 @@ export default function ChatPanel({
           if (name === "push_widget") {
             const id = toolCallKey(msg.id, tc);
             wLatest[id] = widgetFromArgs(args);
-            if (!wOrder.includes(id)) wOrder.push(id);
+            if (!wOrder.includes(id)) {
+              wOrder.push(id);
+              // Progress fires HERE too, not just on the chip path below. A widget IS
+              // this tool's output, so it never becomes a chip - which also meant the
+              // voice status line, which rides on chip creation, went silent for the
+              // one tool whose work takes longest and is most worth narrating. Guarded
+              // by first-sight like the chip branch: args stream in over many frames.
+              onProgress?.(name);
+            }
             // Flush every widget except the one still streaming (last in order).
             for (let i = 0; i < wOrder.length - 1; i++) flushWidget(wOrder[i]);
           } else {
