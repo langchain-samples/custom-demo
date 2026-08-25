@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatPanelHandle } from "@/components/ChatPanel";
 import { voiceToken, voiceTrace } from "@/lib/api";
-import { INVOKE_TOOL, VoiceSession, type VoiceState } from "@/lib/voice";
+import { INVOKE_TOOL, VoiceSession, type VoicePersona, type VoiceState } from "@/lib/voice";
 
 export interface VoiceSessionOptions {
   chat: React.RefObject<ChatPanelHandle | null>;
@@ -18,6 +18,11 @@ export interface VoiceSessionOptions {
   customer?: string;
   /** Prebuilt voice name from `metadata.voice.voice_name`; falls back to the house voice. */
   voiceName?: string;
+  /**
+   * Who the assistant is, for the shell's system instruction. Without it the voice
+   * introduces itself as a generic analytics assistant and cannot say who it works for.
+   */
+  persona?: VoicePersona;
 }
 
 export interface VoiceSessionView {
@@ -54,7 +59,7 @@ function toBase64(bytes: Uint8Array): string {
 }
 
 export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
-  const { chat, workspace, project, customer, voiceName } = opts;
+  const { chat, workspace, project, customer, voiceName, persona } = opts;
   const [state, setState] = useState<VoiceState>("idle");
   const [activity, setActivity] = useState("");
   const [speaking, setSpeaking] = useState(false);
@@ -168,7 +173,7 @@ export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
               outputs,
             });
           },
-        }, voiceName);
+        }, voiceName, persona);
         session.current = live;
         await live.start();
       } catch (e) {
@@ -180,7 +185,7 @@ export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
         session.current = null;
       }
     })();
-  }, [chat, workspace, project, customer, voiceName]);
+  }, [chat, workspace, project, customer, voiceName, persona]);
 
   return {
     state,

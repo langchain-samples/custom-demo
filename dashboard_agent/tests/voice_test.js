@@ -26,6 +26,7 @@ function ok(name, fn) {
     encodeBase64,
     decodeBase64,
     setupMessage,
+    voiceInstructions,
     supportsNonBlocking,
     toolResponseMessage,
     systemTurnMessage,
@@ -303,6 +304,35 @@ function ok(name, fn) {
     assert.equal(haloTransform(0.2, 0.8).speaker, "model");
     // Both directions still brighten with volume.
     assert.ok(userLoud.opacity > userSoft.opacity && modelLoud.opacity > modelSoft.opacity);
+  });
+
+  ok("the shell knows who it works for", () => {
+    // Without this the assistant introduces itself as a generic "analytics assistant" and
+    // cannot say whose data it is looking at - the wrong first impression in a demo, and
+    // invisible in the code because the DEEP AGENT's prompt is customer-specific.
+    const text = voiceInstructions({
+      displayName: "Progressive GPT",
+      customer: "Progressive",
+      industry: "Insurance",
+      topics: ["Claimant: Claim status", "Customer: Renewal discounts"],
+    });
+    assert.ok(text.includes("Progressive GPT"), "it introduces itself by name");
+    assert.ok(text.includes("Progressive"), "it knows the customer");
+    assert.ok(text.includes("insurance"), "and the industry, lowercased mid-sentence");
+    assert.ok(text.includes("Claimant: Claim status"), "and what people ask about");
+    // It must still be told to route data questions to the tool, not answer them itself.
+    assert.ok(text.includes(INVOKE_TOOL));
+    // And it reaches the wire.
+    const setup = setupMessage("m", undefined, "", { customer: "Progressive" }).setup;
+    assert.ok(setup.systemInstruction.parts[0].text.includes("Progressive"));
+  });
+
+  ok("no persona degrades to something sayable", () => {
+    // An assistant with no metadata yet must not make the model read a broken sentence.
+    const text = voiceInstructions();
+    assert.ok(text.startsWith("You are a live analytics assistant."), text.slice(0, 60));
+    assert.ok(!text.includes("undefined"));
+    assert.ok(!text.includes("What people ask you about"), "no empty topic list");
   });
 
   console.log(`\n${passed} passed`);

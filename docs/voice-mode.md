@@ -36,6 +36,25 @@ runs the same split server-side: we give up a Python-side voice loop (and the ne
 stereo-WAV recording it can attach) to keep the canvas alive. The audio worklets in
 `frontend/public/` are adapted from it.
 
+## Who the shell thinks it is
+
+`voiceInstructions(persona)` builds the system instruction from the assistant's own
+metadata: display name, customer, industry, and the quick-action labels (which carry both
+the personas it serves and their topics, in a few words each).
+
+This is easy to miss because the DEEP AGENT's prompt is already customer-specific - the
+shell is a separate model, and without an identity of its own it introduces itself as a
+generic "analytics assistant" that cannot say whose data it is looking at. Which is the
+wrong first impression in a customer demo.
+
+With it, "who are you?" gets answered from a live session as: *"I'm Progressive GPT, your
+analytics assistant for Progressive. I can help you with questions about claims, renewals,
+or pretty much anything about your customers' data."*
+
+Kept short on purpose - this is a realtime speech model, and a long system instruction costs
+latency and adherence - and it degrades to a sayable sentence when an assistant has no
+metadata yet.
+
 ## Not going silent
 
 A deep agent run takes tens of seconds. The fix is a **two-phase response**: acknowledge

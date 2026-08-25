@@ -132,12 +132,28 @@ export default function App() {
    * screen. The X drops back to chat without hanging up.
    */
   const [voiceStage, setVoiceStage] = useState(true);
+  /**
+   * The identity the voice shell speaks with. Memoised because it is a dependency of the
+   * session's `start`, and a fresh object every render would rebuild that callback.
+   */
+  const voicePersona = useMemo(
+    () => ({
+      displayName,
+      customer: meta?.customer,
+      industry: meta?.industry,
+      // The quick-action labels double as "who asks you what": each one is a persona and
+      // a topic in a few words ("Claimant: Claim status").
+      topics: presets.map((p) => p.label).filter(Boolean),
+    }),
+    [displayName, meta?.customer, meta?.industry, presets],
+  );
   const voice = useVoiceSession({
     chat: chatRef,
     workspace: meta?.ls_artifacts?.workspace,
     project: meta?.customer,
     customer: meta?.customer,
     voiceName: (meta?.voice as { voice_name?: string } | undefined)?.voice_name,
+    persona: voicePersona,
   });
   const showStage = voiceEnabled && voiceStage;
 

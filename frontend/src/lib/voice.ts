@@ -59,29 +59,64 @@ const SPEAKING_IDLE_MS = 700;
 export const INVOKE_TOOL = "invoke_deep_agent";
 export const RESUME_TOOL = "resume_deep_agent";
 
+/** Who the shell is, so it can answer "who are you?" without guessing. */
+export interface VoicePersona {
+  /** The assistant's name, e.g. "Progressive GPT". */
+  displayName?: string;
+  /** The customer it belongs to, e.g. "Progressive". */
+  customer?: string;
+  /** Their industry, e.g. "Insurance". */
+  industry?: string;
+  /**
+   * What people ask it about - the quick-action labels ("Claimant: Claim status"), which
+   * carry both the personas it serves and their topics in a few words each.
+   */
+  topics?: string[];
+}
+
 /**
- * Spoken-delivery instructions for the shell (NOT the agent's prompt, which stays
- * untouched). The non-blocking contract is stated explicitly because the model has to
- * cooperate with it: a deep agent run takes tens of seconds, and the alternative to
- * "acknowledge, then keep the floor" is dead air.
+ * Spoken-delivery instructions for the shell. NOT the agent's prompt, which never learns
+ * that voice exists.
+ *
+ * The IDENTITY half matters more than it looks. The deep agent's prompt is customer-
+ * specific, but this model is the one doing the talking, so without it the assistant
+ * introduces itself as a generic "analytics assistant" and cannot say who it works for or
+ * what it covers - which is exactly the wrong first impression in a customer demo.
+ *
+ * Kept short deliberately: this is a realtime speech model, and a long system instruction
+ * costs latency and adherence.
  */
-export const VOICE_INSTRUCTIONS = `You are the voice of a live analytics assistant. You
-are being HEARD, not read: keep replies to a sentence or two, never speak markdown, and
+export function voiceInstructions(persona: VoicePersona = {}): string {
+  const name = persona.displayName || "a live analytics assistant";
+  const who = persona.customer
+    ? `You are ${name}, the voice of ${persona.customer}'s${
+        persona.industry ? ` ${persona.industry.toLowerCase()}` : ""
+      } assistant. You work for ${persona.customer} and you talk to their people about their own data.`
+    : `You are ${name}.`;
+  const covers = persona.topics?.length
+    ? `\n\nWhat people ask you about: ${persona.topics.slice(0, 6).join("; ")}.`
+    : "";
+
+  return `${who}${covers}
+
+You are being HEARD, not read: keep replies to a sentence or two, never speak markdown, and
 never read out a list of numbers.
 
-You have one real capability: the \`${INVOKE_TOOL}\` tool, which asks the analytics agent
-a question. Use it for anything about the customer's data, metrics, accounts, orders or
-reports. Pass the user's question through in full.
+You have one real capability: the \`${INVOKE_TOOL}\` tool, which asks the analytics agent a
+question. Use it for anything about the customer's data, metrics, accounts, orders or
+reports. Pass the user's question through in full. Answer directly only for small talk and
+for who or what you are.
 
-\`${INVOKE_TOOL}\` is NON-BLOCKING and slow (up to a minute). So:
-- Say a short acknowledgement when you call it ("Let me pull that up"), then stop and let
-  the user talk. Do NOT go silent waiting for it.
+\`${INVOKE_TOOL}\` is slow (up to a minute) and answers in two parts. So:
+- Say a short acknowledgement when you call it ("Let me pull that up"), then stop and let the
+  user talk. Do NOT go silent waiting for it.
 - The findings arrive later as a follow-up result. Weave them in conversationally and
   reconnect them to what was asked.
-- The figures are ON SCREEN in the dashboard. Summarise what they mean; do not recite
-  them. Point at the screen instead: "it's on the dashboard now".
-- If the result says approval is needed, read out the options and, once the user picks
-  one, call \`${RESUME_TOOL}\` with their choice.`;
+- The figures are ON SCREEN in the dashboard. Summarise what they mean, do not recite them:
+  say "it's on the dashboard now" instead.
+- If a result says approval is needed, read out the options and, once the user picks one,
+  call \`${RESUME_TOOL}\` with their choice.`;
+}
 
 /** One function call the model asked us to run. */
 export interface LiveToolCall {
@@ -241,7 +276,12 @@ export function realtimeAudioMessage(pcm: ArrayBuffer): object {
  * pinned into the ephemeral token server-side, and a client that contradicts the pinned
  * config is refused.
  */
-export function setupMessage(model: string, resumeHandle?: string, voice = ""): object {
+export function setupMessage(
+  model: string,
+  resumeHandle?: string,
+  voice = "",
+  persona: VoicePersona = {},
+): object {
   const behavior = supportsNonBlocking(model) ? { behavior: "NON_BLOCKING" } : {};
   // `||`, not a default parameter: an assistant with no voice saved yet carries "" rather
   // than undefined, and "" is not a voice the API accepts.
@@ -261,7 +301,7 @@ export function setupMessage(model: string, resumeHandle?: string, voice = ""): 
       // these transcripts are what the chat panel renders and what the trace records.
       inputAudioTranscription: {},
       outputAudioTranscription: {},
-      systemInstruction: { parts: [{ text: VOICE_INSTRUCTIONS }] },
+      systemInstruction: { parts: [{ text: voiceInstructions(persona) }] },
       tools: [
         {
           functionDeclarations: [
@@ -577,14 +617,16 @@ export class VoiceSession {
 
   private readonly hooks: VoiceSessionHooks;
   private readonly voice: string;
+  private readonly persona: VoicePersona;
   private model = "";
   private token = "";
   /** One retry with a fresh token, for the stale-token case below. */
   private retried = false;
 
-  constructor(hooks: VoiceSessionHooks, voice = DEFAULT_VOICE) {
+  constructor(hooks: VoiceSessionHooks, voice = DEFAULT_VOICE, persona: VoicePersona = {}) {
     this.hooks = hooks;
     this.voice = voice || DEFAULT_VOICE;
+    this.persona = persona;
   }
 
   /**
@@ -649,7 +691,11 @@ export class VoiceSession {
     ws.onopen = () => {
       // The first frame MUST be setup, and nothing else may be sent until the server
       // answers setupComplete.
-      ws.send(JSON.stringify(setupMessage(this.model, this.resumeHandle || undefined, this.voice)));
+      ws.send(
+        JSON.stringify(
+          setupMessage(this.model, this.resumeHandle || undefined, this.voice, this.persona),
+        ),
+      );
     };
     ws.onmessage = (event) => void this.onFrame(event.data);
     ws.onerror = () => this.hooks.onError("websocket error (see the console for detail)");
