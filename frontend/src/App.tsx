@@ -251,12 +251,10 @@ export default function App() {
           <h1 className="m-0 font-heading text-2xl font-bold tracking-tight">{displayName}</h1>
         </button>
         {/* One right-anchored action bar. `ml-auto` belongs to the BAR, not to whichever
-            button happens to come first: hanging it off the first child means the whole row
-            slides left the moment that child is conditional (which the voice control is). */}
+            button happens to come first, so the row does not slide when a child is
+            conditional. The voice control used to live here; it is in the composer now,
+            next to send, because talking to the assistant is the same act as sending. */}
         <div className="ml-auto flex items-center gap-3.5 print:hidden">
-        {voiceEnabled && !showStage && (
-          <VoiceButton voice={voice} onOpen={() => setVoiceStage(true)} />
-        )}
         {/* No tooltip: this is the one action in the bar with a visible label, so a hover
             card explaining it just covers the row below. The icon-only buttons keep theirs. */}
         <Button
@@ -352,6 +350,11 @@ export default function App() {
           )}
           <ChatPanel
             handleRef={chatRef}
+            voiceControl={
+              voiceEnabled && !showStage ? (
+                <VoiceButton voice={voice} onOpen={() => setVoiceStage(true)} />
+              ) : undefined
+            }
             assistantId={assistantId}
             /* Same sandbox key the Files dialog and the agent itself use, so a file
                dropped on the chat lands in the VM this assistant reads from. */

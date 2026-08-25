@@ -1,5 +1,10 @@
 /**
- * The compact voice control in the header: state, a stop, and a way back to the stage.
+ * The voice control, as an icon button INSIDE the composer next to send.
+ *
+ * It sits there because it is the same act as send: the other way to ask this assistant a
+ * question. As a labelled "Talk to the assistant" button in the header it read as a mode
+ * switch somewhere off to the side, and it competed with New Chat for the one part of the
+ * header the eye treats as "actions".
  *
  * Shown once the immersive view (VoiceStage) has been exited, so a running conversation is
  * never invisible. `useVoiceSession` owns the session; this only renders it, which is why
@@ -30,42 +35,52 @@ const LABEL: Record<VoiceState, string> = {
 
 export function VoiceButton({ voice, onOpen }: VoiceButtonProps) {
   const { state, running, activity, error } = voice;
-  const Icon = state === "connecting" || state === "thinking" ? IconLoader2 : IconMicrophone;
   const spin = state === "connecting" || state === "thinking";
+  /**
+   * A PLAIN mic at rest, never the crossed-out one. As a labelled header button the
+   * crossed-out mic read as "voice is currently off"; as a bare icon next to send it reads
+   * as "stop talking", which is the opposite of what clicking it does. The struck-through
+   * mic now means exactly one thing: the stop button.
+   */
+  const Icon = spin ? IconLoader2 : IconMicrophone;
 
   /**
    * One button, one meaning: GO TO THE VOICE VIEW. Starting a conversation from the chat
    * view used to leave you in the chat view with a session running somewhere off screen, and
-   * a separate expander to find the orb - two clicks for the obvious thing. Now the header
-   * takes you there and the orb itself is what starts and stops.
+   * a separate expander to find the orb - two clicks for the obvious thing. Now this takes
+   * you there and the orb itself is what starts and stops.
    */
   const open = () => {
     if (!running) voice.start();
     onOpen();
   };
 
+  /**
+   * The activity line wins over the state label, and the error over both: in an icon-only
+   * control the tooltip is the ONLY place either can appear. The full error text still
+   * shows on the stage, which is where a retry happens.
+   */
+  const hint = error || (running && activity) || LABEL[state];
+
   return (
-    <div className="flex items-center gap-2">
+    <>
       <Button
         type="button"
-        variant={running ? "primary" : "outline"}
-        size="sm"
-        title={error || LABEL[state]}
-        aria-label={LABEL[state]}
+        variant={running ? "primary" : "ghost"}
+        size="icon"
+        title={hint}
+        aria-label={hint}
         onClick={open}
-        className="gap-1.5 rounded-full"
+        className={
+          "size-8 rounded-full" +
+          (state === "error" && !running ? " text-destructive" : "")
+        }
       >
-        {running ? (
-          <Icon className={spin ? "size-4 animate-spin" : "size-4"} />
-        ) : (
-          <IconMicrophoneOff className="size-4" />
-        )}
-        {/* The activity line wins over the state label: while a run is in flight it is the
-            only thing saying the assistant has not stalled. */}
-        <span className="text-xs">{(running && activity) || LABEL[state]}</span>
+        <Icon className={spin ? "size-4 animate-spin" : "size-4"} />
       </Button>
       {/* Stop stays reachable from the chat view, so ending a conversation does not require
-          going back to the orb first. */}
+          going back to the orb first. Only while running, so the resting composer keeps to
+          one voice control. */}
       {running && (
         <Button
           type="button"
@@ -79,11 +94,6 @@ export function VoiceButton({ voice, onOpen }: VoiceButtonProps) {
           <IconMicrophoneOff className="size-4" />
         </Button>
       )}
-      {state === "error" && error && (
-        <span className="max-w-[24rem] text-[11px] leading-snug text-red-500 select-text">
-          {error}
-        </span>
-      )}
-    </div>
+    </>
   );
 }

@@ -14,7 +14,7 @@
  * this component only calls the `guard` prop before sending.
  */
 import { useEffect, useImperativeHandle, useRef, useState } from "react";
-import type { Ref } from "react";
+import type { ReactNode, Ref } from "react";
 import { Streamdown } from "streamdown";
 import {
   IconAlertTriangle,
@@ -109,6 +109,12 @@ export interface ChatPanelHandle {
 }
 
 export interface ChatPanelProps {
+  /**
+   * The voice control, rendered in the composer beside send. A ReactNode rather than the
+   * session itself: the composer is the only thing here that needs to know voice exists,
+   * and App already owns the session.
+   */
+  voiceControl?: ReactNode;
   /** Imperative handle for voice mode (see ChatPanelHandle). */
   handleRef?: Ref<ChatPanelHandle>;
   /** The assistant id to run against (a UUID once one is selected in settings). */
@@ -265,6 +271,7 @@ function statusFromVerdict(result: string | undefined): Goal["status"] {
 
 export default function ChatPanel({
   handleRef,
+  voiceControl,
   assistantId,
   presets = [],
   getRunContext,
@@ -1175,6 +1182,7 @@ export default function ChatPanel({
         minRows={variant === "hero" ? 2 : 1}
         aria-label="Prompt"
         leadingAction={attachButton}
+        trailingAction={voiceControl}
         onKeyDown={(e) => {
           // PromptInput calls this BEFORE its own Enter-to-send and honours
           // defaultPrevented, so completing here beats sending a half-typed command.

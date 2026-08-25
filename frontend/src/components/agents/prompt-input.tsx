@@ -63,6 +63,12 @@ export interface PromptInputProps extends Omit<
   minRows?: number;
   maxRows?: number;
   leadingAction?: ReactNode;
+  /**
+   * Rendered right-aligned on the action row, immediately LEFT of send. For a control
+   * that belongs with send rather than with the attach cluster (the mic, which is the
+   * other way to ask a question).
+   */
+  trailingAction?: ReactNode;
   className?: string;
 }
 
@@ -82,6 +88,7 @@ export function PromptInput({
   minRows = 2,
   maxRows = 8,
   leadingAction,
+  trailingAction,
   className,
   disabled,
   placeholder = "Ask the agent to do something…",
@@ -297,13 +304,19 @@ export function PromptInput({
           </Select>
         ) : null}
 
+        {trailingAction ? (
+          <span className="ml-auto flex items-center gap-1">{trailingAction}</span>
+        ) : null}
+
         <Button
           type={loading ? "button" : "submit"}
           size="icon"
           disabled={loading ? !onStop : !canSubmit}
           aria-label={loading ? "Stop generating" : "Send prompt"}
           onClick={loading ? onStop : undefined}
-          className="ml-auto size-8 rounded-full"
+          // `ml-auto` moves to the trailing group when there is one, or the two would
+          // sit at opposite ends of the row instead of next to each other.
+          className={cn("size-8 rounded-full", !trailingAction && "ml-auto")}
         >
           <AnimatePresence initial={false} mode="popLayout">
             <motion.span
