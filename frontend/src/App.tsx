@@ -143,9 +143,12 @@ export default function App() {
       industry: meta?.industry,
       // The quick-action labels double as "who asks you what": each one is a persona and
       // a topic in a few words ("Claimant: Claim status").
-      topics: presets.map((p) => p.label).filter(Boolean),
+      topics: (meta?.actions ?? []).map((a) => a.label).filter(Boolean),
     }),
-    [displayName, meta?.customer, meta?.industry, presets],
+    // `meta.actions` rather than `presets`: the latter is `?? []`, so it is a NEW array on
+    // every render, which made this memo re-run every time and rebuild the session's
+    // `start` callback with it.
+    [displayName, meta?.customer, meta?.industry, meta?.actions],
   );
   const voice = useVoiceSession({
     chat: chatRef,
@@ -156,6 +159,12 @@ export default function App() {
     persona: voicePersona,
   });
   const showStage = voiceEnabled && voiceStage;
+  // Reset per assistant. Without this the flag is sticky for the life of the tab: exit the
+  // orb once and every voice assistant you pick afterwards opens in the chat view instead,
+  // which looks like the feature failing to turn on.
+  useEffect(() => {
+    setVoiceStage(true);
+  }, [activeAssistant?.assistant_id]);
 
   // Effective theme: an active assistant's brand theme wins, else the manual
   // preference. Applied to <html> + remembered so a reload restores it.
