@@ -105,5 +105,26 @@ const CORPUS = [
     }
   });
 
+  ok("the stylesheet does not shadow the derived palette", () => {
+    // A REGRESSION GUARD for a bug that made the orb fully grey: the fallbacks were declared
+    // inside `.voice-orb`, and a custom property set on the element beats the one inherited
+    // from the root - so the JS-derived palette never applied, and the fallback (brand
+    // primary mixed with white) won. For a brand whose primary seed is near-black that is
+    // literally a grey ball. Fallbacks belong on `:root`, where an inline style can beat them.
+    const fs = require("node:fs");
+    const css = fs.readFileSync(
+      path.join(__dirname, "..", "..", "frontend", "src", "index.css"),
+      "utf8",
+    );
+    const block = css.slice(css.indexOf(".voice-orb {"), css.indexOf("}", css.indexOf(".voice-orb {")));
+    assert.ok(block.length > 0, "expected a .voice-orb rule");
+    assert.ok(
+      !/--orb-[abc]\s*:/.test(block),
+      "`.voice-orb` must not declare --orb-a/b/c: it shadows the derived palette",
+    );
+    // And the fallbacks must exist somewhere, so an unbranded app is not a grey ball either.
+    assert.ok(/--orb-a:\s*#/.test(css), "expected a literal --orb-a fallback on :root");
+  });
+
   console.log(`\n${passed} passed`);
 })();

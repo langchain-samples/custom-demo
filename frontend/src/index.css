@@ -96,6 +96,15 @@
        colors a customer needs to supply. Declared here rather than JS-only so
        every consumer has a real default to resolve against. ---- */
     --brand-primary: #0072BC;
+    /* Orb stops. Fallbacks ONLY - `applyOrb` (branding.ts) overwrites these per assistant
+       with hues derived in OKLCH. They must live here rather than on `.voice-orb`: a custom
+       property declared on the element shadows the inherited one, so fallbacks next to the
+       component silently win over the real palette (which is how the orb went fully grey
+       for a brand whose primary seed is near-black). */
+    --orb-a: #64c1ff;
+    --orb-b: #9cbeff;
+    --orb-c: #32cbeb;
+    --orb-base: #eef5fd;
     --brand-secondary: #00A651;
     /* Hue used to tint surfaces. Separate from --brand-primary because a
        saturated red/orange primary makes a repellent surface tint. */
@@ -284,15 +293,6 @@ input[type="color"]::-moz-color-swatch {
   --halo-opacity: 0.22;
   --sphere-scale: 1;
   --orb-size: 260px;
-  /* Fallbacks only. The real stops are written by `applyOrb` (branding.ts), derived from the
-     brand colour in OKLCH: L and C clamped into a luminous band, the other two stops
-     obtained by ROTATING hue. Rotation is the point - mixing toward a fixed violet or pink
-     in sRGB passes near the grey axis, which is what used to put a grey bruise on a blue
-     brand's sphere. */
-  --orb-a: color-mix(in srgb, var(--brand-primary) 78%, #ffffff);
-  --orb-b: color-mix(in srgb, var(--brand-primary) 60%, #ffffff);
-  --orb-c: color-mix(in srgb, var(--brand-primary) 40%, #ffffff);
-  --orb-base: #f7f8fc;
   position: relative;
   display: grid;
   place-items: center;
