@@ -432,6 +432,35 @@ export function progressMessage(what: string): object {
 }
 
 /**
+ * A thinking sound rather than a sentence.
+ *
+ * There is no API feature for this - no backchannel or disfluency setting - but the model
+ * does it readily when asked, verified live ("Hmm...", "uhh..."). It matters because a
+ * status line every six seconds delivered as a full sentence turns a wait into a lecture,
+ * while a filler is what a person actually does while they look something up.
+ */
+export function fillerMessage(): object {
+  return systemTurnMessage(
+    "you are still working on it. Make ONE short natural thinking sound - " +
+      '"mmhm", "uhh", "okaaay", "let me see" - and nothing else. ' +
+      "No sentence, no explanation, no repeating the question.",
+  );
+}
+
+/**
+ * What to say on the nth progress beat: filler on the odd ones, substance on the even ones.
+ *
+ * Alternating rather than all-filler or all-substance. All filler and a long wait tells you
+ * nothing about what is happening; all substance and the assistant narrates its own
+ * plumbing every six seconds. Starting with filler is deliberate too - the acknowledgement
+ * ("let me pull that up") has only just been said, so a second full sentence immediately
+ * after reads as nervous.
+ */
+export function progressBeat(beat: number, label: string): object {
+  return beat % 2 === 1 ? fillerMessage() : progressMessage(label);
+}
+
+/**
  * What the agent is doing right now, in words a listener understands.
  *
  * Driven by the agent's OWN tool calls rather than a canned timer, so "still searching the
@@ -836,14 +865,15 @@ export class VoiceSession {
     // Progress, throttled. The agent calls a dozen tools in a turn and narrating each one
     // would be worse than silence; one line every few seconds reads as thinking aloud.
     let lastProgress = 0;
+    let beat = 0;
     const narrate = (toolName: string) => {
       const label = progressLabel(toolName);
-      // The status line updates every time; the SPOKEN line does not.
+      // The status line updates every time; the SPOKEN beat does not.
       this.hooks.onActivity(label);
       const now = Date.now();
       if (now - lastProgress < PROGRESS_MIN_GAP_MS) return;
       lastProgress = now;
-      ws.send(JSON.stringify(progressMessage(label)));
+      ws.send(JSON.stringify(progressBeat(++beat, label)));
     };
 
     try {

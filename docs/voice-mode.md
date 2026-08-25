@@ -87,7 +87,7 @@ kinds of thing, and only the first is a `toolResponse`:
 | When | Sent as | Why |
 |---|---|---|
 | Immediately | `toolResponse`, `willContinue: true`, `scheduling: SILENT` | Ends the model's wait so it keeps the floor. `willContinue` says the answer is still coming. |
-| Every few seconds | `clientContent` user turn, `[system] progress on ...` | Narrates what the agent is ACTUALLY doing, from its own tool calls (`progressLabel`), throttled to one line per 6s. |
+| Every few seconds | `clientContent` user turn, alternating `[system] progress on ...` and a filler request | Narrates what the agent is ACTUALLY doing, from its own tool calls (`progressLabel`), throttled to one beat per 6s. Odd beats ask for a THINKING SOUND ("mmhm", "okaaay"), even beats carry the label. |
 | When the run lands | `clientContent` user turn, `[system] result for ...` | The answer, phrased so the model reports it rather than re-answering. |
 
 The trap: **a second `toolResponse` for an answered call is dropped, and so is a
@@ -96,10 +96,21 @@ sends. Verified live on 3.1: the model acknowledges, the result arrives, and it 
 again. A plain user turn is narrated every time, and the `[system]` prefix is what stops the
 model answering it as though the user had said it.
 
-Live that reads as: *"Let me pull that up." / "I'm still working on that claim status." /
-"I'm searching the data for it now." / "I'm getting the dashboard ready." / "...in review
-right now, with an inspection scheduled for Friday. You can see the details on your
-dashboard."*
+Live that reads as: *"Let me pull up that information for you." / "okaaay" / "Still looking
+into it for you." / "mmhm" / "The dashboard is loading now." / "...currently under review by
+an adjuster, and an inspection is scheduled for this Friday. You can see all the details on
+the dashboard now."*
+
+The alternation is deliberate. Every beat as a full sentence turns a wait into a lecture;
+every beat as a filler says nothing about what is happening. There is no API feature for the
+sounds - no backchannel or disfluency setting anywhere in the Live API - but the model does
+them readily when the turn asks for one and forbids a sentence. (`Affective dialog` and
+`Proactive audio` are different things, and 2.5-only: tone matching, and control over when
+the model speaks at all.)
+
+What is NOT achievable: backchannelling while the USER talks. Gemini stays silent during
+your turn by design, and anything else would fight barge-in. The filler covers the agent's
+working time, which is where the dead air actually is.
 
 ## One trace per conversation
 
