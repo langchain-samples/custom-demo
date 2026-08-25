@@ -259,3 +259,85 @@ input[type="color"]::-moz-color-swatch {
   border: none;
   border-radius: calc(var(--radius) * 0.6);
 }
+
+/* ---------------------------------------------------------------------------
+   The voice orb (components/VoiceOrb.tsx).
+   Kept in CSS rather than Tailwind classes because it is layered gradients plus
+   keyframes, and `--level` is written from an animation frame at audio rate.
+
+   Colours come from the brand tokens, so a customer's orb is their colour - with a
+   fixed violet drift mixed in for the iridescent sheen the flat brand hue lacks.
+--------------------------------------------------------------------------- */
+@keyframes orb-float {
+  0%, 100% { transform: translateY(-8px); }
+  50%      { transform: translateY(8px); }
+}
+@keyframes orb-drift {
+  0%   { transform: rotate(0deg)   scale(1.04); }
+  50%  { transform: rotate(180deg) scale(1.1); }
+  100% { transform: rotate(360deg) scale(1.04); }
+}
+
+.voice-orb {
+  --level: 0;
+  --idle: 0.35;
+  --orb-size: 260px;
+  --orb-a: var(--brand-primary);
+  --orb-b: var(--brand-secondary, #7c5cff);
+  --orb-c: #b06cff;
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--orb-size);
+  height: var(--orb-size);
+  border: 0;
+  background: none;
+  cursor: pointer;
+  animation: orb-float 7s ease-in-out infinite;
+}
+
+/* The reactive halo: a wide, heavily blurred copy whose size and opacity track `--level`. */
+.voice-orb__halo {
+  position: absolute;
+  inset: -38%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 50% 50%,
+    color-mix(in srgb, var(--orb-a) 55%, transparent) 0%,
+    color-mix(in srgb, var(--orb-b) 35%, transparent) 45%,
+    transparent 70%
+  );
+  filter: blur(30px);
+  opacity: calc(0.22 * var(--idle) + 0.75 * var(--level));
+  transform: scale(calc(0.9 + 0.28 * var(--level)));
+  transition: opacity 90ms linear, transform 90ms linear;
+}
+
+/* The sphere: several off-centre radial gradients, slowly rotating so the colours drift. */
+.voice-orb__sphere {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 32% 62%, color-mix(in srgb, var(--orb-a) 92%, #fff) 0%, transparent 58%),
+    radial-gradient(circle at 72% 34%, color-mix(in srgb, var(--orb-b) 88%, #fff) 0%, transparent 60%),
+    radial-gradient(circle at 55% 78%, color-mix(in srgb, var(--orb-c) 70%, #fff) 0%, transparent 55%),
+    radial-gradient(circle at 50% 45%, #ffffff 0%, color-mix(in srgb, var(--orb-a) 30%, #fff) 100%);
+  animation: orb-drift 18s linear infinite;
+  transform: scale(calc(1 + 0.05 * var(--level)));
+  transition: transform 90ms linear;
+}
+
+/* A soft top-left highlight, which is what stops it reading as a flat disc. */
+.voice-orb__sheen {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 28%, rgb(255 255 255 / 0.55) 0%, transparent 45%);
+  pointer-events: none;
+}
+
+/* Connecting: no audio yet, so say so with motion rather than leaving it inert. */
+.voice-orb[data-state="connecting"] .voice-orb__halo { animation: orb-float 1.6s ease-in-out infinite; }
+.voice-orb[data-state="error"] .voice-orb__sphere { filter: grayscale(0.7); }

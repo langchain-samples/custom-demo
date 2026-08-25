@@ -112,6 +112,20 @@ export function pcm16ToFloat(buffer: ArrayBuffer): Float32Array {
   return out;
 }
 
+/**
+ * Loudness of one audio frame, 0..1 (RMS, lightly boosted).
+ *
+ * Speech RMS sits low - a normal voice lands around 0.05-0.15 - so the raw value barely
+ * moves a visual. The boost maps that useful band onto most of the range without letting a
+ * loud moment clip past 1.
+ */
+export function frameLevel(samples: Float32Array): number {
+  if (!samples.length) return 0;
+  let sum = 0;
+  for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+  return Math.min(1, Math.sqrt(sum / samples.length) * 4);
+}
+
 /** Base64 to bytes (the Live API sends audio as base64 inline data). */
 export function decodeBase64(b64: string): ArrayBuffer {
   const bin = atob(b64);
@@ -472,6 +486,12 @@ export interface VoiceSessionHooks {
   /** True while model audio is arriving, so the UI can look alive while it talks. */
   onSpeaking(active: boolean): void;
   /**
+   * Loudness right now, 0..1, from whichever side is making sound. Called per audio frame
+   * (dozens of times a second), so a consumer must NOT hold it in React state - write it
+   * to a ref and read it from an animation frame.
+   */
+  onLevel(level: number): void;
+  /**
    * Why a session failed, in the server's own words. Without this a bad URL, a rejected
    * token and a normal hang-up are indistinguishable: the socket just closes and the
    * button goes quiet.
@@ -542,6 +562,7 @@ export class VoiceSession {
   stop(): void {
     this.closed = true;
     if (this.speakingTimer) clearTimeout(this.speakingTimer);
+    this.hooks.onLevel(0);
     this.ws?.close();
     this.ws = null;
     this.recorder?.disconnect();
@@ -619,6 +640,9 @@ export class VoiceSession {
   private sendMic(frame: Float32Array): void {
     if (this.ws?.readyState !== WebSocket.OPEN || !this.ctx) return;
     const out = downsampleTo16k(frame, this.ctx.sampleRate);
+    // The halo should react to the USER too, not just the model: half a conversation is
+    // them talking, and a flat orb while you speak feels deaf.
+    this.hooks.onLevel(frameLevel(out));
     this.ws.send(JSON.stringify(realtimeAudioMessage(floatToPcm16(out))));
   }
 
@@ -650,7 +674,11 @@ export class VoiceSession {
 
     const chunks = audioChunksFrom(frame);
     for (const chunk of chunks) {
-      this.player?.port.postMessage(pcm16ToFloat(decodeBase64(chunk)));
+      const samples = pcm16ToFloat(decodeBase64(chunk));
+      this.player?.port.postMessage(samples);
+      // Measured here rather than in the worklet: the worklet drains on the audio thread
+      // and would need a message back, and this is the same audio a beat earlier.
+      this.hooks.onLevel(frameLevel(samples));
     }
     // Audio arrives in a burst per turn, so "still speaking" is a timer rather than a
     // flag: it stays true until the chunks stop for a moment.

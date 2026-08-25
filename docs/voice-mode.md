@@ -144,7 +144,16 @@ For a voice-enabled assistant the chat rail is replaced by `VoiceStage`: one orb
 line, and the assistant's own branding. The dashboard keeps its pane beside it, which is
 the whole point - you talk, and the figures appear over there.
 
-Three things about it are load-bearing rather than decorative:
+The orb's halo tracks MEASURED loudness, not a timer: `frameLevel` takes the RMS of every
+audio frame in both directions (your microphone and the model's speech), the session reports
+it through `onLevel`, and `VoiceOrb` reads it from an animation frame and writes it to a CSS
+custom property. Two consequences worth keeping: the level is a REF rather than React state
+(it updates at audio rate, and state would re-render the tree dozens of times a second), and
+the easing is asymmetric - fast attack, slow release - which is what makes it read as
+breathing rather than flickering. Colours come from the brand tokens, so a customer's orb is
+their colour.
+
+Three more things are load-bearing rather than decorative:
 
 - **ChatPanel stays mounted underneath.** The stage is an overlay, not a swap. ChatPanel
   owns the run machinery and the widget flushing, so unmounting it would take the dashboard

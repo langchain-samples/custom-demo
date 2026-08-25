@@ -42,6 +42,7 @@ function ok(name, fn) {
     liveUrl,
     DEFAULT_VOICE,
     downsampleTo16k,
+    frameLevel,
     realtimeAudioMessage,
     INVOKE_TOOL,
     RESUME_TOOL,
@@ -259,6 +260,19 @@ function ok(name, fn) {
       blank.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName,
       DEFAULT_VOICE,
     );
+  });
+
+  ok("the audio level is measured, not faked", () => {
+    // The orb's halo tracks this, so it has to move over the range a VOICE occupies:
+    // speech RMS sits around 0.05-0.15 raw, which would barely register unboosted.
+    assert.equal(frameLevel(new Float32Array(0)), 0, "no samples is silence");
+    assert.equal(frameLevel(new Float32Array(256)), 0, "digital silence is silence");
+    const speechish = new Float32Array(512).map((_, i) => 0.1 * Math.sin(i / 8));
+    const level = frameLevel(speechish);
+    assert.ok(level > 0.15 && level < 0.5, `quiet speech should be visible, got ${level}`);
+    // A loud frame saturates rather than exceeding the range the CSS expects.
+    const loud = new Float32Array(512).map((_, i) => (i % 2 ? 1 : -1));
+    assert.equal(frameLevel(loud), 1);
   });
 
   console.log(`\n${passed} passed`);

@@ -26,6 +26,11 @@ export interface VoiceSessionView {
   activity: string;
   /** True while the model is talking, for the orb's animation. */
   speaking: boolean;
+  /**
+   * Live loudness, 0..1. A REF and not state on purpose: it updates dozens of times a
+   * second, so the orb reads it from an animation frame instead of re-rendering.
+   */
+  level: React.MutableRefObject<number>;
   /** The last thing either side said, for a caption under the orb. */
   lastSaid: { role: "user" | "model"; text: string } | null;
   error: string;
@@ -42,6 +47,7 @@ export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
   const [lastSaid, setLastSaid] = useState<VoiceSessionView["lastSaid"]>(null);
   const [error, setError] = useState("");
   const session = useRef<VoiceSession | null>(null);
+  const level = useRef(0);
   const traceId = useRef("");
 
   // A live microphone and an open socket must not outlive the page.
@@ -62,6 +68,7 @@ export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
     }
     setActivity("");
     setSpeaking(false);
+    level.current = 0;
     setState("idle");
   }, []);
 
@@ -112,6 +119,9 @@ export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
           onState: setState,
           onActivity: setActivity,
           onSpeaking: setSpeaking,
+          onLevel: (v) => {
+            level.current = v;
+          },
           onError: (detail) => {
             // Logged as well as shown: the server's reason is usually the whole answer.
             console.error("[voice]", detail);
@@ -153,6 +163,7 @@ export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
     state,
     activity,
     speaking,
+    level,
     lastSaid,
     error,
     running: state !== "idle" && state !== "error",

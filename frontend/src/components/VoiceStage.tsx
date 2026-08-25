@@ -11,9 +11,10 @@
  */
 
 import { useState } from "react";
-import { IconX, IconMicrophone } from "@tabler/icons-react";
+import { IconX } from "@tabler/icons-react";
 import type { QuickAction } from "@/lib/api";
 import type { VoiceSessionView } from "@/lib/hooks/use-voice-session";
+import { VoiceOrb } from "@/components/VoiceOrb";
 
 export interface VoiceStageProps {
   voice: VoiceSessionView;
@@ -49,17 +50,8 @@ export function VoiceStage({
   logo,
   presets = [],
 }: VoiceStageProps) {
-  const { state, speaking, running } = voice;
+  const { running } = voice;
   const [reading, setReading] = useState<number | null>(null);
-  // The orb reads its state through scale and glow rather than words: bigger and brighter
-  // while it talks, a slow breath while it listens, a pulse while it works.
-  const orb = [
-    "relative grid size-56 place-items-center rounded-full transition-all duration-500",
-    "bg-brand shadow-[0_0_80px_-10px_var(--brand-primary)]",
-    speaking ? "scale-110" : "scale-100",
-    state === "thinking" ? "animate-pulse" : "",
-    running ? "" : "opacity-70 hover:opacity-100",
-  ].join(" ");
 
   return (
     <div className="relative flex h-full flex-col items-center justify-center gap-8 px-8">
@@ -78,18 +70,7 @@ export function VoiceStage({
         <h2 className="m-0 font-heading text-xl font-semibold tracking-tight">{displayName}</h2>
       </div>
 
-      <button
-        type="button"
-        onClick={() => (running ? voice.stop() : voice.start())}
-        aria-label={running ? "Stop the conversation" : "Start talking"}
-        className={orb}
-      >
-        {/* A breathing ring, so a listening orb is visibly live rather than a flat disc. */}
-        {running && (
-          <span className="absolute inset-0 animate-ping rounded-full bg-brand/30 [animation-duration:2.4s]" />
-        )}
-        <IconMicrophone className="relative size-14 text-brand-foreground" />
-      </button>
+      <VoiceOrb voice={voice} onClick={() => (running ? voice.stop() : voice.start())} />
 
       <div className="flex min-h-16 max-w-md flex-col items-center gap-1.5 text-center">
         <p className="m-0 text-sm text-muted-foreground">{statusLine(voice)}</p>
