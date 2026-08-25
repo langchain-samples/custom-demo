@@ -86,12 +86,13 @@ export function VoiceButton({
           const { token, model } = await voiceToken();
           return { token, model };
         },
-        ask: async (question, headers) => {
-          const out = await chat.current?.ask(question, headers);
+        ask: async (question, headers, onProgress) => {
+          const out = await chat.current?.ask(question, headers, onProgress);
           return {
             answer: out?.answer || "",
             widgets: (out?.widgets || []) as { title?: string; value?: string }[],
             approval: out?.approval,
+            runId: out?.runId,
           };
         },
         resume: async (choice) => {

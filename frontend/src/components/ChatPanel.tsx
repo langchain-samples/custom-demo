@@ -84,6 +84,12 @@ export interface TurnResult {
    */
   approval?: string;
   error?: string;
+  /**
+   * The agent run's LangSmith id. Voice mode records it on its `invoke_deep_agent` span,
+   * which is how the conversation trace and the agent trace stay connected (they cannot be
+   * nested - see the note in graph.py).
+   */
+  runId?: string;
 }
 
 /**
@@ -92,7 +98,11 @@ export interface TurnResult {
  * typed one - which is the entire reason voice mode runs the agent from the browser.
  */
 export interface ChatPanelHandle {
-  ask(question: string, headers?: Record<string, string>): Promise<TurnResult>;
+  ask(
+    question: string,
+    headers?: Record<string, string>,
+    onProgress?: (toolName: string) => void,
+  ): Promise<TurnResult>;
   /** Answer whatever the last turn paused on. */
   resumeWith(value: unknown): Promise<TurnResult>;
   busy(): boolean;
@@ -339,8 +349,13 @@ export default function ChatPanel({
     images?: ImageAttachment[];
     /** Distributed-tracing headers, so a voice-driven run nests under its tool span. */
     headers?: Record<string, string>;
+    /**
+     * Called with each tool the agent starts. Voice mode uses it to narrate progress
+     * during a 60-second run; the typed path shows the same thing as chips.
+     */
+    onProgress?: (toolName: string) => void;
   }): Promise<TurnResult> => {
-    const { question, resume, images = [], headers } = opts;
+    const { question, resume, images = [], headers, onProgress } = opts;
     const isResume = resume !== undefined;
     // Returned rather than thrown: a programmatic caller (voice) needs something to say,
     // and "a turn was already running" is a normal race there, not a failure.
@@ -487,6 +502,8 @@ export default function ChatPanel({
             if (!chipMap[id]) {
               chipMap[id] = { id, name, arg: summary, result: null, code: ci?.code, codeLang: ci?.lang };
               chipOrder.push(id);
+              // Real progress, from the agent's own tool calls (the shell throttles it).
+              onProgress?.(name);
             } else {
               chipMap[id] = {
                 ...chipMap[id],
@@ -763,7 +780,12 @@ export default function ChatPanel({
         ]);
         // A caller driving this by voice cannot see the review card, so hand back a
         // line it can read out. The card is still rendered for whoever is looking.
-        return { answer, widgets: turnWidgets, approval: describeInterrupt(pending) };
+        return {
+          answer,
+          widgets: turnWidgets,
+          approval: describeInterrupt(pending),
+          runId: runId || undefined,
+        };
       }
 
       if (answer) setBubble({ streaming: false, markdown: true, text: answer });
@@ -777,7 +799,7 @@ export default function ChatPanel({
           ...prev,
           { kind: "feedback", id: nextId(), runId: runId!, workspace: runContext.ls_workspace },
         ]);
-      return { answer, widgets: turnWidgets, error: errorMsg || undefined };
+      return { answer, widgets: turnWidgets, error: errorMsg || undefined, runId: runId || undefined };
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
         setBubble({
@@ -964,10 +986,14 @@ export default function ChatPanel({
   useImperativeHandle(
     handleRef,
     () => ({
-      ask: async (question: string, headers?: Record<string, string>) => {
+      ask: async (
+        question: string,
+        headers?: Record<string, string>,
+        onProgress?: (toolName: string) => void,
+      ) => {
         const blocked = guard?.(question);
         if (blocked) return { answer: blocked, widgets: [] };
-        return runTurn({ question, headers });
+        return runTurn({ question, headers, onProgress });
       },
       resumeWith: (value: unknown) => runTurn({ resume: value }),
       busy: () => busyRef.current,

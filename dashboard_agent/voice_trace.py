@@ -134,13 +134,27 @@ def open_tool(session_id: str, name: str, inputs: dict) -> dict:
 
 
 def close_tool(session_id: str, tool_id: str, outputs: dict) -> bool:
-    """Close a tool span opened by `open_tool`. False when it is unknown (or replayed)."""
+    """Close a tool span opened by `open_tool`. False when it is unknown (or replayed).
+
+    An `outputs["run_id"]` is turned into the agent run's URL, because that link is the
+    whole substitute for nesting: the agent run cannot be a child of this span (see the
+    note in graph.py), so the span has to say where the run is instead. Best-effort - the
+    id alone is still useful, and the run may not have finished ingesting yet.
+    """
     session = _session(session_id)
     if session is None:
         return False
     child = session["tools"].pop(tool_id, None)
     if child is None:
         return False
+    run_id = str(outputs.get("run_id") or "")
+    if run_id:
+        try:
+            url = getattr(session["run"].ls_client.read_run(run_id), "url", "")
+            if url:
+                outputs = {**outputs, "agent_trace": url}
+        except Exception:  # noqa: BLE001 - the id on its own is enough to find the run
+            pass
     child.end(outputs=outputs)
     child.patch()
     return True

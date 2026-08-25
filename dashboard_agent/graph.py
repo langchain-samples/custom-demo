@@ -72,24 +72,27 @@ async def graph(config: Any):
     configurable = (config or {}).get("configurable", {}) or {}
     workspace_id = configurable.get("ls_workspace") or None
     project_name = configurable.get("ls_project") or None
-    # Distributed tracing: when the caller sends `langsmith-trace`, Agent Server
-    # surfaces it here and we can hang this run under the caller's span instead of
-    # starting a second, disconnected trace. That is what makes voice mode ONE tree
-    # (voice_session -> invoke_deep_agent -> this run) rather than two, and it is what
-    # `dashboard_agent/voice_trace.py` mints the header for.
+    # NO DISTRIBUTED-TRACING PARENT HERE, deliberately, and it is worth reading why before
+    # adding one back. Voice mode wants the agent run nested inside its `invoke_deep_agent`
+    # span (see voice_trace.py), and LangSmith documents exactly that: send `langsmith-trace`,
+    # read it off `configurable`, wrap the run in `tracing_context(parent=...)`.
     #
-    # Trusted-caller note (LangSmith documents this): a dotted order from an inbound
-    # header decides where runs are recorded. The only caller that sends one here is
-    # our own SPA, over the deployment's own auth (auth.py), carrying a value this
-    # deployment minted. Do not widen that.
-    parent_trace = configurable.get("langsmith-trace") or None
-
-    if not workspace_id and not project_name and not parent_trace:
+    # Measured against this deployment, every form of it LOSES THE RUN. Bare dotted order,
+    # a headers mapping, and a `RunTree.from_headers(..., ls_client=client)` built with the
+    # right workspace client all produce the same outcome: the agent answers, and no run is
+    # recorded anywhere - not nested, not at its own root. A control run with the header
+    # removed traces normally, full tree. The same parent handle nests correctly when the
+    # child is a plain `@traceable` in one process, so the mechanism is fine; what breaks it
+    # is the Agent Server's own run identity, which is authoritative and does not defer to an
+    # inbound parent.
+    #
+    # An unnested trace is a cosmetic loss. A missing trace is the demo. So the voice shell
+    # records the agent run's id on its tool span instead (`closeToolSpan`), which gives a
+    # click-through without putting the trace at risk.
+    if not workspace_id and not project_name:
         yield base_graph
         return
 
     client = _client_for_workspace(workspace_id) if workspace_id else None
-    with tracing_context(
-        enabled=True, client=client, project_name=project_name, parent=parent_trace
-    ):
+    with tracing_context(enabled=True, client=client, project_name=project_name):
         yield base_graph

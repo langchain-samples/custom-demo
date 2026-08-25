@@ -28,6 +28,11 @@ function ok(name, fn) {
     setupMessage,
     supportsNonBlocking,
     toolResponseMessage,
+    systemTurnMessage,
+    resultMessage,
+    progressMessage,
+    progressLabel,
+    digest,
     toolCallsFrom,
     audioChunksFrom,
     transcriptsFrom,
@@ -94,14 +99,55 @@ function ok(name, fn) {
     assert.equal("behavior" in off.tools[0].functionDeclarations[0], false);
   });
 
+  ok("the late result is a user turn, not another tool response", () => {
+    // Verified live: a second `toolResponse` for an answered call is dropped, and so is a
+    // `clientContent` turn carrying a `functionResponse` part (what the ADK example sends).
+    // A plain user turn is narrated every time.
+    const msg = resultMessage("Units fell across three SKUs.", ["Units: -12%"]);
+    const turn = msg.clientContent.turns[0];
+    assert.equal(turn.role, "user");
+    assert.equal(msg.clientContent.turnComplete, true);
+    assert.ok(!JSON.stringify(msg).includes("functionResponse"));
+    // The `[system]` prefix stops the model answering it as if the user had said it.
+    assert.ok(turn.parts[0].text.startsWith("[system] "), turn.parts[0].text);
+    assert.ok(turn.parts[0].text.includes("Units fell across three SKUs."));
+    assert.ok(turn.parts[0].text.includes("Units: -12%"));
+  });
+
+  ok("progress is narratable and named after what the agent is doing", () => {
+    // Real tool calls, not a canned timer: "searching the data now" is true when said.
+    assert.equal(progressLabel("datasearch"), "searching the data now");
+    assert.equal(progressLabel("push_widget"), "building the dashboard");
+    // An unknown tool stays vague rather than saying an internal tool name out loud.
+    assert.equal(progressLabel("some_internal_thing"), "still working through it");
+    const msg = progressMessage(progressLabel("datasearch"));
+    assert.ok(msg.clientContent.turns[0].parts[0].text.includes("searching the data now"));
+  });
+
+  ok("the digest keeps only widgets with a value", () => {
+    assert.deepEqual(digest([{ title: "Units", value: "-12%" }, { title: "No value" }]),
+      ["Units: -12%"]);
+  });
+
+  ok("the ack says the call is not finished", () => {
+    // `willContinue` is what keeps the model from treating the acknowledgement as the
+    // answer (and it is why it stops waiting and keeps the floor).
+    const ack = toolResponseMessage({ id: "c1", name: INVOKE_TOOL, args: {} },
+      { status: "started" }, "SILENT", true);
+    const [r] = ack.toolResponse.functionResponses;
+    assert.equal(r.willContinue, true);
+    // `scheduling` sits BESIDE `response`, not inside it.
+    assert.equal(r.scheduling, "SILENT");
+    assert.equal(r.response.scheduling, undefined);
+  });
+
   ok("a tool response carries the call id and its scheduling", () => {
     const call = { id: "call-1", name: INVOKE_TOOL, args: {} };
     const msg = toolResponseMessage(call, { answer: "done" }, "INTERRUPT");
     const [response] = msg.toolResponse.functionResponses;
     assert.equal(response.id, "call-1");
     assert.equal(response.name, INVOKE_TOOL);
-    // `scheduling` rides INSIDE the response payload, not beside it.
-    assert.equal(response.response.scheduling, "INTERRUPT");
+    assert.equal(response.scheduling, "INTERRUPT");
     assert.equal(response.response.answer, "done");
   });
 

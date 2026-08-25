@@ -35,6 +35,9 @@ const LIVE_PATH =
 export const MIC_RATE = 16000;
 export const PLAYBACK_RATE = 24000;
 
+/** Never narrate progress more often than this: thinking aloud, not a monologue. */
+const PROGRESS_MIN_GAP_MS = 6000;
+
 /** What the shell is allowed to ask the SPA to do. */
 export const INVOKE_TOOL = "invoke_deep_agent";
 export const RESUME_TOOL = "resume_deep_agent";
@@ -233,20 +236,96 @@ export function setupMessage(model: string, resumeHandle?: string): object {
   };
 }
 
-/** The `toolResponse` frame for one finished call. */
+/**
+ * The `toolResponse` frame that ACKNOWLEDGES a call, so the model stops waiting.
+ *
+ * `willContinue` is what makes this an acknowledgement rather than an answer: it tells the
+ * model the real result is still coming, which is how a later `clientContent` response for
+ * the same call id is accepted instead of ignored. `scheduling` sits BESIDE `response`, not
+ * inside it (it is a field of `FunctionResponse` - cf. the ADK example's
+ * `types.FunctionResponse(..., response={...}, scheduling=...)`).
+ */
 export function toolResponseMessage(
   call: LiveToolCall,
   response: Record<string, unknown>,
   scheduling: ResponseScheduling,
+  willContinue = false,
 ): object {
   return {
     toolResponse: {
       functionResponses: [
-        // `scheduling` rides INSIDE the response payload, not beside it.
-        { id: call.id, name: call.name, response: { ...response, scheduling } },
+        {
+          id: call.id,
+          name: call.name,
+          response,
+          scheduling,
+          ...(willContinue ? { willContinue: true } : {}),
+        },
       ],
     },
   };
+}
+
+/**
+ * How the late half of a tool call gets DELIVERED: as a plain user turn.
+ *
+ * Not as a second `toolResponse` (the call is already answered, so it is dropped), and not
+ * as a `clientContent` turn carrying a `functionResponse` part either - that is what the
+ * ADK example sends, and verified against a live 3.1 session it is silently ignored: the
+ * model acknowledges, the result arrives, and it never speaks again. A user turn IS
+ * narrated, every time.
+ *
+ * The `[system]` prefix is doing real work: without it the model answers the text as if the
+ * user had said it ("thanks for telling me"), rather than reporting it back.
+ */
+export function systemTurnMessage(text: string): object {
+  return {
+    clientContent: {
+      turns: [{ role: "user", parts: [{ text: `[system] ${text}` }] }],
+      turnComplete: true,
+    },
+  };
+}
+
+/** The finished answer, phrased so the model reports rather than re-answers. */
+export function resultMessage(answer: string, onScreen: string[]): object {
+  const screen = onScreen.length ? ` On the dashboard: ${onScreen.join("; ")}.` : "";
+  return systemTurnMessage(
+    `result for the question you are working on: ${answer}${screen} ` +
+      "Report this back conversationally in a sentence or two.",
+  );
+}
+
+/** Progress, so a 60-second run is narrated rather than silent. */
+export function progressMessage(what: string): object {
+  return systemTurnMessage(
+    `progress on the question you are working on: ${what}. ` +
+      "Say one short line about it, do not repeat yourself, and keep waiting.",
+  );
+}
+
+/**
+ * What the agent is doing right now, in words a listener understands.
+ *
+ * Driven by the agent's OWN tool calls rather than a canned timer, so "still searching the
+ * data" is true when it is said. Unknown tools fall back to a vague line, which is better
+ * than naming an internal tool out loud.
+ */
+const PROGRESS_LABELS: Record<string, string> = {
+  datasearch: "searching the data now",
+  web_search: "checking external sources",
+  execute: "crunching the numbers in the sandbox",
+  push_widget: "building the dashboard",
+  write_todos: "planning out the steps",
+  read_file: "reading through the files",
+  ls: "looking through the files",
+  glob: "looking through the files",
+  grep: "searching the files",
+  task: "handing part of this to a specialist",
+};
+
+export function progressLabel(toolName: string): string {
+  return PROGRESS_LABELS[toolName] || "still working through it";
 }
 
 /** Function calls in a server frame, if any. */
@@ -326,6 +405,11 @@ export function spokenResult(
  * `?key=` is refused with `1007 Missing or malformed auth token in request. Obtain one
  * from CreateAuthToken and pass it in an access_token query parameter`.
  */
+/** Widget headlines as spoken lines ("Units: -12%"), for the on-screen digest. */
+export function digest(widgets: { title?: string; value?: string }[]): string[] {
+  return widgets.filter((w) => w.title && w.value).map((w) => `${w.title}: ${w.value}`);
+}
+
 export function liveUrl(token: string): string {
   return `wss://${LIVE_HOST}${LIVE_PATH}?access_token=${encodeURIComponent(token)}`;
 }
@@ -342,7 +426,15 @@ export interface VoiceSessionHooks {
   ask(
     question: string,
     headers: Record<string, string>,
-  ): Promise<{ answer: string; widgets: { title?: string; value?: string }[]; approval?: string }>;
+    /** Called with each tool the agent starts, so the shell can narrate progress. */
+    onProgress?: (toolName: string) => void,
+  ): Promise<{
+    answer: string;
+    widgets: { title?: string; value?: string }[];
+    approval?: string;
+    /** The agent run's LangSmith id, recorded on the tool span to link the traces. */
+    runId?: string;
+  }>;
   /** Answer an approval the agent paused on, with the option the user spoke. */
   resume(
     choice: string,
@@ -548,43 +640,69 @@ export class VoiceSession {
   }
 
   /**
-   * Run one function call. TWO responses, which is the whole trick to not going silent:
-   * an immediate acknowledgement so the model keeps the floor, then the real answer with
-   * `INTERRUPT` scheduling once the agent finishes (up to a minute later). The two-phase
-   * shape is borrowed from the ADK example.
+   * Run one function call. TWO responses, sent as DIFFERENT message types, which is the
+   * whole trick to not going silent:
+   *
+   *   1. `toolResponse` with an acknowledgement, immediately. This completes the call, so
+   *      the model stops waiting and keeps the floor.
+   *   2. `clientContent` carrying a `functionResponse` part, once the agent finishes (up
+   *      to a minute later). A second `toolResponse` would be dropped - see
+   *      `lateToolResponseMessage`.
    */
   private async runTool(call: LiveToolCall): Promise<void> {
     const ws = this.ws;
     if (!ws) return;
     const ack = { status: "started", note: "Working on it; results follow." };
-    ws.send(JSON.stringify(toolResponseMessage(call, ack, "SILENT")));
+    // `willContinue`: acknowledged, not answered. This is what stops the model waiting.
+    ws.send(JSON.stringify(toolResponseMessage(call, ack, "SILENT", true)));
     this.hooks.onState("thinking");
+
+    // Progress, throttled. The agent calls a dozen tools in a turn and narrating each one
+    // would be worse than silence; one line every few seconds reads as thinking aloud.
+    let lastProgress = 0;
+    const narrate = (toolName: string) => {
+      const now = Date.now();
+      if (now - lastProgress < PROGRESS_MIN_GAP_MS) return;
+      lastProgress = now;
+      ws.send(JSON.stringify(progressMessage(progressLabel(toolName))));
+    };
 
     try {
       if (call.name === RESUME_TOOL) {
         const out = await this.hooks.resume(String(call.args.choice || ""));
         this.pendingApproval = "";
-        ws.send(
-          JSON.stringify(
-            toolResponseMessage(call, spokenResult(out.answer, out.widgets), "INTERRUPT"),
-          ),
-        );
+        ws.send(JSON.stringify(resultMessage(out.answer, digest(out.widgets))));
         return;
       }
 
       const question = String(call.args.question || "");
       const span = await this.hooks.openToolSpan(question);
-      const out = await this.hooks.ask(question, span.headers || {});
+      const out = await this.hooks.ask(question, span.headers || {}, narrate);
       const payload = out.approval
         ? { status: "needs_approval", approval: out.approval }
         : spokenResult(out.answer, out.widgets);
       this.pendingApproval = out.approval || "";
-      if (span.tool_id) this.hooks.closeToolSpan(span.tool_id, payload);
-      ws.send(JSON.stringify(toolResponseMessage(call, payload, "INTERRUPT")));
+      // `run_id` is the link between this conversation's trace and the agent's own: the two
+      // cannot be nested (graph.py explains why), so the span records where to look.
+      if (span.tool_id) {
+        this.hooks.closeToolSpan(span.tool_id, { ...payload, run_id: out.runId || "" });
+      }
+      ws.send(
+        JSON.stringify(
+          out.approval
+            ? systemTurnMessage(
+                `the agent needs a decision before it can finish: ${out.approval} ` +
+                  "Read out the options and wait for the answer.",
+              )
+            : resultMessage(out.answer, digest(out.widgets)),
+        ),
+      );
     } catch (e) {
       ws.send(
         JSON.stringify(
-          toolResponseMessage(call, { status: "failed", error: (e as Error).message }, "INTERRUPT"),
+          systemTurnMessage(
+            `that question failed: ${(e as Error).message}. Say so briefly.`,
+          ),
         ),
       );
     } finally {
