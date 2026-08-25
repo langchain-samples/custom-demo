@@ -82,6 +82,9 @@ jobs:
           # `web_search` calls Tavily and errors out (never invents results) without
           # this, so a deployment missing it has a visibly broken research tool.
           TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          # Voice mode. Absent, the deployment simply has no voice: POST /voice/token
+          # answers 501 and the mic button reports it. Nothing else degrades.
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           {
             echo "LS_CROSS_WORKSPACE_KEY=$LS_CROSS_WORKSPACE_KEY"
@@ -91,6 +94,7 @@ jobs:
             echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"
             echo "ANTHROPIC_CUSTOM_HEADERS=$ANTHROPIC_CUSTOM_HEADERS"
             echo "TAVILY_API_KEY=$TAVILY_API_KEY"
+            echo "GEMINI_API_KEY=$GEMINI_API_KEY"
             # Turn on deepagents dynamic subagents (QuickJS interpreter + task() fan-out).
             echo "DA_DYNAMIC_SUBAGENTS=1"
           } > .env

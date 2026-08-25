@@ -317,9 +317,18 @@ presents as a socket that just closes.
 ## Setup
 
 ```bash
-# .env
+# .env  (local)
 GEMINI_API_KEY=<from https://aistudio.google.com/apikey>
 ```
+
+For the DEPLOYMENT it takes two steps, and the second is the one that gets forgotten: add
+`GEMINI_API_KEY` as a GitHub Actions secret, AND make sure it is named in both places in
+`.github/workflows/ci.yml` - the `env:` block and the `echo` that writes `.env`. The deploy job
+reconstructs `.env` from those secrets and `langgraph deploy` turns it into the deployment's
+secrets, so a secret that exists in GitHub but is not named in the workflow never arrives.
+
+Absent, nothing breaks except voice: `POST /voice/token` answers 501 and the mic button says
+so.
 
 Then create an assistant with **Voice mode** switched on in the New customer demo dialog,
 or flip `metadata.voice.enabled` on one that already exists.
