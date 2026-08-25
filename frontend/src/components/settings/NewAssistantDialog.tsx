@@ -224,8 +224,7 @@ export function NewAssistantDialog({
                 speech-to-speech model runs the conversation and asks the agent
                 your question as a tool call, so the dashboard fills in exactly
                 as it does when you type, and the whole thing lands in one
-                LangSmith trace. Needs GEMINI_API_KEY on the deployment; without
-                it the button stays hidden.
+                LangSmith trace.
               </Hint>
             </span>
           </label>
