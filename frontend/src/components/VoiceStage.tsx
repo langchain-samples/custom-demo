@@ -72,18 +72,10 @@ export function VoiceStage({
 
       <VoiceOrb voice={voice} onClick={() => (running ? voice.stop() : voice.start())} />
 
-      <div className="flex min-h-16 max-w-md flex-col items-center gap-1.5 text-center">
-        <p className="m-0 text-sm text-muted-foreground">{statusLine(voice)}</p>
-        {/* The last thing said, so a listener can confirm they were heard correctly. */}
-        {voice.lastSaid && (
-          <p className="m-0 text-[13px] leading-snug text-foreground/70">
-            <span className="text-muted-foreground">
-              {voice.lastSaid.role === "user" ? "You: " : ""}
-            </span>
-            {voice.lastSaid.text}
-          </p>
-        )}
-      </div>
+      {/* Status only. No transcript: the whole point of this view is not reading, and a
+          live caption of what was just said pulls the eye off the dashboard. The words are
+          still recorded - they go to the conversation's trace. */}
+      <p className="m-0 min-h-5 text-sm text-muted-foreground">{statusLine(voice)}</p>
 
       {presets.length > 0 && (
         <div className="flex w-full max-w-lg flex-col items-center gap-2">

@@ -31,8 +31,6 @@ export interface VoiceSessionView {
    * second, so the orb reads it from an animation frame instead of re-rendering.
    */
   level: React.MutableRefObject<number>;
-  /** The last thing either side said, for a caption under the orb. */
-  lastSaid: { role: "user" | "model"; text: string } | null;
   error: string;
   running: boolean;
   start: () => void;
@@ -44,7 +42,6 @@ export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
   const [state, setState] = useState<VoiceState>("idle");
   const [activity, setActivity] = useState("");
   const [speaking, setSpeaking] = useState(false);
-  const [lastSaid, setLastSaid] = useState<VoiceSessionView["lastSaid"]>(null);
   const [error, setError] = useState("");
   const session = useRef<VoiceSession | null>(null);
   const level = useRef(0);
@@ -111,7 +108,8 @@ export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
             };
           },
           onTranscript: (role, text) => {
-            setLastSaid({ role, text });
+            // Not rendered anywhere: the stage shows status, not a caption. Kept because
+            // the utterances are what make the conversation legible in the trace.
             if (traceId.current) {
               void voiceTrace({ action: "utterance", session_id: traceId.current, role, text });
             }
@@ -164,7 +162,6 @@ export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
     activity,
     speaking,
     level,
-    lastSaid,
     error,
     running: state !== "idle" && state !== "error",
     start,

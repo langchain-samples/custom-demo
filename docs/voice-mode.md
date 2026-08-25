@@ -150,8 +150,15 @@ it through `onLevel`, and `VoiceOrb` reads it from an animation frame and writes
 custom property. Two consequences worth keeping: the level is a REF rather than React state
 (it updates at audio rate, and state would re-render the tree dozens of times a second), and
 the easing is asymmetric - fast attack, slow release - which is what makes it read as
-breathing rather than flickering. Colours come from the brand tokens, so a customer's orb is
-their colour.
+breathing rather than flickering. Colours are DERIVED from the brand hue rather than taken
+straight from it: a brand secondary can legitimately be near-black (Progressive's is), and
+mixing that into a sphere reads as a bruise, so each stop is lightened toward white and
+pulled toward violet or pink. The result is recognisably the customer's colour and reliably
+luminous.
+
+The stage shows STATUS only, no transcript: reading is what the chat view is for, and a live
+caption pulls the eye off the dashboard. The utterances are still recorded - they are what
+make the conversation legible in its trace.
 
 Three more things are load-bearing rather than decorative:
 

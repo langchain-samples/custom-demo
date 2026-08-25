@@ -282,9 +282,14 @@ input[type="color"]::-moz-color-swatch {
   --level: 0;
   --idle: 0.35;
   --orb-size: 260px;
-  --orb-a: var(--brand-primary);
-  --orb-b: var(--brand-secondary, #7c5cff);
-  --orb-c: #b06cff;
+  /* The brand hue leads, but the other two stops are DERIVED rather than taken straight
+     from the brand: a secondary can legitimately be near-black (Progressive's is), and
+     mixing that into a sphere reads as a bruise rather than iridescence. Each stop is
+     lightened toward white and pulled toward violet/pink, so any brand lands somewhere
+     between "its colour" and "luminous". */
+  --orb-a: color-mix(in srgb, var(--brand-primary) 78%, #ffffff);
+  --orb-b: color-mix(in srgb, var(--brand-primary) 45%, #8b6cff);
+  --orb-c: color-mix(in srgb, var(--brand-primary) 25%, #ff6ec7);
   position: relative;
   display: grid;
   place-items: center;
@@ -320,10 +325,12 @@ input[type="color"]::-moz-color-swatch {
   border-radius: 50%;
   overflow: hidden;
   background:
-    radial-gradient(circle at 32% 62%, color-mix(in srgb, var(--orb-a) 92%, #fff) 0%, transparent 58%),
-    radial-gradient(circle at 72% 34%, color-mix(in srgb, var(--orb-b) 88%, #fff) 0%, transparent 60%),
-    radial-gradient(circle at 55% 78%, color-mix(in srgb, var(--orb-c) 70%, #fff) 0%, transparent 55%),
-    radial-gradient(circle at 50% 45%, #ffffff 0%, color-mix(in srgb, var(--orb-a) 30%, #fff) 100%);
+    radial-gradient(circle at 30% 64%, color-mix(in srgb, var(--orb-a) 85%, #fff) 0%, transparent 60%),
+    radial-gradient(circle at 74% 32%, color-mix(in srgb, var(--orb-b) 80%, #fff) 0%, transparent 62%),
+    radial-gradient(circle at 58% 80%, color-mix(in srgb, var(--orb-c) 72%, #fff) 0%, transparent 58%),
+    /* The base layer is nearly white, so any gap between the stops reads as light rather
+       than as a hole. */
+    radial-gradient(circle at 50% 42%, #ffffff 0%, color-mix(in srgb, var(--orb-a) 22%, #fff) 100%);
   animation: orb-drift 18s linear infinite;
   transform: scale(calc(1 + 0.05 * var(--level)));
   transition: transform 90ms linear;
