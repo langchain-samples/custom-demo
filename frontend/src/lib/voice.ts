@@ -27,6 +27,7 @@
 // stripping, where neither the `@/` alias nor extensionless resolution works. Vite is
 // happy with the explicit form, so it is the one that works in both.
 import { ConversationRecorder } from "./voiceRecorder.ts";
+import { activeLabel } from "./toolLabels.ts";
 
 const LIVE_HOST = "generativelanguage.googleapis.com";
 // The CONSTRAINED method, and it has to be. Verified against the live API: an ephemeral
@@ -491,11 +492,15 @@ export function progressMessage(what: string): object {
 }
 
 /**
- * What the agent is doing right now, in words a listener understands.
+ * What the agent is doing right now, in words a listener HEARS.
  *
  * Driven by the agent's OWN tool calls rather than a canned timer, so "still searching the
  * data" is true when it is said. Unknown tools fall back to a vague line, which is better
  * than naming an internal tool out loud.
+ *
+ * Spoken only. The on-screen status line uses `activeLabel` instead: these read aloud as
+ * half a sentence ("searching the data now"), which is right for speech and wrong for a
+ * label, and the screen should match the words the chat log uses for the same tool.
  */
 const PROGRESS_LABELS: Record<string, string> = {
   datasearch: "searching the data now",
@@ -896,13 +901,15 @@ export class VoiceSession {
     // would be worse than silence; one line every few seconds reads as thinking aloud.
     let lastProgress = 0;
     const narrate = (toolName: string) => {
-      const label = progressLabel(toolName);
-      // The status line updates every time; the SPOKEN line does not.
-      this.hooks.onActivity(label);
+      // Two audiences, two vocabularies. The SCREEN gets the same present-tense label the
+      // chat log uses for that tool ("Listing files"), so the orb and the log agree and
+      // every tool we know is named. The MODEL gets a conversational phrase to say out
+      // loud, which is a different sentence shape entirely.
+      this.hooks.onActivity(activeLabel(toolName));
       const now = Date.now();
       if (now - lastProgress < PROGRESS_MIN_GAP_MS) return;
       lastProgress = now;
-      ws.send(JSON.stringify(progressMessage(label)));
+      ws.send(JSON.stringify(progressMessage(progressLabel(toolName))));
     };
 
     try {
