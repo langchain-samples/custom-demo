@@ -40,7 +40,7 @@ function statusLine(voice: VoiceSessionView): string {
   if (voice.activity) return voice.activity;
   if (voice.speaking) return "Speaking…";
   if (voice.state === "thinking") return "Working on it…";
-  return "Listening, just start talking";
+  return "Listening…";
 }
 
 export function VoiceStage({
