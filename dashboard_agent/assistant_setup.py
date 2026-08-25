@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import cast
 
 import httpx
@@ -891,10 +892,23 @@ def prepare_assistant(payload: dict) -> dict:
     )
     push = payload.get("push_prompts", True)
 
-    brand = fetch_brand(customer, payload.get("website"))
-    analysis = analyze_customer(
-        customer, payload.get("industry", ""), payload.get("website"), use_case
-    )
+    # CONCURRENT on purpose. These two are the same wall clock spent twice: `fetch_brand`
+    # is a Brandfetch call plus a scrape of the customer's site, `analyze_customer` is an
+    # LLM call, and neither reads the other's output (brand is not consumed until the
+    # accent is resolved, far below). Run serially they were simply added together.
+    # Threads rather than async because both are blocking HTTP, and this function is
+    # called from a sync route.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        brand_job = pool.submit(fetch_brand, customer, payload.get("website"))
+        analysis_job = pool.submit(
+            analyze_customer,
+            customer,
+            payload.get("industry", ""),
+            payload.get("website"),
+            use_case,
+        )
+        brand = brand_job.result()
+        analysis = analysis_job.result()
     industry = payload.get("industry") or analysis.get("industry") or ""
     actions = list(payload.get("actions") or analysis.get("actions") or [])
     display_name = payload.get("display_name") or f"{customer} GPT"

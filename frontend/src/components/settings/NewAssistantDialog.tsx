@@ -16,7 +16,7 @@
  *
  * Mounted only while visible, so each open starts from a fresh prefill.
  */
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
@@ -95,6 +95,43 @@ const IGNORE_AUTOFILL = {
   "data-lpignore": "true",
 } as const;
 
+/** Setup's typical wall clock. Not a deadline - see useSetupCountdown. */
+const SETUP_SECONDS = 60;
+
+/**
+ * Seconds remaining of the expected setup time, to one decimal, or null once it has run
+ * out. A minute of a blank progressless button is long enough that people assume it has
+ * hung and click away, and setup is genuinely a minute of real work.
+ *
+ * It counts down an ESTIMATE, not a deadline: nothing here can know when the LLM will
+ * finish. So it stops at zero and drops back to a plain "Setting up…" rather than showing
+ * a negative number or freezing at 0.0 - both of which read as broken, which is the exact
+ * impression the countdown exists to prevent.
+ *
+ * 100ms so the tenths actually move. Interval rather than an animation frame: this is one
+ * short text node, and rAF would repaint it 60 times a second to show the same digit.
+ */
+function useSetupCountdown(running: boolean): number | null {
+  const [left, setLeft] = useState<number | null>(null);
+  const startedAt = useRef(0);
+
+  useEffect(() => {
+    if (!running) {
+      setLeft(null);
+      return;
+    }
+    startedAt.current = Date.now();
+    setLeft(SETUP_SECONDS);
+    const id = setInterval(() => {
+      const remaining = SETUP_SECONDS - (Date.now() - startedAt.current) / 1000;
+      setLeft(remaining > 0 ? remaining : null);
+    }, 100);
+    return () => clearInterval(id);
+  }, [running]);
+
+  return left;
+}
+
 export function NewAssistantDialog({
   initialOwner,
   creating,
@@ -109,6 +146,8 @@ export function NewAssistantDialog({
   const [promptSource, setPromptSource] = useState("context_hub");
   const [demoTraffic, setDemoTraffic] = useState(false);
   const [voice, setVoice] = useState(false);
+
+  const secondsLeft = useSetupCountdown(creating);
 
   const canCreate = !!customer.trim() && !creating;
 
@@ -255,7 +294,11 @@ export function NewAssistantDialog({
               })
             }
           >
-            {creating ? "Setting up…" : "Create"}
+            {creating
+              ? secondsLeft === null
+                ? "Setting up…"
+                : `Setting up… ${secondsLeft.toFixed(1)}`
+              : "Create"}
           </Button>
           <Button
             type="button"
