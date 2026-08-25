@@ -67,9 +67,14 @@ export function VoicePicker({ value, onChange }: VoicePickerProps) {
           <SelectTrigger className="h-8 flex-1 text-xs">
             <SelectValue />
           </SelectTrigger>
-          <SelectContent>
+          {/* `right-auto` + a min width: SelectContent is `absolute left-0 right-0`, so by
+              default the panel is exactly as wide as its trigger - and this trigger is
+              `flex-1` in a narrow side panel next to a play button, which wrapped every
+              label onto three lines ("Sulafat / - / warm"). Releasing the right edge lets
+              the panel size to its content instead. */}
+          <SelectContent className="right-auto min-w-[13rem]">
             {SAMPLED_VOICES.map((v) => (
-              <SelectItem key={v.name} value={v.name} className="text-xs">
+              <SelectItem key={v.name} value={v.name} className="text-xs whitespace-nowrap">
                 {v.name} <span className="text-muted-foreground">- {v.character}</span>
               </SelectItem>
             ))}

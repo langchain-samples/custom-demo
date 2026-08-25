@@ -41,11 +41,13 @@ const LIVE_PATH =
 /**
  * The house voice, used unless an assistant names another.
  *
- * "Even" in Google's own one-word descriptors, which is what an insurance or analytics
- * assistant wants: the upbeat ones (Puck, Laomedeia) read as breezy when someone is asking
- * about a theft claim. Per-assistant override lives in `metadata.voice.voice_name`.
+ * "Breezy" in Google's own one-word descriptors. Schedar ("even") held this slot first, on
+ * the reasoning that a claims or analytics assistant should not sound chipper about a theft
+ * claim - but even reads as flat over a speaker, and flat is the wrong first impression for
+ * a demo. Per-assistant override lives in `metadata.voice.voice_name`, which is where an
+ * assistant with a sombre subject should say so.
  */
-export const DEFAULT_VOICE = "Schedar";
+export const DEFAULT_VOICE = "Aoede";
 
 /** Live API audio rates. Both fixed by the API: 16k in, 24k out. */
 export const MIC_RATE = 16000;
