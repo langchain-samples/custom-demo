@@ -44,6 +44,15 @@ export interface VoiceSessionView {
   stop: () => void;
 }
 
+/** Bytes to base64, chunked so a long recording cannot blow the argument limit. */
+function toBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(binary);
+}
+
 export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
   const { chat, workspace, project, customer, voiceName } = opts;
   const [state, setState] = useState<VoiceState>("idle");
@@ -65,10 +74,17 @@ export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
   );
 
   const stop = useCallback(() => {
+    // Rendered BEFORE stop() tears the session down, and sent with the closing call so the
+    // trace ends up with a scrubbable timeline of the conversation.
+    const wav = session.current?.recording() || null;
     session.current?.stop();
     session.current = null;
     if (traceId.current) {
-      void voiceTrace({ action: "end", session_id: traceId.current });
+      void voiceTrace({
+        action: "end",
+        session_id: traceId.current,
+        audio_wav: wav ? toBase64(wav) : "",
+      });
       traceId.current = "";
     }
     setActivity("");

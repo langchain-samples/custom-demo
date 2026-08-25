@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import os
 import threading
+import traceback
 import uuid
 
 from langsmith import Client, RunTree
@@ -160,8 +161,17 @@ def close_tool(session_id: str, tool_id: str, outputs: dict) -> bool:
     return True
 
 
-def end_session(session_id: str, outputs: dict | None = None) -> bool:
-    """Close the root span (and any tool span still open, so none is left running)."""
+def end_session(session_id: str, outputs: dict | None = None, audio_wav: bytes = b"") -> bool:
+    """Close the root span, attaching the conversation audio when there is any.
+
+    The attachment is what turns the trace into something you can LISTEN to: LangSmith
+    renders a `(mime, bytes)` attachment on a run tagged `ls_modality: audio` as a scrubbable
+    player, with the user on the left channel and the assistant on the right (the browser
+    builds the stereo mix - see `lib/voiceRecorder.ts`). Same shape as the ADK example's
+    server-side recorder.
+
+    Also closes any tool span still open, so a tab shut mid-run does not leave one spinning.
+    """
     with _LOCK:
         session = _SESSIONS.pop(session_id, None)
     if session is None:
@@ -169,6 +179,14 @@ def end_session(session_id: str, outputs: dict | None = None) -> bool:
     for child in session["tools"].values():
         child.end(outputs={"status": "abandoned"})
         child.patch()
-    session["run"].end(outputs=outputs or {})
-    session["run"].patch()
+    run = session["run"]
+    if audio_wav:
+        # Best-effort: a conversation that happened is worth recording even if its audio
+        # cannot be stored (a big body, a rejected upload).
+        try:
+            run.attachments = {"conversation": ("audio/wav", audio_wav)}
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+    run.end(outputs=outputs or {})
+    run.patch()
     return True

@@ -140,3 +140,31 @@ def test_sessions_are_capped_so_abandoned_tabs_cannot_grow_the_table():
     # Oldest evicted, newest kept: the live conversation is always the newest.
     assert ids[-1] in voice_trace._SESSIONS
     assert ids[0] not in voice_trace._SESSIONS
+
+
+def test_ending_a_session_attaches_the_conversation_audio():
+    """The attachment is what makes a voice trace playable, so its shape matters.
+
+    LangSmith renders a `(mime, bytes)` attachment on an `ls_modality: audio` run as a
+    scrubbable player. A wrong mime or a bare bytes value is not an error anywhere - the
+    run just quietly has no audio.
+    """
+    sid = voice_trace.start_session()
+    assert voice_trace.end_session(sid, {"turns": 2}, b"RIFFfake-wav-bytes")
+    root = _root(sid) if sid in voice_trace._SESSIONS else None
+    assert root is None, "the session is closed and removed"
+
+
+def test_the_attachment_carries_the_wav_mime_and_bytes(monkeypatch):
+    sid = voice_trace.start_session()
+    run = voice_trace._SESSIONS[sid]["run"]
+    voice_trace.end_session(sid, {}, b"RIFF....")
+    assert run.attachments == {"conversation": ("audio/wav", b"RIFF....")}
+
+
+def test_no_audio_means_no_attachment():
+    """A conversation with nothing captured must not attach an empty file."""
+    sid = voice_trace.start_session()
+    run = voice_trace._SESSIONS[sid]["run"]
+    voice_trace.end_session(sid, {}, b"")
+    assert not hasattr(run, "attachments") or not run.attachments

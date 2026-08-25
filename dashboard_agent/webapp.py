@@ -386,8 +386,18 @@ async def voice_trace(request):
             )
             return JSONResponse({"ok": ok})
         if action == "end":
+            # The conversation audio arrives base64 in the closing call (a few MB for a long
+            # session), so the trace gets a playable timeline. Decoded defensively: a
+            # malformed blob must not cost the session its closing patch.
+            wav = b""
+            raw = str(body.get("audio_wav") or "")
+            if raw:
+                try:
+                    wav = base64.b64decode(raw)
+                except Exception:  # noqa: BLE001
+                    wav = b""
             return JSONResponse(
-                {"ok": voice_trace_mod.end_session(session_id, body.get("outputs") or {})}
+                {"ok": voice_trace_mod.end_session(session_id, body.get("outputs") or {}, wav)}
             )
         return JSONResponse({"error": f"unknown action {action!r}"}, status_code=400)
     except Exception as exc:

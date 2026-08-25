@@ -93,7 +93,15 @@ voice_session
   `- invoke_deep_agent (tool)        <- outputs carry the agent run's id + URL
 ```
 
-**The agent run is NOT nested inside that span, and cannot be.** LangSmith documents the way
+The root run carries the conversation as a stereo WAV attachment (user left, assistant
+right), which is what makes the trace PLAYABLE: LangSmith renders it as a scrubbable
+timeline on an `ls_modality: audio` run. The browser builds the mix
+(`lib/voiceRecorder.ts`) and sends it base64 with the closing call. The placement rule is
+the subtle part: model audio arrives in bursts faster than real time, so each chunk starts
+at the LATER of its arrival time and the end of the previous one - place them at arrival
+time and a burst overlaps into a garbled blip, while a genuine pause still leaves silence.
+
+**The agent run is NOT nested inside that span, and cannot be from here.** LangSmith documents the way
 to do it - send `langsmith-trace`, read it off `configurable`, wrap the run in
 `tracing_context(parent=...)` - and measured against this deployment every form of it loses
 the run outright: not nested, not at its own root, nothing recorded, and no error, because
@@ -105,6 +113,18 @@ An unnested trace is cosmetic; a missing trace is the demo. So the tool span rec
 agent run's id and resolved URL (`agent_trace` in its outputs) and the agent run traces
 normally in the same project: two trees, one click apart. `graph.py` carries the same note,
 because the docs make re-adding that parent look obviously correct.
+
+**Why the ADK example nests and this does not.** It invokes the deep agent IN PROCESS -
+`agent.ainvoke(...)` inside `tracing_context(parent=tool_run)` - so the parent is an
+ordinary in-process one and nesting is automatic. Ours runs through Agent Server, in another
+process, which is the only reason distributed tracing is involved at all.
+
+Getting the same tree means invoking the agent in-process for voice turns: a route that
+runs `build_agent()` inside the tool span (`assistant_evals.py` already does exactly this
+for experiments) and streams frames in the shape `ChatPanel` parses, so the dashboard keeps
+working. That is a scoped piece of work rather than a tweak - it duplicates streaming
+behaviour the platform currently provides - and it is the right next step if the nested tree
+matters more than the extra surface.
 
 ## Four things the docs will not tell you
 

@@ -23,6 +23,11 @@
  * widget reason above; the audio worklets in public/ are adapted from it.
  */
 
+// Relative AND with the extension: the Node tests import this module directly via type
+// stripping, where neither the `@/` alias nor extensionless resolution works. Vite is
+// happy with the explicit form, so it is the one that works in both.
+import { ConversationRecorder } from "./voiceRecorder.ts";
+
 const LIVE_HOST = "generativelanguage.googleapis.com";
 // The CONSTRAINED method, and it has to be. Verified against the live API: an ephemeral
 // token on the plain `BidiGenerateContent` is refused with `1008 Method doesn't allow
@@ -567,6 +572,8 @@ export class VoiceSession {
   /** Partial transcripts accumulate here; Live streams them a few words at a time. */
   private partial = { user: "", model: "" };
   private speakingTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Both sides of the conversation, for the trace's playable timeline. */
+  private readonly tape = new ConversationRecorder(MIC_RATE, PLAYBACK_RATE);
 
   private readonly hooks: VoiceSessionHooks;
   private readonly voice: string;
@@ -681,6 +688,8 @@ export class VoiceSession {
     // The halo should react to the USER too, not just the model: half a conversation is
     // them talking, and a flat orb while you speak feels deaf.
     this.hooks.onLevel(frameLevel(out), "user");
+    // Recorded at the rate we SEND, so the two sides line up on one timeline.
+    this.tape.add("user", out);
     this.ws.send(JSON.stringify(realtimeAudioMessage(floatToPcm16(out))));
   }
 
@@ -714,6 +723,7 @@ export class VoiceSession {
     for (const chunk of chunks) {
       const samples = pcm16ToFloat(decodeBase64(chunk));
       this.player?.port.postMessage(samples);
+      this.tape.add("model", samples);
       // Measured here rather than in the worklet: the worklet drains on the audio thread
       // and would need a message back, and this is the same audio a beat earlier.
       this.hooks.onLevel(frameLevel(samples), "model");
@@ -818,6 +828,15 @@ export class VoiceSession {
       this.hooks.onActivity("");
       this.hooks.onState("listening");
     }
+  }
+
+  /**
+   * The conversation as a stereo WAV (user left, assistant right), or null if nothing was
+   * captured. Attached to the trace when the session ends, which is what gives the run a
+   * scrubbable audio timeline.
+   */
+  recording(): Uint8Array | null {
+    return this.tape.render();
   }
 
   /** Whether the agent is waiting on a spoken approval (drives the button's hint). */
