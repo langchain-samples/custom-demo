@@ -159,11 +159,29 @@ export default function App() {
     persona: voicePersona,
   });
   const showStage = voiceEnabled && voiceStage;
-  // Reset per assistant. Without this the flag is sticky for the life of the tab: exit the
-  // orb once and every voice assistant you pick afterwards opens in the chat view instead,
-  // which looks like the feature failing to turn on.
+  /**
+   * `stop` through a ref so the reset below can end a session without depending on the
+   * session view - listing `voice` there would re-run the effect on every state change and
+   * hang up mid-conversation.
+   */
+  const voiceStopRef = useRef(voice.stop);
+  voiceStopRef.current = voice.stop;
+  // Reset per assistant. The stage flag is otherwise sticky for the life of the tab: exit
+  // the orb once and every voice assistant you pick afterwards opens in the chat view
+  // instead, which looks like the feature failing to turn on.
   useEffect(() => {
     setVoiceStage(true);
+    /**
+     * And END any live session, because a session belongs to the assistant it was started
+     * for. Its identity and voice are baked into the Live API setup frame, which is sent
+     * once and cannot be amended, and its trace is scoped to that customer's project. Left
+     * running across a switch, the model keeps introducing itself as the previous company
+     * and its turns land in the wrong project.
+     *
+     * Deliberately not restarted: picking a new assistant should not seize the microphone.
+     * The orb comes back in its resting state and is the button to start talking.
+     */
+    voiceStopRef.current();
   }, [activeAssistant?.assistant_id]);
 
   // Effective theme: an active assistant's brand theme wins, else the manual
