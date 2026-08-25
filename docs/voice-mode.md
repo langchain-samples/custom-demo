@@ -254,7 +254,14 @@ Three more things are load-bearing rather than decorative:
   a plain mic button says "not yet" honestly.
 
 The X returns to the chat view without hanging up; a compact control then appears in the
-header showing state plus the activity line, with a way back.
+header showing state plus the activity line, with a way back. The view resets to the orb when
+the active assistant changes, so the choice is per assistant rather than sticky for the tab.
+
+**New Chat restarts a live session.** It has to: the thread is gone, so a session left
+running would remember a conversation the agent no longer has, reference figures that exist
+nowhere, and keep appending to a trace whose conversation ended. Restarting gives a new
+thread, a new Live session and a new `voice_session` trace - and stopping flushes the
+finished conversation's audio onto its own trace on the way out.
 
 ## Choosing the colours
 

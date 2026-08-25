@@ -197,6 +197,16 @@ export default function App() {
     setWidgets([]);
     setHasDashboard(false);
     setResetCounter((n) => n + 1);
+    // A live voice session restarts with it. Leaving it up would mean the model still
+    // remembers a conversation the AGENT no longer has - the thread is gone - so it would
+    // reference figures and claims that are no longer anywhere, and keep appending to a
+    // trace whose conversation ended. Restarting gives a new thread, a new Live session and
+    // a new `voice_session` trace, which is what "new chat" should mean on all three.
+    // Stopping also flushes the finished conversation's audio onto its own trace.
+    if (voice.running) {
+      voice.stop();
+      voice.start();
+    }
   };
 
   // Per-run context, resolved fresh at send time from the settings handle.
