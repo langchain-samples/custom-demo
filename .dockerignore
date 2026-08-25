@@ -1,3 +1,23 @@
+# Build context excludes. Anything here is invisible to `langgraph build` / `langgraph deploy`,
+# which build from the WORKING TREE - so this file is the only thing standing between a
+# developer's local secrets and an image layer.
+
+# --- secrets, first and non-negotiable ---
+# Safe to exclude even though langgraph.json points `env` at .env: the CLI reads that file
+# LOCALLY and sends its values to the control plane as deployment secrets
+# (langgraph_cli/deploy.py:_secrets_from_env). The image never needs it, and a
+# GitHub-integration build never had it anyway, since .env is gitignored.
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+credentials.json
+token.json
+
+# --- build noise ---
 frontend
 chat-langchain-lite
 .git
@@ -8,3 +28,4 @@ node_modules
 **/__pycache__
 *.log
 dist
+.DS_Store
