@@ -255,7 +255,7 @@ export default function App() {
             slides left the moment that child is conditional (which the voice control is). */}
         <div className="ml-auto flex items-center gap-3.5 print:hidden">
         {voiceEnabled && !showStage && (
-          <VoiceButton voice={voice} onExpand={() => setVoiceStage(true)} />
+          <VoiceButton voice={voice} onOpen={() => setVoiceStage(true)} />
         )}
         {/* No tooltip: this is the one action in the bar with a visible label, so a hover
             card explaining it just covers the row below. The icon-only buttons keep theirs. */}

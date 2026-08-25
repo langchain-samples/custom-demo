@@ -4,22 +4,20 @@
  * Shown once the immersive view (VoiceStage) has been exited, so a running conversation is
  * never invisible. `useVoiceSession` owns the session; this only renders it, which is why
  * leaving the stage does not hang up.
+ *
+ * Clicking it goes TO the voice view - starting a session if there is not one - because
+ * starting a conversation and then hunting for the orb was two clicks for one intention.
  */
 
-import {
-  IconMicrophone,
-  IconMicrophoneOff,
-  IconLoader2,
-  IconArrowsMaximize,
-} from "@tabler/icons-react";
+import { IconMicrophone, IconMicrophoneOff, IconLoader2 } from "@tabler/icons-react";
 import { Button } from "@/components/motion/button";
 import type { VoiceSessionView } from "@/lib/hooks/use-voice-session";
 import type { VoiceState } from "@/lib/voice";
 
 export interface VoiceButtonProps {
   voice: VoiceSessionView;
-  /** Return to the immersive view. */
-  onExpand: () => void;
+  /** Open the immersive view. Called for a fresh start as well as for a return. */
+  onOpen: () => void;
 }
 
 const LABEL: Record<VoiceState, string> = {
@@ -30,10 +28,21 @@ const LABEL: Record<VoiceState, string> = {
   error: "Voice failed, tap to retry",
 };
 
-export function VoiceButton({ voice, onExpand }: VoiceButtonProps) {
+export function VoiceButton({ voice, onOpen }: VoiceButtonProps) {
   const { state, running, activity, error } = voice;
   const Icon = state === "connecting" || state === "thinking" ? IconLoader2 : IconMicrophone;
   const spin = state === "connecting" || state === "thinking";
+
+  /**
+   * One button, one meaning: GO TO THE VOICE VIEW. Starting a conversation from the chat
+   * view used to leave you in the chat view with a session running somewhere off screen, and
+   * a separate expander to find the orb - two clicks for the obvious thing. Now the header
+   * takes you there and the orb itself is what starts and stops.
+   */
+  const open = () => {
+    if (!running) voice.start();
+    onOpen();
+  };
 
   return (
     <div className="flex items-center gap-2">
@@ -43,7 +52,7 @@ export function VoiceButton({ voice, onExpand }: VoiceButtonProps) {
         size="sm"
         title={error || LABEL[state]}
         aria-label={LABEL[state]}
-        onClick={() => (running ? voice.stop() : voice.start())}
+        onClick={open}
         className="gap-1.5 rounded-full"
       >
         {running ? (
@@ -55,17 +64,19 @@ export function VoiceButton({ voice, onExpand }: VoiceButtonProps) {
             only thing saying the assistant has not stalled. */}
         <span className="text-xs">{(running && activity) || LABEL[state]}</span>
       </Button>
+      {/* Stop stays reachable from the chat view, so ending a conversation does not require
+          going back to the orb first. */}
       {running && (
         <Button
           type="button"
           variant="ghost"
           size="icon"
-          title="Back to the voice view"
-          aria-label="Back to the voice view"
-          onClick={onExpand}
+          title="Stop the conversation"
+          aria-label="Stop the conversation"
+          onClick={voice.stop}
           className="size-8 rounded-full"
         >
-          <IconArrowsMaximize className="size-4" />
+          <IconMicrophoneOff className="size-4" />
         </Button>
       )}
       {state === "error" && error && (
