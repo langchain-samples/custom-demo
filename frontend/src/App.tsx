@@ -238,16 +238,17 @@ export default function App() {
         {voiceEnabled && !showStage && (
           <VoiceButton voice={voice} onExpand={() => setVoiceStage(true)} />
         )}
-        <Tooltip content="Start a new chat (reset the conversation + dashboard)" side="bottom">
-          <Button
-            variant="secondary"
-            className="gap-1.5 rounded-full px-4 print:hidden"
-            aria-label="New Chat"
-            onClick={handleResetConversation}
-          >
-            <IconSparkles size={16} /> New Chat
-          </Button>
-        </Tooltip>
+        {/* No tooltip: this is the one action in the bar with a visible label, so a hover
+            card explaining it just covers the row below. The icon-only buttons keep theirs. */}
+        <Button
+          variant="secondary"
+          className="gap-1.5 rounded-full px-4 print:hidden"
+          aria-label="New Chat"
+          title="Resets the conversation and the dashboard"
+          onClick={handleResetConversation}
+        >
+          <IconSparkles size={16} /> New Chat
+        </Button>
         <Tooltip content="Browse the agent's files" side="bottom">
           <Button
             variant="secondary"
