@@ -83,6 +83,11 @@ All four present identically: the socket opens, closes again, and the button goe
 idle. No error frame, nothing useful in the network tab. Each one cost a live session to
 find, so they are pinned by tests.
 
+0. **Mint the token after the mic, not before.** A token only opens a session for ~60
+   seconds (`newSessionExpireTime`), and `getUserMedia` can sit on a permission dialog for
+   longer than that, so minting first turns a slow "Allow" into a `1007` that blames the
+   token. The session mints its own token from `getToken`, after `startAudio`, and retries
+   once with a fresh one if a close reason mentions the token at all.
 1. **Use the `BidiGenerateContentConstrained` RPC.** An ephemeral token on the plain
    `BidiGenerateContent` is refused with `1008 Method doesn't allow unregistered callers`.
 2. **Pass the token as `access_token`, not `key`.** It replaces an API key but is not one;

@@ -69,18 +69,23 @@ export function VoiceButton({
     setError("");
     setState("connecting");
     try {
-      const { token, model } = await voiceToken();
       // The conversation's root span. Best-effort: a blank id means "not traced", and
       // the conversation proceeds either way.
       const started = await voiceTrace({
         action: "session",
         workspace,
         project,
-        metadata: { customer: customer || "", model },
+        metadata: { customer: customer || "" },
       });
       traceId.current = String(started.session_id || "");
 
-      const live = new VoiceSession(model, token, {
+      const live = new VoiceSession({
+        // Minted by the session, once the mic is live: a token only opens a session for
+        // about a minute, and the permission dialog can eat all of it.
+        getToken: async () => {
+          const { token, model } = await voiceToken();
+          return { token, model };
+        },
         ask: async (question, headers) => {
           const out = await chat.current?.ask(question, headers);
           return {
@@ -145,6 +150,8 @@ export function VoiceButton({
 
   return (
     <div className="flex items-center gap-2">
+      {/* The reason a session died is often the entire answer, and a `title` tooltip
+          truncates it. Rendered inline so it can be read and copied. */}
       <Button
         type="button"
         variant={running ? "primary" : "outline"}
@@ -161,6 +168,11 @@ export function VoiceButton({
         )}
         <span className="text-xs">{LABEL[state]}</span>
       </Button>
+      {state === "error" && error && (
+        <span className="max-w-[28rem] text-[11px] leading-snug text-red-500 select-text">
+          {error}
+        </span>
+      )}
     </div>
   );
 }

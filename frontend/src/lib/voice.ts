@@ -320,6 +320,11 @@ export interface VoiceSessionHooks {
    * button goes quiet.
    */
   onError(detail: string): void;
+  /**
+   * Mint a Live token. Called by the session rather than passed in, so it happens after
+   * the mic is ready and so a retry can get a fresh one (see `start`).
+   */
+  getToken(): Promise<{ token: string; model: string }>;
   /** Open a trace span for a tool call; returns its id and the run's trace headers. */
   openToolSpan(question: string): Promise<{ tool_id?: string; headers?: Record<string, string> }>;
   /** Close that span once the run finished. */
@@ -348,17 +353,25 @@ export class VoiceSession {
   /** Partial transcripts accumulate here; Live streams them a few words at a time. */
   private partial = { user: "", model: "" };
 
-  private readonly model: string;
-  private readonly token: string;
   private readonly hooks: VoiceSessionHooks;
+  private model = "";
+  private token = "";
+  /** One retry with a fresh token, for the stale-token case below. */
+  private retried = false;
 
-  constructor(model: string, token: string, hooks: VoiceSessionHooks) {
-    this.model = model;
-    this.token = token;
+  constructor(hooks: VoiceSessionHooks) {
     this.hooks = hooks;
   }
 
-  /** Connect, start the mic, and begin the conversation. */
+  /**
+   * Start the mic FIRST, then mint the token, then connect.
+   *
+   * The order matters and is not obvious: a token is only good for ~60 seconds to OPEN a
+   * session (Google's `newSessionExpireTime` default), and `getUserMedia` can sit on a
+   * browser permission dialog for as long as the user takes to notice it. Minting first
+   * means a slow "Allow" spends the whole window and the socket closes with a 1007 that
+   * blames the token.
+   */
   async start(): Promise<void> {
     this.hooks.onState("connecting");
     await this.startAudio();
@@ -399,6 +412,11 @@ export class VoiceSession {
   }
 
   private async connect(): Promise<void> {
+    if (!this.token) {
+      const minted = await this.hooks.getToken();
+      this.token = minted.token;
+      this.model = minted.model;
+    }
     const ws = new WebSocket(liveUrl(this.token));
     this.ws = ws;
     ws.onopen = () => {
@@ -418,12 +436,21 @@ export class VoiceSession {
       }
       // 1000 is a clean hang-up; anything else is the server telling us why, and it is
       // the only place it ever says so.
-      if (event.code && event.code !== 1000) {
-        this.hooks.onError(`live session closed (${event.code}): ${event.reason || "no reason given"}`);
-        this.hooks.onState("error");
-      } else {
+      if (!event.code || event.code === 1000) {
         this.hooks.onState("idle");
+        return;
       }
+      // A token is single-use and only opens a session for ~60 seconds, so "this token is
+      // spent or stale" is an ordinary outcome, not a fault: mint a fresh one and try
+      // once more before bothering the user. Once, so a genuine rejection still surfaces.
+      if (!this.retried && /token/i.test(event.reason || "")) {
+        this.retried = true;
+        this.token = "";
+        void this.connect();
+        return;
+      }
+      this.hooks.onError(`live session closed (${event.code}): ${event.reason || "no reason given"}`);
+      this.hooks.onState("error");
     };
   }
 
