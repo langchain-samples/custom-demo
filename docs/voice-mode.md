@@ -60,6 +60,28 @@ An `ask_user` pause comes back as `needs_approval` with the question and its opt
 read out; the spoken choice returns through `resume_deep_agent`. The options have to be
 spoken, because the run only accepts one of them.
 
+## Narrating a 60-second run
+
+A deep agent turn is far too long to sit through in silence, so the shell sends three
+kinds of thing, and only the first is a `toolResponse`:
+
+| When | Sent as | Why |
+|---|---|---|
+| Immediately | `toolResponse`, `willContinue: true`, `scheduling: SILENT` | Ends the model's wait so it keeps the floor. `willContinue` says the answer is still coming. |
+| Every few seconds | `clientContent` user turn, `[system] progress on ...` | Narrates what the agent is ACTUALLY doing, from its own tool calls (`progressLabel`), throttled to one line per 6s. |
+| When the run lands | `clientContent` user turn, `[system] result for ...` | The answer, phrased so the model reports it rather than re-answering. |
+
+The trap: **a second `toolResponse` for an answered call is dropped, and so is a
+`clientContent` turn carrying a `functionResponse` part** - which is what the ADK example
+sends. Verified live on 3.1: the model acknowledges, the result arrives, and it never speaks
+again. A plain user turn is narrated every time, and the `[system]` prefix is what stops the
+model answering it as though the user had said it.
+
+Live that reads as: *"Let me pull that up." / "I'm still working on that claim status." /
+"I'm searching the data for it now." / "I'm getting the dashboard ready." / "...in review
+right now, with an inspection scheduled for Friday. You can see the details on your
+dashboard."*
+
 ## One trace per conversation
 
 `voice_trace.py` opens a `voice_session` run and hangs the utterances and the tool call
@@ -67,15 +89,22 @@ under it:
 
 ```
 voice_session
-  ├─ user_speech / agent_speech      ← Live's input/output transcription
-  └─ invoke_deep_agent (tool)
-       └─ the agent run              ← nests via distributed tracing
+  |- user_speech / agent_speech      <- Live's input/output transcription
+  `- invoke_deep_agent (tool)        <- outputs carry the agent run's id + URL
 ```
 
-The nesting is not automatic, because the run is started by the browser. `open_tool`
-returns the `langsmith-trace` / `baggage` headers for the tool span, the SPA puts them on
-the run request, and `graph.py` turns them back into a tracing parent. Both ends have to
-opt in — if you change one, change the other.
+**The agent run is NOT nested inside that span, and cannot be.** LangSmith documents the way
+to do it - send `langsmith-trace`, read it off `configurable`, wrap the run in
+`tracing_context(parent=...)` - and measured against this deployment every form of it loses
+the run outright: not nested, not at its own root, nothing recorded, and no error, because
+ingestion is asynchronous. A control run without the header traces normally, and the same
+parent handle nests correctly when the child is a plain `@traceable` in one process. What
+refuses it is the Agent Server's own run identity, which does not defer to an inbound parent.
+
+An unnested trace is cosmetic; a missing trace is the demo. So the tool span records the
+agent run's id and resolved URL (`agent_trace` in its outputs) and the agent run traces
+normally in the same project: two trees, one click apart. `graph.py` carries the same note,
+because the docs make re-adding that parent look obviously correct.
 
 ## Four things the docs will not tell you
 
