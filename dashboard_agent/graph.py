@@ -77,14 +77,19 @@ async def graph(config: Any):
     # span (see voice_trace.py), and LangSmith documents exactly that: send `langsmith-trace`,
     # read it off `configurable`, wrap the run in `tracing_context(parent=...)`.
     #
-    # Measured on Agent Server 0.11.1 AND 0.13.0, every form of it LOSES THE RUN. Bare dotted order,
-    # a headers mapping, and a `RunTree.from_headers(..., ls_client=client)` built with the
-    # right workspace client all produce the same outcome: the agent answers, and no run is
-    # recorded anywhere - not nested, not at its own root. A control run with the header
-    # removed traces normally, full tree. The same parent handle nests correctly when the
-    # child is a plain `@traceable` in one process, so the mechanism is fine; what breaks it
-    # is the Agent Server's own run identity, which is authoritative and does not defer to an
-    # inbound parent.
+    # Measured on Agent Server 0.11.1 AND 0.13.0, and it fails in TWO different ways depending
+    # on what the parent handle points at:
+    #
+    #   - A ROOT-level parent (the documented shape: a traced Python caller using the SDK or
+    #     RemoteGraph with `rt.to_headers()`) keeps the run and propagates the TRACE ID, but
+    #     not the parentage: the run lands in the caller's trace as a SECOND ROOT.
+    #   - A NON-ROOT parent - which is what voice mode needs, since the span to nest under is
+    #     the `invoke_deep_agent` tool span - loses the run entirely. Not nested, not at its
+    #     own root, not anywhere, and nothing errors, because ingestion is asynchronous.
+    #
+    # A control run with the header removed traces normally, full tree, and the same handle
+    # nests correctly when the child is a plain `@traceable` in one process. So the mechanism
+    # works; what does not is Agent Server's run identity deferring to an inbound parent.
     #
     # An unnested trace is a cosmetic loss. A missing trace is the demo. So the voice shell
     # records the agent run's id on its tool span instead (`closeToolSpan`), which gives a

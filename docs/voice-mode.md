@@ -134,7 +134,16 @@ normally in the same project: two trees, one click apart. `graph.py` carries the
 because the docs make re-adding that parent look obviously correct.
 
 Tested on Agent Server **0.11.1 and 0.13.0** - the newer build behaves identically, so this
-is not a version lag waiting to be fixed by an upgrade.
+is not a version lag waiting to be fixed by an upgrade. It fails in two distinct ways, which
+is worth knowing before anyone files it:
+
+| Parent handle | Outcome |
+|---|---|
+| ROOT-level (the documented shape: traced Python caller, SDK or RemoteGraph, `rt.to_headers()`) | Run is KEPT and shares the caller's trace id, but is not nested - it lands as a second root in that trace. |
+| NON-ROOT (what voice needs: the `invoke_deep_agent` tool span) | Run is LOST. Not nested, not at its own root, not anywhere - and no error, because ingestion is asynchronous. |
+
+A control run without the header traces normally, and the same handle nests correctly when
+the child is a plain `@traceable` in one process.
 
 **Why the ADK example nests and this does not.** It invokes the deep agent IN PROCESS -
 `agent.ainvoke(...)` inside `tracing_context(parent=tool_run)` - so the parent is an
