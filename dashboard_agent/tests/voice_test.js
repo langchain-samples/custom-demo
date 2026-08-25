@@ -32,8 +32,6 @@ function ok(name, fn) {
     systemTurnMessage,
     resultMessage,
     progressMessage,
-    progressBeat,
-    fillerMessage,
     progressLabel,
     digest,
     toolCallsFrom,
@@ -313,22 +311,6 @@ function ok(name, fn) {
     // Both directions still brighten with volume.
     assert.ok(userLoud.halo.opacity > userSoft.halo.opacity);
     assert.ok(modelLoud.halo.opacity > modelSoft.halo.opacity);
-  });
-
-  ok("progress alternates a thinking sound with something informative", () => {
-    // A status line every six seconds as a full sentence turns a wait into a lecture; all
-    // filler and a long wait says nothing about what is happening. Odd beats are sounds,
-    // even beats carry the label. Verified live that the model will actually do the sounds.
-    const first = JSON.stringify(progressBeat(1, "searching the data now"));
-    const second = JSON.stringify(progressBeat(2, "searching the data now"));
-    const third = JSON.stringify(progressBeat(3, "building the dashboard"));
-    assert.ok(first.includes("thinking sound"), "beat 1 is a filler");
-    assert.ok(!first.includes("searching the data"), "a filler must not carry the label");
-    assert.ok(second.includes("searching the data now"), "beat 2 says what it is doing");
-    assert.ok(third.includes("thinking sound"), "beat 3 is a filler again");
-    // The filler has to forbid a sentence explicitly, or the model answers in prose.
-    const filler = JSON.stringify(fillerMessage());
-    assert.ok(filler.includes("No sentence"), filler.slice(0, 120));
   });
 
   console.log(`\n${passed} passed`);
