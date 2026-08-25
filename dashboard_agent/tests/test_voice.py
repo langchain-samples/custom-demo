@@ -21,35 +21,31 @@ def _no_env(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
 
-def test_token_request_pins_the_model_and_modality():
-    """Wire names, not the guide's SDK names.
+def test_token_request_pins_nothing_but_the_use_count():
+    """What is ABSENT here is the point, and it cost a live session to learn.
 
-    `liveConnectConstraints` / `lockAdditionalFields` read naturally and are what the
-    guide shows, but the REST resource answers `Unknown name "liveConnectConstraints" at
-    'auth_token'` - which is a 400 nobody sees until someone tries to talk. Verified
-    against the v1beta discovery document's `AuthToken`.
+    Pinning the session into the token (`bidiGenerateContentSetup` + an empty `fieldMask`)
+    is what the docs invite, and it fails: the socket closes with `1011 Internal error`,
+    and a client that then sends `setup: {}` gets `1007 token-based requests cannot use
+    project-scoped features`. An unpinned token reaches `setupComplete`. So the guard is
+    that nobody re-adds the pinning after reading the guide.
     """
-    body = voice.token_request("gemini-2.5-flash-native-audio-preview-12-2025")
-    assert "liveConnectConstraints" not in body and "lockAdditionalFields" not in body
-    setup = body["bidiGenerateContentSetup"]
-    # `models/` prefix: the Live API's model field is a resource name, not a bare id.
-    assert setup["model"] == "models/gemini-2.5-flash-native-audio-preview-12-2025"
-    # Modality lives under generationConfig on the wire, not beside the model.
-    assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
-    # Single use, so a leaked token buys one session at most.
+    body = voice.token_request("gemini-3.1-flash-live-preview")
+    assert body == {"uses": 1}
+    # Single use, so a leaked token buys one session at most - the only bound left once
+    # the config lives client-side.
     assert body["uses"] == 1
-    # PRESENT and empty: an empty field mask is what makes the pinning binding.
-    assert body["fieldMask"] == ""
 
 
-def test_token_request_enables_resumption_and_both_transcripts():
-    cfg = voice.token_request("m")["bidiGenerateContentSetup"]
-    # A Live connection dies at ~10 minutes; a demo does not. Resumption has to be
-    # pinned into the token's config or a reconnect is refused.
-    assert "sessionResumption" in cfg
-    # A native-audio model returns no text, so the chat transcript IS these.
-    assert "inputAudioTranscription" in cfg
-    assert "outputAudioTranscription" in cfg
+def test_token_request_never_sends_the_sdk_field_names():
+    """`liveConnectConstraints` / `lockAdditionalFields` are SDK names, not wire names.
+
+    Posting them is rejected with `Unknown name "liveConnectConstraints" at 'auth_token'`,
+    which is a 400 nobody sees until someone tries to talk.
+    """
+    body = voice.token_request("m")
+    assert "liveConnectConstraints" not in body
+    assert "lockAdditionalFields" not in body
 
 
 def test_voice_is_unconfigured_without_a_key(monkeypatch):

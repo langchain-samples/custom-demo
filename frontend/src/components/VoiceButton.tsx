@@ -103,6 +103,12 @@ export function VoiceButton({
           }
         },
         onState: setState,
+        // Shown on the button and logged: the server's reason is usually the whole
+        // answer (a wrong RPC or a stale token both read as "the socket just closed").
+        onError: (detail) => {
+          console.error("[voice]", detail);
+          setError(detail);
+        },
         openToolSpan: async (question) => {
           if (!traceId.current) return {};
           const span = await voiceTrace({

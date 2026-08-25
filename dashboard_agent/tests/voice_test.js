@@ -155,10 +155,16 @@ function ok(name, fn) {
     assert.deepEqual(out.on_screen, ["Units: -12%"]);
   });
 
-  ok("the token goes in the query string, url-encoded", () => {
+  ok("the url uses the constrained RPC and the access_token param", () => {
+    // Both halves are load-bearing, and both were verified against the live API:
+    // the plain `BidiGenerateContent` refuses an ephemeral token with `1008 Method
+    // doesn't allow unregistered callers`, and `?key=` with `1007 Missing or malformed
+    // auth token ... pass it in an access_token query parameter`. Either way the socket
+    // just opens and closes, which is indistinguishable from a normal hang-up.
     const url = liveUrl("auth_tokens/abc+def");
-    assert.ok(url.startsWith("wss://generativelanguage.googleapis.com/ws/"));
-    assert.ok(url.includes("access_token=auth_tokens%2Fabc%2Bdef"));
+    assert.ok(url.includes("GenerativeService.BidiGenerateContentConstrained"), url);
+    assert.ok(url.includes("access_token=auth_tokens%2Fabc%2Bdef"), url);
+    assert.ok(!url.includes("key="), "an ephemeral token is not an API key");
   });
 
   console.log(`\n${passed} passed`);

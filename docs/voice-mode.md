@@ -77,6 +77,29 @@ returns the `langsmith-trace` / `baggage` headers for the tool span, the SPA put
 the run request, and `graph.py` turns them back into a tracing parent. Both ends have to
 opt in — if you change one, change the other.
 
+## Four things the docs will not tell you
+
+All four present identically: the socket opens, closes again, and the button goes back to
+idle. No error frame, nothing useful in the network tab. Each one cost a live session to
+find, so they are pinned by tests.
+
+1. **Use the `BidiGenerateContentConstrained` RPC.** An ephemeral token on the plain
+   `BidiGenerateContent` is refused with `1008 Method doesn't allow unregistered callers`.
+2. **Pass the token as `access_token`, not `key`.** It replaces an API key but is not one;
+   `?key=` gets `1007 Missing or malformed auth token`.
+3. **Do not pin the session into the token.** `bidiGenerateContentSetup` + an empty
+   `fieldMask` is what the guide invites, and it closes with `1011 Internal error
+   encountered` (and a client that leans on it with `setup: {}` gets `1007 token-based
+   requests cannot use project-scoped features`). The token carries `uses: 1` and nothing
+   else; the session config lives in `voice.ts`.
+4. **State `responseModalities` in the client setup.** Omitting it is another bare
+   `1011`. The transcription configs belong there too, and they are the only text a
+   native-audio session emits.
+
+Also: the guide's `liveConnectConstraints` / `lockAdditionalFields` are SDK field names.
+The REST resource wants `bidiGenerateContentSetup` / `fieldMask` (see the v1beta discovery
+document's `AuthToken`), and posting the SDK names is a 400.
+
 ## Setup
 
 ```bash
@@ -98,12 +121,12 @@ with nothing visibly broken. There is a test pinning that link.
   next to "Backfill demo traffic". Turning it on for an assistant that already exists
   means patching `metadata.voice.enabled`; the Settings panel already patches assistant
   metadata live, so a toggle there is the obvious next step.
-- **Not verified against a live session.** Every pure part is unit-tested
-  (`voice_test.js`, `test_voice.py`, `test_voice_trace.py`) and the token, trace and
-  nesting paths are wired end to end, but nobody has spoken to it yet. The two things
-  most likely to need a fix on first contact are the mic downsample and whether a second
-  `functionResponse` for the same call id is accepted as readily as the ADK example
-  suggests.
+- **The audio path is unverified.** A real session has been driven end to end from Node
+  (mint -> connect -> speak -> `invoke_deep_agent` called with the question passed
+  through), so the protocol, the token and the tool declarations are known good. What has
+  not run is the browser half: the mic downsample, the playback worklet, and whether a
+  second `functionResponse` for the same call id is accepted as readily as the ADK example
+  suggests. Those are the first three places to look if a real conversation misbehaves.
 - **Session limits.** Resumption is wired (a ~10 minute connection reconnects on its
   handle), but the 15-minute audio-session cap needs `contextWindowCompression` to go
   past, which is not set up yet.

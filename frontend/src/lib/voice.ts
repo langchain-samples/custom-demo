@@ -24,8 +24,12 @@
  */
 
 const LIVE_HOST = "generativelanguage.googleapis.com";
+// The CONSTRAINED method, and it has to be. Verified against the live API: an ephemeral
+// token on the plain `BidiGenerateContent` is refused with `1008 Method doesn't allow
+// unregistered callers`, which arrives as a socket that opens and closes again - no error
+// frame, nothing in the network tab that names the cause.
 const LIVE_PATH =
-  "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
+  "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained";
 
 /** Live API audio rates. Both fixed by the API: 16k in, 24k out. */
 export const MIC_RATE = 16000;
@@ -137,6 +141,13 @@ export function setupMessage(model: string, resumeHandle?: string): object {
   return {
     setup: {
       model: `models/${model}`,
+      // Audio out, and it must be stated: a Live session opened without an explicit
+      // modality closes with `1011 Internal error encountered` - no error frame, no hint.
+      generationConfig: { responseModalities: ["AUDIO"] },
+      // The ONLY text this session produces. A native-audio model answers in audio, so
+      // these transcripts are what the chat panel renders and what the trace records.
+      inputAudioTranscription: {},
+      outputAudioTranscription: {},
       systemInstruction: { parts: [{ text: VOICE_INSTRUCTIONS }] },
       tools: [
         {
@@ -271,7 +282,13 @@ export function spokenResult(
   return { answer, on_screen: onScreen };
 }
 
-/** The websocket URL for an ephemeral token (used in place of an API key). */
+/**
+ * The websocket URL for an ephemeral token.
+ *
+ * `access_token`, not `key`: the token is used in place of an API key but is not one, and
+ * `?key=` is refused with `1007 Missing or malformed auth token in request. Obtain one
+ * from CreateAuthToken and pass it in an access_token query parameter`.
+ */
 export function liveUrl(token: string): string {
   return `wss://${LIVE_HOST}${LIVE_PATH}?access_token=${encodeURIComponent(token)}`;
 }
@@ -297,6 +314,12 @@ export interface VoiceSessionHooks {
   onTranscript(role: "user" | "model", text: string): void;
   /** Connection state, for the button. */
   onState(state: VoiceState): void;
+  /**
+   * Why a session failed, in the server's own words. Without this a bad URL, a rejected
+   * token and a normal hang-up are indistinguishable: the socket just closes and the
+   * button goes quiet.
+   */
+  onError(detail: string): void;
   /** Open a trace span for a tool call; returns its id and the run's trace headers. */
   openToolSpan(question: string): Promise<{ tool_id?: string; headers?: Record<string, string> }>;
   /** Close that span once the run finished. */
@@ -384,13 +407,23 @@ export class VoiceSession {
       ws.send(JSON.stringify(setupMessage(this.model, this.resumeHandle || undefined)));
     };
     ws.onmessage = (event) => void this.onFrame(event.data);
-    ws.onerror = () => this.hooks.onState("error");
-    ws.onclose = () => {
+    ws.onerror = () => this.hooks.onError("websocket error (see the console for detail)");
+    ws.onclose = (event) => {
       if (this.closed) return;
       // A Live connection lasts about ten minutes and a demo does not, so a close with
       // a resumption handle in hand is a reconnect, not the end of the conversation.
-      if (this.resumeHandle) void this.connect();
-      else this.hooks.onState("idle");
+      if (this.resumeHandle) {
+        void this.connect();
+        return;
+      }
+      // 1000 is a clean hang-up; anything else is the server telling us why, and it is
+      // the only place it ever says so.
+      if (event.code && event.code !== 1000) {
+        this.hooks.onError(`live session closed (${event.code}): ${event.reason || "no reason given"}`);
+        this.hooks.onState("error");
+      } else {
+        this.hooks.onState("idle");
+      }
     };
   }
 
@@ -422,6 +455,11 @@ export class VoiceSession {
     }
 
     if ((frame as { setupComplete?: unknown }).setupComplete) this.hooks.onState("listening");
+
+    // An in-band error, e.g. a malformed frame from us. Reported rather than swallowed:
+    // the session often survives it, so nothing else would ever mention it.
+    const inBand = (frame as { error?: { message?: string } })?.error?.message;
+    if (inBand) this.hooks.onError(`live error: ${inBand}`);
 
     const handle = resumptionHandle(frame);
     if (handle) this.resumeHandle = handle;

@@ -43,35 +43,32 @@ def voice_configured() -> bool:
 
 
 def token_request(model: str) -> dict:
-    """The `POST /v1beta/auth_tokens` body. Pure, so the pinning is testable.
+    """The `POST /v1beta/auth_tokens` body. Pure, so what is (and is not) pinned is testable.
 
-    Field names come from the REST resource (the v1beta discovery document's `AuthToken`),
-    NOT from the guide: the guide shows the SDK's `liveConnectConstraints` /
-    `lockAdditionalFields`, and posting those verbatim is rejected with
-    `Unknown name "liveConnectConstraints" at 'auth_token'`. The wire names are
-    `bidiGenerateContentSetup` and `fieldMask`, and the pinned config is the Live setup
-    message itself rather than a nested `config` object.
+    Deliberately minimal, and that took a live session to establish. Field names here come
+    from the REST resource (the v1beta discovery document's `AuthToken`), NOT the guide:
+    the guide's `liveConnectConstraints` / `lockAdditionalFields` are SDK names and are
+    rejected with `Unknown name "liveConnectConstraints" at 'auth_token'`.
 
-    `sessionResumption` is pinned because it is not optional in practice: a Live
-    connection dies at ~10 minutes and an audio session caps at 15, so a demo that
-    outlasts either has to reconnect on the same token.
+    WHY NOTHING IS PINNED. The tempting shape is to pin the whole session
+    (`bidiGenerateContentSetup` + an empty `fieldMask`), which per the discovery document
+    makes the token's setup authoritative and the client's "ignored" - the browser could
+    then not widen its own capabilities. Verified against the live API: it does not work.
+    A pinned token closes the socket with `1011 Internal error encountered`, and a client
+    that sends `setup: {}` to lean on the pinned config gets `1007 token-based requests
+    cannot use project-scoped features such as tuned models`. An unpinned token with a
+    client-supplied setup reaches `setupComplete` on the first try.
+
+    So the session config (model, tools, instructions) lives in `frontend/src/lib/voice.ts`
+    and this token is only a short-lived, SINGLE-USE ticket. What that costs: a client
+    could open a session configured differently from ours. What bounds it: `uses: 1`, a
+    ~60 second window to open the session, and the fact that the token cannot do anything
+    outside the Live API.
+
+    `model` is accepted (and ignored) so callers can keep passing the model they intend to
+    connect with; it is the client's setup that selects it.
     """
-    return {
-        "uses": 1,
-        "bidiGenerateContentSetup": {
-            "model": f"models/{model}",
-            "generationConfig": {"responseModalities": _MODALITIES},
-            "sessionResumption": {},
-            # Both directions: the input transcript is what the chat panel shows as the
-            # user's turn, and the output transcript is the assistant bubble (a
-            # native-audio model returns no text of its own).
-            "inputAudioTranscription": {},
-            "outputAudioTranscription": {},
-        },
-        # Empty field mask = the setup above is locked and the client cannot widen it.
-        # Present rather than omitted: this field is what makes the pinning binding.
-        "fieldMask": "",
-    }
+    return {"uses": 1}
 
 
 def mint_token(model: str = "") -> dict:
