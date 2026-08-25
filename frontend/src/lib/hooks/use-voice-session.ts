@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatPanelHandle } from "@/components/ChatPanel";
-import { voiceToken, voiceTrace } from "@/lib/api";
+import { ensureThread, voiceToken, voiceTrace } from "@/lib/api";
 import { INVOKE_TOOL, VoiceSession, type VoicePersona, type VoiceState } from "@/lib/voice";
 
 export interface VoiceSessionOptions {
@@ -105,11 +105,18 @@ export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
       try {
         // The conversation's root span. Best-effort: a blank id means "not traced", and
         // the conversation proceeds either way.
+        //
+        // `thread_id` is what puts the run in a THREAD, which is where LangSmith renders a
+        // conversation as turns with an audio player rather than as a lone run with a file
+        // attached. It is the SAME thread the agent runs on, so the spoken conversation and
+        // the agent's turns are one thing in the UI. `ensureThread` mints it now if the
+        // first question has not been asked yet.
+        const threadId = await ensureThread().catch(() => "");
         const started = await voiceTrace({
           action: "session",
           workspace,
           project,
-          metadata: { customer: customer || "" },
+          metadata: { customer: customer || "", thread_id: threadId },
         });
         traceId.current = String(started.session_id || "");
 

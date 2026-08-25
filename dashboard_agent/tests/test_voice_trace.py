@@ -70,6 +70,17 @@ def test_a_session_is_one_root_span_tagged_as_audio():
     assert root.kwargs["project_name"] == "proj-1"
 
 
+def test_the_session_carries_the_thread_id_it_was_given():
+    """`thread_id` is what puts the run in a THREAD, and the thread view is where LangSmith
+    renders a conversation with a scrubbable audio player. Without it the attachment is just
+    a file card on an isolated run, which is what shipped first."""
+    sid = voice_trace.start_session("ws-1", "proj-1", {"thread_id": "thread-abc"})
+    meta = _root(sid).kwargs["extra"]["metadata"]
+    assert meta["thread_id"] == "thread-abc"
+    # And still marked as a conversation, or the audio is treated as an attachment.
+    assert meta["ls_modality"] == "audio"
+
+
 def test_no_langsmith_key_means_no_session_rather_than_an_error(monkeypatch):
     """Tracing is a nicety; the conversation is not. An unusable key must be silent."""
     monkeypatch.setattr(voice_trace, "_client", lambda *_a, **_k: None)

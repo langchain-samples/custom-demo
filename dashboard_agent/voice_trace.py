@@ -64,8 +64,16 @@ def _client(workspace: str = "") -> Client | None:
 def start_session(workspace: str = "", project: str = "", metadata: dict | None = None) -> str:
     """Open the conversation's root span. Returns a session id ("" when not tracing).
 
-    `ls_modality: audio` in the metadata is what makes LangSmith render the run with
-    its audio affordances, and matches what the ADK example sets.
+    Two metadata keys are load-bearing rather than decorative:
+
+    - `ls_modality: audio` marks the run as a conversation, which is what makes LangSmith
+      offer its audio affordances instead of treating the WAV as a file.
+    - `thread_id` (passed in by the caller) puts the run in a THREAD. Without it the run is
+      an island: the attachment shows as a plain file card, and the turn-by-turn view with
+      the scrubbable player - the thing worth showing - never appears. It is the same thread
+      the agent runs on, so the spoken conversation and the agent's turns are one object.
+
+    Both match what langchain-ai/google-adk-realtime-deepagents-example sets.
     """
     client = _client(workspace)
     if client is None:

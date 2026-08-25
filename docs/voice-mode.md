@@ -122,8 +122,12 @@ voice_session
 ```
 
 The root run carries the conversation as a stereo WAV attachment (user left, assistant
-right), which is what makes the trace PLAYABLE: LangSmith renders it as a scrubbable
-timeline on an `ls_modality: audio` run. The browser builds the mix
+right), which is what makes the trace PLAYABLE. Two metadata keys decide whether it renders
+as a player or as a file card: `ls_modality: audio` marks the run as a conversation, and
+`thread_id` puts it in a THREAD - the turn-by-turn view is where the scrubbable player lives.
+Miss the second and you get exactly what shipped first: a `conversation WAV 5MB` card on an
+isolated run, with no way to hear it in place. It is the same thread the agent runs on, so the
+spoken conversation and the agent's turns are one object. The browser builds the mix
 (`lib/voiceRecorder.ts`) and sends it base64 with the closing call. The placement rule is
 the subtle part: model audio arrives in bursts faster than real time, so each chunk starts
 at the LATER of its arrival time and the end of the previous one - place them at arrival
