@@ -54,8 +54,13 @@ export const PLAYBACK_RATE = 24000;
 /** Never narrate progress more often than this: thinking aloud, not a monologue. */
 const PROGRESS_MIN_GAP_MS = 6000;
 
-/** How long after the last audio chunk we still consider the model to be speaking. */
-const SPEAKING_IDLE_MS = 700;
+/**
+ * How long the player must stay drained before we call the model silent. This is an
+ * UNDERRUN debounce, not a gap timer: it only has to outlast a momentary buffer dip
+ * mid-sentence. It was 700ms when it timed gaps in chunk ARRIVAL; left there it would
+ * just add three quarters of a second of lag to every "it stopped talking".
+ */
+const SPEAKING_IDLE_MS = 200;
 
 /** What the shell is allowed to ask the SPA to do. */
 export const INVOKE_TOOL = "invoke_deep_agent";
@@ -743,6 +748,34 @@ export class VoiceSession {
     this.hooks.onState("idle");
   }
 
+  /**
+   * The model became audible, or stopped being audible - reported by the player worklet
+   * when its queue fills or drains, which is the only signal that tracks the SPEAKER.
+   *
+   * Chunk arrival used to stand in for this, and it is systematically early: Gemini sends
+   * an utterance faster than realtime, so the socket goes quiet seconds before the voice
+   * does. That is why the caption read "Listening…" over the top of the assistant talking,
+   * and why the keyboard sound came back in under it.
+   *
+   * "Drained" is debounced because a brief underrun mid-sentence would otherwise flap the
+   * caption; "playing" is not, because the first syllable should land immediately.
+   */
+  private onPlayback(playing: boolean): void {
+    if (this.speakingTimer) {
+      clearTimeout(this.speakingTimer);
+      this.speakingTimer = null;
+    }
+    if (playing) {
+      this.hooks.onSpeaking(true);
+      this.keys?.duck(1);
+      return;
+    }
+    this.speakingTimer = setTimeout(() => {
+      this.hooks.onSpeaking(false);
+      this.keys?.duck(0);
+    }, SPEAKING_IDLE_MS);
+  }
+
   private async startAudio(): Promise<void> {
     // One context at the PLAYBACK rate (24k, fixed by the API). Mic frames arrive at
     // whatever the device gives and are downsampled per frame, which is cheaper and
@@ -754,6 +787,7 @@ export class VoiceSession {
 
     this.player = new AudioWorkletNode(ctx, "pcm-player-processor");
     this.player.connect(ctx.destination);
+    this.player.port.onmessage = (event) => this.onPlayback(event.data === "playing");
     // Shares this context: browsers cap concurrent AudioContexts, and it needs to duck
     // against the same output the player writes to.
     this.keys = new TypingSound(ctx);
@@ -858,24 +892,11 @@ export class VoiceSession {
       this.tape.add("model", samples);
       // Measured here rather than in the worklet: the worklet drains on the audio thread
       // and would need a message back, and this is the same audio a beat earlier.
-      const modelLevel = frameLevel(samples);
-      this.hooks.onLevel(modelLevel, "model");
-      // Keys follow the voice: a burst must never clatter under the assistant talking.
-      this.keys?.duck(modelLevel);
+      this.hooks.onLevel(frameLevel(samples), "model");
     }
-    // Audio arrives in a burst per turn, so "still speaking" is a timer rather than a
-    // flag: it stays true until the chunks stop for a moment.
-    if (chunks.length) {
-      this.hooks.onSpeaking(true);
-      if (this.speakingTimer) clearTimeout(this.speakingTimer);
-      this.speakingTimer = setTimeout(() => {
-        this.hooks.onSpeaking(false);
-        // Release the duck here, not on a level frame: when the model stops talking the
-        // chunks simply stop arriving, so there is no quiet frame to un-duck on and the
-        // keys would stay muted for the rest of the session after its first word.
-        this.keys?.duck(0);
-      }, SPEAKING_IDLE_MS);
-    }
+    // NOT "is the model speaking" - see onPlayback. Arrival is minutes ahead of the
+    // speaker: Gemini streams a whole utterance in a burst, so the socket falls quiet
+    // while the player still has seconds of it queued.
 
     const { input, output } = transcriptsFrom(frame);
     if (input) this.partial.user += input;

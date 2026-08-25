@@ -10,6 +10,12 @@ class PcmPlayerProcessor extends AudioWorkletProcessor {
     super();
     this.queue = []; // Float32Array chunks, in arrival order
     this.readIndex = 0; // read offset into queue[0]
+    // Whether we were draining audio on the previous render quantum. The main thread
+    // needs to know when the model is AUDIBLE, which is not when its audio arrives:
+    // Gemini streams an utterance faster than realtime, so the socket goes quiet
+    // seconds before the speaker does. Only transitions are posted, so this costs one
+    // message per utterance rather than one per quantum.
+    this.wasPlaying = false;
     this.port.onmessage = (event) => {
       if (event.data === "clear") {
         this.queue = [];
@@ -35,6 +41,11 @@ class PcmPlayerProcessor extends AudioWorkletProcessor {
         this.queue.shift();
         this.readIndex = 0;
       }
+    }
+    const playing = this.queue.length > 0;
+    if (playing !== this.wasPlaying) {
+      this.wasPlaying = playing;
+      this.port.postMessage(playing ? "playing" : "drained");
     }
     return true;
   }
