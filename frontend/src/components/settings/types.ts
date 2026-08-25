@@ -16,6 +16,12 @@ export type PromptMode = "prompt_hub" | "context_hub" | "inline";
 
 /** All editable panel fields for the active assistant. */
 export interface PanelConfig {
+  /**
+   * Prebuilt Live API voice for spoken replies (`metadata.voice.voice_name`). Empty means
+   * the house default (see `DEFAULT_VOICE`). Separate from `voice.enabled`, which is the
+   * builder's switch and is not editable here.
+   */
+  voiceName: string;
   /** LangSmith workspace id (trace routing + workspace-scoped prompts). */
   lsWorkspace: string;
   /** Branding: display name shown in the header. */

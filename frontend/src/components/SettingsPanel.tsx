@@ -63,6 +63,7 @@ import { ToolsSection } from "./settings/ToolsSection";
 import { DeleteAssistant } from "./settings/DeleteAssistant";
 import { DemoTraffic } from "./settings/DemoTraffic";
 import type { PanelConfig, PromptMode } from "./settings/types";
+import { VoicePicker } from "@/components/settings/VoicePicker";
 import { coerceTheme } from "@/lib/theme";
 import type { Theme } from "@/lib/theme";
 import { applyBrand, DEFAULT_TINT } from "@/lib/branding";
@@ -175,6 +176,7 @@ function configFromAssistant(a: Assistant, workspace: string): PanelConfig {
     logo: m.logo || DEFAULT_LOGO,
     actions: Array.isArray(m.actions) && m.actions.length ? m.actions : DEFAULT_ACTIONS,
     theme: coerceTheme(m.theme),
+    voiceName: ((m.voice as { voice_name?: string } | undefined)?.voice_name as string) || "",
     fontHeading: (m.font_heading as string) || "",
     fontHeadingFallback: (m.font_heading_fallback as string) || DEFAULT_CURATED,
     fontBody: (m.font_body as string) || "",
@@ -201,6 +203,7 @@ function blankConfig(workspace: string): PanelConfig {
     accent2: "",
     brandNeutral: "",
     brandTint: DEFAULT_TINT,
+    voiceName: "",
     logo: "",
     actions: [],
     theme: "dark",
@@ -442,6 +445,17 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
 
     /* ---- Imperative handle: defined below, after editBranding ---- */
 
+    /**
+     * Whether the SELECTED assistant can speak. Read from its metadata rather than from
+     * `cfg`, because voice mode is the builder's switch (set at setup) and nothing in this
+     * panel edits it - only the voice it uses.
+     */
+    const voiceEnabled = !!(
+      assistants.find((a) => a.assistant_id === selectedId)?.metadata?.voice as
+        | { enabled?: boolean }
+        | undefined
+    )?.enabled;
+
     /* ---- Branding edits: update state + debounced metadata PATCH ---- */
     const scheduleBrandingSave = useCallback((next: PanelConfig) => {
       const id = selectedIdRef.current;
@@ -464,6 +478,9 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           logo: next.logo,
           actions: next.actions,
           theme: next.theme,
+          // Merge, never replace: `enabled` is the builder's switch and the picker has no
+          // business changing it.
+          voice: { ...((src?.metadata?.voice as object) || {}), voice_name: next.voiceName },
         };
         try {
           const updated = await updateAssistant(id, { metadata: meta });
@@ -812,6 +829,14 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
                   onNeutral={(v) => editBranding({ brandNeutral: v })}
                   onTint={(v) => editBranding({ brandTint: v })}
                 >
+                  {/* Only for an assistant that can speak: a voice picker on a text-only
+                      assistant is a setting with no effect. */}
+                  {voiceEnabled && (
+                    <VoicePicker
+                      value={cfg.voiceName}
+                      onChange={(v) => editBranding({ voiceName: v })}
+                    />
+                  )}
                   <TypographySection
                     headingFont={cfg.fontHeading}
                     headingFallback={cfg.fontHeadingFallback}

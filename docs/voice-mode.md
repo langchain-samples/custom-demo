@@ -138,6 +138,39 @@ Also: the guide's `liveConnectConstraints` / `lockAdditionalFields` are SDK fiel
 The REST resource wants `bidiGenerateContentSetup` / `fieldMask` (see the v1beta discovery
 document's `AuthToken`), and posting the SDK names is a 400.
 
+## The voice view
+
+For a voice-enabled assistant the chat rail is replaced by `VoiceStage`: one orb, a status
+line, and the assistant's own branding. The dashboard keeps its pane beside it, which is
+the whole point - you talk, and the figures appear over there.
+
+Three things about it are load-bearing rather than decorative:
+
+- **ChatPanel stays mounted underneath.** The stage is an overlay, not a swap. ChatPanel
+  owns the run machinery and the widget flushing, so unmounting it would take the dashboard
+  with it and drop the session's `ask` handle mid-turn.
+- **The activity line.** A deep agent turn runs up to a minute; a silent orb with no status
+  is indistinguishable from a hung one. It shows the agent's current tool
+  (`onActivity`, unthrottled - unlike the spoken narration).
+- **Quick actions are a teleprompter.** Tapping one opens the question to READ ALOUD rather
+  than submitting it. Sending it as text would make the orb answer something the microphone
+  never heard.
+
+The X returns to the chat view without hanging up; a compact control then appears in the
+header showing state plus the activity line, with a way back.
+
+## Choosing the voice
+
+`DEFAULT_VOICE` is **Schedar** ("even" in Google's descriptors) - the upbeat voices read as
+breezy when someone is asking about a theft claim. Per assistant it is
+`metadata.voice.voice_name`, edited under Settings -> Advanced brand, where the dropdown has
+a play button: the samples in `frontend/public/voice-samples/` are pre-rendered by the Live
+API (~14KB each), so previewing costs no tokens.
+
+`speechConfig` goes inside `generationConfig`. On `setup` it is rejected with
+`1007 Unknown name "speechConfig" at 'setup'`, which - like every other setup mistake -
+presents as a socket that just closes.
+
 ## Setup
 
 ```bash

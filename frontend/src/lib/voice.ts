@@ -31,12 +31,24 @@ const LIVE_HOST = "generativelanguage.googleapis.com";
 const LIVE_PATH =
   "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained";
 
+/**
+ * The house voice, used unless an assistant names another.
+ *
+ * "Even" in Google's own one-word descriptors, which is what an insurance or analytics
+ * assistant wants: the upbeat ones (Puck, Laomedeia) read as breezy when someone is asking
+ * about a theft claim. Per-assistant override lives in `metadata.voice.voice_name`.
+ */
+export const DEFAULT_VOICE = "Schedar";
+
 /** Live API audio rates. Both fixed by the API: 16k in, 24k out. */
 export const MIC_RATE = 16000;
 export const PLAYBACK_RATE = 24000;
 
 /** Never narrate progress more often than this: thinking aloud, not a monologue. */
 const PROGRESS_MIN_GAP_MS = 6000;
+
+/** How long after the last audio chunk we still consider the model to be speaking. */
+const SPEAKING_IDLE_MS = 700;
 
 /** What the shell is allowed to ask the SPA to do. */
 export const INVOKE_TOOL = "invoke_deep_agent";
@@ -176,14 +188,22 @@ export function realtimeAudioMessage(pcm: ArrayBuffer): object {
  * pinned into the ephemeral token server-side, and a client that contradicts the pinned
  * config is refused.
  */
-export function setupMessage(model: string, resumeHandle?: string): object {
+export function setupMessage(model: string, resumeHandle?: string, voice = ""): object {
   const behavior = supportsNonBlocking(model) ? { behavior: "NON_BLOCKING" } : {};
+  // `||`, not a default parameter: an assistant with no voice saved yet carries "" rather
+  // than undefined, and "" is not a voice the API accepts.
+  const voiceName = voice || DEFAULT_VOICE;
   return {
     setup: {
       model: `models/${model}`,
       // Audio out, and it must be stated: a Live session opened without an explicit
       // modality closes with `1011 Internal error encountered` - no error frame, no hint.
-      generationConfig: { responseModalities: ["AUDIO"] },
+      // `speechConfig` belongs in HERE and not on `setup`, where it is rejected with
+      // `1007 Unknown name "speechConfig" at 'setup'`.
+      generationConfig: {
+        responseModalities: ["AUDIO"],
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
+      },
       // The ONLY text this session produces. A native-audio model answers in audio, so
       // these transcripts are what the chat panel renders and what the trace records.
       inputAudioTranscription: {},
@@ -444,6 +464,14 @@ export interface VoiceSessionHooks {
   /** Connection state, for the button. */
   onState(state: VoiceState): void;
   /**
+   * What the agent is doing, in words, for the one-line indicator. Fires on EVERY tool
+   * the agent starts - unlike the spoken narration, which is throttled, because a status
+   * line can update as often as it likes without becoming a monologue.
+   */
+  onActivity(label: string): void;
+  /** True while model audio is arriving, so the UI can look alive while it talks. */
+  onSpeaking(active: boolean): void;
+  /**
    * Why a session failed, in the server's own words. Without this a bad URL, a rejected
    * token and a normal hang-up are indistinguishable: the socket just closes and the
    * button goes quiet.
@@ -481,15 +509,18 @@ export class VoiceSession {
   private closed = false;
   /** Partial transcripts accumulate here; Live streams them a few words at a time. */
   private partial = { user: "", model: "" };
+  private speakingTimer: ReturnType<typeof setTimeout> | null = null;
 
   private readonly hooks: VoiceSessionHooks;
+  private readonly voice: string;
   private model = "";
   private token = "";
   /** One retry with a fresh token, for the stale-token case below. */
   private retried = false;
 
-  constructor(hooks: VoiceSessionHooks) {
+  constructor(hooks: VoiceSessionHooks, voice = DEFAULT_VOICE) {
     this.hooks = hooks;
+    this.voice = voice || DEFAULT_VOICE;
   }
 
   /**
@@ -510,6 +541,7 @@ export class VoiceSession {
   /** Tear everything down. Safe to call twice. */
   stop(): void {
     this.closed = true;
+    if (this.speakingTimer) clearTimeout(this.speakingTimer);
     this.ws?.close();
     this.ws = null;
     this.recorder?.disconnect();
@@ -551,7 +583,7 @@ export class VoiceSession {
     ws.onopen = () => {
       // The first frame MUST be setup, and nothing else may be sent until the server
       // answers setupComplete.
-      ws.send(JSON.stringify(setupMessage(this.model, this.resumeHandle || undefined)));
+      ws.send(JSON.stringify(setupMessage(this.model, this.resumeHandle || undefined, this.voice)));
     };
     ws.onmessage = (event) => void this.onFrame(event.data);
     ws.onerror = () => this.hooks.onError("websocket error (see the console for detail)");
@@ -616,8 +648,16 @@ export class VoiceSession {
       this.player?.port.postMessage("clear");
     }
 
-    for (const chunk of audioChunksFrom(frame)) {
+    const chunks = audioChunksFrom(frame);
+    for (const chunk of chunks) {
       this.player?.port.postMessage(pcm16ToFloat(decodeBase64(chunk)));
+    }
+    // Audio arrives in a burst per turn, so "still speaking" is a timer rather than a
+    // flag: it stays true until the chunks stop for a moment.
+    if (chunks.length) {
+      this.hooks.onSpeaking(true);
+      if (this.speakingTimer) clearTimeout(this.speakingTimer);
+      this.speakingTimer = setTimeout(() => this.hooks.onSpeaking(false), SPEAKING_IDLE_MS);
     }
 
     const { input, output } = transcriptsFrom(frame);
@@ -661,10 +701,13 @@ export class VoiceSession {
     // would be worse than silence; one line every few seconds reads as thinking aloud.
     let lastProgress = 0;
     const narrate = (toolName: string) => {
+      const label = progressLabel(toolName);
+      // The status line updates every time; the SPOKEN line does not.
+      this.hooks.onActivity(label);
       const now = Date.now();
       if (now - lastProgress < PROGRESS_MIN_GAP_MS) return;
       lastProgress = now;
-      ws.send(JSON.stringify(progressMessage(progressLabel(toolName))));
+      ws.send(JSON.stringify(progressMessage(label)));
     };
 
     try {
@@ -706,6 +749,7 @@ export class VoiceSession {
         ),
       );
     } finally {
+      this.hooks.onActivity("");
       this.hooks.onState("listening");
     }
   }

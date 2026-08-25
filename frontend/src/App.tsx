@@ -27,6 +27,8 @@ import { Button } from "@/components/motion/button";
 import { Tooltip } from "@/components/motion/tooltip";
 import ChatPanel, { type ChatPanelHandle } from "@/components/ChatPanel";
 import { VoiceButton } from "@/components/VoiceButton";
+import { VoiceStage } from "@/components/VoiceStage";
+import { useVoiceSession } from "@/lib/hooks/use-voice-session";
 import { DashboardCanvas } from "@/components/DashboardCanvas";
 import { EvalPanel } from "@/components/EvalPanel";
 import { FileBrowser } from "@/components/FileBrowser";
@@ -124,6 +126,20 @@ export default function App() {
    * the whole feature is in the browser (see lib/voice.ts).
    */
   const voiceEnabled = !!(meta?.voice as { enabled?: boolean } | undefined)?.enabled;
+  /**
+   * The immersive orb view, which REPLACES the chat rail for a voice assistant. Default
+   * on: for an assistant whose whole point is talking, a chat log is the wrong first
+   * screen. The X drops back to chat without hanging up.
+   */
+  const [voiceStage, setVoiceStage] = useState(true);
+  const voice = useVoiceSession({
+    chat: chatRef,
+    workspace: meta?.ls_artifacts?.workspace,
+    project: meta?.customer,
+    customer: meta?.customer,
+    voiceName: (meta?.voice as { voice_name?: string } | undefined)?.voice_name,
+  });
+  const showStage = voiceEnabled && voiceStage;
 
   // Effective theme: an active assistant's brand theme wins, else the manual
   // preference. Applied to <html> + remembered so a reload restores it.
@@ -199,20 +215,15 @@ export default function App() {
           <BrandLogo logo={logo} />
           <h1 className="m-0 font-heading text-2xl font-bold tracking-tight">{displayName}</h1>
         </button>
-        {voiceEnabled && (
+        {voiceEnabled && !showStage && (
           <div className="ml-auto print:hidden">
-            <VoiceButton
-              chat={chatRef}
-              workspace={meta?.ls_artifacts?.workspace}
-              project={meta?.customer}
-              customer={meta?.customer}
-            />
+            <VoiceButton voice={voice} onExpand={() => setVoiceStage(true)} />
           </div>
         )}
         <Tooltip content="Start a new chat (reset the conversation + dashboard)" side="bottom">
           <Button
             variant="secondary"
-            className={`${voiceEnabled ? "" : "ml-auto"} gap-1.5 rounded-full px-4 print:hidden`}
+            className={`${voiceEnabled && !showStage ? "" : "ml-auto"} gap-1.5 rounded-full px-4 print:hidden`}
             aria-label="New Chat"
             onClick={handleResetConversation}
           >
@@ -285,6 +296,21 @@ export default function App() {
               : "mx-auto w-full max-w-[760px]")
           }
         >
+          {/* The orb, over the chat rail. ChatPanel stays MOUNTED underneath rather than
+              being swapped out: it owns the run machinery and the widget flushing, so
+              unmounting it would take the dashboard with it (and drop the session's
+              `ask` handle mid-turn). */}
+          {showStage && (
+            <div className="absolute inset-0 z-20 bg-background">
+              <VoiceStage
+                voice={voice}
+                onExit={() => setVoiceStage(false)}
+                displayName={displayName}
+                logo={logo}
+                presets={presets}
+              />
+            </div>
+          )}
           <ChatPanel
             handleRef={chatRef}
             assistantId={assistantId}

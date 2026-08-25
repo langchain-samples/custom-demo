@@ -40,6 +40,7 @@ function ok(name, fn) {
     resumptionHandle,
     spokenResult,
     liveUrl,
+    DEFAULT_VOICE,
     downsampleTo16k,
     realtimeAudioMessage,
     INVOKE_TOOL,
@@ -236,6 +237,28 @@ function ok(name, fn) {
     // Already at (or below) the target rate: nothing to do.
     const same = new Float32Array([0.5, -0.5]);
     assert.equal(downsampleTo16k(same, 16000), same);
+  });
+
+  ok("the voice rides in generationConfig, not on setup", () => {
+    // `speechConfig` on `setup` is rejected with `1007 Unknown name "speechConfig" at
+    // 'setup'` - the socket just closes, which is indistinguishable from every other
+    // setup mistake.
+    const setup = setupMessage("gemini-3.1-flash-live-preview").setup;
+    assert.equal(setup.speechConfig, undefined);
+    const picked = setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig;
+    assert.equal(picked.voiceName, DEFAULT_VOICE);
+    // An assistant's own voice wins over the house default.
+    const custom = setupMessage("m", undefined, "Sulafat").setup;
+    assert.equal(
+      custom.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName,
+      "Sulafat",
+    );
+    // An empty name must not reach the API as "" (which is not a voice).
+    const blank = setupMessage("m", undefined, "").setup;
+    assert.equal(
+      blank.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName,
+      DEFAULT_VOICE,
+    );
   });
 
   console.log(`\n${passed} passed`);
