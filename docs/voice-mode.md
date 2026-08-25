@@ -88,6 +88,10 @@ find, so they are pinned by tests.
    longer than that, so minting first turns a slow "Allow" into a `1007` that blames the
    token. The session mints its own token from `getToken`, after `startAudio`, and retries
    once with a fresh one if a close reason mentions the token at all.
+1. **Send mic audio as `audio`, not `mediaChunks`.** Most examples still show
+   `realtimeInput.mediaChunks`, and the server answers `1007 realtime_input.media_chunks is
+   deprecated. Use audio, video, or text instead`. It fires on the first frame a microphone
+   produces, so nothing short of a real mic finds it.
 1. **Use the `BidiGenerateContentConstrained` RPC.** An ephemeral token on the plain
    `BidiGenerateContent` is refused with `1008 Method doesn't allow unregistered callers`.
 2. **Pass the token as `access_token`, not `key`.** It replaces an API key but is not one;
@@ -129,9 +133,12 @@ with nothing visibly broken. There is a test pinning that link.
 - **The audio path is unverified.** A real session has been driven end to end from Node
   (mint -> connect -> speak -> `invoke_deep_agent` called with the question passed
   through), so the protocol, the token and the tool declarations are known good. What has
-  not run is the browser half: the mic downsample, the playback worklet, and whether a
-  second `functionResponse` for the same call id is accepted as readily as the ADK example
-  suggests. Those are the first three places to look if a real conversation misbehaves.
+  not run is the last mile in a browser: real microphone capture and the playback worklet.
+  The frame shape and the downsample are exercised against a live session (750 frames of a
+  generated tone, accepted), and a text turn drives the full tool round trip, so what is
+  left is whether a real voice is understood and whether the queued audio plays back
+  cleanly. Also unproven: whether a second `functionResponse` for the same call id is
+  accepted as readily as the ADK example suggests.
 - **Session limits.** Resumption is wired (a ~10 minute connection reconnects on its
   handle), but the 15-minute audio-session cap needs `contextWindowCompression` to go
   past, which is not set up yet.

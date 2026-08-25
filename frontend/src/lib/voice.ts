@@ -130,6 +130,43 @@ export function supportsNonBlocking(model: string): boolean {
 }
 
 /**
+ * Resample a mic frame to the 16k the Live API wants, averaging rather than picking.
+ *
+ * Taking every Nth sample (the one-liner) aliases everything above 8kHz down into the
+ * speech band, which is audible as harshness and makes recognition worse for no reason.
+ * A box average over each output bin is three lines and much closer to right.
+ */
+export function downsampleTo16k(frame: Float32Array, inRate: number): Float32Array {
+  if (inRate <= MIC_RATE) return frame;
+  const ratio = inRate / MIC_RATE;
+  const out = new Float32Array(Math.floor(frame.length / ratio));
+  for (let i = 0; i < out.length; i++) {
+    const start = Math.floor(i * ratio);
+    const end = Math.min(frame.length, Math.floor((i + 1) * ratio));
+    let sum = 0;
+    for (let j = start; j < end; j++) sum += frame[j];
+    out[i] = end > start ? sum / (end - start) : 0;
+  }
+  return out;
+}
+
+/**
+ * One frame of mic audio, as a `realtimeInput`.
+ *
+ * `audio`, NOT `mediaChunks`: the latter is what most examples still show and the server
+ * rejects it outright - `1007 realtime_input.media_chunks is deprecated. Use audio, video,
+ * or text instead` - which kills the session on the first frame the mic produces, i.e.
+ * only ever in front of a real microphone.
+ */
+export function realtimeAudioMessage(pcm: ArrayBuffer): object {
+  return {
+    realtimeInput: {
+      audio: { mimeType: `audio/pcm;rate=${MIC_RATE}`, data: encodeBase64(pcm) },
+    },
+  };
+}
+
+/**
  * The `setup` message that opens a session.
  *
  * Only the model and the tool declarations are ours to choose here: everything else was
@@ -457,18 +494,8 @@ export class VoiceSession {
   /** Downsample one mic frame to 16k and ship it. */
   private sendMic(frame: Float32Array): void {
     if (this.ws?.readyState !== WebSocket.OPEN || !this.ctx) return;
-    const ratio = this.ctx.sampleRate / MIC_RATE;
-    const out = new Float32Array(Math.floor(frame.length / ratio));
-    for (let i = 0; i < out.length; i++) out[i] = frame[Math.floor(i * ratio)];
-    this.ws.send(
-      JSON.stringify({
-        realtimeInput: {
-          mediaChunks: [
-            { mimeType: `audio/pcm;rate=${MIC_RATE}`, data: encodeBase64(floatToPcm16(out)) },
-          ],
-        },
-      }),
-    );
+    const out = downsampleTo16k(frame, this.ctx.sampleRate);
+    this.ws.send(JSON.stringify(realtimeAudioMessage(floatToPcm16(out))));
   }
 
   private async onFrame(data: unknown): Promise<void> {

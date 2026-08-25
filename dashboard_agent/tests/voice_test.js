@@ -35,6 +35,8 @@ function ok(name, fn) {
     resumptionHandle,
     spokenResult,
     liveUrl,
+    downsampleTo16k,
+    realtimeAudioMessage,
     INVOKE_TOOL,
     RESUME_TOOL,
   } = await import(MOD);
@@ -165,6 +167,29 @@ function ok(name, fn) {
     assert.ok(url.includes("GenerativeService.BidiGenerateContentConstrained"), url);
     assert.ok(url.includes("access_token=auth_tokens%2Fabc%2Bdef"), url);
     assert.ok(!url.includes("key="), "an ephemeral token is not an API key");
+  });
+
+  ok("mic audio is sent as `audio`, never as the deprecated `mediaChunks`", () => {
+    // The server rejects mediaChunks outright: `1007 realtime_input.media_chunks is
+    // deprecated. Use audio, video, or text instead` - and it only ever fires in front
+    // of a real microphone, so no amount of protocol testing without one catches it.
+    const msg = realtimeAudioMessage(new Uint8Array([1, 2, 3, 4]).buffer);
+    assert.ok(!("mediaChunks" in msg.realtimeInput), "mediaChunks is rejected by the server");
+    assert.equal(msg.realtimeInput.audio.mimeType, "audio/pcm;rate=16000");
+    assert.equal(typeof msg.realtimeInput.audio.data, "string");
+  });
+
+  ok("the downsample averages rather than dropping samples", () => {
+    // Picking every Nth sample aliases everything above 8kHz into the speech band. An
+    // alternating +1/-1 signal is the worst case: averaging cancels it to ~0, while
+    // picking preserves it at full amplitude as a phantom tone.
+    const alternating = new Float32Array(48).map((_, i) => (i % 2 ? 1 : -1));
+    const out = downsampleTo16k(alternating, 48000);
+    assert.equal(out.length, 16);
+    assert.ok(Math.max(...out.map(Math.abs)) < 0.4, `aliased: ${out.slice(0, 4)}`);
+    // Already at (or below) the target rate: nothing to do.
+    const same = new Float32Array([0.5, -0.5]);
+    assert.equal(downsampleTo16k(same, 16000), same);
   });
 
   console.log(`\n${passed} passed`);
