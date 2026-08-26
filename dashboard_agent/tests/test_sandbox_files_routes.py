@@ -48,9 +48,17 @@ def _clear_sandbox_cache():
 class _FakeBackend:
     """Minimal sandbox backend: records calls, returns REAL LsResult/ReadResult."""
 
-    def __init__(self, ls: LsResult | None = None, read: ReadResult | None = None):
+    def __init__(
+        self,
+        ls: LsResult | None = None,
+        read: ReadResult | None = None,
+        execute: str | None = None,
+    ):
         self._ls = ls or LsResult(entries=[])
         self._read = read or ReadResult(file_data=FileData(content="", encoding="utf-8"))
+        # None means "this backend has no exec", which is a real shape: the media path
+        # must degrade to a placeholder rather than propagate an AttributeError as a 500.
+        self._execute = execute
         self.calls: list[tuple] = []
 
     @property
@@ -64,6 +72,12 @@ class _FakeBackend:
     async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         self.calls.append(("aread", file_path, offset, limit))
         return self._read
+
+    async def aexecute(self, command: str):
+        self.calls.append(("aexecute", command))
+        if self._execute is None:
+            raise RuntimeError("this backend has no exec")
+        return self._execute
 
 
 def _install(monkeypatch, backend, enabled: bool = True):
@@ -109,7 +123,9 @@ def test_list_orders_dirs_first_then_case_insensitive(monkeypatch):
         "kind": "dir",
     }
     assert by_name["apple.md"]["kind"] == "text"
-    assert by_name["chart.png"]["kind"] == "binary"  # greyed out before any click
+    # "media", not "binary": the browser renders a PNG, so the tree must not grey it out.
+    # Greying is reserved for what genuinely cannot be shown (see the .zip case below).
+    assert by_name["chart.png"]["kind"] == "media"
     assert body["root"] == "/workspace"
     assert body["path"] == "/workspace/data"
     assert body["parent"] == "/workspace"
@@ -299,14 +315,48 @@ def test_read_next_page_resumes_where_the_last_one_stopped(monkeypatch):
 
 
 def test_read_binary_extension_never_touches_the_vm(monkeypatch):
+    # A .zip is unshowable in any browser, so the gate still fires before any VM call.
+    # (A .png or .pdf takes the media path instead - see the two tests below.)
     fake = _install(monkeypatch, _FakeBackend(read=_read_ok("should not be reached")))
-    resp = client.get("/sandbox-file?path=/workspace/data/chart.png")
+    resp = client.get("/sandbox-file?path=/workspace/data/bundle.zip")
     body = resp.json()
     assert resp.status_code == 200
     assert body["kind"] == "binary" and body["content"] is None
-    assert body["reason"] == "binary" and ".png" in body["message"]
+    assert body["reason"] == "binary" and ".zip" in body["message"]
     assert body["language"] is None and body["encoding"] is None
     assert fake.calls == []  # the allowlist gate fires before any VM call
+
+
+def test_read_media_returns_base64_and_a_mime_type(monkeypatch):
+    """A PDF comes back as bytes, because a browser can render one.
+
+    Refusing it made the claims demo unable to open the denial letter the whole
+    scenario is about.
+    """
+    _install(monkeypatch, _FakeBackend(execute="JVBERi0xLjQK"))
+    body = client.get("/sandbox-file?path=/workspace/data/letter.pdf").json()
+    assert body["kind"] == "media"
+    assert body["mime"] == "application/pdf"
+    assert body["encoding"] == "base64" and body["content"] == "JVBERi0xLjQK"
+    assert body["truncated"] is False
+
+
+def test_read_media_that_is_too_large_is_a_placeholder_not_an_error(monkeypatch):
+    """The size check runs IN the VM, so an oversized file costs no base64 transfer."""
+    _install(monkeypatch, _FakeBackend(execute="ERR:too_large:9999999"))
+    resp = client.get("/sandbox-file?path=/workspace/data/scan.pdf")
+    body = resp.json()
+    assert resp.status_code == 200
+    assert body["kind"] == "binary" and body["content"] is None
+    assert body["reason"] == "too_large" and "PDF" in body["message"]
+
+
+def test_read_media_degrades_when_the_vm_cannot_exec(monkeypatch):
+    """A preview pane that 500s is worse than one that says it cannot show the file."""
+    _install(monkeypatch, _FakeBackend())  # no `execute` configured -> the call raises
+    resp = client.get("/sandbox-file?path=/workspace/data/letter.pdf")
+    assert resp.status_code == 200
+    assert resp.json()["kind"] == "binary" and resp.json()["content"] is None
 
 
 @pytest.mark.parametrize("name", [".env", ".env.local"])

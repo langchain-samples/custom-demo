@@ -16,6 +16,17 @@ export type PromptMode = "prompt_hub" | "context_hub" | "inline";
 
 /** All editable panel fields for the active assistant. */
 export interface PanelConfig {
+  /**
+   * Whether this assistant can be spoken to (`metadata.voice.enabled`) — the switch that
+   * puts a mic button in the header. Metadata, not run context, because the agent knows
+   * nothing about voice; the whole feature lives in the browser (see lib/voice.ts).
+   */
+  voiceEnabled: boolean;
+  /**
+   * Prebuilt Live API voice for spoken replies (`metadata.voice.voice_name`). Empty means
+   * the house default (see `DEFAULT_VOICE`). Only has an effect while `voiceEnabled`.
+   */
+  voiceName: string;
   /** LangSmith workspace id (trace routing + workspace-scoped prompts). */
   lsWorkspace: string;
   /** Branding: display name shown in the header. */

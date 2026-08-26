@@ -53,53 +53,19 @@ jobs:
       # ANTHROPIC_API_KEY (intentionally left unset here so no real API calls run).
       - run: uv run pytest dashboard_agent/tests -q
 
-  # --- CD: deploy the agent to LangGraph on push to main (after CI passes) ---
-  # The frontend is deployed separately by Vercel's GitHub integration; this job
-  # only ships the LangGraph agent. .env is gitignored, so the deployment's runtime
-  # secrets are reconstructed here from GitHub Actions secrets.
-  deploy:
-    name: Deploy agent (LangGraph)
-    runs-on: ubuntu-latest
-    needs: [frontend, backend]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    concurrency:
-      group: deploy-agent
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-      - run: uv sync
-      - name: Reconstruct deployment .env from secrets
-        env:
-          LS_CROSS_WORKSPACE_KEY: ${{ secrets.LS_CROSS_WORKSPACE_KEY }}
-          BRANDFETCH_API_KEY: ${{ secrets.BRANDFETCH_API_KEY }}
-          APP_SHARED_SECRET: ${{ secrets.APP_SHARED_SECRET }}
-          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          ANTHROPIC_CUSTOM_HEADERS: ${{ secrets.ANTHROPIC_CUSTOM_HEADERS }}
-          # `web_search` calls Tavily and errors out (never invents results) without
-          # this, so a deployment missing it has a visibly broken research tool.
-          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
-        run: |
-          {
-            echo "LS_CROSS_WORKSPACE_KEY=$LS_CROSS_WORKSPACE_KEY"
-            echo "BRANDFETCH_API_KEY=$BRANDFETCH_API_KEY"
-            echo "APP_SHARED_SECRET=$APP_SHARED_SECRET"
-            echo "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"
-            echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"
-            echo "ANTHROPIC_CUSTOM_HEADERS=$ANTHROPIC_CUSTOM_HEADERS"
-            echo "TAVILY_API_KEY=$TAVILY_API_KEY"
-            # Turn on deepagents dynamic subagents (QuickJS interpreter + task() fan-out).
-            echo "DA_DYNAMIC_SUBAGENTS=1"
-          } > .env
-      - name: langgraph deploy
-        env:
-          # Org-scoped key + tenant id target the Josiah Coad workspace's deployment.
-          LANGSMITH_API_KEY: ${{ secrets.LS_CROSS_WORKSPACE_KEY }}
-          LANGSMITH_TENANT_ID: 4582c584-4ea8-48aa-a5bc-ba36237b4735
-        run: uv run langgraph deploy --deployment-id e746b603-8f54-4584-868f-0c47f2eac777 --deployment-type dev
+  # --- CD ---
+  # There is no deploy job here on purpose. The LangSmith deployment is connected to this
+  # repository through the GitHub integration with `build_on_push: true`, so a push to main
+  # builds and deploys itself - and its secrets live on the deployment rather than being
+  # reconstructed from GitHub Actions secrets into a .env at build time.
+  #
+  # That also buys preview deployments per pull request, which the CLI path could not do. The
+  # job this replaced ran `langgraph deploy --deployment-id ...` against a specific deployment;
+  # keeping both would race two deploys on every merge, and the pinned id becomes a broken
+  # build the moment that deployment is deleted.
+  #
+  # The frontend is still deployed separately by Vercel's GitHub integration, and points at
+  # the Agent Server through VITE_LG_URL in the Vercel project's environment.
 
   # --- Optional nightly live tests (uncomment + add ANTHROPIC_API_KEY secret) ---
   # Runs the real-LLM e2e + hallucination tests off the PR path (slow, costs

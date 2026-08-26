@@ -3,6 +3,8 @@
  *
  *   markdown  → Streamdown (the same renderer chat answers use, so a README
  *               reads identically here and in the transcript)
+ *   csv / tsv → a real table: sticky bold headers, grid, zebra rows (CsvSheet)
+ *   pdf/image → rendered from base64 via a blob URL (MediaView)
  *   other text→ monospace <pre>, wrapped, matching ToolChip's payload style
  *   binary /  → a friendly placeholder built from the server's `reason` +
  *   oversized   `message`; never raw bytes
@@ -20,6 +22,8 @@ import { Streamdown } from "streamdown";
 import { Button } from "@/components/ui/button";
 import { PaneState } from "@/components/files/PaneState";
 import type { FileState, SandboxNode } from "@/components/files/fileTreeData";
+import { CsvSheet } from "@/components/files/CsvSheet";
+import { MediaView } from "@/components/files/MediaView";
 import { PROSE_CLS } from "@/lib/markdown";
 
 interface SandboxFileViewProps {
@@ -62,7 +66,7 @@ export function SandboxFileView({ node, state, onLoadMore, appending }: SandboxF
         ) : null}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto p-4">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto p-4">
         {state.status === "loading" ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <IconLoader2 size={15} className="animate-spin [animation-duration:0.6s]" />
@@ -86,10 +90,14 @@ export function SandboxFileView({ node, state, onLoadMore, appending }: SandboxF
           <p className="m-0 text-sm text-muted-foreground">This file is empty.</p>
         ) : file ? (
           <>
-            {file.language === "markdown" ? (
+            {file.kind === "media" && file.mime ? (
+              <MediaView base64={file.content ?? ""} mime={file.mime} name={node.name} />
+            ) : file.language === "markdown" ? (
               <div className={PROSE_CLS}>
                 <Streamdown>{file.content ?? ""}</Streamdown>
               </div>
+            ) : file.language === "csv" || file.language === "tsv" ? (
+              <CsvSheet text={file.content ?? ""} delimiter={file.language === "tsv" ? "\t" : ","} />
             ) : (
               <pre className="m-0 whitespace-pre-wrap break-words rounded-md border border-border bg-background p-3 font-mono text-[12px] text-foreground">
                 {file.content}

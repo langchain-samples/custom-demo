@@ -25,7 +25,10 @@ import {
 } from "@tabler/icons-react";
 import { Button } from "@/components/motion/button";
 import { Tooltip } from "@/components/motion/tooltip";
-import ChatPanel from "@/components/ChatPanel";
+import ChatPanel, { type ChatPanelHandle } from "@/components/ChatPanel";
+import { VoiceButton } from "@/components/VoiceButton";
+import { VoiceStage } from "@/components/VoiceStage";
+import { useVoiceSession } from "@/lib/hooks/use-voice-session";
 import { DashboardCanvas } from "@/components/DashboardCanvas";
 import { EvalPanel } from "@/components/EvalPanel";
 import { FileBrowser } from "@/components/FileBrowser";
@@ -109,12 +112,77 @@ export default function App() {
   }, [resizing, chatWidth]);
 
   const settingsRef = useRef<SettingsHandle>(null);
+  /** Imperative handle voice mode drives (see VoiceButton). */
+  const chatRef = useRef<ChatPanelHandle | null>(null);
 
   // Branding for the header + chat presets (falls back to the app defaults).
   const meta = activeAssistant?.metadata;
   const displayName = meta?.display_name || DEFAULT_NAME;
   const logo = meta?.logo || DEFAULT_LOGO;
   const presets = meta?.actions ?? [];
+  /**
+   * Voice mode is per-assistant and OFF unless the builder turned it on. It lives in
+   * metadata rather than the runtime context because the agent knows nothing about it:
+   * the whole feature is in the browser (see lib/voice.ts).
+   */
+  const voiceEnabled = !!(meta?.voice as { enabled?: boolean } | undefined)?.enabled;
+  /**
+   * The immersive orb view, which REPLACES the chat rail for a voice assistant. Default
+   * on: for an assistant whose whole point is talking, a chat log is the wrong first
+   * screen. The X drops back to chat without hanging up.
+   */
+  const [voiceStage, setVoiceStage] = useState(true);
+  /**
+   * The identity the voice shell speaks with. Memoised because it is a dependency of the
+   * session's `start`, and a fresh object every render would rebuild that callback.
+   */
+  const voicePersona = useMemo(
+    () => ({
+      displayName,
+      customer: meta?.customer,
+      industry: meta?.industry,
+      // The quick-action labels double as "who asks you what": each one is a persona and
+      // a topic in a few words ("Claimant: Claim status").
+      topics: (meta?.actions ?? []).map((a) => a.label).filter(Boolean),
+    }),
+    // `meta.actions` rather than `presets`: the latter is `?? []`, so it is a NEW array on
+    // every render, which made this memo re-run every time and rebuild the session's
+    // `start` callback with it.
+    [displayName, meta?.customer, meta?.industry, meta?.actions],
+  );
+  const voice = useVoiceSession({
+    chat: chatRef,
+    workspace: meta?.ls_artifacts?.workspace,
+    project: meta?.customer,
+    customer: meta?.customer,
+    voiceName: (meta?.voice as { voice_name?: string } | undefined)?.voice_name,
+    persona: voicePersona,
+  });
+  const showStage = voiceEnabled && voiceStage;
+  /**
+   * `stop` through a ref so the reset below can end a session without depending on the
+   * session view - listing `voice` there would re-run the effect on every state change and
+   * hang up mid-conversation.
+   */
+  const voiceStopRef = useRef(voice.stop);
+  voiceStopRef.current = voice.stop;
+  // Reset per assistant. The stage flag is otherwise sticky for the life of the tab: exit
+  // the orb once and every voice assistant you pick afterwards opens in the chat view
+  // instead, which looks like the feature failing to turn on.
+  useEffect(() => {
+    setVoiceStage(true);
+    /**
+     * And END any live session, because a session belongs to the assistant it was started
+     * for. Its identity and voice are baked into the Live API setup frame, which is sent
+     * once and cannot be amended, and its trace is scoped to that customer's project. Left
+     * running across a switch, the model keeps introducing itself as the previous company
+     * and its turns land in the wrong project.
+     *
+     * Deliberately not restarted: picking a new assistant should not seize the microphone.
+     * The orb comes back in its resting state and is the button to start talking.
+     */
+    voiceStopRef.current();
+  }, [activeAssistant?.assistant_id]);
 
   // Effective theme: an active assistant's brand theme wins, else the manual
   // preference. Applied to <html> + remembered so a reload restores it.
@@ -147,6 +215,16 @@ export default function App() {
     setWidgets([]);
     setHasDashboard(false);
     setResetCounter((n) => n + 1);
+    // A live voice session restarts with it. Leaving it up would mean the model still
+    // remembers a conversation the AGENT no longer has - the thread is gone - so it would
+    // reference figures and claims that are no longer anywhere, and keep appending to a
+    // trace whose conversation ended. Restarting gives a new thread, a new Live session and
+    // a new `voice_session` trace, which is what "new chat" should mean on all three.
+    // Stopping also flushes the finished conversation's audio onto its own trace.
+    if (voice.running) {
+      voice.stop();
+      voice.start();
+    }
   };
 
   // Per-run context, resolved fresh at send time from the settings handle.
@@ -190,16 +268,22 @@ export default function App() {
           <BrandLogo logo={logo} />
           <h1 className="m-0 font-heading text-2xl font-bold tracking-tight">{displayName}</h1>
         </button>
-        <Tooltip content="Start a new chat (reset the conversation + dashboard)" side="bottom">
-          <Button
-            variant="secondary"
-            className="ml-auto gap-1.5 rounded-full px-4 print:hidden"
-            aria-label="New Chat"
-            onClick={handleResetConversation}
-          >
-            <IconSparkles size={16} /> New Chat
-          </Button>
-        </Tooltip>
+        {/* One right-anchored action bar. `ml-auto` belongs to the BAR, not to whichever
+            button happens to come first, so the row does not slide when a child is
+            conditional. The voice control used to live here; it is in the composer now,
+            next to send, because talking to the assistant is the same act as sending. */}
+        <div className="ml-auto flex items-center gap-3.5 print:hidden">
+        {/* No tooltip: this is the one action in the bar with a visible label, so a hover
+            card explaining it just covers the row below. The icon-only buttons keep theirs. */}
+        <Button
+          variant="secondary"
+          className="gap-1.5 rounded-full px-4 print:hidden"
+          aria-label="New Chat"
+          title="Resets the conversation and the dashboard"
+          onClick={handleResetConversation}
+        >
+          <IconSparkles size={16} /> New Chat
+        </Button>
         <Tooltip content="Browse the agent's files" side="bottom">
           <Button
             variant="secondary"
@@ -247,6 +331,7 @@ export default function App() {
             <IconSettings size={18} />
           </Button>
         </Tooltip>
+        </div>
       </header>
 
       <div
@@ -266,7 +351,35 @@ export default function App() {
               : "mx-auto w-full max-w-[760px]")
           }
         >
+          {/* The orb, over the chat rail. ChatPanel stays MOUNTED underneath rather than
+              being swapped out: it owns the run machinery and the widget flushing, so
+              unmounting it would take the dashboard with it (and drop the session's
+              `ask` handle mid-turn). */}
+          {showStage && (
+            <div className="absolute inset-0 z-20 bg-background">
+              <VoiceStage
+                voice={voice}
+                // Leaving the orb HANGS UP. Orb and listening are one thing: the alternative
+                // made "running, but not on the orb" a reachable state, which is why the
+                // composer needed its own stop button next to the mic - two controls for one
+                // conversation, and a live microphone with nothing on screen saying so.
+                onExit={() => {
+                  voice.stop();
+                  setVoiceStage(false);
+                }}
+                displayName={displayName}
+                logo={logo}
+                presets={presets}
+              />
+            </div>
+          )}
           <ChatPanel
+            handleRef={chatRef}
+            voiceControl={
+              voiceEnabled && !showStage ? (
+                <VoiceButton voice={voice} onOpen={() => setVoiceStage(true)} />
+              ) : undefined
+            }
             assistantId={assistantId}
             /* Same sandbox key the Files dialog and the agent itself use, so a file
                dropped on the chat lands in the VM this assistant reads from. */

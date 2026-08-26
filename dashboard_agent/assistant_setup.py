@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import cast
 
 import httpx
@@ -71,6 +72,11 @@ def safe_curated(name: str) -> str:
     """A bundled fallback family, defaulting when the value isn't one of ours."""
     n = (name or "").strip()
     return n if n in CURATED_FONTS else DEFAULT_CURATED
+
+
+def _wants_voice(value: object) -> bool:
+    """Did the builder turn voice mode on? Anything unexpected reads as off."""
+    return bool(value.get("enabled")) if isinstance(value, dict) else False
 
 
 def slugify(name: str) -> str:
@@ -871,7 +877,7 @@ def prepare_assistant(payload: dict) -> dict:
     """Turn setup inputs into a ready assistant payload (metadata + context).
 
     Inputs: workspace, customer, owner, industry, website, use_case, failure_mode
-    (or legacy `hallucination` bool), enabled_tools, push_prompts. Does brand fetch
+    (or legacy `hallucination` bool), enabled_tools, voice, push_prompts. Does brand fetch
     + LLM analysis (personas, data gap, tool selection) + optional prompt push, and
     upserts the assistant's demo eval dataset (best-effort; see assistant_evals).
     Returns {name, display_name, accent, logo, actions, metadata, context, prompt_urls}.
@@ -886,10 +892,23 @@ def prepare_assistant(payload: dict) -> dict:
     )
     push = payload.get("push_prompts", True)
 
-    brand = fetch_brand(customer, payload.get("website"))
-    analysis = analyze_customer(
-        customer, payload.get("industry", ""), payload.get("website"), use_case
-    )
+    # CONCURRENT on purpose. These two are the same wall clock spent twice: `fetch_brand`
+    # is a Brandfetch call plus a scrape of the customer's site, `analyze_customer` is an
+    # LLM call, and neither reads the other's output (brand is not consumed until the
+    # accent is resolved, far below). Run serially they were simply added together.
+    # Threads rather than async because both are blocking HTTP, and this function is
+    # called from a sync route.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        brand_job = pool.submit(fetch_brand, customer, payload.get("website"))
+        analysis_job = pool.submit(
+            analyze_customer,
+            customer,
+            payload.get("industry", ""),
+            payload.get("website"),
+            use_case,
+        )
+        brand = brand_job.result()
+        analysis = analysis_job.result()
     industry = payload.get("industry") or analysis.get("industry") or ""
     actions = list(payload.get("actions") or analysis.get("actions") or [])
     display_name = payload.get("display_name") or f"{customer} GPT"
@@ -1146,6 +1165,14 @@ def prepare_assistant(payload: dict) -> dict:
         "font_body_fallback": analysis.get("body_fallback") or DEFAULT_CURATED,
         "font_source": "google",
         "failure_mode": failure_mode,
+        # Voice mode, off unless the builder asked for it. In METADATA and not in
+        # `context` on purpose: the agent knows nothing about voice (the whole feature
+        # is in the browser - see frontend/src/lib/voice.ts), and only the SPA reads it.
+        # Never inferred from the use case either, like the `explicit_only` tools: a
+        # microphone is the presenter's choice, not the setup LLM's. Read defensively
+        # (a non-dict `voice` must not raise): setup runs on assistant provisioning, and
+        # nothing about the eval/voice trimmings may fail a customer's assistant.
+        "voice": {"enabled": _wants_voice(payload.get("voice"))},
         # Manifest of LangSmith artifacts this assistant created, so deleting the
         # assistant can cascade-delete them (see webapp.py /cleanup).
         "ls_artifacts": {

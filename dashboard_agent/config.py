@@ -215,3 +215,25 @@ def data_prompt_name() -> str:
     """Prompt Hub name for the synthetic data-source system prompt."""
     load_env()
     return os.getenv("DASHBOARD_DATA_PROMPT", "dashboard-agent-data")
+
+
+def voice_model() -> str:
+    """Gemini Live model the voice shell connects to (see voice.py).
+
+    3.1 by default: it is the current low-latency audio-to-audio model, and it is what
+    langchain-ai/google-adk-realtime-deepagents-example runs on.
+
+    Its one documented limitation does NOT bite us, and it is worth knowing why before
+    changing this. Google's tool-use docs mark 3.1's function calling "synchronous only"
+    (`behavior: NON_BLOCKING` is 2.5-only), and a blocking call means "the model will not
+    start responding until you've sent the tool response" - which for a tool that starts a
+    full agent run would be tens of seconds of dead air. What avoids that is the TWO-PHASE
+    response in voice.ts: acknowledge the call immediately so the model keeps the floor,
+    then send the real answer as a later response. That needs no model support.
+
+    Set this to `gemini-2.5-flash-native-audio-preview-12-2025` for the native-audio 2.5
+    model (which also gets affective dialogue and proactive audio); the client adds the
+    `NON_BLOCKING` flag automatically where it is supported.
+    """
+    load_env()
+    return os.getenv("DASHBOARD_VOICE_MODEL", "gemini-3.1-flash-live-preview")

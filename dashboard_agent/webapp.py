@@ -28,9 +28,12 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from dashboard_agent import voice_trace as voice_trace_mod
+
 # Absolute import: Agent Server loads http.app as a top-level module (no package
 # parent), so a relative `from .config` import would fail here.
 from dashboard_agent.config import load_env, make_client
+from dashboard_agent.voice import mint_token, voice_configured
 
 
 async def feedback(request):
@@ -305,6 +308,102 @@ async def trace_url(request):
         return JSONResponse({"url": url})
     except Exception as exc:
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+
+
+async def voice_token(request):
+    """Mint a short-lived Gemini Live token for the voice shell.
+
+    POST -> {token, model, expires_at}. The browser connects to Google directly with
+    this instead of an API key, so `GEMINI_API_KEY` stays server-side and no audio ever
+    transits this deployment. See voice.py for what the token is pinned to.
+
+    Deliberately a POST with no body: it mints a credential, so it must not be
+    cacheable or reachable by a stray link, and it inherits whatever auth the
+    deployment enforces on this app (see auth.py).
+    """
+    if not voice_configured():
+        return JSONResponse(
+            {"error": "voice mode is unavailable: GEMINI_API_KEY is not set"}, status_code=501
+        )
+    try:
+        return JSONResponse(mint_token())
+    except Exception as exc:
+        # No degraded mode worth having: without a token the client cannot connect, so
+        # say so rather than handing back something it will fail on.
+        return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=502)
+
+
+async def voice_trace(request):
+    """Record the voice conversation into ONE LangSmith trace. See voice_trace.py.
+
+    POST {action, ...} -> the shape depends on the action, because all four are the same
+    small bookkeeping call and four routes for them would be noise:
+
+      session   {workspace?, project?, metadata?}      -> {session_id}
+      utterance {session_id, role, text}               -> {ok}
+      tool      {session_id, name, inputs}             -> {tool_id, headers}
+      tool_end  {session_id, tool_id, outputs}         -> {ok}
+      end       {session_id, outputs?}                 -> {ok}
+
+    `tool` is the interesting one: its `headers` are what the SPA puts on the agent run
+    so the run nests under the tool span instead of starting its own trace.
+
+    Best-effort throughout: a conversation must not break because its trace could not be
+    written, so a missing session or an unusable LangSmith key answers `{}` / `ok: false`
+    rather than an error the UI has to handle.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    action = str(body.get("action") or "")
+    try:
+        if action == "session":
+            return JSONResponse(
+                {
+                    "session_id": voice_trace_mod.start_session(
+                        str(body.get("workspace") or ""),
+                        str(body.get("project") or ""),
+                        body.get("metadata") or {},
+                    )
+                }
+            )
+        session_id = str(body.get("session_id") or "")
+        if action == "utterance":
+            ok = voice_trace_mod.utterance(
+                session_id, str(body.get("role") or ""), str(body.get("text") or "")
+            )
+            return JSONResponse({"ok": ok})
+        if action == "tool":
+            return JSONResponse(
+                voice_trace_mod.open_tool(
+                    session_id, str(body.get("name") or "tool"), body.get("inputs") or {}
+                )
+            )
+        if action == "tool_end":
+            ok = voice_trace_mod.close_tool(
+                session_id, str(body.get("tool_id") or ""), body.get("outputs") or {}
+            )
+            return JSONResponse({"ok": ok})
+        if action == "end":
+            # The conversation audio arrives base64 in the closing call (a few MB for a long
+            # session), so the trace gets a playable timeline. Decoded defensively: a
+            # malformed blob must not cost the session its closing patch.
+            wav = b""
+            raw = str(body.get("audio_wav") or "")
+            if raw:
+                try:
+                    wav = base64.b64decode(raw)
+                except Exception:  # noqa: BLE001
+                    wav = b""
+            return JSONResponse(
+                {"ok": voice_trace_mod.end_session(session_id, body.get("outputs") or {}, wav)}
+            )
+        return JSONResponse({"error": f"unknown action {action!r}"}, status_code=400)
+    except Exception as exc:
+        # Logged, not raised: losing a span is not worth ending a conversation over.
+        traceback.print_exc()
+        return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=200)
 
 
 async def tools(request):
@@ -604,6 +703,23 @@ _TEXT_NAMES = frozenset(
 
 _MARKDOWN_EXTS = frozenset({"md", "markdown", "mdx"})
 
+# Binaries the BROWSER can render natively, so they are worth shipping as bytes rather
+# than refusing. Everything else stays "binary" and gets the placeholder.
+_MEDIA_MIME = {
+    "pdf": "application/pdf",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
+}
+
+# Ceiling on a media file, in BYTES of the original. The in-VM read caps stdout at
+# ~500 KiB and base64 inflates by 4/3, so this is what fits in one round trip with room
+# to spare. A generated demo PDF is a few KB; this is only a guard against someone
+# uploading a scanned manual.
+_MAX_MEDIA_BYTES = 300 * 1024
+
 # deepagents' in-VM read script emits this literal for a zero-byte file; it would
 # render as body text in the viewer.
 _EMPTY_FILE_REMINDER = "System reminder: File exists but has empty contents"
@@ -647,7 +763,7 @@ def _safe_path(raw: str, root: str) -> str | None:
 
 
 def _file_kind(name: str) -> str:
-    """Classify a file name as previewable ("text") or not ("binary")."""
+    """Classify a file name: "text", "media" (browser-renderable bytes) or "binary"."""
     low = name.lower()
     # Dotenv files are excluded deliberately: the deployment's only auth is a shared
     # token that ships in the SPA bundle, so a browser-reachable `cat` of any secrets
@@ -656,7 +772,9 @@ def _file_kind(name: str) -> str:
         return "binary"
     ext = posixpath.splitext(low)[1].lstrip(".")
     if ext:
-        return "text" if ext in _TEXT_EXTS else "binary"
+        if ext in _TEXT_EXTS:
+            return "text"
+        return "media" if ext in _MEDIA_MIME else "binary"
     return "text" if low in _TEXT_NAMES else "binary"
 
 
@@ -757,6 +875,31 @@ async def _vm_read(backend, path: str, offset: int, limit: int):
     """One `aread` against a time-bounded backend, holding an inflight slot."""
     async with _SANDBOX_SLOTS:
         return await _bounded(backend).aread(path, offset, limit)
+
+
+async def _vm_media(backend, path: str) -> tuple[str, str]:
+    """Base64 of a small binary file, as `(payload, error)` - exactly one is non-empty.
+
+    `aread` is line-oriented and would mangle bytes, so this shells out. The size check
+    runs IN THE VM and before the encode, so an oversized file costs one cheap round trip
+    instead of half a megabyte of base64 that the caller then throws away.
+
+    Single-quoted path: it comes from `_safe_path`, so it is already confined to the
+    sandbox root, and quoting keeps a space or bracket in a filename from splitting.
+    """
+    quoted = "'" + path.replace("'", "'\\''") + "'"
+    script = (
+        f"sz=$(stat -c %s {quoted} 2>/dev/null || echo -1)\n"
+        f'if [ "$sz" -lt 0 ]; then echo "ERR:missing";\n'
+        f'elif [ "$sz" -gt {_MAX_MEDIA_BYTES} ]; then echo "ERR:too_large:$sz";\n'
+        f"else base64 -w0 {quoted}; fi"
+    )
+    async with _SANDBOX_SLOTS:
+        out = await _bounded(backend).aexecute(script)
+    text = (getattr(out, "result", None) or getattr(out, "stdout", None) or str(out)).strip()
+    if text.startswith("ERR:"):
+        return "", text[4:]
+    return text, ""
 
 
 async def sandbox_files(request):
@@ -878,7 +1021,41 @@ async def sandbox_file(request):
             "limit": limit,
             "sandbox_id": _sandbox_id(backend),
         }
-        if _file_kind(name) != "text":
+        kind = _file_kind(name)
+        if kind == "media":
+            # Shipped as bytes rather than refused: a browser renders a PDF or an image
+            # natively, and a claims demo whose denial letter cannot be opened is missing
+            # the document the whole scenario is about.
+            ext = posixpath.splitext(name.lower())[1].lstrip(".")
+            try:
+                payload, problem = await asyncio.wait_for(
+                    _vm_media(backend, path), timeout=SANDBOX_TIMEOUT
+                )
+            except TimeoutError:
+                return _err(504, "timeout", "The sandbox did not respond.")
+            except Exception:  # noqa: BLE001 - a backend without `aexecute`, or a VM that
+                # refused the command. A preview pane that 500s is worse than one that says
+                # it cannot show the file, and every other unshowable case here is a 200.
+                payload, problem = "", "unreadable"
+            if problem.startswith("too_large"):
+                return _placeholder(
+                    base, "too_large", f"This {ext.upper()} is too large to preview."
+                )
+            if problem or not payload:
+                return _placeholder(base, "binary", f"Could not read this {ext.upper()}.")
+            return JSONResponse(
+                {
+                    **base,
+                    "kind": "media",
+                    "language": ext,
+                    "encoding": "base64",
+                    "mime": _MEDIA_MIME[ext],
+                    "content": payload,
+                    "truncated": False,
+                    "next_offset": None,
+                }
+            )
+        if kind != "text":
             label = posixpath.splitext(name)[1] or name
             return _placeholder(base, "binary", f"Binary file ({label}) — preview not supported.")
 
@@ -1216,6 +1393,8 @@ app = Starlette(
     routes=[
         Route("/feedback", feedback, methods=["POST"]),
         Route("/tools", tools, methods=["GET"]),
+        Route("/voice/token", voice_token, methods=["POST"]),
+        Route("/voice/trace", voice_trace, methods=["POST"]),
         Route("/sandbox-files", sandbox_files, methods=["GET"]),
         Route("/sandbox-file", sandbox_file, methods=["GET"]),
         Route("/sandbox-upload", sandbox_upload, methods=["POST"]),

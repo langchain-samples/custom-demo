@@ -63,6 +63,7 @@ import { ToolsSection } from "./settings/ToolsSection";
 import { DeleteAssistant } from "./settings/DeleteAssistant";
 import { DemoTraffic } from "./settings/DemoTraffic";
 import type { PanelConfig, PromptMode } from "./settings/types";
+import { VoicePicker } from "@/components/settings/VoicePicker";
 import { coerceTheme } from "@/lib/theme";
 import type { Theme } from "@/lib/theme";
 import { applyBrand, DEFAULT_TINT } from "@/lib/branding";
@@ -175,6 +176,8 @@ function configFromAssistant(a: Assistant, workspace: string): PanelConfig {
     logo: m.logo || DEFAULT_LOGO,
     actions: Array.isArray(m.actions) && m.actions.length ? m.actions : DEFAULT_ACTIONS,
     theme: coerceTheme(m.theme),
+    voiceEnabled: !!(m.voice as { enabled?: boolean } | undefined)?.enabled,
+    voiceName: ((m.voice as { voice_name?: string } | undefined)?.voice_name as string) || "",
     fontHeading: (m.font_heading as string) || "",
     fontHeadingFallback: (m.font_heading_fallback as string) || DEFAULT_CURATED,
     fontBody: (m.font_body as string) || "",
@@ -201,6 +204,8 @@ function blankConfig(workspace: string): PanelConfig {
     accent2: "",
     brandNeutral: "",
     brandTint: DEFAULT_TINT,
+    voiceEnabled: false,
+    voiceName: "",
     logo: "",
     actions: [],
     theme: "dark",
@@ -402,6 +407,13 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
             logo: cfg.logo,
             actions: cfg.actions,
             theme: cfg.theme,
+            // From `cfg`, not `base`: the switch below should put the mic button in the
+            // header on the click, not 600ms later when the PATCH lands.
+            voice: {
+              ...((base.metadata?.voice as object) || {}),
+              enabled: cfg.voiceEnabled,
+              voice_name: cfg.voiceName,
+            },
           },
         };
         // One call writes every brand token (seeds, contrast foreground, derived
@@ -417,7 +429,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
         applyBrand(null); // clear overrides → the unbranded defaults in index.css
         onActiveAssistantChange?.(null);
       }
-    }, [selectedId, assistants, cfg.name, cfg.accent, cfg.accent2, cfg.brandNeutral, cfg.brandTint, cfg.logo, cfg.actions, cfg.theme, onActiveAssistantChange]);
+    }, [selectedId, assistants, cfg.name, cfg.accent, cfg.accent2, cfg.brandNeutral, cfg.brandTint, cfg.logo, cfg.actions, cfg.theme, cfg.voiceEnabled, cfg.voiceName, onActiveAssistantChange]);
 
     /* ---- Typography: async (may hit the font CDN), so kept separate ---- */
     useEffect(() => {
@@ -464,6 +476,13 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           logo: next.logo,
           actions: next.actions,
           theme: next.theme,
+          // Merge, never replace: whatever else setup wrote under `voice` (nothing today,
+          // but this is the one metadata key another writer is likely to extend) survives.
+          voice: {
+            ...((src?.metadata?.voice as object) || {}),
+            enabled: next.voiceEnabled,
+            voice_name: next.voiceName,
+          },
         };
         try {
           const updated = await updateAssistant(id, { metadata: meta });
@@ -584,6 +603,9 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           // Off unless the presenter asked for it: it fills the customer's project
           // with runs they never made, priced like they did.
           demo_traffic: v.demoTraffic,
+          // Voice mode. Lands in the assistant's METADATA, not its context: the agent
+          // knows nothing about voice, only the SPA does (see lib/voice.ts).
+          voice: { enabled: v.voice },
         });
         // Hoisted so the baseline experiment below runs against the SAME context
         // the assistant was created with.
@@ -670,6 +692,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
               failureMode: "hallucination",
               promptSource: "context_hub",
               demoTraffic: false,
+              voice: false,
             },
             workspace,
           );
@@ -808,6 +831,14 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
                   onNeutral={(v) => editBranding({ brandNeutral: v })}
                   onTint={(v) => editBranding({ brandTint: v })}
                 >
+                  {/* Only for an assistant that can speak: a voice picker on a text-only
+                      assistant is a setting with no effect. */}
+                  {cfg.voiceEnabled && (
+                    <VoicePicker
+                      value={cfg.voiceName}
+                      onChange={(v) => editBranding({ voiceName: v })}
+                    />
+                  )}
                   <TypographySection
                     headingFont={cfg.fontHeading}
                     headingFallback={cfg.fontHeadingFallback}
@@ -838,6 +869,9 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
                   onSystemPrompt={(v) => editConfig({ systemPrompt: v })}
                   onDataGap={(v) => editConfig({ dataGap: v })}
                   onDataPrompt={(v) => editConfig({ dataPrompt: v })}
+                  // editBranding, not editConfig: this one is saved onto the assistant.
+                  voiceEnabled={cfg.voiceEnabled}
+                  onVoiceEnabled={(v) => editBranding({ voiceEnabled: v })}
                 />
 
                 <ToolsSection

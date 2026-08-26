@@ -23,6 +23,9 @@
  *    and derived in a space `toLegacyRgb` understands (sRGB).
  */
 import type { Theme } from "./theme";
+// Relative AND with the extension: the Node tests import this module via type
+// stripping, where neither the `@/` alias nor extensionless resolution works.
+import { orbPalette } from "./orbPalette.ts";
 
 /* ------------------------------ Brand shape ----------------------------- */
 
@@ -244,6 +247,21 @@ export function brandWithDefaults(b: Partial<Brand> | null | undefined): Brand {
  * Only theme-independent values are written; the derived chart series are
  * written as light AND dark variants so the cascade — not JS — picks.
  */
+/**
+ * Orb stops for the voice view, derived in OKLCH rather than mixed in sRGB.
+ *
+ * Set as variables here (not computed in CSS) so the derivation is testable and does not
+ * depend on relative-colour syntax support. See `orbPalette` for the recipe and for why
+ * sRGB mixing produced a grey bruise.
+ */
+function applyOrb(root: CSSStyleDeclaration, b: Brand): void {
+  const orb = orbPalette(b.primary, b.secondary);
+  root.setProperty("--orb-a", orb.a);
+  root.setProperty("--orb-b", orb.b);
+  root.setProperty("--orb-c", orb.c);
+  root.setProperty("--orb-base", orb.base);
+}
+
 export function applyBrand(brand: Partial<Brand> | null): void {
   if (typeof document === "undefined") return;
   const root = document.documentElement.style;
@@ -265,6 +283,7 @@ export function applyBrand(brand: Partial<Brand> | null): void {
   root.setProperty("--brand-neutral", b.neutral);
   root.setProperty("--brand-tint", `${b.tint}%`);
   root.setProperty("--brand-fg", contrastForeground(b.primary));
+  applyOrb(root, b);
   if (b.success) root.setProperty("--success", b.success);
   else root.removeProperty("--success");
   if (b.warning) root.setProperty("--warning", b.warning);

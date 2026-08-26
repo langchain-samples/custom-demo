@@ -253,6 +253,12 @@ export interface SetupInput {
   demo_traffic?: boolean;
   /** Capabilities the new assistant starts with; editable afterwards. */
   enabled_tools?: string[];
+  /**
+   * Voice mode: adds the mic button on this assistant. OPT-IN, and never inferred from
+   * the use case. Lands in the assistant's metadata rather than its runtime context,
+   * because the agent knows nothing about voice (see lib/voice.ts).
+   */
+  voice?: { enabled: boolean };
 }
 
 /** Prepared payload the assistant_setup graph returns. */
@@ -391,6 +397,13 @@ export interface RunStreamOptions {
   /** Optional abort signal to cancel the stream. */
   signal?: AbortSignal;
   /**
+   * Extra request headers. Used by voice mode for LangSmith distributed tracing:
+   * `langsmith-trace` + `baggage`, minted by POST /voice/trace, make this run nest
+   * under the conversation's tool span instead of starting its own trace (graph.py
+   * turns them back into a tracing parent).
+   */
+  headers?: Record<string, string>;
+  /**
    * The active `/goal`, sent as deepagents' `rubric` state key. `RubricMiddleware`
    * grades each finished turn against it and sends the agent back for another pass
    * until it is satisfied; it no-ops when this is absent. Re-sent every turn — the
@@ -406,7 +419,7 @@ export interface RunStreamOptions {
  * is the raw string (typically JSON) — the caller parses it.
  */
 export async function* runStream(opts: RunStreamOptions): AsyncGenerator<SSEEvent> {
-  const { threadId, assistantId, messages, context, resume, signal, rubric } = opts;
+  const { threadId, assistantId, messages, context, resume, signal, rubric, headers } = opts;
   const body: Record<string, unknown> = {
     assistant_id: assistantId,
     // "updates" carries `__interrupt__` when a tool pauses for human review;
@@ -433,7 +446,7 @@ export async function* runStream(opts: RunStreamOptions): AsyncGenerator<SSEEven
 
   const res = await fetch(`${getApiBase()}/threads/${threadId}/runs/stream`, {
     method: "POST",
-    headers: apiHeaders(),
+    headers: { ...apiHeaders(), ...(headers || {}) },
     body: JSON.stringify(body),
     signal,
   });
@@ -686,7 +699,8 @@ export async function listAgents(workspace?: string): Promise<string[]> {
  * allowlist, not from the bytes — so the UI can pick an icon and grey out
  * non-previewable files before the user clicks one.
  */
-export type SandboxKind = "dir" | "text" | "binary";
+/** "media" is a binary the BROWSER can render (PDF, image) - shipped as base64. */
+export type SandboxKind = "dir" | "text" | "binary" | "media";
 
 /**
  * Which sandbox VM to browse. Both fields come from the ACTIVE ASSISTANT'S
@@ -738,6 +752,8 @@ export interface SandboxFile {
   encoding: string | null;
   /** null when the file is not previewable — see `reason` / `message`. */
   content: string | null;
+  /** Content type, set only for `kind: "media"` (its `content` is base64). */
+  mime?: string;
   offset: number;
   limit: number;
   /**
@@ -1196,4 +1212,49 @@ export async function postFeedback(body: FeedbackInput): Promise<FeedbackResult>
     body: JSON.stringify(body),
   });
   return res.json();
+}
+
+/* ---------------------------------- Voice ---------------------------------- */
+
+/** A minted Gemini Live token (see dashboard_agent/voice.py). */
+export interface VoiceToken {
+  token: string;
+  model: string;
+  expires_at: string;
+}
+
+/**
+ * Mint a short-lived token for a Live API session.
+ *
+ * The browser connects to Google directly with this instead of an API key, so
+ * `GEMINI_API_KEY` never leaves the server. Short-lived and single-use: mint one per
+ * session, not per app load.
+ */
+export async function voiceToken(): Promise<VoiceToken> {
+  const res = await fetch(`${getApiBase()}/voice/token`, {
+    method: "POST",
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw await errorFrom(res);
+  return res.json();
+}
+
+/**
+ * Record one step of the conversation's LangSmith trace (see voice_trace.py).
+ *
+ * Best-effort by design and never throws: a lost span is not worth interrupting a
+ * conversation for, so a failure resolves to `{}` and the caller carries on untraced.
+ */
+export async function voiceTrace(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  try {
+    const res = await fetch(`${getApiBase()}/voice/trace`, {
+      method: "POST",
+      headers: { ...apiHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return {};
+    return await res.json();
+  } catch {
+    return {};
+  }
 }

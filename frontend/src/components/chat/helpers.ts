@@ -20,7 +20,8 @@ import {
   IconCode,
   IconTerminal2,
 } from "@tabler/icons-react";
-import type { MessageContent, ToolCall, Widget } from "@/lib/api";
+import type { MessageContent, ReviewInterrupt, ToolCall, Widget } from "@/lib/api";
+import { TOOL_LABELS } from "@/lib/toolLabels";
 
 /** A Tabler icon component (size/stroke/className props). */
 export type TablerIcon = ComponentType<{ size?: number | string; className?: string; stroke?: number }>;
@@ -83,31 +84,37 @@ export function widgetLooksComplete(w: Widget | null | undefined): boolean {
   }
 }
 
-/** Icon + label shown on each tool "chip". Mirrors the original TOOL_META. */
-export const TOOL_META: Record<string, { icon: TablerIcon; label: string }> = {
+/**
+ * Icon per tool. The WORDS live in lib/toolLabels.ts, shared with the voice shell's live
+ * status line so the orb and the chat log describe the same tool call the same way.
+ */
+const TOOL_ICONS: Record<string, TablerIcon> = {
   // Core
-  datasearch: { icon: IconSearch, label: "Searched reports" },
-  push_widget: { icon: IconChartBar, label: "Added widget" },
+  datasearch: IconSearch,
+  push_widget: IconChartBar,
   // Capability tools (see dashboard_agent/tools/registry.py)
-  draft_email: { icon: IconMail, label: "Drafted an email" },
-  suggest_meeting_times: { icon: IconCalendarEvent, label: "Suggested meeting times" },
-  list_data_sources: { icon: IconDatabase, label: "Listed data sources" },
-  web_search: { icon: IconWorldSearch, label: "Searched the web" },
+  draft_email: IconMail,
+  suggest_meeting_times: IconCalendarEvent,
+  list_data_sources: IconDatabase,
+  web_search: IconWorldSearch,
   // deepagents built-ins that are always live
-  write_todos: { icon: IconChecklist, label: "Planned steps" },
-  task: { icon: IconRobot, label: "Delegated to subagent" },
-  eval: { icon: IconCode, label: "Ran code" },
-  execute: { icon: IconTerminal2, label: "Ran command" },
-  ls: { icon: IconFolder, label: "Listed files" },
-  glob: { icon: IconFolder, label: "Found files" },
-  grep: { icon: IconSearch, label: "Searched files" },
-  read_file: { icon: IconFileText, label: "Read a file" },
-  write_file: { icon: IconFilePencil, label: "Wrote a file" },
-  edit_file: { icon: IconFilePencil, label: "Edited a file" },
+  write_todos: IconChecklist,
+  task: IconRobot,
+  eval: IconCode,
+  execute: IconTerminal2,
+  ls: IconFolder,
+  glob: IconFolder,
+  grep: IconSearch,
+  read_file: IconFileText,
+  write_file: IconFilePencil,
+  edit_file: IconFilePencil,
 };
 
 export function toolMeta(name: string): { icon: TablerIcon; label: string } {
-  return TOOL_META[name] || { icon: IconTool, label: name };
+  return {
+    icon: TOOL_ICONS[name] || IconTool,
+    label: TOOL_LABELS[name]?.done || name,
+  };
 }
 
 /**
@@ -174,4 +181,22 @@ export function widgetFromArgs(args: Record<string, unknown>): Widget {
 /** Convenience: the tool_call id used to key chips/widgets, with a fallback. */
 export function toolCallKey(msgId: string | undefined, tc: ToolCall): string {
   return tc.id || `${msgId || ""}:${tc.name || ""}`;
+}
+
+/**
+ * One line describing what a paused run is waiting for, for reading aloud.
+ *
+ * The review CARD is the real interface; this exists because a voice caller has no eyes
+ * on it. `ask_user` is multiple choice, so its options have to be spoken or the listener
+ * cannot answer (the run only accepts one of them).
+ */
+export function describeInterrupt(review: ReviewInterrupt): string {
+  const draft = (review.draft as Record<string, unknown> | undefined) || {};
+  const question = String((review.question as string) ?? draft.question ?? "");
+  const raw = (review.options ?? draft.options) as unknown;
+  const options = (Array.isArray(raw) ? raw : []).map((o) => String(o).trim()).filter(Boolean);
+  if (question && options.length) return `${question} Options: ${options.join("; ")}.`;
+  if (question) return question;
+  // The artifact interrupts (draft_email, suggest_meeting_times) carry no question.
+  return `The agent is waiting for approval on a ${String(review.kind || "step").replace(/_/g, " ")}.`;
 }

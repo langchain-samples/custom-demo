@@ -96,6 +96,15 @@
        colors a customer needs to supply. Declared here rather than JS-only so
        every consumer has a real default to resolve against. ---- */
     --brand-primary: #0072BC;
+    /* Orb stops. Fallbacks ONLY - `applyOrb` (branding.ts) overwrites these per assistant
+       with hues derived in OKLCH. They must live here rather than on `.voice-orb`: a custom
+       property declared on the element shadows the inherited one, so fallbacks next to the
+       component silently win over the real palette (which is how the orb went fully grey
+       for a brand whose primary seed is near-black). */
+    --orb-a: #64c1ff;
+    --orb-b: #9cbeff;
+    --orb-c: #32cbeb;
+    --orb-base: #eef5fd;
     --brand-secondary: #00A651;
     /* Hue used to tint surfaces. Separate from --brand-primary because a
        saturated red/orange primary makes a repellent surface tint. */
@@ -259,3 +268,98 @@ input[type="color"]::-moz-color-swatch {
   border: none;
   border-radius: calc(var(--radius) * 0.6);
 }
+
+/* ---------------------------------------------------------------------------
+   The voice orb (components/VoiceOrb.tsx).
+   Kept in CSS rather than Tailwind classes because it is layered gradients plus
+   keyframes, and `--level` is written from an animation frame at audio rate.
+
+   Colours come from the brand tokens, so a customer's orb is their colour - with a
+   fixed violet drift mixed in for the iridescent sheen the flat brand hue lacks.
+--------------------------------------------------------------------------- */
+@keyframes orb-float {
+  0%, 100% { transform: translateY(-8px); }
+  50%      { transform: translateY(8px); }
+}
+@keyframes orb-drift {
+  0%   { transform: rotate(0deg)   scale(1.04); }
+  50%  { transform: rotate(180deg) scale(1.1); }
+  100% { transform: rotate(360deg) scale(1.04); }
+}
+
+.voice-orb {
+  /* Written from an animation frame by VoiceOrb; see `orbTransform` for the geometry. */
+  --halo-scale: 1;
+  --halo-opacity: 0.22;
+  --sphere-scale: 1;
+  --orb-size: 260px;
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--orb-size);
+  height: var(--orb-size);
+  border: 0;
+  background: none;
+  cursor: pointer;
+  animation: orb-float 7s ease-in-out infinite;
+}
+
+/* The reactive halo: a wide, heavily blurred copy whose size and opacity track `--level`. */
+.voice-orb__halo {
+  position: absolute;
+  inset: -38%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 50% 50%,
+    color-mix(in srgb, var(--orb-a) 55%, transparent) 0%,
+    color-mix(in srgb, var(--orb-b) 35%, transparent) 45%,
+    transparent 70%
+  );
+  filter: blur(30px);
+  opacity: var(--halo-opacity);
+  transform: scale(var(--halo-scale));
+  transition: opacity 90ms linear, transform 90ms linear;
+}
+
+/* The body wrapper: the audio-driven scale lives HERE, alone. Put it on the sphere and the
+   drift animation wins the `transform` property and the orb never moves with the voice. */
+.voice-orb__body {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  transform: scale(var(--sphere-scale));
+  transition: transform 90ms linear;
+}
+
+/* The sphere: several off-centre radial gradients, slowly rotating so the colours drift. */
+.voice-orb__sphere {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  background:
+    /* The stops arrive luminous already (L and C clamped in `orbPalette`), so they are used
+       as-is: re-mixing them with white here is what flattened the whole sphere toward grey. */
+    radial-gradient(circle at 30% 64%, var(--orb-a) 0%, transparent 62%),
+    radial-gradient(circle at 74% 32%, var(--orb-b) 0%, transparent 64%),
+    radial-gradient(circle at 58% 80%, var(--orb-c) 0%, transparent 60%),
+    /* The base is nearly white with a trace of the brand hue, so any gap between the stops
+       reads as light rather than as a hole. */
+    radial-gradient(circle at 50% 42%, #ffffff 0%, var(--orb-base) 100%);
+  animation: orb-drift 18s linear infinite;
+  transition: transform 90ms linear;
+}
+
+/* A soft top-left highlight, which is what stops it reading as a flat disc. */
+.voice-orb__sheen {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 28%, rgb(255 255 255 / 0.55) 0%, transparent 45%);
+  pointer-events: none;
+}
+
+/* Connecting: no audio yet, so say so with motion rather than leaving it inert. */
+.voice-orb[data-speaker="user"] .voice-orb__halo { filter: blur(22px); }
+.voice-orb[data-state="connecting"] .voice-orb__halo { animation: orb-float 1.6s ease-in-out infinite; }
+.voice-orb[data-state="error"] .voice-orb__sphere { filter: grayscale(0.7); }

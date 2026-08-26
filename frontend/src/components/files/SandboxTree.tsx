@@ -27,6 +27,7 @@ import {
   IconFolderOpen,
   IconLoader2,
   IconMarkdown,
+  IconFileTypePdf,
   IconPhoto,
 } from "@tabler/icons-react";
 import { baseName, type SandboxNode } from "@/components/files/fileTreeData";
@@ -44,6 +45,9 @@ function iconFor(node: SandboxNode, expanded: boolean) {
   if (node.isDir) return expanded ? IconFolderOpen : IconFolder;
   if (node.kind === "binary") return IconPhoto;
   const ext = node.name.includes(".") ? node.name.split(".").pop()!.toLowerCase() : "";
+  // "media" is a binary the browser CAN render, so it stays undimmed (see `dim` below)
+  // and gets a real icon rather than the generic one.
+  if (node.kind === "media") return ext === "pdf" ? IconFileTypePdf : IconPhoto;
   if (ext === "md" || ext === "mdx" || ext === "markdown") return IconMarkdown;
   if (ext === "csv" || ext === "tsv") return IconFileTypeCsv;
   if (CODE_EXT.has(ext)) return IconFileCode;
