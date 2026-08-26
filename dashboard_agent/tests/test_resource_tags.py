@@ -176,6 +176,58 @@ def test_everything_resolvable_is_tagged_and_the_rest_is_reported(monkeypatch):
     assert all(p["tag_value_id"] == VALUE_ID for p in posted)
 
 
+def test_a_project_that_does_not_exist_yet_is_created_pre_tagged(monkeypatch):
+    """The normal case on a fresh assistant, not an edge one.
+
+    A tracing project does not exist until something traces into it, and setup runs before
+    the first turn - so without this the project stays untagged until someone re-runs a
+    backfill, which is exactly what happened to the first assistant created after tagging
+    shipped.
+    """
+    created: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        path = request.url.path
+        if path.endswith("/tags"):
+            return httpx.Response(200, json=_tags(["assistant-acme-co"]))
+        if path == "/api/v1/sessions" and request.method == "GET":
+            return httpx.Response(200, json=[])  # no project yet
+        if path == "/api/v1/sessions" and request.method == "POST":
+            created.append(json.loads(request.content))
+            return httpx.Response(200, json={"id": "proj-new"})
+        return httpx.Response(404)
+
+    monkeypatch.setattr(rt, "_open", lambda *a, **k: _client(handler))
+    out = rt.tag_assistant_resources(
+        api_key="k", workspace="ws", customer="Acme Co", project="Acme Co"
+    )
+    assert out["tagged"] == ["project:Acme Co (created)"]
+    assert out["missing"] == [] and out["error"] == ""
+    # Pre-tagged in the SAME call, so it is never briefly untagged (matters under ABAC).
+    assert created == [{"name": "Acme Co", "tag_value_ids": [VALUE_ID]}]
+
+
+def test_a_dataset_that_does_not_exist_is_reported_not_created(monkeypatch):
+    """Only projects are created.
+
+    A dataset absent because the failure mode planted none must not be conjured into
+    existence by a tagging pass.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/tags"):
+            return httpx.Response(200, json=_tags(["assistant-acme-co"]))
+        return httpx.Response(200, json=[])
+
+    monkeypatch.setattr(rt, "_open", lambda *a, **k: _client(handler))
+    out = rt.tag_assistant_resources(
+        api_key="k", workspace="ws", customer="Acme Co", dataset="acme-evals"
+    )
+    assert out["tagged"] == [] and out["missing"] == ["dataset:acme-evals"]
+
+
 def test_an_already_tagged_resource_counts_as_tagged(monkeypatch):
     """409 is idempotency, not failure: re-running setup must not report a fake problem."""
 

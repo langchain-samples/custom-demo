@@ -143,9 +143,23 @@ def _apply(
         rid = _resolve(client, kind, name)
         if rid:
             targets.append((kind, name, rid))
-        else:
-            # Not an error: a tracing project with no traces yet does not exist to tag.
-            receipt["missing"].append(f"{kind}:{name}")
+            continue
+        if kind == "project":
+            # A tracing project does not exist until something traces INTO it, and setup
+            # runs before the assistant's first turn - so on a fresh assistant this is the
+            # normal case, not an edge one, and the project would stay untagged until
+            # someone happened to re-run a backfill. Create it here, pre-tagged in the
+            # same call (`tag_value_ids` is applied in the same transaction, so it is
+            # never briefly untagged). Harmless if traces arrive later: this is the same
+            # project they would have created.
+            made = client.post(f"{API}/sessions", json={"name": name, "tag_value_ids": [value_id]})
+            if made.status_code < 300:
+                receipt["tagged"].append(f"{kind}:{name} (created)")
+            else:
+                receipt["missing"].append(f"{kind}:{name} ({made.status_code})")
+            continue
+        # Not an error: a dataset a failure mode never planted does not exist to tag.
+        receipt["missing"].append(f"{kind}:{name}")
     if evaluator_id:
         targets.append(("evaluator", evaluator_id, evaluator_id))
 
