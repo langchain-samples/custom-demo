@@ -703,6 +703,23 @@ _TEXT_NAMES = frozenset(
 
 _MARKDOWN_EXTS = frozenset({"md", "markdown", "mdx"})
 
+# Binaries the BROWSER can render natively, so they are worth shipping as bytes rather
+# than refusing. Everything else stays "binary" and gets the placeholder.
+_MEDIA_MIME = {
+    "pdf": "application/pdf",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
+}
+
+# Ceiling on a media file, in BYTES of the original. The in-VM read caps stdout at
+# ~500 KiB and base64 inflates by 4/3, so this is what fits in one round trip with room
+# to spare. A generated demo PDF is a few KB; this is only a guard against someone
+# uploading a scanned manual.
+_MAX_MEDIA_BYTES = 300 * 1024
+
 # deepagents' in-VM read script emits this literal for a zero-byte file; it would
 # render as body text in the viewer.
 _EMPTY_FILE_REMINDER = "System reminder: File exists but has empty contents"
@@ -746,7 +763,7 @@ def _safe_path(raw: str, root: str) -> str | None:
 
 
 def _file_kind(name: str) -> str:
-    """Classify a file name as previewable ("text") or not ("binary")."""
+    """Classify a file name: "text", "media" (browser-renderable bytes) or "binary"."""
     low = name.lower()
     # Dotenv files are excluded deliberately: the deployment's only auth is a shared
     # token that ships in the SPA bundle, so a browser-reachable `cat` of any secrets
@@ -755,7 +772,9 @@ def _file_kind(name: str) -> str:
         return "binary"
     ext = posixpath.splitext(low)[1].lstrip(".")
     if ext:
-        return "text" if ext in _TEXT_EXTS else "binary"
+        if ext in _TEXT_EXTS:
+            return "text"
+        return "media" if ext in _MEDIA_MIME else "binary"
     return "text" if low in _TEXT_NAMES else "binary"
 
 
@@ -856,6 +875,31 @@ async def _vm_read(backend, path: str, offset: int, limit: int):
     """One `aread` against a time-bounded backend, holding an inflight slot."""
     async with _SANDBOX_SLOTS:
         return await _bounded(backend).aread(path, offset, limit)
+
+
+async def _vm_media(backend, path: str) -> tuple[str, str]:
+    """Base64 of a small binary file, as `(payload, error)` - exactly one is non-empty.
+
+    `aread` is line-oriented and would mangle bytes, so this shells out. The size check
+    runs IN THE VM and before the encode, so an oversized file costs one cheap round trip
+    instead of half a megabyte of base64 that the caller then throws away.
+
+    Single-quoted path: it comes from `_safe_path`, so it is already confined to the
+    sandbox root, and quoting keeps a space or bracket in a filename from splitting.
+    """
+    quoted = "'" + path.replace("'", "'\\''") + "'"
+    script = (
+        f"sz=$(stat -c %s {quoted} 2>/dev/null || echo -1)\n"
+        f'if [ "$sz" -lt 0 ]; then echo "ERR:missing";\n'
+        f'elif [ "$sz" -gt {_MAX_MEDIA_BYTES} ]; then echo "ERR:too_large:$sz";\n'
+        f"else base64 -w0 {quoted}; fi"
+    )
+    async with _SANDBOX_SLOTS:
+        out = await _bounded(backend).aexecute(script)
+    text = (getattr(out, "result", None) or getattr(out, "stdout", None) or str(out)).strip()
+    if text.startswith("ERR:"):
+        return "", text[4:]
+    return text, ""
 
 
 async def sandbox_files(request):
@@ -977,7 +1021,41 @@ async def sandbox_file(request):
             "limit": limit,
             "sandbox_id": _sandbox_id(backend),
         }
-        if _file_kind(name) != "text":
+        kind = _file_kind(name)
+        if kind == "media":
+            # Shipped as bytes rather than refused: a browser renders a PDF or an image
+            # natively, and a claims demo whose denial letter cannot be opened is missing
+            # the document the whole scenario is about.
+            ext = posixpath.splitext(name.lower())[1].lstrip(".")
+            try:
+                payload, problem = await asyncio.wait_for(
+                    _vm_media(backend, path), timeout=SANDBOX_TIMEOUT
+                )
+            except TimeoutError:
+                return _err(504, "timeout", "The sandbox did not respond.")
+            except Exception:  # noqa: BLE001 - a backend without `aexecute`, or a VM that
+                # refused the command. A preview pane that 500s is worse than one that says
+                # it cannot show the file, and every other unshowable case here is a 200.
+                payload, problem = "", "unreadable"
+            if problem.startswith("too_large"):
+                return _placeholder(
+                    base, "too_large", f"This {ext.upper()} is too large to preview."
+                )
+            if problem or not payload:
+                return _placeholder(base, "binary", f"Could not read this {ext.upper()}.")
+            return JSONResponse(
+                {
+                    **base,
+                    "kind": "media",
+                    "language": ext,
+                    "encoding": "base64",
+                    "mime": _MEDIA_MIME[ext],
+                    "content": payload,
+                    "truncated": False,
+                    "next_offset": None,
+                }
+            )
+        if kind != "text":
             label = posixpath.splitext(name)[1] or name
             return _placeholder(base, "binary", f"Binary file ({label}) — preview not supported.")
 

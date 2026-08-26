@@ -699,7 +699,8 @@ export async function listAgents(workspace?: string): Promise<string[]> {
  * allowlist, not from the bytes — so the UI can pick an icon and grey out
  * non-previewable files before the user clicks one.
  */
-export type SandboxKind = "dir" | "text" | "binary";
+/** "media" is a binary the BROWSER can render (PDF, image) - shipped as base64. */
+export type SandboxKind = "dir" | "text" | "binary" | "media";
 
 /**
  * Which sandbox VM to browse. Both fields come from the ACTIVE ASSISTANT'S
@@ -751,6 +752,8 @@ export interface SandboxFile {
   encoding: string | null;
   /** null when the file is not previewable — see `reason` / `message`. */
   content: string | null;
+  /** Content type, set only for `kind: "media"` (its `content` is base64). */
+  mime?: string;
   offset: number;
   limit: number;
   /**
