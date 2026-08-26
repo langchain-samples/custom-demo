@@ -79,7 +79,10 @@ export function VoiceStage({
         onClick={onExit}
         title="End the conversation and go back to the chat view"
         aria-label="End the conversation and go back to the chat view"
-        className="absolute top-4 right-4 grid size-9 place-items-center rounded-full border border-border bg-panel text-muted-foreground transition-colors hover:text-foreground"
+        // Primary, not a muted outline: this ends the conversation, which is the one
+        // consequential action on this screen, and it should not read as a stray chrome
+        // button next to an orb that fills the view.
+        className="absolute top-4 right-4 grid size-9 place-items-center rounded-full bg-[var(--brand-primary)] text-[var(--brand-primary-fg)] transition-opacity hover:opacity-85"
       >
         <IconX className="size-4" />
       </button>

@@ -258,7 +258,7 @@ export interface SetupInput {
    * the use case. Lands in the assistant's metadata rather than its runtime context,
    * because the agent knows nothing about voice (see lib/voice.ts).
    */
-  voice?: { enabled: boolean };
+  voice?: { voice_name?: string };
 }
 
 /** Prepared payload the assistant_setup graph returns. */

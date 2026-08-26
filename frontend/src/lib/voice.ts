@@ -189,8 +189,11 @@ for who or what you are.
   user talk. Do NOT go silent waiting for it.
 - The findings arrive later as a follow-up result. Weave them in conversationally and
   reconnect them to what was asked.
-- The figures are ON SCREEN in the dashboard. Summarise what they mean, do not recite them:
-  say "it's on the dashboard now" instead.
+- WHEN the result lists dashboard items, the figures are on screen: summarise what they
+  mean rather than reciting them, and you may say so ("it's on the dashboard now").
+- When the result lists NO dashboard items, nothing was drawn. Do not mention the dashboard
+  or say anything is shown - the agent only builds one when the question calls for a chart,
+  and most questions do not. Just answer.
 - If a result says approval is needed, read out the options and, once the user picks one,
   call \`${RESUME_TOOL}\` with their choice.`;
 }
@@ -493,7 +496,12 @@ export function systemTurnMessage(text: string): object {
 
 /** The finished answer, phrased so the model reports rather than re-answers. */
 export function resultMessage(answer: string, onScreen: string[]): object {
-  const screen = onScreen.length ? ` On the dashboard: ${onScreen.join("; ")}.` : "";
+  // The empty case is stated OUT LOUD rather than left as an absence. Saying nothing let
+  // the model fall back on the general instruction and announce a dashboard that was never
+  // drawn - it cannot see the screen, so silence here reads as "as usual", not as "none".
+  const screen = onScreen.length
+    ? ` On the dashboard: ${onScreen.join("; ")}.`
+    : " Nothing was added to the dashboard for this one, so do not refer to it.";
   return systemTurnMessage(
     `result for the question you are working on: ${answer}${screen} ` +
       "Report this back conversationally in a sentence or two.",

@@ -121,17 +121,15 @@ export default function App() {
   const logo = meta?.logo || DEFAULT_LOGO;
   const presets = meta?.actions ?? [];
   /**
-   * Voice mode is per-assistant and OFF unless the builder turned it on. It lives in
-   * metadata rather than the runtime context because the agent knows nothing about it:
-   * the whole feature is in the browser (see lib/voice.ts).
+   * The immersive orb view, which REPLACES the chat rail while a conversation is live.
+   *
+   * Default OFF, and every assistant can talk. Voice used to be a per-assistant switch
+   * that also chose the landing screen, which made one setting do two unrelated jobs and
+   * left most assistants unable to talk at all for no reason anyone could name. Now
+   * every assistant opens the same typing-first screen with a mic in the composer, and
+   * the mic is what opens this.
    */
-  const voiceEnabled = !!(meta?.voice as { enabled?: boolean } | undefined)?.enabled;
-  /**
-   * The immersive orb view, which REPLACES the chat rail for a voice assistant. Default
-   * on: for an assistant whose whole point is talking, a chat log is the wrong first
-   * screen. The X drops back to chat without hanging up.
-   */
-  const [voiceStage, setVoiceStage] = useState(true);
+  const [voiceStage, setVoiceStage] = useState(false);
   /**
    * The identity the voice shell speaks with. Memoised because it is a dependency of the
    * session's `start`, and a fresh object every render would rebuild that callback.
@@ -158,7 +156,7 @@ export default function App() {
     voiceName: (meta?.voice as { voice_name?: string } | undefined)?.voice_name,
     persona: voicePersona,
   });
-  const showStage = voiceEnabled && voiceStage;
+  const showStage = voiceStage;
   /**
    * `stop` through a ref so the reset below can end a session without depending on the
    * session view - listing `voice` there would re-run the effect on every state change and
@@ -166,11 +164,10 @@ export default function App() {
    */
   const voiceStopRef = useRef(voice.stop);
   voiceStopRef.current = voice.stop;
-  // Reset per assistant. The stage flag is otherwise sticky for the life of the tab: exit
-  // the orb once and every voice assistant you pick afterwards opens in the chat view
-  // instead, which looks like the feature failing to turn on.
+  // Back to the typing-first screen on every assistant switch, so picking an assistant
+  // never lands you in a voice view you did not ask for.
   useEffect(() => {
-    setVoiceStage(true);
+    setVoiceStage(false);
     /**
      * And END any live session, because a session belongs to the assistant it was started
      * for. Its identity and voice are baked into the Live API setup frame, which is sent
@@ -376,9 +373,9 @@ export default function App() {
           <ChatPanel
             handleRef={chatRef}
             voiceControl={
-              voiceEnabled && !showStage ? (
+              showStage ? undefined : (
                 <VoiceButton voice={voice} onOpen={() => setVoiceStage(true)} />
-              ) : undefined
+              )
             }
             assistantId={assistantId}
             /* Same sandbox key the Files dialog and the agent itself use, so a file

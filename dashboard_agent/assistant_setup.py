@@ -74,11 +74,6 @@ def safe_curated(name: str) -> str:
     return n if n in CURATED_FONTS else DEFAULT_CURATED
 
 
-def _wants_voice(value: object) -> bool:
-    """Did the builder turn voice mode on? Anything unexpected reads as off."""
-    return bool(value.get("enabled")) if isinstance(value, dict) else False
-
-
 def slugify(name: str) -> str:
     """Lowercase, hyphenate to a URL-safe slug (falls back to "customer")."""
     return re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-") or "customer"
@@ -1165,14 +1160,14 @@ def prepare_assistant(payload: dict) -> dict:
         "font_body_fallback": analysis.get("body_fallback") or DEFAULT_CURATED,
         "font_source": "google",
         "failure_mode": failure_mode,
-        # Voice mode, off unless the builder asked for it. In METADATA and not in
-        # `context` on purpose: the agent knows nothing about voice (the whole feature
-        # is in the browser - see frontend/src/lib/voice.ts), and only the SPA reads it.
-        # Never inferred from the use case either, like the `explicit_only` tools: a
-        # microphone is the presenter's choice, not the setup LLM's. Read defensively
-        # (a non-dict `voice` must not raise): setup runs on assistant provisioning, and
-        # nothing about the eval/voice trimmings may fail a customer's assistant.
-        "voice": {"enabled": _wants_voice(payload.get("voice"))},
+        # Voice: only the prebuilt voice name lives here now, set later in Settings.
+        # There is no `enabled` flag - every assistant can be spoken to, and the mic sits
+        # in the composer of all of them. It was a per-assistant switch that also chose
+        # the landing screen, i.e. one setting doing two unrelated jobs, which left most
+        # assistants mute for no reason anyone could name. Metadata rather than context
+        # because the agent knows nothing about voice: the whole feature is in the browser
+        # (see frontend/src/lib/voice.ts).
+        "voice": {},
         # Manifest of LangSmith artifacts this assistant created, so deleting the
         # assistant can cascade-delete them (see webapp.py /cleanup).
         "ls_artifacts": {

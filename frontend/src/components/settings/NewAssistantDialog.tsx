@@ -78,8 +78,6 @@ export interface NewAssistantValues {
   promptSource: string;
   /** Backfill the trace project with synthetic traffic (off unless asked for). */
   demoTraffic: boolean;
-  /** Show the mic button on this assistant (off unless asked for). */
-  voice: boolean;
 }
 
 interface Props {
@@ -145,7 +143,6 @@ export function NewAssistantDialog({
   const [failureMode, setFailureMode] = useState("hallucination");
   const [promptSource, setPromptSource] = useState("context_hub");
   const [demoTraffic, setDemoTraffic] = useState(false);
-  const [voice, setVoice] = useState(false);
 
   const secondsLeft = useSetupCountdown(creating);
 
@@ -254,25 +251,6 @@ export function NewAssistantDialog({
             </span>
           </label>
 
-          <label className="flex cursor-pointer items-center gap-2">
-            <Switch checked={voice} onCheckedChange={setVoice} />
-            <span className="flex items-center gap-1.5 text-[12.5px] font-medium text-foreground">
-              Voice mode
-              {/* Flagged, not hidden: it works, but it rides on a Live API that Google
-                  labels preview (no GA model, two weeks' deprecation notice), and the
-                  microphone path has had the fewest miles of anything here. */}
-              <span className="rounded-full border border-border px-1.5 py-px text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
-                Experimental
-              </span>
-              <Hint>
-                Adds a mic button so you can talk to this assistant. A
-                speech-to-speech model runs the conversation and asks the agent
-                your question as a tool call, so the dashboard fills in exactly
-                as it does when you type, and the whole thing lands in one
-                LangSmith trace.
-              </Hint>
-            </span>
-          </label>
         </div>
 
         <DialogFooter>
@@ -290,7 +268,6 @@ export function NewAssistantDialog({
                 failureMode,
                 promptSource,
                 demoTraffic,
-                voice,
               })
             }
           >

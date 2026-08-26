@@ -428,46 +428,19 @@ def test_no_push_means_no_backfill(rec, monkeypatch, traffic):
     assert traffic == []
 
 
-# --- voice mode (a builder flag, not an inference) ---
+# --- voice mode (universal, no flag) ---
 
 
-def test_voice_is_off_unless_the_builder_asks_for_it(rec, monkeypatch):
-    """A microphone is the presenter's choice. Nothing may turn it on by itself.
+def test_every_assistant_can_be_spoken_to(rec, monkeypatch):
+    """No `enabled` flag: the mic is in every assistant's composer.
+
+    It used to be a per-assistant switch that ALSO chose the landing screen - one setting
+    doing two unrelated jobs - which left most assistants mute for no reason anyone could
+    name. `voice` stays as a dict because the voice NAME lives there, set in Settings.
 
     In metadata rather than context, because the agent knows nothing about voice: the
-    whole feature is in the browser (frontend/src/lib/voice.ts). Absent-means-off also
-    keeps every assistant created before this unchanged.
+    whole feature is in the browser (frontend/src/lib/voice.ts).
     """
     out = _prep(monkeypatch, _analysis())
-    assert out["metadata"]["voice"] == {"enabled": False}
+    assert out["metadata"]["voice"] == {}
     assert "voice" not in out["context"]
-
-
-def test_voice_is_on_when_the_builder_asks(rec, monkeypatch):
-    out = _prep(monkeypatch, _analysis(), voice={"enabled": True})
-    assert out["metadata"]["voice"] == {"enabled": True}
-
-
-def test_a_malformed_voice_payload_is_off_rather_than_an_error(rec, monkeypatch):
-    """Setup must not fail over the voice flag: this runs on assistant provisioning."""
-    for bad in (None, "yes", {}, {"enabled": None}):
-        out = _prep(monkeypatch, _analysis(), voice=bad)
-        assert out["metadata"]["voice"] == {"enabled": False}, bad
-
-
-def test_the_setup_graph_forwards_the_voice_flag(monkeypatch):
-    """The graph drops any input key it does not list, silently.
-
-    So a switch wired end to end in the SPA can still arrive as "off" with nothing
-    visibly broken - which is exactly what happened to this one on the first pass.
-    """
-    from dashboard_agent import setup_graph
-
-    seen: dict = {}
-    monkeypatch.setattr(
-        setup_graph, "prepare_assistant", lambda payload: seen.update(payload) or {}
-    )
-    setup_graph._run(
-        {"workspace": "ws1", "customer": "Acme Co", "voice": {"enabled": True}}  # type: ignore[arg-type]
-    )
-    assert seen["voice"] == {"enabled": True}
