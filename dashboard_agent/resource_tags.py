@@ -130,6 +130,38 @@ def _resolve(client: httpx.Client, kind: str, name: str) -> str:
     return ""
 
 
+def _apply(
+    client: httpx.Client,
+    receipt: dict,
+    value_id: str,
+    wanted: list[tuple[str, str]],
+    evaluator_id: str,
+) -> dict:
+    """Resolve each name and attach the tag. Fills and returns `receipt`."""
+    targets: list[tuple[str, str, str]] = []
+    for kind, name in wanted:
+        rid = _resolve(client, kind, name)
+        if rid:
+            targets.append((kind, name, rid))
+        else:
+            # Not an error: a tracing project with no traces yet does not exist to tag.
+            receipt["missing"].append(f"{kind}:{name}")
+    if evaluator_id:
+        targets.append(("evaluator", evaluator_id, evaluator_id))
+
+    for kind, name, rid in targets:
+        r = client.post(
+            f"{API}/workspaces/current/taggings",
+            json={"tag_value_id": value_id, "resource_type": kind, "resource_id": rid},
+        )
+        # 409 means it is already tagged, which is success for an idempotent call.
+        if r.status_code < 300 or r.status_code == 409:
+            receipt["tagged"].append(f"{kind}:{name}")
+        else:
+            receipt["missing"].append(f"{kind}:{name} ({r.status_code})")
+    return receipt
+
+
 def tag_assistant_resources(
     *,
     api_key: str,
@@ -172,30 +204,23 @@ def tag_assistant_resources(
     try:
         with _open(api_key, workspace) as client:
             value_id, err = _value_id(client, app)
+            # The two key types want OPPOSITE header shapes, and picking wrong looks
+            # identical to having no permission. A cross-workspace SERVICE key needs
+            # `X-Tenant-Id` to resolve a workspace at all (403 without it); a PERSONAL
+            # access token is already bound to one and is refused when sent someone
+            # else's (403 with it). So a 403 on the very first call earns one retry with
+            # the header dropped, which covers a local run holding only a PAT.
+            if err and err.endswith("(403)") and workspace:
+                client.close()
+                with _open(api_key, None) as bare:
+                    value_id, err = _value_id(bare, app)
+                    if not err and value_id:
+                        return _apply(bare, receipt, value_id, wanted, evaluator_id)
             if err or not value_id:
                 receipt["error"] = err or "no tag value"
                 return receipt
 
-            targets: list[tuple[str, str, str]] = []
-            for kind, name in wanted:
-                rid = _resolve(client, kind, name)
-                if rid:
-                    targets.append((kind, name, rid))
-                else:
-                    receipt["missing"].append(f"{kind}:{name}")
-            if evaluator_id:
-                targets.append(("evaluator", evaluator_id, evaluator_id))
-
-            for kind, name, rid in targets:
-                r = client.post(
-                    f"{API}/workspaces/current/taggings",
-                    json={"tag_value_id": value_id, "resource_type": kind, "resource_id": rid},
-                )
-                # 409 means it is already tagged, which is success for an idempotent call.
-                if r.status_code < 300 or r.status_code == 409:
-                    receipt["tagged"].append(f"{kind}:{name}")
-                else:
-                    receipt["missing"].append(f"{kind}:{name} ({r.status_code})")
+            return _apply(client, receipt, value_id, wanted, evaluator_id)
     except Exception as e:  # noqa: BLE001 - provisioning must never fail on a tag
         receipt["error"] = str(e)[:200]
     return receipt
