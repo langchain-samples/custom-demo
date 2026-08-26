@@ -1086,6 +1086,43 @@ def prepare_assistant(payload: dict) -> dict:
 
             eval_judge_prompt = judge_prompt_name(eval_dataset)
 
+    # Tag everything this assistant just created with its own Application, so a workspace
+    # holding two dozen demos can be filtered down to one. Last, because it needs the names
+    # the steps above settled on. Threaded, because it is half a dozen HTTP round trips of
+    # pure bookkeeping and no one should wait on it: the receipt is reported by the setup
+    # graph rather than returned here.
+    #
+    # Best-effort by contract (see resource_tags): a workspace on a plan without resource
+    # tags, or a key without `workspaces:manage` to mint the value, leaves the assistant
+    # untagged and nothing else changes.
+    if push:
+        import threading
+
+        from .resource_tags import tag_assistant_resources
+
+        threading.Thread(
+            target=lambda: print(
+                "[setup] application tag: "
+                + str(
+                    tag_assistant_resources(
+                        api_key=os.getenv("LS_CROSS_WORKSPACE_KEY")
+                        or os.getenv("LANGSMITH_API_KEY")
+                        or "",
+                        workspace=workspace,
+                        customer=customer,
+                        project=context.get("ls_project", ""),
+                        dataset=eval_dataset,
+                        prompts=tuple(
+                            n for n in (context.get("prompt_name", ""), eval_judge_prompt) if n
+                        ),
+                        agents=tuple(n for n in (context.get("agent_repo", ""), skills_repo) if n),
+                        evaluator_id=eval_evaluator_id,
+                    )
+                )
+            ),
+            daemon=True,
+        ).start()
+
     # A day of synthetic traffic in the assistant's trace project, so the LangSmith
     # Monitoring and Insights tabs have something to show the moment the demo starts
     # (otherwise every chart is empty and Insights has nothing to cluster). Threaded
