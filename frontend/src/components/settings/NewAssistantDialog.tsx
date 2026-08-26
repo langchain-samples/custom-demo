@@ -93,18 +93,18 @@ const IGNORE_AUTOFILL = {
   "data-lpignore": "true",
 } as const;
 
-/** Setup's typical wall clock. Not a deadline - see useSetupCountdown. */
-const SETUP_SECONDS = 60;
+/** Setup's typical wall clock, measured rather than guessed. Not a deadline. */
+const SETUP_SECONDS = 40;
 
 /**
- * Seconds remaining of the expected setup time, to one decimal, or null once it has run
- * out. A minute of a blank progressless button is long enough that people assume it has
- * hung and click away, and setup is genuinely a minute of real work.
+ * Seconds remaining of the expected setup time, to one decimal, or null when not running.
+ * Forty seconds of a blank progressless button is long enough that people assume it has
+ * hung and click away.
  *
- * It counts down an ESTIMATE, not a deadline: nothing here can know when the LLM will
- * finish. So it stops at zero and drops back to a plain "Setting up…" rather than showing
- * a negative number or freezing at 0.0 - both of which read as broken, which is the exact
- * impression the countdown exists to prevent.
+ * It counts an ESTIMATE, not a deadline, and it KEEPS GOING past zero into negatives.
+ * That looks wrong and is not: nothing here can know when the LLM will finish, so a run
+ * showing "-30.0" is reporting that it took seventy seconds. Freezing at 0.0 would throw
+ * away the only number that says a run was slow, which is the one worth hearing about.
  *
  * 100ms so the tenths actually move. Interval rather than an animation frame: this is one
  * short text node, and rAF would repaint it 60 times a second to show the same digit.
@@ -120,10 +120,10 @@ function useSetupCountdown(running: boolean): number | null {
     }
     startedAt.current = Date.now();
     setLeft(SETUP_SECONDS);
-    const id = setInterval(() => {
-      const remaining = SETUP_SECONDS - (Date.now() - startedAt.current) / 1000;
-      setLeft(remaining > 0 ? remaining : null);
-    }, 100);
+    const id = setInterval(
+      () => setLeft(SETUP_SECONDS - (Date.now() - startedAt.current) / 1000),
+      100,
+    );
     return () => clearInterval(id);
   }, [running]);
 
