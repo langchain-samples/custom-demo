@@ -706,6 +706,13 @@ export class VoiceSession {
   private resumeHandle = "";
   private pendingApproval = "";
   private closed = false;
+  /**
+   * Whether the server has answered `setupComplete`. The socket being OPEN is NOT enough:
+   * the protocol forbids sending anything between the setup frame and its acknowledgement,
+   * so mic audio gated on readyState alone was being pushed into a window where the server
+   * discards it. See sendMic.
+   */
+  private ready = false;
   /** Partial transcripts accumulate here; Live streams them a few words at a time. */
   private partial = { user: "", model: "" };
   private speakingTimer: ReturnType<typeof setTimeout> | null = null;
@@ -744,6 +751,7 @@ export class VoiceSession {
   /** Tear everything down. Safe to call twice. */
   stop(): void {
     this.closed = true;
+    this.ready = false;
     if (this.speakingTimer) clearTimeout(this.speakingTimer);
     this.hooks.onLevel(0, "model");
     this.hooks.onLevel(0, "user");
@@ -817,6 +825,7 @@ export class VoiceSession {
       this.token = minted.token;
       this.model = minted.model;
     }
+    this.ready = false;
     const ws = new WebSocket(liveUrl(this.token));
     this.ws = ws;
     ws.onopen = () => {
@@ -860,7 +869,13 @@ export class VoiceSession {
 
   /** Downsample one mic frame to 16k and ship it. */
   private sendMic(frame: Float32Array): void {
-    if (this.ws?.readyState !== WebSocket.OPEN || !this.ctx) return;
+    // `ready`, not just OPEN. The mic goes live in startAudio, BEFORE the socket exists,
+    // and the protocol allows nothing between the setup frame and `setupComplete` - so
+    // audio sent in that window is discarded by the server. Someone who taps the orb and
+    // says "hi" straight away lost the front of the word to it, leaving the model's
+    // end-of-speech detection to wait out its silence timer on a fragment. Which is
+    // exactly the "the first thing I say takes ages" symptom.
+    if (!this.ready || this.ws?.readyState !== WebSocket.OPEN || !this.ctx) return;
     const out = downsampleTo16k(frame, this.ctx.sampleRate);
     // The halo should react to the USER too, not just the model: half a conversation is
     // them talking, and a flat orb while you speak feels deaf.
@@ -880,7 +895,10 @@ export class VoiceSession {
       return;
     }
 
-    if ((frame as { setupComplete?: unknown }).setupComplete) this.hooks.onState("listening");
+    if ((frame as { setupComplete?: unknown }).setupComplete) {
+      this.ready = true;
+      this.hooks.onState("listening");
+    }
 
     // An in-band error, e.g. a malformed frame from us. Reported rather than swallowed:
     // the session often survives it, so nothing else would ever mention it.
