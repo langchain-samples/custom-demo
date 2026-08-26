@@ -180,6 +180,11 @@ def _sandbox_note(runtime) -> str:
         "document you do not have, say exactly that and ask them to upload it there. NEVER ask "
         "them to paste a file's contents, email it, or attach it to the chat — the Files panel is "
         "the only channel, and offering another one strands the conversation.\n"
+        "STILL STARTING: if /workspace/data is EMPTY, or `execute` fails to connect, the VM is "
+        "almost certainly still booting - it is created when the assistant is and takes a couple "
+        "of minutes to finish. Say exactly that, and offer to try again in a moment. Do NOT "
+        "conclude the data is missing or misconfigured, do NOT tell the user the files are not "
+        "mounted, and do NOT ask them to upload what setup already planted.\n"
         "pandas, numpy, statsmodels, scikit-learn and pypdf are already installed, so you can "
         "parse an uploaded PDF with code rather than asking the user to transcribe it. You cannot "
         "see the pixels of an image file; identify it and work with the text or data you can "
@@ -627,11 +632,52 @@ def _sandbox_ready(client: Any, name: str) -> bool:
     lightweight status endpoint rather than `list_sandboxes`, since this runs on the
     hot path (once per idle gap, see `_SANDBOX_REVALIDATE_AFTER`).
     """
+    return _status_or_none(client, name) == "ready"
+
+
+# How long a turn will wait for a VM to finish booting before giving up on it. Setup
+# pre-warms at provisioning, but provisioning now finishes in ~40s and a boot plus the
+# pandas/numpy/statsmodels/scikit-learn install takes longer than that - so the first
+# question can genuinely arrive before the VM is usable. Waiting makes that turn slow;
+# not waiting made it look like the assistant had no data at all.
+_SANDBOX_WAIT_SECONDS = 25.0
+_SANDBOX_POLL_SECONDS = 1.5
+
+
+def _status_or_none(client: Any, name: str) -> str | None:
+    """The VM's status, or None when the service cannot tell us.
+
+    The two are NOT the same and conflating them is a regression waiting to happen: an SDK
+    without `get_sandbox_status`, or a call that errors, means "unknown", and treating
+    unknown as "not ready" would refuse a perfectly good VM after a pointless wait.
+    """
     try:
         status = client.get_sandbox_status(name)
     except Exception:  # noqa: BLE001 - gone, unreachable, or an SDK without the call
-        return False
-    return str(getattr(status, "status", "") or "").lower() == "ready"
+        return None
+    value = str(getattr(status, "status", "") or "").lower()
+    return value or None
+
+
+def _wait_ready(client: Any, name: str, seconds: float = _SANDBOX_WAIT_SECONDS) -> bool:
+    """Poll until the VM reports ready, or `seconds` elapse. True if it got there.
+
+    A booting VM is NOT "stopped", so `_acquire_raw` used to hand it straight back and the
+    first read against it failed - which the model then reported as its files not being
+    mounted.
+
+    An UNKNOWABLE status returns True immediately rather than waiting: that is the
+    behaviour before this existed, and blocking a turn for 25s on an SDK that simply has no
+    status endpoint would be a worse bug than the one being fixed.
+    """
+    deadline = time.monotonic() + seconds
+    while True:
+        status = _status_or_none(client, name)
+        if status is None or status == "ready":
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(_SANDBOX_POLL_SECONDS)
 
 
 def _acquire_raw(client: Any, name: str, *, create: bool) -> tuple[Any, bool] | None:
@@ -699,6 +745,11 @@ def _ensure_sandbox(key: str, *, create: bool = True, seed: list[dict] | None = 
         if got is None:
             return None
         raw, created = got
+        # Wait for it to actually be up. Before seeding, not after: `_seed_data` swallows
+        # its own failures, so seeding a VM that has not finished booting produced an
+        # empty /workspace/data and no error anywhere.
+        if not _wait_ready(client, name):
+            return None
         backend = LangSmithSandbox(raw)
         if created:
             _seed_data(backend, seed)

@@ -365,11 +365,14 @@ def test_fresh_cache_entry_is_trusted_without_asking_the_service(monkeypatch):
     calls: list[str] = []
     monkeypatch.setattr(client, "get_sandbox_status", lambda name: calls.append(name))
     first, _ = A._resolve_backends(_rt(customer="Eval Co"))
+    # Creating a VM costs ONE status check, because a freshly created VM is not up yet and
+    # seeding it before it is produces an empty /workspace/data (see _wait_ready).
+    after_create = list(calls)
     again, _ = A._resolve_backends(_rt(customer="Eval Co"))
     # An active conversation resolves backends on every model and tool call; none of
     # those may turn into a status round trip.
     assert again is first
-    assert calls == []
+    assert calls == after_create
 
 
 def test_stale_cache_entry_is_revalidated_and_kept_when_the_vm_lives(monkeypatch):

@@ -219,8 +219,12 @@ export function SandboxBrowser({ target, onReload }: SandboxBrowserProps) {
     return (
       <PaneState
         icon={<IconFolderOff size={30} />}
-        title="No sandbox available for this assistant"
-        detail={`${boot.message} - a sandbox appears once the agent has run a turn that uses one, and browsing never starts one.`}
+        title="No sandbox to browse yet"
+        // Not "no sandbox available", which read as a broken assistant. The usual cause is
+        // a VM still booting: it is created with the assistant and takes a couple of
+        // minutes, and browsing deliberately never starts one (a UI click must not
+        // provision infrastructure).
+        detail={`${boot.message} - it is probably still starting, which takes a couple of minutes after an assistant is created. Browsing never starts one, so ask the agent something or try again shortly.`}
         action={
           <Button variant="secondary" size="sm" className="mt-1" onClick={onReload}>
             <IconRefresh size={14} /> Try again
