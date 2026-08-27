@@ -49,6 +49,26 @@ const LIVE_PATH =
  */
 export const DEFAULT_VOICE = "Aoede";
 
+/**
+ * Voice-activity detection, tuned rather than left at Google's defaults.
+ *
+ * `silenceDurationMs` is how long the server waits after you stop making noise before it
+ * decides your turn is over and starts generating — usually the largest single slice of the
+ * gap between finishing a question and hearing anything back, and the default is
+ * conservative. Shorter feels snappier; too short and it cuts in during a pause mid-sentence.
+ *
+ * Values match langchain-samples/deepagents-deep-dive's voice notebook, which tuned them for
+ * the same model against the same complaint.
+ */
+const VAD = {
+  /** End-of-speech wait. The latency knob. */
+  silenceDurationMs: 400,
+  /** How much speech is needed before a turn counts as started. Guards against a cough. */
+  prefixPaddingMs: 120,
+  startOfSpeechSensitivity: "START_SENSITIVITY_HIGH",
+  endOfSpeechSensitivity: "END_SENSITIVITY_HIGH",
+} as const;
+
 /** Live API audio rates. Both fixed by the API: 16k in, 24k out. */
 export const MIC_RATE = 16000;
 export const PLAYBACK_RATE = 24000;
@@ -393,6 +413,11 @@ export function setupMessage(
       },
       // The ONLY text this session produces. A native-audio model answers in audio, so
       // these transcripts are what the chat panel renders and what the trace records.
+      // On `setup`, NOT inside `generationConfig` — the opposite of `speechConfig`, which is
+      // rejected there with `1007 Unknown name "speechConfig" at 'setup'`. The Live setup
+      // frame validates strictly and a misplaced key closes the socket with no error frame,
+      // so this placement is asserted in voice_test.js.
+      realtimeInputConfig: { automaticActivityDetection: { ...VAD } },
       inputAudioTranscription: {},
       outputAudioTranscription: {},
       systemInstruction: { parts: [{ text: voiceInstructions(persona) }] },

@@ -243,6 +243,22 @@ function ok(name, fn) {
     assert.equal(downsampleTo16k(same, 16000), same);
   });
 
+  ok("voice-activity detection is tuned, and sits on setup", () => {
+    // The mirror image of the speechConfig rule below: this one belongs on `setup` and
+    // NOT in generationConfig. The Live setup frame validates strictly and a misplaced key
+    // closes the socket with 1007 and no error frame, so placement is worth pinning.
+    const setup = setupMessage("gemini-3.1-flash-live-preview").setup;
+    const vad = setup.realtimeInputConfig.automaticActivityDetection;
+    assert.equal(setup.generationConfig.realtimeInputConfig, undefined);
+    // The latency knob: how long the server waits after you stop talking before it decides
+    // the turn is over. Google's default is conservative and it is the biggest slice of the
+    // gap between finishing a question and hearing anything back.
+    assert.equal(vad.silenceDurationMs, 400);
+    assert.equal(vad.prefixPaddingMs, 120);
+    assert.equal(vad.startOfSpeechSensitivity, "START_SENSITIVITY_HIGH");
+    assert.equal(vad.endOfSpeechSensitivity, "END_SENSITIVITY_HIGH");
+  });
+
   ok("the voice rides in generationConfig, not on setup", () => {
     // `speechConfig` on `setup` is rejected with `1007 Unknown name "speechConfig" at
     // 'setup'` - the socket just closes, which is indistinguishable from every other
