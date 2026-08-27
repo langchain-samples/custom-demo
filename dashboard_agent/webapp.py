@@ -36,6 +36,30 @@ from dashboard_agent.config import load_env, make_client
 from dashboard_agent.voice import mint_token, voice_configured
 
 
+def _delete_error(exc: Exception) -> str:
+    """A cleanup failure in words the reader can act on.
+
+    A raw httpx error is three lines of URL and a link to MDN's page on 403, which tells a
+    presenter nothing. A 403 here is not a bug and not transient: it is a role that lacks a
+    named permission, and naming it is the difference between "try again" and "ask an admin
+    for rules:delete". The server already says which one in the body.
+    """
+    text = str(exc)
+    if "403" in text or "Forbidden" in text:
+        detail = ""
+        response = getattr(exc, "response", None)
+        if response is not None:
+            try:
+                detail = str(response.json().get("detail") or "")
+            except Exception:  # noqa: BLE001 - a non-JSON body is no reason to lose the 403
+                detail = (response.text or "")[:200]
+        for token in ("permission ", "missing permission "):
+            if token in detail:
+                return f"not permitted: needs the {detail.split(token)[-1].strip()} permission"
+        return "not permitted (403) - the API key's role is missing a delete permission"
+    return f"{type(exc).__name__}: {exc}"
+
+
 async def feedback(request):
     """Record user feedback on a run (create, or update an existing feedback)."""
     try:
@@ -203,7 +227,7 @@ async def cleanup(request):
             fn()
             deleted.append(f"{kind}:{name}")
         except Exception as exc:
-            failed.append({"artifact": f"{kind}:{name}", "error": f"{type(exc).__name__}: {exc}"})
+            failed.append({"artifact": f"{kind}:{name}", "error": _delete_error(exc)})
 
     _try(
         "project", body.get("project"), lambda: client.delete_project(project_name=body["project"])
