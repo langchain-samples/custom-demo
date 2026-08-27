@@ -16,7 +16,7 @@
  *
  * Mounted only while visible, so each open starts from a fresh prefill.
  */
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { Workspace } from "@/lib/api";
 import { useSetupCountdown } from "./useSetupCountdown";
 import { Combobox } from "@/components/ui/combobox";
@@ -69,6 +69,13 @@ function Hint({ children }: { children: ReactNode }) {
     </TooltipProvider>
   );
 }
+
+/**
+ * Preselected when nothing is chosen yet. Matched by NAME, not id: a hardcoded uuid is
+ * right for exactly one organization and silently selects nothing everywhere else, whereas
+ * a workspace called "Demo" either exists or the field stays empty and asks.
+ */
+const DEFAULT_WORKSPACE_NAME = "demo";
 
 /** Remembers the demo-traffic choice between creates. */
 const DEMO_TRAFFIC_LS_KEY = "newAssistantDemoTraffic";
@@ -142,6 +149,18 @@ export function NewAssistantDialog({
   // same form with fewer fields.
   const needsWorkspace = !initialWorkspace;
   const [workspace, setWorkspace] = useState("");
+
+  // Default to "Demo" once the list arrives. An effect and not a useState initializer,
+  // because the workspaces load asynchronously and are usually still empty at mount - the
+  // initializer would run once against nothing and never fire again. Guarded on `workspace`
+  // so it only ever fills a BLANK field and cannot overwrite a deliberate choice.
+  useEffect(() => {
+    if (!needsWorkspace || workspace) return;
+    const fallback = workspaces.find(
+      (w) => (w.name || "").trim().toLowerCase() === DEFAULT_WORKSPACE_NAME,
+    );
+    if (fallback) setWorkspace(fallback.id);
+  }, [needsWorkspace, workspace, workspaces]);
   const [customer, setCustomer] = useState("");
   const [website, setWebsite] = useState("");
   const [useCase, setUseCase] = useState("");
