@@ -428,6 +428,40 @@ def test_no_push_means_no_backfill(rec, monkeypatch, traffic):
     assert traffic == []
 
 
+def test_the_graph_forwards_every_input_it_declares():
+    """`_INPUT_KEYS` must cover every non-output field of `SetupState`.
+
+    `_run` builds its payload from `_INPUT_KEYS` alone, so a field declared on the state but
+    missing from that tuple is dropped SILENTLY - the switch arrives as "off" and nothing
+    anywhere errors. That has now happened twice: to the voice flag on its first pass, and to
+    `demo_traffic`, which never once reached `prepare_assistant` from the create form.
+
+    Asserted as a set relationship rather than by listing keys, so the next field added to
+    the state is covered without anyone remembering to extend this test.
+    """
+    from dashboard_agent.setup_graph import _INPUT_KEYS, SetupState
+
+    outputs = {"result", "status", "error"}
+    declared = set(SetupState.__annotations__) - outputs
+    assert declared - set(_INPUT_KEYS) == set(), "declared on SetupState but never forwarded"
+
+
+def test_demo_traffic_reaches_prepare_assistant(monkeypatch):
+    """The specific key that was dropped. Opt-in, so both directions matter."""
+    from dashboard_agent import setup_graph
+
+    seen: dict = {}
+    monkeypatch.setattr(
+        setup_graph, "prepare_assistant", lambda payload: seen.update(payload) or {}
+    )
+    setup_graph._run({"workspace": "ws1", "customer": "Acme Co", "demo_traffic": True})
+    assert seen["demo_traffic"] is True
+
+    seen.clear()
+    setup_graph._run({"workspace": "ws1", "customer": "Acme Co"})
+    assert "demo_traffic" not in seen  # absent means off; prepare_assistant defaults it
+
+
 # --- voice mode (universal, no flag) ---
 
 

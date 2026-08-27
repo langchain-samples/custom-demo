@@ -32,6 +32,7 @@ _INPUT_KEYS = (
     "push_prompts",
     "enabled_tools",
     "prompt_source",
+    "demo_traffic",
 )
 
 
@@ -49,6 +50,8 @@ class SetupState(TypedDict, total=False):
     push_prompts: bool
     enabled_tools: list[str]
     prompt_source: Literal["prompt_hub", "context_hub"]
+    # Backfill the trace project with synthetic traffic. Opt-in; see prepare_assistant.
+    demo_traffic: bool
     result: dict
     status: str
     error: str
