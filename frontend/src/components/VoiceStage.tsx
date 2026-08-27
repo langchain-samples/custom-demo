@@ -79,10 +79,13 @@ export function VoiceStage({
         onClick={onExit}
         title="End the conversation and go back to the chat view"
         aria-label="End the conversation and go back to the chat view"
-        // Primary, not a muted outline: this ends the conversation, which is the one
-        // consequential action on this screen, and it should not read as a stray chrome
-        // button next to an orb that fills the view.
-        className="absolute top-4 right-4 grid size-9 place-items-center rounded-full bg-[var(--brand-primary)] text-[var(--brand-primary-fg)] transition-opacity hover:opacity-85"
+        // Hardcoded white, NOT the brand primary. This is the one consequential control on
+        // the screen, and painting it in the customer's colour meant its contrast changed
+        // per assistant - against a pale brand, or a light-themed orb, it disappeared. A
+        // fixed white disc with a near-black glyph reads on every brand and every theme,
+        // and the ring keeps it off a white background. The one place a brand colour is
+        // the wrong choice is the control you must always be able to find.
+        className="absolute top-4 right-4 grid size-9 place-items-center rounded-full bg-white text-neutral-900 ring-1 ring-black/10 shadow-sm transition-opacity hover:opacity-85"
       >
         <IconX className="size-4" />
       </button>

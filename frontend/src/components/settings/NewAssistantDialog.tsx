@@ -17,7 +17,9 @@
  * Mounted only while visible, so each open starts from a fresh prefill.
  */
 import { useState, type ReactNode } from "react";
+import type { Workspace } from "@/lib/api";
 import { useSetupCountdown } from "./useSetupCountdown";
+import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
@@ -68,7 +70,31 @@ function Hint({ children }: { children: ReactNode }) {
   );
 }
 
+/** Remembers the demo-traffic choice between creates. */
+const DEMO_TRAFFIC_LS_KEY = "newAssistantDemoTraffic";
+
+function readFlag(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === "1";
+  } catch {
+    return false; // private mode: the safe answer for a switch that costs money
+  }
+}
+
+function writeFlag(key: string, on: boolean): void {
+  try {
+    localStorage.setItem(key, on ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+}
+
 export interface NewAssistantValues {
+  /**
+   * Chosen IN this dialog, and only when the panel has no workspace yet - i.e. a first-run
+   * user, who has nothing selected behind the modal. Blank means "use the panel's".
+   */
+  workspace: string;
   owner: string;
   customer: string;
   website: string;
@@ -83,6 +109,10 @@ export interface NewAssistantValues {
 
 interface Props {
   initialOwner: string;
+  /** The panel's current workspace. Empty means the dialog must ask for one. */
+  initialWorkspace: string;
+  /** Offered only when `initialWorkspace` is empty. */
+  workspaces: Workspace[];
   creating: boolean;
   onCreate: (values: NewAssistantValues) => void;
   onCancel: () => void;
@@ -96,21 +126,38 @@ const IGNORE_AUTOFILL = {
 
 export function NewAssistantDialog({
   initialOwner,
+  initialWorkspace,
+  workspaces,
   creating,
   onCreate,
   onCancel,
 }: Props) {
+  // Hidden once we know who you are. It is prefilled from localStorage and almost never
+  // changed, so on every run after the first it was a field to skip past. Change it in
+  // Customize if you need to.
+  const knowsOwner = !!initialOwner;
   const [owner, setOwner] = useState(initialOwner);
+  // Asked for only when there is nothing selected behind the modal. On a first run this is
+  // the whole reason the separate onboarding dialog used to exist; the rest of it was this
+  // same form with fewer fields.
+  const needsWorkspace = !initialWorkspace;
+  const [workspace, setWorkspace] = useState("");
   const [customer, setCustomer] = useState("");
   const [website, setWebsite] = useState("");
   const [useCase, setUseCase] = useState("");
   const [failureMode, setFailureMode] = useState("hallucination");
   const [promptSource, setPromptSource] = useState("context_hub");
-  const [demoTraffic, setDemoTraffic] = useState(false);
+  /**
+   * Sticky across creates. Still OFF by default on a machine that has never set it - it
+   * ingests thousands of priced runs into the customer's project, and nobody should get
+   * that by accident - but a presenter who wants it wants it every time, and re-ticking it
+   * on every demo was the only reason to open this row at all.
+   */
+  const [demoTraffic, setDemoTraffic] = useState(() => readFlag(DEMO_TRAFFIC_LS_KEY));
 
   const secondsLeft = useSetupCountdown(creating);
 
-  const canCreate = !!customer.trim() && !creating;
+  const canCreate = !!customer.trim() && (!needsWorkspace || !!workspace) && !creating;
 
   return (
     <Dialog open onOpenChange={(o) => !o && onCancel()}>
@@ -132,12 +179,30 @@ export function NewAssistantDialog({
         </DialogHeader>
 
         <div className="flex flex-col gap-2">
-          <Input
-            placeholder="Owner name"
-            value={owner}
-            onChange={(e) => setOwner(e.target.value)}
-            {...IGNORE_AUTOFILL}
-          />
+          {needsWorkspace && (
+            <div className="flex flex-col gap-1.5">
+              <Combobox
+                options={workspaces.map((w) => ({ value: w.id, label: w.name || w.id }))}
+                value={workspace}
+                onChange={setWorkspace}
+                placeholder="Choose a workspace to log to…"
+                searchPlaceholder="Filter workspaces…"
+                emptyText="No workspaces."
+              />
+              <p className="m-0 text-[11px] leading-snug text-muted-foreground">
+                Traces, prompts and datasets all land here. You can change it later in
+                Customize.
+              </p>
+            </div>
+          )}
+          {!knowsOwner && (
+            <Input
+              placeholder="Owner name"
+              value={owner}
+              onChange={(e) => setOwner(e.target.value)}
+              {...IGNORE_AUTOFILL}
+            />
+          )}
           <Input
             placeholder="Customer (used as the assistant name)"
             value={customer}
@@ -200,7 +265,13 @@ export function NewAssistantDialog({
           </div>
 
           <label className="flex cursor-pointer items-center gap-2">
-            <Switch checked={demoTraffic} onCheckedChange={setDemoTraffic} />
+            <Switch
+              checked={demoTraffic}
+              onCheckedChange={(on) => {
+                setDemoTraffic(on);
+                writeFlag(DEMO_TRAFFIC_LS_KEY, on);
+              }}
+            />
             <span className="flex items-center gap-1.5 text-[12.5px] font-medium text-foreground">
               Backfill demo traffic
               <Hint>
@@ -225,6 +296,7 @@ export function NewAssistantDialog({
             disabled={!canCreate}
             onClick={() =>
               onCreate({
+                workspace,
                 owner: owner.trim(),
                 customer: customer.trim(),
                 website: website.trim(),

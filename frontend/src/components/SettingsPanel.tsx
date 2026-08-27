@@ -54,7 +54,6 @@ import { WorkspaceSelect } from "./settings/WorkspaceSelect";
 import { AssistantSelect } from "./settings/AssistantSelect";
 import { NewAssistantDialog, type NewAssistantValues } from "./settings/NewAssistantDialog";
 import { DemoBriefDialog, type DemoBrief } from "./settings/DemoBriefDialog";
-import { OnboardingDialog } from "./settings/OnboardingDialog";
 import { VisualSection } from "./settings/VisualSection";
 import { BrandSection } from "./settings/BrandSection";
 import { TypographySection } from "./settings/TypographySection";
@@ -314,8 +313,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
     const [creating, setCreating] = useState(false);
     // Post-setup presenter brief popup (null = hidden).
     const [demoBrief, setDemoBrief] = useState<DemoBrief | null>(null);
-    // First-run onboarding (shown once when no owner name is saved yet).
-    const [showOnboarding, setShowOnboarding] = useState(false);
+    // First run (no owner name saved yet) opens the create form, once.
     const onboardingCheckedRef = useRef(false);
 
     // Latest-value refs for async callbacks (debounced save, create/delete).
@@ -367,9 +365,13 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
       setWorkspaces(wlist);
       setToolSpecs(tlist);
       // First-run: no owner name saved yet ⇒ treat as a new DE and onboard once.
+      // First run opens the ORDINARY create form. There used to be a separate onboarding
+      // dialog: the same form with fewer fields, plus a workspace picker - two things to
+      // keep in step, and a new user's first screen was the one nobody ever edited. The
+      // picker moved into this form, shown only when no workspace is chosen yet.
       if (!onboardingCheckedRef.current) {
         onboardingCheckedRef.current = true;
-        if (!readLS(LAST_OWNER_LS_KEY)) setShowOnboarding(true);
+        if (!readLS(LAST_OWNER_LS_KEY)) setShowNewForm(true);
       }
       // On the very first load, restore the saved assistant's config (no reset).
       const saved = selectedIdRef.current;
@@ -638,7 +640,9 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
 
     const handleCreate = useCallback(
       async (v: NewAssistantValues) => {
-        const workspace = cfgRef.current.lsWorkspace;
+        // The dialog only offers a workspace when the panel has none, so its value wins
+        // when present and the panel's is the steady-state answer.
+        const workspace = v.workspace || cfgRef.current.lsWorkspace;
         if (!v.customer) {
           window.alert("Customer is required - it's used as the assistant name.");
           return;
@@ -647,42 +651,14 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           window.alert("Pick a Workspace first (top of the panel) - setup needs it.");
           return;
         }
+        // Persist it and load that workspace's prompts, exactly as picking it in the panel
+        // would have - otherwise a first-run user creates into a workspace the panel does
+        // not know it is pointed at.
+        if (v.workspace) handleWorkspace(v.workspace);
         setCreating(true);
         try {
           await runCreate(v, workspace);
           setShowNewForm(false);
-        } catch (e) {
-          window.alert("Setup failed: " + errMsg(e));
-        } finally {
-          setCreating(false);
-        }
-      },
-      [runCreate],
-    );
-
-    // First-run onboarding: capture the DE's name + workspace, create their first
-    // demo, then dismiss. Reuses runCreate; website is left blank (LLM guesses)
-    // and the failure mode defaults to the hallucination demo. Demo traffic is off
-    // here as it is in the create form — this is someone's first minute in the app,
-    // which is the worst moment to silently fill a project with priced runs.
-    const handleOnboardingCreate = useCallback(
-      async (name: string, workspace: string, customer: string, useCase: string) => {
-        handleWorkspace(workspace); // persist + load that workspace's prompts
-        setCreating(true);
-        try {
-          await runCreate(
-            {
-              owner: name,
-              customer,
-              website: "",
-              useCase,
-              failureMode: "hallucination",
-              promptSource: "context_hub",
-              demoTraffic: false,
-            },
-            workspace,
-          );
-          setShowOnboarding(false);
         } catch (e) {
           window.alert("Setup failed: " + errMsg(e));
         } finally {
@@ -743,18 +719,14 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
 
     return (
       <>
-      <OnboardingDialog
-        open={showOnboarding}
-        workspaces={workspaces}
-        creating={creating}
-        onCreate={handleOnboardingCreate}
-      />
       <DemoBriefDialog brief={demoBrief} onClose={() => setDemoBrief(null)} />
       {/* Outside the Sheet on purpose: a modal here covers the settings panel and the
           page, so the only editable thing on screen is the customer being created. */}
       {showNewForm && (
         <NewAssistantDialog
           initialOwner={readLS(LAST_OWNER_LS_KEY)}
+          initialWorkspace={cfg.lsWorkspace}
+          workspaces={workspaces}
           creating={creating}
           onCreate={handleCreate}
           onCancel={() => setShowNewForm(false)}
