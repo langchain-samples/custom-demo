@@ -50,7 +50,7 @@ export function SandboxFileView({ node, state, onLoadMore, appending }: SandboxF
   const file = state.status === "ready" ? state.file : null;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {/* Sticky path header — the tree only shows basenames. */}
       <div className="flex flex-shrink-0 items-center gap-2 border-b border-border px-4 py-2">
         <span

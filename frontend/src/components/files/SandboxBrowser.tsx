@@ -296,7 +296,11 @@ export function SandboxBrowser({ target, onReload }: SandboxBrowserProps) {
             />
           )}
         </div>
-        <div className="flex min-h-0 flex-col">
+        {/* `min-w-0`: a grid item's min-width defaults to AUTO, so this column refused to
+            shrink below its content and a wide CSV pushed the whole grid past the dialog
+            instead of scrolling inside its own box. The 1fr does not constrain it without
+            this. */}
+        <div className="flex min-h-0 min-w-0 flex-col">
           <SandboxFileView
             node={selected}
             state={fileState}
