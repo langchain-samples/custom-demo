@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Combobox } from "@/components/ui/combobox";
+import { useSetupCountdown } from "./useSetupCountdown";
 
 const INTERNAL_USE_CASE =
   "An internal assistant for employees to explore company metrics, operations, and performance.";
@@ -47,6 +48,8 @@ export function OnboardingDialog({
     );
     if (match) setWorkspace(match.id);
   }, [workspaces, workspace]);
+
+  const secondsLeft = useSetupCountdown(creating);
 
   const canCreate = !!name.trim() && !!workspace && !!customer.trim() && !creating;
 
@@ -136,7 +139,11 @@ export function OnboardingDialog({
           disabled={!canCreate}
           onClick={() => onCreate(name.trim(), workspace, customer.trim(), useCase.trim())}
         >
-          {creating ? "Setting up your demo…" : "Create"}
+          {creating
+            ? secondsLeft === null
+              ? "Setting up your demo…"
+              : `Setting up your demo… ${secondsLeft.toFixed(1)}`
+            : "Create"}
         </Button>
       </DialogContent>
     </Dialog>
