@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "test": "vitest run",
     "lint": "oxlint && node scripts/check-no-emdash.mjs",
     "check:emdash": "node scripts/check-no-emdash.mjs",
     "preview": "vite preview"
@@ -47,6 +48,7 @@
     "@vitejs/plugin-react": "^6.0.3",
     "oxlint": "^1.71.0",
     "typescript": "~6.0.2",
-    "vite": "^8.1.1"
+    "vite": "^8.1.1",
+    "vitest": "^4.1.11"
   }
 }

@@ -838,8 +838,35 @@ export async function readSandboxFile(
   return res.json();
 }
 
-/** Outcome of an upload (POST /sandbox-upload). Never throws; check `failed`. */
-export interface SandboxUploadResult {
+/**
+ * Read a sandbox text file WHOLE, following `next_offset` to the end.
+ *
+ * `readSandboxFile` is paginated because the file viewer wants a "Show more" button.
+ * An HTML artifact has no such affordance: a document rendered from half its lines is
+ * simply the wrong document, so this is the canonical read the artifact tab uses once
+ * a write finishes. Returns null when the file is not previewable text (binary, or
+ * past the server's byte caps), which the caller shows as a placeholder.
+ */
+export async function readSandboxTextFile(
+  target: SandboxTarget,
+  path: string,
+  maxPages = 20,
+): Promise<string | null> {
+  const parts: string[] = [];
+  let offset = 0;
+  for (let page = 0; page < maxPages; page++) {
+    const file = await readSandboxFile(target, path, { offset });
+    if (file.content === null) return parts.length ? parts.join("") : null;
+    parts.push(file.content);
+    // A null next_offset means last page; equal means paging cannot advance (one
+    // oversized line), and looping on it would spin forever.
+    if (file.next_offset === null || file.next_offset <= offset) break;
+    offset = file.next_offset;
+  }
+  return parts.join("");
+}
+
+/** Outcome of an upload (POST /sandbox-upload). Never throws; check `failed`. */export interface SandboxUploadResult {
   dir: string;
   written: { name: string; path: string }[];
   failed: { name: string; error: string }[];

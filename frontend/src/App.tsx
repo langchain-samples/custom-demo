@@ -6,7 +6,7 @@
  *   │  ChatPanel                                                                  │
  *   └─────────────────────────────────────────────────────────────────────────── ┘
  *   ┌── once widgets exist: two columns (420px rail + 1fr) ──────────────────────┐
- *   │  ChatPanel  │  DashboardCanvas                                              │
+ *   │  ChatPanel  │  DashboardPane (widget canvas + one tab per HTML artifact)     │
  *   └─────────────────────────────────────────────────────────────────────────── ┘
  *
  * The gear opens the SettingsPanel Sheet. App owns the streamed-widget list, the
@@ -29,7 +29,7 @@ import ChatPanel, { type ChatPanelHandle } from "@/components/ChatPanel";
 import { VoiceButton } from "@/components/VoiceButton";
 import { VoiceStage } from "@/components/VoiceStage";
 import { useVoiceSession } from "@/lib/hooks/use-voice-session";
-import { DashboardCanvas } from "@/components/DashboardCanvas";
+import { DashboardPane, type ArtifactState } from "@/components/DashboardPane";
 import { EvalPanel } from "@/components/EvalPanel";
 import { FileBrowser } from "@/components/FileBrowser";
 import { SettingsPanel, type SettingsHandle } from "@/components/SettingsPanel";
@@ -37,6 +37,7 @@ import { getAssistantId } from "@/lib/config";
 import { applyTheme, getStoredTheme, setStoredTheme, type Theme } from "@/lib/theme";
 import { invalidateColorCache } from "@/lib/branding";
 import type { Assistant, RunContext, Widget } from "@/lib/api";
+import { readSandboxTextFile } from "@/lib/api";
 
 const DEFAULT_NAME = "Corebot";
 const DEFAULT_LOGO = "";
@@ -64,6 +65,9 @@ export default function App() {
   const [evalsOpen, setEvalsOpen] = useState(false);
   const [activeAssistant, setActiveAssistant] = useState<Assistant | null>(null);
   const [widgets, setWidgets] = useState<Widget[]>([]);
+  // HTML files the agent wrote to /workspace/artifacts, keyed by path; each becomes a
+  // tab beside the widget canvas. Cleared with the dashboard on reset.
+  const [artifacts, setArtifacts] = useState<Record<string, ArtifactState>>({});
   // Sticky: once a dashboard has appeared, keep the two-column layout until a
   // conversation reset (assistant switch/create) — matches the SPA's
   // has-dashboard class, which clearDashboard() empties but does not remove.
@@ -210,6 +214,7 @@ export default function App() {
   // Reset the conversation + dashboard on assistant switch/create.
   const handleResetConversation = () => {
     setWidgets([]);
+    setArtifacts({});
     setHasDashboard(false);
     setResetCounter((n) => n + 1);
     // A live voice session restarts with it. Leaving it up would mean the model still
@@ -390,6 +395,38 @@ export default function App() {
               setWidgets((prev) => [...prev, w]);
               setHasDashboard(true);
             }}
+            onArtifact={({ path, content, streaming }) => {
+              setHasDashboard(true);
+              setArtifacts((prev) => ({
+                ...prev,
+                // A finishing write sends no content: keep whatever streamed, so the
+                // tab holds its last good render until the canonical read lands.
+                [path]: {
+                  content: content || prev[path]?.content || "",
+                  streaming,
+                },
+              }));
+              if (streaming) return;
+              // The write completed. Re-read the file, because what streamed is the
+              // TOOL ARGUMENT, and for edit_file that is a diff rather than the
+              // document. Best effort: with no sandbox (DA_SANDBOX=0, no entitlement)
+              // the file lives in graph state and this 503s, leaving the streamed
+              // content in place, which is the right fallback for write_file.
+              readSandboxTextFile(
+                {
+                  agent_repo: activeAssistant?.metadata?.ls_artifacts?.agent_repo || undefined,
+                  customer: activeAssistant?.metadata?.customer || undefined,
+                },
+                path,
+              )
+                .then((text) => {
+                  if (text === null) return;
+                  setArtifacts((prev) => ({ ...prev, [path]: { content: text, streaming: false } }));
+                })
+                .catch(() => {
+                  /* keep the streamed content */
+                });
+            }}
             guard={guard}
             resetKey={resetKey}
             logo={logo}
@@ -410,7 +447,7 @@ export default function App() {
         {/* Live dashboard pane — mounted once a dashboard has appeared. */}
         {hasDashboard && (
           <section className="flex min-h-0 flex-col overflow-hidden print:overflow-visible">
-            <DashboardCanvas widgets={widgets} theme={effectiveTheme} />
+            <DashboardPane widgets={widgets} theme={effectiveTheme} artifacts={artifacts} />
           </section>
         )}
       </div>

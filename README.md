@@ -158,6 +158,36 @@ deep agent, with the tool executed in the browser so the canvas, chips and trace
 from the normal run. Off unless an assistant's builder flag turns it on, and invisible
 without `GEMINI_API_KEY`. See [docs/voice-mode.md](docs/voice-mode.md).
 
+## HTML artifacts
+
+Widgets are the answer surface, and the prompt says so: the agent reaches for
+`push_widget` whenever a KPI, chart, table or text block can make the point. For the
+things those six types genuinely cannot express (a formatted letter, a print-ready
+report, a page to download and send on, an interactive view) it writes a standalone
+document with `write_file` to `/workspace/artifacts/<name>.html`.
+
+That file becomes its own tab beside the dashboard, and it renders **while it is being
+written**. No new tool and no new widget type: the frontend already partial-parses
+streaming tool-call arguments to fill in charts progressively, and the artifact tab
+reads `write_file`'s `content` argument the same way. Because the artifact is a real
+file, the agent revises it with `edit_file` instead of rewriting it, and the existing
+file browser and `/sandbox-file` route serve it unchanged.
+
+`safeHtmlPrefix` (`frontend/src/lib/artifacts.ts`) is what makes a half-written document
+renderable. HTML5 parsing recovers from unclosed elements on its own, so it only repairs
+the three cases that do not: a half-written tag, an unclosed `<style>`, and an unclosed
+`<script>` (emptied, since half a statement throws).
+
+The iframe runs with `allow-scripts` and deliberately **without** `allow-same-origin`, so
+a generated page executes and can load external CDNs but cannot read the deployment
+token this app keeps in `localStorage`. Those two sandbox flags must never appear
+together there.
+
+**Needs the sandbox.** Without one (`DA_SANDBOX=0`, no entitlement) `write_file` goes to
+the graph `files` state key rather than a VM. The live stream still renders, since it
+reads the tool argument, but the post-write canonical re-read has nothing to fetch, so
+an `edit_file` result will not be reflected.
+
 ## Tests
 
 ```bash

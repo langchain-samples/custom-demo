@@ -29,6 +29,7 @@ import {
 import type { QuickAction, ReviewInterrupt, RunContext, ThreadMessage, Widget } from "@/lib/api";
 import { ensureThread, resetThread, runStream } from "@/lib/api";
 import { PROSE_CLS } from "@/lib/markdown";
+import { isHtmlArtifactPath } from "@/lib/artifacts";
 import { ReviewCard } from "@/components/chat/ReviewCard";
 import { Button } from "@/components/motion/button";
 import { ToolChip, type ChipData } from "@/components/chat/ToolChip";
@@ -130,6 +131,15 @@ export interface ChatPanelProps {
   /** Receives each widget as it flushes (progressive), for the dashboard pane.
    *  Widgets accumulate across turns; the dashboard is cleared only by New Chat. */
   onWidget: (widget: Widget) => void;
+  /**
+   * Receives an HTML artifact as `write_file` streams it into /workspace/artifacts.
+   *
+   * `content` is the partial document while `streaming` is true, which is what makes
+   * the artifact tab build up on screen as the agent types it. Once the write
+   * completes (`streaming` false) App re-reads the file from the sandbox, because an
+   * `edit_file` follow-up carries only a diff and never the whole document.
+   */
+  onArtifact?: (artifact: { path: string; content: string; streaming: boolean }) => void;
   /**
    * Send guard, run before every send. Return an error string to BLOCK the send
    * (rendered as an assistant message; App opens settings as a side effect) or
@@ -276,6 +286,7 @@ export default function ChatPanel({
   presets = [],
   getRunContext,
   onWidget,
+  onArtifact,
   guard,
   resetKey,
   logo,
@@ -403,6 +414,9 @@ export default function ChatPanel({
     const wOrder: string[] = [];
     const wLatest: Record<string, Widget> = {};
     const wFlushed = new Set<string>();
+    // Artifact writes seen this run, keyed by tool_call id -> path. Lets the write's
+    // ToolMessage (which carries only tool_call_id) mark the right artifact finished.
+    const artifactPathByCall: Record<string, string> = {};
     // Message ids belonging to a middleware's own model call (the goal grader),
     // learned from metadata. Only needed on a server that does NOT suffix event
     // names with the namespace: there the frames look like main-graph output and
@@ -490,6 +504,25 @@ export default function ChatPanel({
             // Flush every widget except the one still streaming (last in order).
             for (let i = 0; i < wOrder.length - 1; i++) flushWidget(wOrder[i]);
           } else {
+            // An HTML artifact write is ALSO a normal chip, so this runs alongside the
+            // chip path rather than replacing it, and deliberately before the id guard
+            // below: the earliest arg frames can arrive without a tool_call id, and
+            // those carry the opening tags we want on screen soonest.
+            if (name === "write_file" || name === "edit_file") {
+              const a = args as { file_path?: string; content?: string };
+              if (isHtmlArtifactPath(a.file_path)) {
+                const path = a.file_path as string;
+                if (tc.id) artifactPathByCall[tc.id] = path;
+                // edit_file carries old_string/new_string, not the document, so it has
+                // no content to stream. It still registers the artifact (creating its
+                // tab) and the post-write re-read supplies the edited text.
+                onArtifact?.({
+                  path,
+                  content: typeof a.content === "string" ? a.content : "",
+                  streaming: true,
+                });
+              }
+            }
             // A chip MUST be keyed by the real tool_call id so the tool's result
             // (ToolMessage.tool_call_id) can match and clear its spinner. Skip
             // partial stream frames that don't carry the id yet — keying a chip on a
@@ -538,6 +571,12 @@ export default function ChatPanel({
         }
       } else if (msg.type === "tool" && msg.name !== "push_widget") {
         const cid = msg.tool_call_id;
+        // The write landed: hand the artifact over as finished so App re-reads the
+        // file. Until this fires, what the tab shows is the streamed argument, which
+        // for edit_file is not the document at all.
+        if (cid && artifactPathByCall[cid]) {
+          onArtifact?.({ path: artifactPathByCall[cid], content: "", streaming: false });
+        }
         if (cid && chipMap[cid]) {
           chipMap[cid] = { ...chipMap[cid], result: contentToText(msg.content) };
           syncChips();

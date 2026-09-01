@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   frontend:
-    name: Frontend (build + lint)
+    name: Frontend (build + lint + test)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -26,6 +26,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npm run lint
+      - run: npm test
       # The exact build Vercel runs (tsc -b && vite build) — catches type errors
       # that `tsc --noEmit` misses in build mode.
       - run: npm run build
