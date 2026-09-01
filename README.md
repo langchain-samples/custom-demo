@@ -244,7 +244,7 @@ fabricates over the gap — exactly the same catch-and-fix demo, now domain-agno
 | `DASHBOARD_DATASET` | `humanitarian` | `synthetic` = live-LLM data backend for any topic |
 | `DASHBOARD_DATA_MODEL` | `anthropic:claude-haiku-4-5-20251001` | fast model for synthetic data + the simulated tools (`init_chat_model` id) |
 | `DASHBOARD_DATA_PROMPT` | `dashboard-agent-data` | Prompt Hub name for the synthetic data prompt |
-| `TAVILY_API_KEY` | (unset) | required by the optional `web_search` tool; without it that tool returns an error instead of results. The deployment reads it from the `TAVILY_API_KEY` Actions secret (see the CD job in `.github/workflows/ci.yml`) — a key in your local `.env` does **not** reach it |
+| `TAVILY_API_KEY` | (unset) | required by the optional `web_search` tool; without it that tool returns an error instead of results. The deployment reads it from its own `TAVILY_API_KEY` secret on the LangSmith deployment (there is no CD job; see the comment in `.github/workflows/ci.yml`) — a key in your local `.env` does **not** reach it |
 | `BRANDFETCH_API_KEY` | (unset) | optional — accurate brand palette + typefaces at setup; falls back to an LLM guess |
 | `LOGODEV_TOKEN` | (bundled publishable key) | optional — Logo.dev key for customer logos |
 | `LANGGRAPH_URL` | `http://127.0.0.1:2024` | Agent Server the `scripts/` helpers talk to |

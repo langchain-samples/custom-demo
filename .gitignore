@@ -29,3 +29,4 @@ node_modules/
 
 # Sibling demo project — not part of this repo (provides a local venv/key only)
 chat-langchain-lite/
+assistants-backup-old-deployment.json

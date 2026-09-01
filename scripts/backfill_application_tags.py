@@ -36,7 +36,7 @@ from dashboard_agent.resource_tags import (  # noqa: E402
     tag_assistant_resources,
 )
 
-DEFAULT_URL = "https://customdemos-c2ed229923a35379ac6f044f78e62989.us.langgraph.app"
+DEFAULT_URL = "https://custom-demos-599b02fd350b553b832acd74983fa55a.us.langgraph.app"
 
 
 def assistants(url: str, token: str) -> list[dict]:

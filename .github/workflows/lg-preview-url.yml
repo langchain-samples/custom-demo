@@ -76,7 +76,7 @@ jobs:
       - name: Resolve the LangSmith preview and set VITE_LG_URL for this branch
         env:
           LS_CROSS_WORKSPACE_KEY: ${{ secrets.LS_CROSS_WORKSPACE_KEY }}
-          LANGSMITH_TENANT_ID: 4582c584-4ea8-48aa-a5bc-ba36237b4735
+          LANGSMITH_TENANT_ID: b5c04067-b1c1-4e7a-8a0b-2c39a8d29419
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
           # Only needed when the Vercel project belongs to a team rather than a user.
