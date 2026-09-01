@@ -159,7 +159,17 @@ async def workspaces(request):
             if w.get("id")
         ]
         out.sort(key=lambda w: (w["name"] or "").lower())
-        return JSONResponse({"workspaces": out})
+        # Which org these workspaces belong to. Only a label, so a failure here must not
+        # cost the caller its workspace list: the picker is usable without it.
+        organization = ""
+        try:
+            async with httpx.AsyncClient(timeout=10) as hc:
+                org = await hc.get(f"{endpoint}/api/v1/orgs/current", headers={"x-api-key": key})
+            if org.status_code == 200:
+                organization = org.json().get("display_name") or ""
+        except Exception:  # noqa: BLE001 - label only
+            organization = ""
+        return JSONResponse({"workspaces": out, "organization": organization})
     except Exception as exc:
         return JSONResponse({"workspaces": [], "note": f"{type(exc).__name__}: {exc}"})
 

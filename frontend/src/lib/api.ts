@@ -108,6 +108,13 @@ export interface Workspace {
   name?: string;
 }
 
+/** GET /workspaces: the pickable workspaces plus the org they belong to. */
+export interface WorkspaceList {
+  workspaces: Workspace[];
+  /** Org display name, for labelling the picker. Empty when the lookup failed. */
+  organization: string;
+}
+
 /**
  * Per-run runtime context (dashboard_agent.agent.Context). Sent as
  * `{ context: {...} }` in the run body — NOT config.configurable. Only
@@ -618,15 +625,19 @@ export async function getTraceUrl(runId: string, workspace?: string): Promise<st
 
 /* ---------------------- Workspaces / projects / prompts ------------------ */
 
-/** List LangSmith workspaces (GET /workspaces). Empty on failure. */
-export async function listWorkspaces(): Promise<Workspace[]> {
+/** List LangSmith workspaces and their org (GET /workspaces). Empty on failure. */
+export async function listWorkspaces(): Promise<WorkspaceList> {
+  const empty: WorkspaceList = { workspaces: [], organization: "" };
   try {
     const res = await fetch(`${getApiBase()}/workspaces`, { headers: apiHeaders() });
-    if (!res.ok) return [];
+    if (!res.ok) return empty;
     const d = await res.json();
-    return Array.isArray(d.workspaces) ? d.workspaces : [];
+    return {
+      workspaces: Array.isArray(d.workspaces) ? d.workspaces : [],
+      organization: typeof d.organization === "string" ? d.organization : "",
+    };
   } catch {
-    return [];
+    return empty;
   }
 }
 

@@ -44,7 +44,7 @@ from langsmith import Client
 from .config import MODEL, goal_max_iterations, goal_model, model_provider, require_model_key
 from .ctx import ctx_get as _ctx
 from .mocking import enable_mocking
-from .prompt import pull_agent_prompt, pull_system_prompt
+from .prompt import ARTIFACT_NOTE, pull_agent_prompt, pull_system_prompt
 from .tools import (
     all_tools,
     allowed_tool_names,
@@ -132,6 +132,7 @@ def _hub_system_prompt(request: ModelRequest) -> str:
         base
         + _capability_note(request.runtime)
         + _sandbox_note(request.runtime)
+        + ARTIFACT_NOTE
         + _subagents_note()
     )
     # Compose deepagents' middleware-built prompt (SkillsMiddleware catalogue,

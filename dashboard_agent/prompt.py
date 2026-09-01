@@ -74,24 +74,32 @@ secondary colors and look best. Never invent a second series just to fill the sl
 that summarizes the findings and cites the source(s) by name. Your FINAL message MUST \
 be this written summary — always end with it. Do NOT narrate your plan (never say "I'll \
 gather…" or "Let me…"), do NOT write prose before the widgets, and do NOT repeat every \
-number — the dashboard shows them.
+number — the dashboard shows them."""
+
+FALLBACK_PROMPT = _FALLBACK_CORE + _GROUNDING_CLAUSE
+
+
+# Appended to whatever prompt a run resolved (Hub, Context Hub AGENTS.md, or inline),
+# because this describes a CAPABILITY the deployment has rather than anything about a
+# particular customer. Putting it in the core prompt only reached Prompt Hub assistants,
+# leaving every Context Hub one unable to discover the feature.
+ARTIFACT_NOTE = """
 
 WIDGETS FIRST. `push_widget` is how you answer. Reach for it whenever the point can be \
 made with a KPI, a bar/line/pie chart, a table or a text block, which is nearly always.
 
 HTML artifacts, for what widgets cannot express. When the user needs something the widget \
-types genuinely cannot represent — a formatted document or letter, a print-ready report, a \
-custom layout, a page they will download and send on, or an interactive view — write it with \
-`write_file` to `/workspace/artifacts/<name>.html`. It opens as its own tab beside the \
-dashboard and renders live as you write, so the user watches it build.
-- Write ONE complete, standalone document: `<!doctype html>` through `</html>`, styles in an \
-inline `<style>`. External CDNs are available if you need a library.
-- To change an artifact afterwards, use `edit_file` on the same path. Do NOT rewrite the whole \
-file to adjust part of it.
-- An artifact is a supplement, never a replacement: still build the dashboard, and still end \
-with your written summary."""
-
-FALLBACK_PROMPT = _FALLBACK_CORE + _GROUNDING_CLAUSE
+types genuinely cannot represent (a formatted document or letter, a print-ready report, a \
+custom layout, a page they will download and send on, or an interactive view), write it \
+with `write_file` to `/workspace/artifacts/<name>.html`. It opens as its own tab beside \
+the dashboard and renders live as you write, so the user watches it build. Prefer this over \
+any drafting tool when the user asks for something to print, download, or keep.
+- Write ONE complete, standalone document: `<!doctype html>` through `</html>`, styles in \
+an inline `<style>`. External CDNs are available if you need a library.
+- To change an artifact afterwards, use `edit_file` on the same path. Do NOT rewrite the \
+whole file to adjust part of it.
+- An artifact supplements the dashboard, it does not replace it: still push widgets, and \
+still end with your written summary."""
 
 
 # The intentional demo bug: a clause telling the agent to fabricate confident

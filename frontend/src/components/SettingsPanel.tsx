@@ -251,6 +251,8 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
   ) {
     const [assistants, setAssistants] = useState<Assistant[]>([]);
     const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+    // Org the workspaces belong to, for labelling the create form's picker.
+    const [organization, setOrganization] = useState("");
 
     // Width (px) of the Customize panel — drag-resizable from its left edge,
     // mirroring the chat rail (see App.tsx). Persisted across sessions.
@@ -362,7 +364,8 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
         listTools(),
       ]);
       setAssistants(alist);
-      setWorkspaces(wlist);
+      setWorkspaces(wlist.workspaces);
+      setOrganization(wlist.organization);
       setToolSpecs(tlist);
       // First-run: no owner name saved yet ⇒ treat as a new DE and onboard once.
       // First run opens the ORDINARY create form. There used to be a separate onboarding
@@ -727,6 +730,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           initialOwner={readLS(LAST_OWNER_LS_KEY)}
           initialWorkspace={cfg.lsWorkspace}
           workspaces={workspaces}
+          organization={organization}
           creating={creating}
           onCreate={handleCreate}
           onCancel={() => setShowNewForm(false)}

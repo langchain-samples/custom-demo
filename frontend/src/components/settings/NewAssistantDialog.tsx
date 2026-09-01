@@ -20,6 +20,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import type { Workspace } from "@/lib/api";
 import { useSetupCountdown } from "./useSetupCountdown";
 import { Combobox } from "@/components/ui/combobox";
+import { guessWebsite } from "@/lib/website";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
@@ -71,12 +72,15 @@ function Hint({ children }: { children: ReactNode }) {
 }
 
 /**
- * Preselected when nothing is chosen yet. Matched by NAME, not id: a hardcoded uuid is
- * right for exactly one organization and silently selects nothing everywhere else, whereas
- * a workspace called "Demo" either exists or the field stays empty and asks.
+ * Preselected when nothing is chosen yet, best match first. Matched by NAME, not id: a
+ * hardcoded uuid is right for exactly one organization and silently selects nothing
+ * everywhere else, whereas these names either exist or the field stays empty and asks.
+ *
+ * A list rather than one name because an exact-match on "demo" alone found nothing in an
+ * org whose workspaces are called "Default Workspace" and "Demo Workspace", which is how
+ * the picker ended up blank.
  */
-const DEFAULT_WORKSPACE_NAME = "demo";
-
+const DEFAULT_WORKSPACE_NAMES = ["default workspace", "demo workspace", "demo", "default"];
 /** Remembers the demo-traffic choice between creates. */
 const DEMO_TRAFFIC_LS_KEY = "newAssistantDemoTraffic";
 
@@ -116,6 +120,8 @@ export interface NewAssistantValues {
 
 interface Props {
   initialOwner: string;
+  /** Org the workspaces belong to, shown under the picker. Empty hides the mention. */
+  organization?: string;
   /** The panel's current workspace. Empty means the dialog must ask for one. */
   initialWorkspace: string;
   /** Offered only when `initialWorkspace` is empty. */
@@ -135,6 +141,7 @@ export function NewAssistantDialog({
   initialOwner,
   initialWorkspace,
   workspaces,
+  organization = "",
   creating,
   onCreate,
   onCancel,
@@ -156,13 +163,16 @@ export function NewAssistantDialog({
   // so it only ever fills a BLANK field and cannot overwrite a deliberate choice.
   useEffect(() => {
     if (!needsWorkspace || workspace) return;
-    const fallback = workspaces.find(
-      (w) => (w.name || "").trim().toLowerCase() === DEFAULT_WORKSPACE_NAME,
-    );
+    const named = (want: string) =>
+      workspaces.find((w) => (w.name || "").trim().toLowerCase() === want);
+    const fallback = DEFAULT_WORKSPACE_NAMES.map(named).find(Boolean);
     if (fallback) setWorkspace(fallback.id);
   }, [needsWorkspace, workspace, workspaces]);
   const [customer, setCustomer] = useState("");
   const [website, setWebsite] = useState("");
+  // Once you type in the website field it is yours: the guess below stops overwriting it,
+  // including when you clear it, which is how you say "this customer has no site".
+  const [websiteTouched, setWebsiteTouched] = useState(false);
   const [useCase, setUseCase] = useState("");
   const [failureMode, setFailureMode] = useState("hallucination");
   const [promptSource, setPromptSource] = useState("context_hub");
@@ -209,6 +219,7 @@ export function NewAssistantDialog({
                 emptyText="No workspaces."
               />
               <p className="m-0 text-[11px] leading-snug text-muted-foreground">
+                {organization ? `Workspaces in ${organization}. ` : ""}
                 Traces, prompts and datasets all land here. You can change it later in
                 Customize.
               </p>
@@ -216,7 +227,7 @@ export function NewAssistantDialog({
           )}
           {!knowsOwner && (
             <Input
-              placeholder="Owner name"
+              placeholder="Your name"
               value={owner}
               onChange={(e) => setOwner(e.target.value)}
               {...IGNORE_AUTOFILL}
@@ -225,13 +236,19 @@ export function NewAssistantDialog({
           <Input
             placeholder="Customer (used as the assistant name)"
             value={customer}
-            onChange={(e) => setCustomer(e.target.value)}
+            onChange={(e) => {
+              setCustomer(e.target.value);
+              if (!websiteTouched) setWebsite(guessWebsite(e.target.value));
+            }}
             {...IGNORE_AUTOFILL}
           />
           <Input
             placeholder="Website (optional, e.g. acme.com)"
             value={website}
-            onChange={(e) => setWebsite(e.target.value)}
+            onChange={(e) => {
+              setWebsiteTouched(true);
+              setWebsite(e.target.value);
+            }}
             {...IGNORE_AUTOFILL}
           />
           <Textarea
