@@ -603,11 +603,32 @@ def _sandbox_key(runtime) -> str:
     return _sandbox_key_from(_ctx(runtime, "agent_repo"), _ctx(runtime, "customer"))
 
 
+def _sandbox_key_credentials() -> tuple[str | None, dict[str, str]]:
+    """`(api_key, headers)` for a `SandboxClient`.
+
+    An ORG-scoped LangSmith key has no default workspace, and `SandboxClient` sends
+    only `X-Api-Key` — it reads no workspace env var and takes no workspace argument.
+    So every sandbox call 403s on such a key, `_ensure_sandbox` swallows that as "no
+    VM", and the run degrades to StateBackend with an empty `/workspace/data` and no
+    error anywhere. Sending the tenant explicitly is what gets the control-plane calls
+    (list/get/create) working.
+
+    It is not sufficient on its own: the data plane (`execute`, and so every file
+    listing) additionally rejects an org-scoped key with "insufficient sandbox
+    access". A deployment is unaffected — the platform injects its own
+    workspace-scoped `LANGSMITH_API_KEY` — but a LOCAL run against an org key needs a
+    workspace-scoped key in `LANGSMITH_API_KEY` to actually reach a VM.
+    """
+    api_key = os.getenv("LANGSMITH_API_KEY") or os.getenv("LS_CROSS_WORKSPACE_KEY") or None
+    workspace = os.getenv("LANGSMITH_WORKSPACE_ID") or os.getenv("WORKSPACE_ID") or ""
+    return api_key, {"X-Tenant-Id": workspace} if workspace else {}
+
+
 def _sandbox_enabled() -> bool:
     """Whether a sandbox can be built at all (extra present, flag on, creds set)."""
     if SandboxClient is None or os.getenv("DA_SANDBOX", "1") == "0":
         return False
-    return bool(os.getenv("LANGSMITH_API_KEY") or os.getenv("LS_CROSS_WORKSPACE_KEY"))
+    return bool(_sandbox_key_credentials()[0])
 
 
 def _seed_data(backend: Any, seed: list[dict] | None = None) -> None:
@@ -731,7 +752,8 @@ def _ensure_sandbox(key: str, *, create: bool = True, seed: list[dict] | None = 
     if cached is not None and now - _SANDBOX_SEEN.get(key, 0.0) < _SANDBOX_REVALIDATE_AFTER:
         return cached
     try:
-        client = SandboxClient(api_key=os.getenv("LANGSMITH_API_KEY") or None)
+        api_key, headers = _sandbox_key_credentials()
+        client = SandboxClient(api_key=api_key, headers=headers or None)
         name = f"da-{_slug(key)}"
         if cached is not None and _sandbox_ready(client, name):
             _SANDBOX_SEEN[key] = now
