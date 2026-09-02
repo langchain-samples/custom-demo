@@ -279,6 +279,14 @@ function statusFromVerdict(result: string | undefined): Goal["status"] {
 }
 
 
+/**
+ * The answer bubble's text before any token arrives. Rendered as the animated
+ * ReasoningText shimmer rather than shown literally, so the renderer, the creation site
+ * and the teardown all have to agree on it: three copies of the string is how a stopped
+ * run kept shimmering.
+ */
+const PLACEHOLDER_TEXT = "Working…";
+
 export default function ChatPanel({
   handleRef,
   voiceControl,
@@ -402,7 +410,7 @@ export default function ChatPanel({
         : []),
       { kind: "activity", id: activityId, chips: [] },
       { kind: "subagents", id: subagentId, groups: [] },
-      { kind: "assistant", id: bubbleId, text: "Working…", streaming: true, markdown: false },
+      { kind: "assistant", id: bubbleId, text: PLACEHOLDER_TEXT, streaming: true, markdown: false },
     ]);
 
     // Per-run mutable stream state (persists across the whole for-await loop).
@@ -866,6 +874,22 @@ export default function ChatPanel({
     } finally {
       busyRef.current = false;
       setBusy(false);
+      // Stop the answer bubble's shimmer. A bubble still marked streaming HERE can only
+      // be an aborted run: the success path has already written the final answer and the
+      // catch above has written the error, and both clear the flag. Abort is the one exit
+      // that writes nothing, deliberately (an "⚠️ Request failed: AbortError" for pressing
+      // Stop would be nonsense), which left the placeholder shimmering forever.
+      patchItem(bubbleId, (it) =>
+        it.kind === "assistant" && it.streaming
+          ? {
+              ...it,
+              streaming: false,
+              // Keep whatever tokens arrived before the stop; only the bare placeholder
+              // gets replaced, since "Working…" frozen in place reads as a hang.
+              text: !it.text || it.text === PLACEHOLDER_TEXT ? "Stopped." : it.text,
+            }
+          : it,
+      );
       // The run is over: freeze any chip still without a result so its spinner +
       // elapsed timer stop (a tool whose result never streamed shouldn't count
       // forever). No syncChips runs after this, so patching the item is safe.
@@ -1092,11 +1116,19 @@ export default function ChatPanel({
       <input
         ref={imagePicker}
         type="file"
-        accept={IMAGE_MIME_TYPES.join(",")}
+        /**
+         * NO `accept` filter, deliberately. It used to be the image MIME types, which
+         * greyed every PDF out in the file picker while dragging that same PDF onto the
+         * chat worked fine - the two ways of attaching a file disagreed about which
+         * files exist. `dropFiles` routes by type either way, and the upload route
+         * restricts by name/count/size rather than type, so there is nothing here for a
+         * filter to usefully enforce.
+         */
         multiple
         className="hidden"
         onChange={(e) => {
-          void attach(e.target.files);
+          // Same routing as a drop: images join the turn, documents go to the VM.
+          void dropFiles(e.target.files);
           e.target.value = "";
         }}
       />
@@ -1104,8 +1136,8 @@ export default function ChatPanel({
         type="button"
         variant="ghost"
         size="icon"
-        aria-label="Attach an image"
-        title="Attach an image, or drop a document to send it to the agent's files"
+        aria-label="Attach a file"
+        title="Attach an image for this message, or a document to send to the agent's files"
         className="size-8 rounded-full"
         disabled={busy}
         onClick={() => imagePicker.current?.click()}
@@ -1509,7 +1541,7 @@ function ItemView({
   // assistant
   // The bare pre-stream placeholder → beUI's animated ReasoningText ("Thinking /
   // Reading the context / …") instead of a static "Working…".
-  if (item.streaming && item.text === "Working…") {
+  if (item.streaming && item.text === PLACEHOLDER_TEXT) {
     return <ReasoningText className="px-1 py-1.5" />;
   }
   // Real answers (final, or streaming once tokens arrive) render as markdown inside
