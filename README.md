@@ -183,6 +183,13 @@ a generated page executes and can load external CDNs but cannot read the deploym
 token this app keeps in `localStorage`. Those two sandbox flags must never appear
 together there.
 
+"Save as PDF" goes through the browser's print pipeline (`contentWindow.print()`, which
+is why the sandbox carries `allow-modals`) rather than a JS library. html2pdf, which the
+widget dashboard uses on its own trusted DOM, could not be given a DOM here without
+injecting model-authored HTML into the parent document, and it rasterizes: its output is
+a picture of the page, with no selectable text. Printing yields real vector text and
+respects the document's `@media print` rules, at the cost of a save dialog.
+
 **Needs the sandbox.** Without one (`DA_SANDBOX=0`, no entitlement) `write_file` goes to
 the graph `files` state key rather than a VM. The live stream still renders, since it
 reads the tool argument, but the post-write canonical re-read has nothing to fetch, so

@@ -14,8 +14,10 @@
  * without yanking them back, so reading artifact A while the agent appends to B works.
  */
 import { useEffect, useRef, useState } from "react";
+import { IconFileTypePdf } from "@tabler/icons-react";
+import { Button } from "@/components/ui/button";
 import { DashboardCanvas } from "@/components/DashboardCanvas";
-import { HtmlArtifact } from "@/components/HtmlArtifact";
+import { HtmlArtifact, type HtmlArtifactHandle } from "@/components/HtmlArtifact";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { artifactName } from "@/lib/artifacts";
 import type { Widget } from "@/lib/api";
@@ -45,6 +47,9 @@ export function DashboardPane({ widgets, theme, artifacts }: DashboardPaneProps)
   const pathsKey = paths.join("\n");
   const [active, setActive] = useState<string>(CANVAS_TAB);
   const seen = useRef<Set<string>>(new Set());
+  // Only the visible artifact is mounted (Tabs unmounts the rest), so one ref is enough
+  // to reach whichever one the download button is currently pointing at.
+  const artifact = useRef<HtmlArtifactHandle>(null);
 
   useEffect(() => {
     const list = pathsKey ? pathsKey.split("\n") : [];
@@ -69,18 +74,36 @@ export function DashboardPane({ widgets, theme, artifacts }: DashboardPaneProps)
 
   return (
     <Tabs value={active} onValueChange={setActive} className="flex min-h-0 flex-1 flex-col gap-0">
-      <TabsList className="mx-4 mt-3 w-fit max-w-[calc(100%-2rem)] overflow-x-auto print:hidden">
-        <TabsTrigger value={CANVAS_TAB}>Dashboard</TabsTrigger>
-        {paths.map((path) => (
-          <TabsTrigger key={path} value={path} className="max-w-52">
-            {/* The full path lives here rather than in a header line: the tab names the
-                file, and hovering gives you where it is. */}
-            <span className="truncate" title={path}>
-              {artifactName(path)}
-            </span>
-          </TabsTrigger>
-        ))}
-      </TabsList>
+      {/* Tabs and the download share ONE row. The button had a row to itself under the
+          tabs, which doubled the header's height for a single control. */}
+      <div className="mx-4 mt-3 flex items-center gap-3 print:hidden">
+        <TabsList className="w-fit min-w-0 flex-shrink overflow-x-auto">
+          <TabsTrigger value={CANVAS_TAB}>Dashboard</TabsTrigger>
+          {paths.map((path) => (
+            <TabsTrigger key={path} value={path} className="max-w-52">
+              {/* The full path lives here rather than in a header line: the tab names
+                  the file, and hovering gives you where it is. */}
+              <span className="truncate" title={path}>
+                {artifactName(path)}
+              </span>
+            </TabsTrigger>
+          ))}
+        </TabsList>
+        {active !== CANVAS_TAB && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => artifact.current?.savePdf()}
+            // Mid-write the document is incomplete, so a PDF of it would be too.
+            disabled={artifacts[active]?.streaming}
+            className="ml-auto flex-shrink-0"
+            title="Open the print dialog, where you can choose Save as PDF"
+          >
+            <IconFileTypePdf className="size-4" />
+            Save as PDF
+          </Button>
+        )}
+      </div>
       <TabsContent value={CANVAS_TAB} className="flex min-h-0 flex-1 flex-col">
         <DashboardCanvas widgets={widgets} theme={theme} />
       </TabsContent>
@@ -89,6 +112,7 @@ export function DashboardPane({ widgets, theme, artifacts }: DashboardPaneProps)
         // are cheap to remount and only the visible one needs to exist.
         <TabsContent key={path} value={path} className="flex min-h-0 flex-1 flex-col">
           <HtmlArtifact
+            ref={artifact}
             path={path}
             content={artifacts[path].content}
             streaming={artifacts[path].streaming}
