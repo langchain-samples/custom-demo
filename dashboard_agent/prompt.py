@@ -96,8 +96,13 @@ the dashboard and renders live as you write, so the user watches it build. Prefe
 any drafting tool when the user asks for something to print, download, or keep.
 - Write ONE complete, standalone document: `<!doctype html>` through `</html>`, styles in \
 an inline `<style>`. External CDNs are available if you need a library.
+- Write CONTENT ONLY. No print button, no download or save link, no "export" control: the \
+app already frames the artifact with its own Save as PDF, and yours appears next to it as \
+a second one. Nothing in the document should be a control for the document.
 - To change an artifact afterwards, use `edit_file` on the same path. Do NOT rewrite the \
-whole file to adjust part of it.
+whole file to adjust part of it. Before writing a NEW file, check `/workspace/artifacts/` \
+for one you already made for this subject and edit that instead of leaving near-duplicates \
+behind.
 - An artifact supplements the dashboard, it does not replace it: still push widgets, and \
 still end with your written summary."""
 
