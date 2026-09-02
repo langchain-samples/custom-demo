@@ -176,6 +176,8 @@ interface UserItem {
   text: string;
   /** Data URLs for images sent with this turn, so the log shows what the agent saw. */
   images?: string[];
+  /** Documents uploaded to the VM for this turn, so the log shows what the agent got. */
+  docs?: { name: string; path: string }[];
 }
 interface ActivityItem {
   kind: "activity";
@@ -373,6 +375,14 @@ export default function ChatPanel({
     question?: string;
     resume?: unknown;
     images?: ImageAttachment[];
+    /**
+     * Files uploaded to the VM alongside this turn. They travel differently from images:
+     * an image rides IN the message, but a document is already on disk, so all the model
+     * needs is to be told where. Without that it has no idea the file arrived - the
+     * sandbox note only lists what setup seeded - which read as the agent ignoring an
+     * attachment the composer had just confirmed.
+     */
+    docs?: { name: string; path: string }[];
     /** Distributed-tracing headers, so a voice-driven run nests under its tool span. */
     headers?: Record<string, string>;
     /**
@@ -381,7 +391,7 @@ export default function ChatPanel({
      */
     onProgress?: (toolName: string) => void;
   }): Promise<TurnResult> => {
-    const { question, resume, images = [], headers, onProgress } = opts;
+    const { question, resume, images = [], docs: sent = [], headers, onProgress } = opts;
     const isResume = resume !== undefined;
     // Returned rather than thrown: a programmatic caller (voice) needs something to say,
     // and "a turn was already running" is a normal race there, not a failure.
@@ -405,6 +415,7 @@ export default function ChatPanel({
               id: nextId(),
               text: question,
               images: images.map((img) => `data:${img.mime};base64,${img.data}`),
+              docs: sent,
             },
           ]
         : []),
@@ -698,7 +709,7 @@ export default function ChatPanel({
         assistantId,
         ...(isResume
           ? { resume }
-          : { messages: [{ role: "user", content: imageContent(question!, images) }] }),
+          : { messages: [{ role: "user", content: imageContent(withDocs(question!, sent), images) }] }),
         context: runContext,
         signal: controller.signal,
         headers,
@@ -986,6 +997,21 @@ export default function ChatPanel({
     return () => clearTimeout(t);
   }, [goal?.status]);
 
+  /**
+   * The question, plus a line naming any files this turn uploaded.
+   *
+   * Appended to the user's text rather than sent as context, because the model has to
+   * see it as part of what was asked: "does this receipt qualify" only makes sense next
+   * to the path of the receipt. The user's own bubble shows the files as chips instead,
+   * so this plumbing never appears in the transcript.
+   */
+  const withDocs = (question: string, sent: { name: string; path: string }[]) => {
+    if (!sent.length) return question;
+    const list = sent.map((d) => d.path).join(", ");
+    const files = sent.length === 1 ? "file" : "files";
+    return `${question}\n\n[The user just uploaded ${sent.length} ${files} to your filesystem: ${list}. Open and use it to answer.]`;
+  };
+
   /** A line the user typed that the agent never sees (a `/goal` ack). */
   const note = (text: string) =>
     setItems((prev) => [
@@ -1047,10 +1073,13 @@ export default function ChatPanel({
     const images = attached;
     setAttached([]);
     // Documents stay in the VM, but the chip is about the turn being sent — leaving it
-    // up would stack one per drop across a whole demo. The Files panel is the record.
+    // up would stack one per drop across a whole demo. They travel INTO the turn, which
+    // is what tells the agent they exist and puts them in the transcript; the Files
+    // panel remains the durable record.
+    const sent = docs;
     setDocs([]);
     setAttachError("");
-    void runTurn({ question, images });
+    void runTurn({ question, images, docs: sent });
   };
 
   /**
@@ -1492,6 +1521,20 @@ function ItemView({
                 alt="attachment"
                 className="max-h-28 rounded-md border border-border object-cover"
               />
+            ))}
+          </div>
+        ) : null}
+        {item.docs?.length ? (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {item.docs.map((doc) => (
+              <span
+                key={doc.path}
+                title={doc.path}
+                className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground"
+              >
+                <IconFileText size={12} />
+                {doc.name}
+              </span>
             ))}
           </div>
         ) : null}

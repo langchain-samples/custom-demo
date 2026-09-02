@@ -73,7 +73,11 @@ export function DashboardPane({ widgets, theme, artifacts }: DashboardPaneProps)
         <TabsTrigger value={CANVAS_TAB}>Dashboard</TabsTrigger>
         {paths.map((path) => (
           <TabsTrigger key={path} value={path} className="max-w-52">
-            <span className="truncate">{artifactName(path)}</span>
+            {/* The full path lives here rather than in a header line: the tab names the
+                file, and hovering gives you where it is. */}
+            <span className="truncate" title={path}>
+              {artifactName(path)}
+            </span>
           </TabsTrigger>
         ))}
       </TabsList>

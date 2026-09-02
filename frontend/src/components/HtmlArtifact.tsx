@@ -167,8 +167,10 @@ export function HtmlArtifact({ path, content, streaming }: HtmlArtifactProps) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-2 px-4 py-2">
-        <span className="truncate font-mono text-xs text-muted-foreground">{path}</span>
+      {/* No path label: the tab above already names the file, and repeating the whole
+          /workspace/artifacts/... path cost a line of height on every artifact. The tab
+          carries it as a tooltip for when it is actually wanted. */}
+      <div className="flex items-center gap-2 px-4 py-1">
         {streaming && (
           <span className="flex-shrink-0 rounded bg-panel-2 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
             Writing
