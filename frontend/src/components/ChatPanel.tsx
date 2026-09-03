@@ -46,7 +46,6 @@ import {
   chipArgSummary,
   chipCode,
   contentToText,
-  toolCallKey,
   widgetFromArgs,
   widgetLooksComplete,
   describeInterrupt,
@@ -549,7 +548,20 @@ export default function ChatPanel({
           const name = tc.name || "";
           const args = tc.args || {};
           if (name === "push_widget") {
-            const id = toolCallKey(msg.id, tc);
+            // The real tool_call id, never a fallback. `toolCallKey` falls back to
+            // `<msgId>:<name>`, and that fallback is what mangled dashboards: the early
+            // arg frames of a tool_use block can arrive before the id does, so the
+            // half-streamed widget was filed under the fallback key, the real id then
+            // opened a SECOND entry, and the fallback entry was no longer last in
+            // wOrder - so the flush loop below pushed a one-cell table and a one-letter
+            // "Key findings" onto the canvas, where wFlushed made it permanent.
+            //
+            // A fallback also collides when one message pushes several widgets, since
+            // every one of them keys to the same `<msgId>:push_widget`.
+            //
+            // The chip branch already skips id-less frames for the same reason.
+            const id = tc.id;
+            if (!id) continue;
             wLatest[id] = widgetFromArgs(args);
             if (!wOrder.includes(id)) {
               wOrder.push(id);

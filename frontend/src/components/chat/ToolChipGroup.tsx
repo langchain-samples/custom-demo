@@ -1,7 +1,7 @@
 /**
  * A burst of tool calls, collapsed into one row.
  *
- *   ▸ ⌗ Read a file  +17 steps            Ran command  ⟳
+ *   ▸ ⌗ Ran command  +17 steps                          ⟳
  *
  * A long agent turn produced a wall of rows - eighteen of them in the case this was
  * built for - which buries the two or three calls that actually mattered. Collapsed,
@@ -11,9 +11,8 @@
  * a single stretch of work into a dozen rows as soon as the agent alternated between
  * reading and running, which is most of the time.
  *
- * The header names the FIRST tool and counts the rest, and while the run is live it also
- * shows the tool now in flight, so a collapsed row still narrates progress rather than
- * going quiet for a minute.
+ * The header names the NEWEST call and counts everything behind it, so a collapsed row
+ * narrates progress while the burst grows rather than going quiet for a minute.
  *
  * Chrome deliberately mirrors SubagentCard: same border, chevron, step count and
  * "✓ done". These sit next to each other in the transcript, and a second visual
@@ -29,16 +28,15 @@ import { toolMeta } from "./helpers";
 
 export function ToolChipGroup({ chips }: { chips: ChipData[] }) {
   const [open, setOpen] = useState(false);
-  const m = toolMeta(chips[0].name);
+  // Titled by the LAST call, not the first. Collapsed, the row is a summary of where
+  // the work has got to, so the newest step is the useful one - and while the burst is
+  // still growing the title narrates progress by itself. Naming the first call also
+  // repeated it directly above the identical first row when expanded.
+  const m = toolMeta(chips[chips.length - 1].name);
   const Icon = m.icon;
-  // "+N steps" counts the calls BEYOND the one the row names. Now that a run mixes
-  // tools those N are not all the same tool, so the row reads "started here, plus N
-  // more steps" rather than "N more of this".
+  // "+N steps" counts everything BEHIND the call the row names.
   const more = chips.length - 1;
   const running = chips.some((c) => c.result === null && !c.stopped);
-  // The tool currently in flight, for the live label. The last chip is the newest, and
-  // an agent runs its tools one at a time here.
-  const current = running ? toolMeta(chips[chips.length - 1].name).label : "";
 
   return (
     <div className="flex flex-col overflow-hidden rounded-lg border border-border bg-panel-2 text-xs text-muted-foreground">
@@ -57,14 +55,12 @@ export function ToolChipGroup({ chips }: { chips: ChipData[] }) {
         <span className="shrink-0 text-[11px] text-muted-foreground">
           +{more} step{more === 1 ? "" : "s"}
         </span>
-        <span className="ml-auto flex min-w-0 items-center gap-1.5">
+        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          {/* No separate "current tool" label any more: the title IS the current tool. */}
           {running ? (
-            <>
-              <span className="truncate text-[11px] text-muted-foreground">{current}</span>
-              <IconLoader2 size={14} className="shrink-0 animate-spin opacity-70" />
-            </>
+            <IconLoader2 size={14} className="animate-spin opacity-70" />
           ) : (
-            <span className="shrink-0 text-[11px] text-muted-foreground">✓ done</span>
+            <span className="text-[11px] text-muted-foreground">✓ done</span>
           )}
         </span>
       </button>

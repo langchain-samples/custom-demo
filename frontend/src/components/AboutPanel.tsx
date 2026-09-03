@@ -112,7 +112,7 @@ export function AboutPanel({ open, onOpenChange, meta, displayName, logo }: Abou
             <h3 className="text-sm font-semibold text-[var(--brand-primary)]">
               How it fits together
             </h3>
-            <div className="rounded-xl border border-border bg-[var(--brand-tint)]/40 p-3">
+            <div className="rounded-xl border border-border bg-panel p-3">
               <ArchitectureDiagram />
             </div>
           </section>
@@ -152,10 +152,34 @@ export function AboutPanel({ open, onOpenChange, meta, displayName, logo }: Abou
 }
 
 /**
- * A static, brand-aware architecture diagram: a question flows into the deepagents
- * harness wrapping the model (planning, memory, filesystem, skills, sub-agents, tools),
- * which returns a live dashboard and written answer, configured per assistant and traced
- * in LangSmith. Uses the assistant's brand CSS variables so it matches the theme.
+ * Fixed palette for the diagram, NOT the assistant's brand colours.
+ *
+ * Two reasons. The diagram explains the platform, which is the same whoever the demo is
+ * for, so it should look the same every time rather than inheriting whatever palette the
+ * setup agent guessed from a logo. And the brand route was actually broken: the ported
+ * version filled the harness and the tool chips with `var(--brand-tint)`, which
+ * branding.ts sets to a PERCENTAGE (`12%`) for use inside color-mix, not a colour. An
+ * invalid fill renders black, so the harness came out black with black-on-black tool
+ * labels.
+ *
+ * Structure comes from the app's own theme tokens, which are already light/dark aware;
+ * only the accent is fixed, mixed into a wash so it works on either background.
+ */
+const C = {
+  accent: "#3b6fd4",
+  accentText: "#ffffff",
+  /** Card and chip faces: the plain panel colour, so text at currentColor always reads. */
+  face: "var(--panel)",
+  /** The harness box and the two bands: a faint accent wash over the panel. */
+  wash: "color-mix(in srgb, #3b6fd4 10%, var(--panel))",
+  bandWash: "color-mix(in srgb, #3b6fd4 6%, var(--panel))",
+  stroke: "var(--border)",
+} as const;
+
+/**
+ * A static architecture diagram: a question flows into the deepagents harness wrapping
+ * the model (planning, memory, filesystem, skills, sub-agents, tools), which returns a
+ * live dashboard and written answer, configured per assistant and traced in LangSmith.
  */
 function ArchitectureDiagram() {
   return (
@@ -175,7 +199,7 @@ function ArchitectureDiagram() {
           markerHeight="7"
           orient="auto-start-reverse"
         >
-          <path d="M0,0 L10,5 L0,10 z" fill="var(--brand-primary)" />
+          <path d="M0,0 L10,5 L0,10 z" fill={C.accent} />
         </marker>
       </defs>
 
@@ -187,9 +211,8 @@ function ArchitectureDiagram() {
           width="900"
           height="46"
           rx="10"
-          fill="var(--brand-soft)"
-          stroke="var(--brand-primary)"
-          strokeOpacity="0.35"
+          fill={C.bandWash}
+          stroke={C.stroke}
         />
         <text x="470" y="33" textAnchor="middle" fontSize="13" fontWeight="700" fill="currentColor">
           Assistant configuration
@@ -203,14 +226,14 @@ function ArchitectureDiagram() {
         y1="56"
         x2="470"
         y2="86"
-        stroke="var(--brand-primary)"
+        stroke={C.accent}
         strokeWidth="2"
         markerEnd="url(#arrow)"
       />
 
       {/* Input card */}
       <g>
-        <rect x="16" y="250" width="150" height="86" rx="12" fill="var(--brand-soft)" stroke="var(--brand-primary)" strokeOpacity="0.4" />
+        <rect x="16" y="250" width="150" height="86" rx="12" fill={C.face} stroke={C.stroke} />
         <text x="91" y="285" textAnchor="middle" fontSize="13" fontWeight="700" fill="currentColor">
           A question
         </text>
@@ -218,12 +241,12 @@ function ArchitectureDiagram() {
           plain language
         </text>
       </g>
-      <line x1="166" y1="293" x2="214" y2="293" stroke="var(--brand-primary)" strokeWidth="2" markerEnd="url(#arrow)" />
+      <line x1="166" y1="293" x2="214" y2="293" stroke={C.accent} strokeWidth="2" markerEnd="url(#arrow)" />
 
       {/* Harness box */}
       <g>
-        <rect x="220" y="86" width="500" height="404" rx="16" fill="var(--brand-tint)" stroke="var(--brand-primary)" strokeWidth="1.5" />
-        <text x="240" y="114" fontSize="13" fontWeight="800" fill="var(--brand-primary)">
+        <rect x="220" y="86" width="500" height="404" rx="16" fill={C.wash} stroke={C.stroke} strokeWidth="1.5" />
+        <text x="240" y="114" fontSize="13" fontWeight="800" fill={C.accent}>
           deepagents harness
         </text>
         <text x="240" y="132" fontSize="11" fill="currentColor" opacity="0.7">
@@ -231,11 +254,11 @@ function ArchitectureDiagram() {
         </text>
 
         {/* Model core */}
-        <rect x="345" y="146" width="250" height="52" rx="26" fill="var(--brand-primary)" />
-        <text x="470" y="172" textAnchor="middle" fontSize="14" fontWeight="800" fill="var(--brand-fg)">
+        <rect x="345" y="146" width="250" height="52" rx="26" fill={C.accent} />
+        <text x="470" y="172" textAnchor="middle" fontSize="14" fontWeight="800" fill={C.accentText}>
           Model (Claude)
         </text>
-        <text x="470" y="189" textAnchor="middle" fontSize="10.5" fill="var(--brand-fg)" opacity="0.85">
+        <text x="470" y="189" textAnchor="middle" fontSize="10.5" fill={C.accentText} opacity="0.85">
           bring your own model
         </text>
 
@@ -254,7 +277,7 @@ function ArchitectureDiagram() {
           const y = 220 + row * 56;
           return (
             <g key={title}>
-              <rect x={x} y={y} width="215" height="46" rx="10" fill="var(--brand-soft)" stroke="var(--brand-primary)" strokeOpacity="0.3" />
+              <rect x={x} y={y} width="215" height="46" rx="10" fill={C.face} stroke={C.stroke} />
               <text x={x + 14} y={y + 20} fontSize="12" fontWeight="700" fill="currentColor">
                 {title}
               </text>
@@ -266,7 +289,7 @@ function ArchitectureDiagram() {
         })}
 
         {/* Tools sub-box */}
-        <rect x="240" y="398" width="460" height="76" rx="12" fill="var(--brand-soft)" stroke="var(--brand-primary)" strokeOpacity="0.3" />
+        <rect x="240" y="398" width="460" height="76" rx="12" fill={C.face} stroke={C.stroke} />
         <text x="254" y="420" fontSize="12" fontWeight="700" fill="currentColor">
           Tools
         </text>
@@ -274,7 +297,7 @@ function ArchitectureDiagram() {
           const x = 254 + i * 111;
           return (
             <g key={t}>
-              <rect x={x} y="432" width="102" height="30" rx="8" fill="var(--brand-tint)" stroke="var(--brand-primary)" strokeOpacity="0.4" />
+              <rect x={x} y="432" width="102" height="30" rx="8" fill={C.face} stroke={C.stroke} />
               <text x={x + 51} y="451" textAnchor="middle" fontSize="11" fontWeight="600" fill="currentColor">
                 {t}
               </text>
@@ -284,9 +307,9 @@ function ArchitectureDiagram() {
       </g>
 
       {/* Output card */}
-      <line x1="720" y1="293" x2="770" y2="293" stroke="var(--brand-primary)" strokeWidth="2" markerEnd="url(#arrow)" />
+      <line x1="720" y1="293" x2="770" y2="293" stroke={C.accent} strokeWidth="2" markerEnd="url(#arrow)" />
       <g>
-        <rect x="772" y="240" width="156" height="106" rx="12" fill="var(--brand-soft)" stroke="var(--brand-primary)" strokeOpacity="0.4" />
+        <rect x="772" y="240" width="156" height="106" rx="12" fill={C.face} stroke={C.stroke} />
         <text x="850" y="278" textAnchor="middle" fontSize="13" fontWeight="700" fill="currentColor">
           Live dashboard
         </text>
@@ -299,9 +322,9 @@ function ArchitectureDiagram() {
       </g>
 
       {/* Observability band (bottom) */}
-      <line x1="470" y1="490" x2="470" y2="502" stroke="var(--brand-primary)" strokeWidth="2" markerEnd="url(#arrow)" />
+      <line x1="470" y1="490" x2="470" y2="502" stroke={C.accent} strokeWidth="2" markerEnd="url(#arrow)" />
       <g>
-        <rect x="20" y="504" width="900" height="46" rx="10" fill="var(--brand-soft)" stroke="var(--brand-primary)" strokeOpacity="0.35" />
+        <rect x="20" y="504" width="900" height="46" rx="10" fill={C.bandWash} stroke={C.stroke} />
         <text x="470" y="528" textAnchor="middle" fontSize="13" fontWeight="700" fill="currentColor">
           LangSmith observability
         </text>
