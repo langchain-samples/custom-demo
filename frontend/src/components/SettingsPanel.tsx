@@ -34,11 +34,6 @@ import {
   cleanupAssistantArtifacts,
   createAssistant,
   deleteAssistant,
-  listAssistants,
-  listAgents,
-  listHubPrompts,
-  listTools,
-  listWorkspaces,
   runEvalExperiment,
   runSetup,
   updateAssistant,
@@ -49,6 +44,15 @@ import {
   type ToolSpec,
   type Workspace,
 } from "@/lib/api";
+import {
+  useAgents,
+  useAssistants,
+  useHubPrompts,
+  useRefetchAssistants,
+  useReplaceAssistantInCache,
+  useTools,
+  useWorkspaces,
+} from "@/lib/queries";
 import { getAssistantId, isAssistantId, setAssistantId } from "@/lib/config";
 import { WorkspaceSelect } from "./settings/WorkspaceSelect";
 import { AssistantSelect } from "./settings/AssistantSelect";
@@ -104,12 +108,6 @@ export interface SettingsPanelProps {
    */
   onActiveAssistantChange?: (assistant: Assistant | null) => void;
   /**
-   * Fires once the first assistant load settles. Until then the app cannot tell "no
-   * assistant" from "not asked yet", and it was showing the empty state to everyone
-   * during the initial fetch.
-   */
-  onLoadedChange?: (loaded: boolean) => void;
-  /**
    * Fires when the assistant is switched or a new one is created — the parent
    * should reset the dashboard + chat and mint a fresh thread.
    */
@@ -141,6 +139,14 @@ const DEFAULT_ACCENT = "#0072BC";
 const DEFAULT_LOGO = "";
 
 const WORKSPACE_LS_KEY = "dashboardWorkspace";
+
+/**
+ * Stable fallbacks for a query that has not resolved. `?? []` inline would allocate a
+ * new array on every render, which re-runs every effect and memo keyed on the list.
+ */
+const EMPTY_ASSISTANTS: Assistant[] = [];
+const EMPTY_WORKSPACES: Workspace[] = [];
+const EMPTY_NAMES: string[] = [];
 const LAST_OWNER_LS_KEY = "lastOwner";
 
 /* ------------------------------- Helpers --------------------------------- */
@@ -252,13 +258,21 @@ function resolveRunContext(cfg: PanelConfig, project: string): RunContext {
 
 export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
   function SettingsPanel(
-    { open, onOpenChange, onActiveAssistantChange, onLoadedChange, onResetConversation },
+    { open, onOpenChange, onActiveAssistantChange, onResetConversation },
     ref,
   ) {
-    const [assistants, setAssistants] = useState<Assistant[]>([]);
-    const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+    /**
+     * Server state now lives in react-query (see lib/queries.ts), not in useState. The
+     * local `const`s below keep the ~15 read sites in this file unchanged, and the
+     * mutations further down invalidate rather than re-fetching by hand.
+     */
+    const assistantsQuery = useAssistants();
+    const assistants = assistantsQuery.data ?? EMPTY_ASSISTANTS;
+    const workspacesQuery = useWorkspaces();
+    const workspaces = workspacesQuery.data?.workspaces ?? EMPTY_WORKSPACES;
+    const organization = workspacesQuery.data?.organization ?? "";
     // Org the workspaces belong to, for labelling the create form's picker.
-    const [organization, setOrganization] = useState("");
+
     // Set when a saved workspace id turned out not to exist any more, so the create
     // form can say why it is asking for one instead of looking arbitrary.
     const [workspaceReset, setWorkspaceReset] = useState(false);
@@ -306,9 +320,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
       }
     }, [resizing, panelWidth]);
 
-    const [hubPrompts, setHubPrompts] = useState<string[]>([]);
-    const [agents, setAgents] = useState<string[]>([]);
-    const [toolSpecs, setToolSpecs] = useState<ToolSpec[]>([]);
+    const [toolSpecsFallback] = useState<ToolSpec[]>([]);
     const [fontStatus, setFontStatus] = useState<{ heading: FontStatus; body: FontStatus }>({
       heading: "curated",
       body: "curated",
@@ -320,6 +332,19 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
     const [cfg, setCfg] = useState<PanelConfig>(() =>
       blankConfig(readLS(WORKSPACE_LS_KEY)),
     );
+    // Workspace-scoped reads. Keyed on the workspace, which is what replaced calling a
+    // `loadHubPrompts(id)` by hand from every path that could change it.
+    const hubPromptsQuery = useHubPrompts(cfg.lsWorkspace);
+    const hubPrompts = hubPromptsQuery.data ?? EMPTY_NAMES;
+    const agentsQuery = useAgents(cfg.lsWorkspace);
+    const agents = agentsQuery.data ?? EMPTY_NAMES;
+    const toolsQuery = useTools();
+    // Cache writers for the mutation sites below. The debounced saves patch one entry;
+    // create and delete invalidate, which is what replaced their manual re-fetch.
+    const replaceAssistant = useReplaceAssistantInCache();
+    const refetchAssistants = useRefetchAssistants();
+    const toolSpecs = toolsQuery.data ?? toolSpecsFallback;
+
     const [showNewForm, setShowNewForm] = useState(false);
     const [creating, setCreating] = useState(false);
     // Post-setup presenter brief popup (null = hidden).
@@ -338,21 +363,6 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
 
     /* ---- Data loading ---- */
 
-    const loadHubPrompts = useCallback(async (workspace: string) => {
-      // Prompt sources are workspace-scoped; only fetch once a workspace is chosen.
-      if (!workspace) {
-        setHubPrompts([]);
-        setAgents([]);
-        return;
-      }
-      const [prompts, agentRepos] = await Promise.all([
-        listHubPrompts(workspace),
-        listAgents(workspace),
-      ]);
-      setHubPrompts(prompts);
-      setAgents(agentRepos);
-    }, []);
-
     // Apply a selection: load its config, persist the id, notify the parent, and
     // optionally reset the conversation (on switch/create, not delete/restore).
     const applySelection = useCallback(
@@ -366,62 +376,46 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
       [onResetConversation],
     );
 
-    const loadAll = useCallback(async () => {
-      const [alist, wlist, tlist] = await Promise.all([
-        listAssistants(),
-        listWorkspaces(),
-        listTools(),
-      ]);
-      setAssistants(alist);
-      setWorkspaces(wlist.workspaces);
-      setOrganization(wlist.organization);
-      setToolSpecs(tlist);
-      // A saved workspace id outlives the org it belonged to. After the move to a new
-      // org every stored id was still sent to the setup graph, which asked LangSmith
-      // about a workspace this key cannot see and failed the whole run with a raw
-      // "403 Forbidden on /settings" 30 seconds in. An id that is not in the list is
-      // not recoverable, so drop it and let the picker ask again.
-      const stale =
-        cfgRef.current.lsWorkspace &&
-        wlist.workspaces.length > 0 &&
-        !wlist.workspaces.some((w) => w.id === cfgRef.current.lsWorkspace);
-      if (stale) {
-        setCfg((c) => ({ ...c, lsWorkspace: "" }));
-        writeLS(WORKSPACE_LS_KEY, "");
-        setWorkspaceReset(true);
-        setShowNewForm(true);
-      }
-      // First-run: no owner name saved yet ⇒ treat as a new DE and onboard once.
-      // First run opens the ORDINARY create form. There used to be a separate onboarding
-      // dialog: the same form with fewer fields, plus a workspace picker - two things to
-      // keep in step, and a new user's first screen was the one nobody ever edited. The
-      // picker moved into this form, shown only when no workspace is chosen yet.
-      if (!onboardingCheckedRef.current) {
-        onboardingCheckedRef.current = true;
-        if (!readLS(LAST_OWNER_LS_KEY)) setShowNewForm(true);
-      }
-      // On the very first load, restore the saved assistant's config (no reset).
-      const saved = selectedIdRef.current;
-      if (isAssistantId(saved) && alist.some((a) => a.assistant_id === saved)) {
-        setCfg((c) => {
-          const a = alist.find((x) => x.assistant_id === saved)!;
-          return configFromAssistant(a, c.lsWorkspace);
-        });
-      }
-      // Skip the prompt list when the workspace was just cleared: it is per-workspace,
-      // and asking for "" is the same 403 in miniature.
-      if (!stale) await loadHubPrompts(cfgRef.current.lsWorkspace);
-      onLoadedChange?.(true);
-    }, [loadHubPrompts, onLoadedChange]);
+    /**
+     * A saved workspace id outlives the org it belonged to. After the move to a new org
+     * every stored id was still sent to the setup graph, which asked LangSmith about a
+     * workspace this key cannot see and failed the whole run with a raw "403 Forbidden
+     * on /settings" 30 seconds in. An id absent from the list is not recoverable, so
+     * drop it and let the picker ask again.
+     */
+    useEffect(() => {
+      if (!cfg.lsWorkspace || workspaces.length === 0) return;
+      if (workspaces.some((w) => w.id === cfg.lsWorkspace)) return;
+      setCfg((c) => ({ ...c, lsWorkspace: "" }));
+      writeLS(WORKSPACE_LS_KEY, "");
+      setWorkspaceReset(true);
+      setShowNewForm(true);
+    }, [cfg.lsWorkspace, workspaces]);
 
-    // Initial load, and a refresh each time the panel opens (matches the SPA).
+    /**
+     * First run (no owner name saved) opens the ordinary create form, once. There used
+     * to be a separate onboarding dialog: the same form with fewer fields plus a
+     * workspace picker, two things to keep in step, and a new user's first screen was
+     * the one nobody ever edited. The picker moved into this form instead.
+     */
     useEffect(() => {
-      void loadAll();
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+      if (assistantsQuery.isPending || onboardingCheckedRef.current) return;
+      onboardingCheckedRef.current = true;
+      if (!readLS(LAST_OWNER_LS_KEY)) setShowNewForm(true);
+    }, [assistantsQuery.isPending]);
+
+    /** Restore the saved assistant's config once the list arrives (no reset). */
+    const restoredRef = useRef(false);
     useEffect(() => {
-      if (open) void loadAll();
-    }, [open, loadAll]);
+      if (restoredRef.current || assistants.length === 0) return;
+      const saved = selectedIdRef.current;
+      const a = isAssistantId(saved)
+        ? assistants.find((x) => x.assistant_id === saved)
+        : undefined;
+      if (!a) return;
+      restoredRef.current = true;
+      setCfg((c) => configFromAssistant(a, c.lsWorkspace));
+    }, [assistants]);
 
     /* ---- Live branding → parent (header/presets) + accent CSS vars ---- */
     useEffect(() => {
@@ -507,15 +501,12 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           voice: { ...((src?.metadata?.voice as object) || {}), voice_name: next.voiceName },
         };
         try {
-          const updated = await updateAssistant(id, { metadata: meta });
-          setAssistants((list) =>
-            list.map((a) => (a.assistant_id === id ? updated : a)),
-          );
+          replaceAssistant(await updateAssistant(id, { metadata: meta }));
         } catch {
           /* non-fatal: branding still applied locally */
         }
       }, 600);
-    }, []);
+    }, [replaceAssistant]);
 
     const editBranding = useCallback(
       (patch: Partial<PanelConfig>) => {
@@ -546,15 +537,16 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
         try {
           // PATCH replaces `context` wholesale — spread the existing one or this
           // wipes prompt_name / ls_workspace / data_gap.
-          const updated = await updateAssistant(id, {
-            context: { ...(src?.context || {}), enabled_tools: ids },
-          });
-          setAssistants((list) => list.map((a) => (a.assistant_id === id ? updated : a)));
+          replaceAssistant(
+            await updateAssistant(id, {
+              context: { ...(src?.context || {}), enabled_tools: ids },
+            }),
+          );
         } catch {
           /* non-fatal: the selection still applies to this session's runs */
         }
       }, 600);
-    }, []);
+    }, [replaceAssistant]);
 
     /* ---- Imperative handle (send-time context + guards + theme) ---- */
     useImperativeHandle(
@@ -587,14 +579,12 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
     );
 
     /* ---- Workspace ---- */
-    const handleWorkspace = useCallback(
-      (id: string) => {
-        setCfg((c) => ({ ...c, lsWorkspace: id }));
-        writeLS(WORKSPACE_LS_KEY, id);
-        void loadHubPrompts(id); // prompts are per-workspace
-      },
-      [loadHubPrompts],
-    );
+    const handleWorkspace = useCallback((id: string) => {
+      setCfg((c) => ({ ...c, lsWorkspace: id }));
+      writeLS(WORKSPACE_LS_KEY, id);
+      // No explicit refetch: the prompt and agent queries are keyed on the workspace, so
+      // changing it here is the fetch. That is the whole reason they are queries.
+    }, []);
 
     /* ---- Assistant selection / create / delete ---- */
     const handleSelectAssistant = useCallback(
@@ -652,8 +642,9 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
             context: assistantContext,
           });
         }
-        const list = await listAssistants();
-        setAssistants(list);
+        // refetch rather than invalidate-then-fetch: applySelection needs the fresh
+        // list in hand, and this is one request instead of two.
+        const list = await refetchAssistants();
         applySelection(a.assistant_id, list, true);
         // Surface the presenter brief the setup agent generated. Close the
         // settings sheet so it lands front-and-centre over the fresh demo.
@@ -665,7 +656,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           setDemoBrief({ customer: v.customer, brief: briefLines, flow: flowLines });
         }
       },
-      [applySelection, onOpenChange],
+      [applySelection, onOpenChange, refetchAssistants],
     );
 
     const handleCreate = useCallback(
@@ -718,13 +709,12 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           }
         }
         await deleteAssistant(id);
-        const list = await listAssistants();
-        setAssistants(list);
+        const list = await refetchAssistants();
         applySelection("", list, false);
       } catch (e) {
         window.alert("Delete failed: " + errMsg(e));
       }
-    }, [applySelection]);
+    }, [applySelection, refetchAssistants]);
 
     /* ---- Derived ---- */
     const hasAssistant = isAssistantId(selectedId);

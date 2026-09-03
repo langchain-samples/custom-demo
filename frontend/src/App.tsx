@@ -44,6 +44,7 @@ import { applyTheme, getStoredTheme, setStoredTheme, type Theme } from "@/lib/th
 import { invalidateColorCache } from "@/lib/branding";
 import type { Assistant, RunContext, Widget } from "@/lib/api";
 import { readSandboxTextFile } from "@/lib/api";
+import { useAssistants } from "@/lib/queries";
 
 const DEFAULT_NAME = "Corebot";
 const DEFAULT_LOGO = "";
@@ -70,7 +71,13 @@ export default function App() {
   const [filesOpen, setFilesOpen] = useState(false);
   const [evalsOpen, setEvalsOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
-  const [assistantsLoaded, setAssistantsLoaded] = useState(false);
+  /**
+   * The same query SettingsPanel uses. react-query dedupes it to one request and one
+   * cache entry, which is what let a hand-rolled `onLoadedChange` callback - threaded
+   * from the panel through here into ChatPanel purely to say "the fetch finished" - be
+   * deleted outright.
+   */
+  const { isPending: assistantsPending } = useAssistants();
   const [activeAssistant, setActiveAssistant] = useState<Assistant | null>(null);
   const [widgets, setWidgets] = useState<Widget[]>([]);
   // HTML files the agent wrote to /workspace/artifacts, keyed by path; each becomes a
@@ -470,7 +477,7 @@ export default function App() {
             logo={logo}
             industry={meta?.industry}
             hasAssistant={!!activeAssistant}
-            assistantsLoaded={assistantsLoaded}
+            assistantsLoaded={!assistantsPending}
             onOpenSettings={() => setSettingsOpen(true)}
           />
           {/* Drag handle to resize the rail (only when the split is shown). */}
@@ -523,7 +530,6 @@ export default function App() {
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
         onActiveAssistantChange={setActiveAssistant}
-        onLoadedChange={setAssistantsLoaded}
         onResetConversation={handleResetConversation}
       />
     </div>
