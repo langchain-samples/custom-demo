@@ -421,7 +421,9 @@ Implementation notes, each of which is load-bearing:
   GitHub-connected, so nothing sets it any more), `create_deep_agent` gets
   `subagents=[researcher, analyst]` + `langchain-quickjs`'s `CodeInterpreterMiddleware`, so the
   agent can write a JS workflow script that fans out via a `task()` global. Pinned to
-  `langchain-quickjs<0.3` to keep `deepagents<0.7`. Two code envs then coexist — the JS interpreter
+  `langchain-quickjs>=0.3,<0.4` alongside `deepagents>=0.7,<0.8` (this used to be pinned <0.3 to
+  hold deepagents below 0.7; both were since upgraded, and quickjs is now a hard dependency rather
+  than an optional extra). Two code envs then coexist — the JS interpreter
   (orchestration only) and the Python `execute` sandbox (data analysis); `_subagents_note` tells the
   model which to use for what.
 - **Naming a subagent card is order-matching, not id-matching.** A subagent's stream namespace is

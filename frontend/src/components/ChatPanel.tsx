@@ -1329,6 +1329,10 @@ export default function ChatPanel({
         placeholder={variant === "hero" ? heroPlaceholder : "Ask a question…"}
         minRows={variant === "hero" ? 2 : 1}
         aria-label="Prompt"
+        // Tags the underlying textarea (PromptInput spreads unknown props onto it) so a
+        // quick-action click can put the caret in it. The component is vendored and
+        // exposes no ref, and only one composer is mounted at a time.
+        data-chat-composer=""
         leadingAction={attachButton}
         trailingAction={voiceControl}
         onKeyDown={(e) => {
@@ -1369,7 +1373,28 @@ export default function ChatPanel({
               {presets.length > 0 && (
                 <div className="flex w-full max-w-xl flex-col gap-1.5">
                   {presets.map((p, i) => (
-                    <PresetButton key={i} action={p} disabled={busy} onClick={() => send(p.question)} />
+                    <PresetButton
+                      key={i}
+                      action={p}
+                      disabled={busy}
+                      // Loads the composer instead of sending. A preset is a long,
+                      // specific question and the presenter usually wants to adjust it
+                      // (a different store, a different claim number) before it goes;
+                      // sending on click meant backing out of a run to change one word.
+                      onClick={() => {
+                        setInput(p.question);
+                        // Focus so the caret is where the eye already is, at the end of
+                        // the text that just appeared, ready to edit or hit send.
+                        requestAnimationFrame(() => {
+                          const box = document.querySelector<HTMLTextAreaElement>(
+                            "textarea[data-chat-composer]",
+                          );
+                          if (!box) return;
+                          box.focus();
+                          box.setSelectionRange(box.value.length, box.value.length);
+                        });
+                      }}
+                    />
                   ))}
                 </div>
               )}
@@ -1793,15 +1818,18 @@ function PresetButton({
   const i = label.indexOf(":");
   const cls =
     "cursor-pointer rounded-lg border border-border bg-panel-2 px-2.5 py-2 text-left text-[12.5px] text-foreground hover:border-brand hover:bg-brand/10 disabled:cursor-default disabled:opacity-60";
+  // The click loads the composer rather than sending, so the title says so: a button
+  // that looks like it asks the question but only fills a box needs to admit it.
+  const title = "Put this in the message box to edit or send";
   if (i > 0) {
     return (
-      <button type="button" className={cls} disabled={disabled} onClick={onClick}>
+      <button type="button" title={title} className={cls} disabled={disabled} onClick={onClick}>
         <b className="text-[color:var(--brand-label)]">{label.slice(0, i + 1)}</b> {label.slice(i + 1).trim()}
       </button>
     );
   }
   return (
-    <button type="button" className={cls} disabled={disabled} onClick={onClick}>
+    <button type="button" title={title} className={cls} disabled={disabled} onClick={onClick}>
       {label}
     </button>
   );
