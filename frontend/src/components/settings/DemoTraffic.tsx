@@ -11,49 +11,33 @@
  * which we poll for because the job takes minutes (several real agent turns for
  * seed traces, then a few thousand run ingests).
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   generateDemoTraffic,
-  getDemoTrafficStatus,
-  type DemoTrafficStatus,
   type DemoTrafficTarget,
 } from "@/lib/api";
-
-const POLL_MS = 5000;
+import { useDemoTrafficStatus } from "@/lib/queries";
 
 interface Props {
   target: DemoTrafficTarget | null;
 }
 
 export function DemoTraffic({ target }: Props) {
-  const [status, setStatus] = useState<DemoTrafficStatus | null>(null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
-  const alive = useRef(true);
 
   const project = target?.project || "";
+  /**
+   * The query owns the poll and the unmount handling. What this replaced was a
+   * setInterval plus an `alive` ref that had to be re-armed in the effect BODY, because
+   * React 19 StrictMode mounts, unmounts and remounts and a ref left false froze the
+   * panel on its first render. None of that is ours to get right any more.
+   */
+  const statusQuery = useDemoTrafficStatus(project, target?.workspace, starting);
+  const status = statusQuery.data ?? null;
   const busy = starting || Boolean(status?.running);
-
-  const refresh = useCallback(async () => {
-    if (!project) return;
-    const next = await getDemoTrafficStatus(project, target?.workspace);
-    if (alive.current) setStatus(next);
-  }, [project, target?.workspace]);
-
-  useEffect(() => {
-    // Re-armed in the effect body rather than only in cleanup, because React 19
-    // StrictMode mounts, unmounts and remounts — a ref left false would freeze
-    // the panel on its first render.
-    alive.current = true;
-    void refresh();
-    if (!busy) return () => { alive.current = false; };
-    const id = setInterval(() => void refresh(), POLL_MS);
-    return () => {
-      alive.current = false;
-      clearInterval(id);
-    };
-  }, [refresh, busy]);
+  const refresh = useCallback(() => void statusQuery.refetch(), [statusQuery]);
 
   const start = useCallback(async () => {
     if (!target) return;

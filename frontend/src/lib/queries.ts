@@ -126,7 +126,11 @@ export function useEvalStatus(target: EvalTarget | null, poll: boolean) {
     queryKey: qk.evalStatus(target ?? ({} as EvalTarget)),
     queryFn: () => getEvalStatus(target as EvalTarget),
     enabled: !!target?.assistant_id,
-    refetchInterval: poll ? EVAL_POLL_MS : false,
+    // Two reasons to keep polling: the caller says a run was just started (LangSmith has
+    // nothing to report for the first few seconds), or LangSmith itself says one is
+    // running. Reading the query's own data here is what avoids the caller having to
+    // derive "still running" from data that only arrives because it is polling.
+    refetchInterval: (query) => (poll || query.state.data?.running ? EVAL_POLL_MS : false),
     // Status is the one thing that must not be served stale: it is the answer to "is it
     // finished yet".
     staleTime: 0,
@@ -139,7 +143,9 @@ export function useDemoTrafficStatus(project: string, workspace: string | undefi
     queryKey: qk.demoTraffic(project, workspace),
     queryFn: () => getDemoTrafficStatus(project, workspace),
     enabled: !!project,
-    refetchInterval: poll ? TRAFFIC_POLL_MS : false,
+    // Poll while the caller has just started a backfill, or while the server says one is
+    // running. Same reasoning as useEvalStatus.
+    refetchInterval: (query) => (poll || query.state.data?.running ? TRAFFIC_POLL_MS : false),
     staleTime: 0,
   });
 }

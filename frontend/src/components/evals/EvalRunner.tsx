@@ -32,16 +32,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { PaneState } from "@/components/files/PaneState";
 import {
-  getDemoTrafficStatus,
-  getEvalStatus,
   runEvalExperiment,
-  type DemoTrafficStatus,
-  type EvalStatus,
   type EvalTarget,
 } from "@/lib/api";
-
-/** How often to re-read LangSmith while an experiment is in flight. */
-const POLL_MS = 4000;
+import { useDemoTrafficStatus, useEvalStatus } from "@/lib/queries";
 
 /**
  * Hard stop for the optimistic "pending" state. POST /evals/run answers as soon
@@ -117,51 +111,41 @@ function OpenLink({ href, children }: { href: string; children: React.ReactNode 
 }
 
 export function EvalRunner({ target }: { target: EvalTarget }) {
-  /** null until the first status lands — getEvalStatus never rejects. */
-  const [status, setStatus] = useState<EvalStatus | null>(null);
   const [starting, setStarting] = useState(false);
   const [pendingSince, setPendingSince] = useState<number | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
+  // Polled only while something is in flight. `pollWanted` is computed from the state
+  // above, before the query, so the query can consume it without a circular read.
+  const pollWanted = starting || pendingSince !== null;
+  const statusQuery = useEvalStatus(target, pollWanted);
 
   // The experiment showing when the current run was kicked off; a *different*
   // name coming back is how we know the new one has landed. A ref, so the poll
   // callback can read it without being rebuilt (and restarting the interval).
   const priorExperiment = useRef<string | null>(null);
 
-  // Guards setState after the dialog closes. Assigned in the effect body rather
-  // than at declaration so React 19's StrictMode remount re-arms it.
-  const alive = useRef(true);
-  useEffect(() => {
-    alive.current = true;
-    return () => {
-      alive.current = false;
-    };
-  }, []);
+  // The query owns the interval now, so the setInterval and the `alive` ref that used to
+  // guard setState after the dialog closed are both gone: react-query drops the result
+  // of a query whose observer has unmounted, which is what the ref was for (and what
+  // StrictMode's double mount made visible). `busy` is now only about the UI.
+  const busy = starting || !!statusQuery.data?.running || pendingSince !== null;
+  const status = statusQuery.data ?? null;
+  const refresh = useCallback(() => void statusQuery.refetch(), [statusQuery]);
 
-  const refresh = useCallback(async () => {
-    const next = await getEvalStatus(target);
-    if (!alive.current) return;
-    setStatus(next);
+  // Clearing the optimistic pending state still needs to watch each new status:
+  // POST /evals/run answers before LangSmith has anything to report, so a NEW
+  // experiment name landing is the signal that the real run has started.
+  useEffect(() => {
+    if (!status) return;
     setPendingSince((since) => {
       if (since === null) return since;
       const landed =
-        !next.running && !!next.experiment_name && next.experiment_name !== priorExperiment.current;
+        !status.running &&
+        !!status.experiment_name &&
+        status.experiment_name !== priorExperiment.current;
       return landed || Date.now() - since > PENDING_TIMEOUT_MS ? null : since;
     });
-  }, [target]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  // `busy` flips exactly twice per run (start, finish), so this effect arms and
-  // disarms the poll without churning it on every status update.
-  const busy = starting || !!status?.running || pendingSince !== null;
-  useEffect(() => {
-    if (!busy) return;
-    const id = setInterval(() => void refresh(), POLL_MS);
-    return () => clearInterval(id);
-  }, [busy, refresh]);
+  }, [status]);
 
   const handleRun = useCallback(async () => {
     setRunError(null);
@@ -169,7 +153,6 @@ export function EvalRunner({ target }: { target: EvalTarget }) {
     priorExperiment.current = status?.experiment_name ?? null;
     // runEvalExperiment resolves with { ok: false } rather than throwing.
     const ack = await runEvalExperiment(target);
-    if (!alive.current) return;
     setStarting(false);
     if (!ack.ok) {
       setRunError(ack.error || "Could not start the experiment.");
@@ -289,20 +272,10 @@ export function EvalRunner({ target }: { target: EvalTarget }) {
  * is the normal state before any traffic has been generated.
  */
 function DemoResources({ project, workspace }: { project: string; workspace?: string }) {
-  const [traffic, setTraffic] = useState<DemoTrafficStatus | null>(null);
-  const alive = useRef(true);
-
-  useEffect(() => {
-    alive.current = true;
-    if (!project) return () => { alive.current = false; };
-    void (async () => {
-      const next = await getDemoTrafficStatus(project, workspace);
-      if (alive.current) setTraffic(next);
-    })();
-    return () => {
-      alive.current = false;
-    };
-  }, [project, workspace]);
+  // A one-shot read, so `poll` is false: this panel is usually opened long after the
+  // backfill ran. It shares a cache entry with the DemoTraffic control in the settings
+  // panel, so opening both no longer means two requests for the same thing.
+  const traffic = useDemoTrafficStatus(project, workspace, false).data ?? null;
 
   if (!project) return null;
   const links = traffic?.links || {};
