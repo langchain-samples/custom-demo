@@ -42,6 +42,7 @@ export const TOOL_LABELS: Record<string, ToolLabel> = {
   read_file: { done: "Read a file", active: "Reading a file" },
   write_file: { done: "Wrote a file", active: "Writing a file" },
   edit_file: { done: "Edited a file", active: "Editing a file" },
+  delete: { done: "Deleted a file", active: "Deleting a file" },
 };
 
 /** The live label for a tool, or a readable fallback for one we do not know. */

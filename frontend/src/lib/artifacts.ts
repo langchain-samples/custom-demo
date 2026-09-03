@@ -107,3 +107,45 @@ export function safeHtmlPrefix(partial: string): string {
   if (lastLt > s.lastIndexOf(">")) s = s.slice(0, lastLt);
   return s;
 }
+
+/**
+ * Whether a partial document has anything a viewer could actually SEE yet.
+ *
+ * An agent writes a full `<head>` first, and its `<style>` block is a big share of the
+ * document: measured on real artifacts, `<body>` began 4301 bytes into 12558 (34%) and
+ * 4061 into 17312 (23%). Until it starts there is nothing to paint, so the iframe was
+ * correctly showing a blank page for the first ~30 seconds of a write, which reads as
+ * broken rather than busy.
+ *
+ * Head content is not the only thing that renders to nothing: an opening `<body>` whose
+ * children have not arrived, or a `<div>` with no text in it yet, are equally empty. So
+ * this asks the real question - is there any non-whitespace text after `<body>` - rather
+ * than looking for the tag alone.
+ */
+export function hasRenderableBody(partial: string): boolean {
+  if (!partial) return false;
+  const lower = partial.toLowerCase();
+  const bodyAt = lower.indexOf("<body");
+  let rest: string;
+  if (bodyAt >= 0) {
+    const gt = partial.indexOf(">", bodyAt);
+    if (gt < 0) return false; // the <body> tag itself is still being written
+    rest = partial.slice(gt + 1);
+  } else if (lower.includes("<html") || lower.includes("<head")) {
+    // A document that has declared itself but not reached its body.
+    return false;
+  } else {
+    // A fragment with no <html>/<head> at all: whatever is there is the content.
+    rest = partial;
+  }
+  // Drop raw-text elements whole (their contents are CSS/JS, not visible text), then
+  // every remaining tag, and see if any real characters are left.
+  const text = rest
+    .replace(/<(script|style)\b[\s\S]*?(<\/\1>|$)/gi, "")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .trim();
+  if (text.length > 0) return true;
+  // No text yet, but a self-contained visual (an img/svg/canvas) counts as something.
+  return /<(img|svg|canvas|video|table)\b/i.test(rest);
+}

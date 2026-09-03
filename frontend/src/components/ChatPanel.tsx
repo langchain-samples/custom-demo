@@ -140,7 +140,13 @@ export interface ChatPanelProps {
    * completes (`streaming` false) App re-reads the file from the sandbox, because an
    * `edit_file` follow-up carries only a diff and never the whole document.
    */
-  onArtifact?: (artifact: { path: string; content: string; streaming: boolean }) => void;
+  onArtifact?: (artifact: {
+    path: string;
+    content: string;
+    streaming: boolean;
+    /** The agent deleted the file: drop the tab rather than leave it blank. */
+    deleted?: boolean;
+  }) => void;
   /**
    * Send guard, run before every send. Return an error string to BLOCK the send
    * (rendered as an assistant message; App opens settings as a side effect) or
@@ -159,6 +165,12 @@ export interface ChatPanelProps {
   industry?: string;
   /** Whether a real assistant is selected — drives the empty-state (CTA vs branded). */
   hasAssistant?: boolean;
+  /**
+   * False until the assistant list has loaded. Without it there is no way to tell "no
+   * assistant" from "not asked yet", so the empty state was shown to everyone during
+   * the first fetch, including people who do have assistants.
+   */
+  assistantsLoaded?: boolean;
   /** Open the settings sheet (from the "Choose assistant" empty-state CTA). */
   onOpenSettings?: () => void;
   /**
@@ -314,6 +326,7 @@ export default function ChatPanel({
   industry,
   sandboxTarget,
   hasAssistant,
+  assistantsLoaded = true,
   onOpenSettings,
   onActivity,
 }: ChatPanelProps) {
@@ -475,6 +488,11 @@ export default function ChatPanel({
     // Artifact writes seen this run, keyed by tool_call id -> path. Lets the write's
     // ToolMessage (which carries only tool_call_id) mark the right artifact finished.
     const artifactPathByCall: Record<string, string> = {};
+    // Message ids that turned out to carry tool calls. A streaming message TRANSITIONS:
+    // its preamble text ("I'll look that up.") arrives several frames before its tool
+    // calls do, so a per-frame "has no tool calls" test says yes, then no. Remembering
+    // which ids ever had tools is what makes that judgement stick.
+    const toolMsgIds = new Set<string>();
     // Message ids belonging to a middleware's own model call (the goal grader),
     // learned from metadata. Only needed on a server that does NOT suffix event
     // names with the namespace: there the frames look like main-graph output and
@@ -510,6 +528,9 @@ export default function ChatPanel({
     // dispatch has no args in the stream at all; it is read back off the script.
     const taskArgs: Record<string, TaskDispatch> = {};
     let answer = "";
+    // Which message id the bubble's current text came from, so a message that later
+    // turns out to have been preamble can withdraw its own text and nothing else's.
+    let answerFromId: string | null = null;
     let runId: string | null = null;
     let errorMsg: string | null = null;
     let interrupt: ReviewInterrupt | null = null;
@@ -579,6 +600,20 @@ export default function ChatPanel({
             // chip path rather than replacing it, and deliberately before the id guard
             // below: the earliest arg frames can arrive without a tool_call id, and
             // those carry the opening tags we want on screen soonest.
+            if (name === "delete") {
+              const a = args as { file_path?: string };
+              // On the CALL, not the result: the tab is showing a file the agent has
+              // decided to remove either way, and a delete that fails leaves a tab the
+              // next write recreates.
+              if (isHtmlArtifactPath(a.file_path)) {
+                onArtifact?.({
+                  path: a.file_path as string,
+                  content: "",
+                  streaming: false,
+                  deleted: true,
+                });
+              }
+            }
             if (name === "write_file" || name === "edit_file") {
               const a = args as { file_path?: string; content?: string };
               if (isHtmlArtifactPath(a.file_path)) {
@@ -633,11 +668,27 @@ export default function ChatPanel({
             syncChips();
           }
         }
-        // Final answer = a MAIN-agent AI message with text, no tools. Exclude
-        // tool-internal LLM output (node "tools") — it must not leak into chat.
+        // Final answer = a MAIN-agent AI message with text that never carried tools.
+        // Exclude tool-internal LLM output (node "tools") — it must not leak into chat.
+        //
+        // Preamble is DISCARDED, not shown. It used to reach the bubble during the few
+        // frames before the tool calls appeared and then stay there, unchallenged, for
+        // the whole tool phase - reading as an answer the agent had not given. It also
+        // left `answer` non-empty, which silently suppressed the "Building your
+        // dashboard…" line below and, since runTurn returns `answer`, was what voice
+        // mode read aloud when a run ended early.
+        if (tcs.length > 0 && msg.id) toolMsgIds.add(msg.id);
         const text = contentToText(msg.content);
-        if (text && tcs.length === 0 && node !== "tools") {
+        const isPreamble = !!msg.id && toolMsgIds.has(msg.id);
+        if (isPreamble && answer && answerFromId === msg.id) {
+          // This id already put its preamble in the bubble. Take it back.
+          answer = "";
+          answerFromId = null;
+          setBubble({ text: PLACEHOLDER_TEXT, streaming: true, markdown: false });
+        }
+        if (text && !isPreamble && node !== "tools") {
           answer = text; // partial content is cumulative per message id
+          answerFromId = msg.id ?? null;
           setBubble({ text: answer, streaming: true, markdown: false });
         }
       } else if (msg.type === "tool" && msg.name !== "push_widget") {
@@ -1411,6 +1462,12 @@ export default function ChatPanel({
                 </div>
               )}
             </div>
+          ) : !assistantsLoaded ? (
+            /* Still asking. Claiming "no assistant selected" before the answer arrives
+               tells someone with a dozen assistants that they have none. */
+            <div className="flex flex-1 items-center justify-center px-6">
+              <ReasoningText phrases={["Loading your assistants"]} />
+            </div>
           ) : (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 select-none px-6 text-center">
               <IconRobot size={64} stroke={1.25} className="opacity-40" />
@@ -1686,7 +1743,14 @@ function ItemView({
         showActions={false}
         contentClassName={PROSE_CLS}
       >
-        <Streamdown parseIncompleteMarkdown>{item.text}</Streamdown>
+        {/* `animated` fades each word in as it arrives instead of snapping the whole
+            block to its new size, which is what makes streamed text read as smooth
+            rather than jumpy. Streamdown has supported this all along and we had it
+            off. Word-level, not per character: per character on a long answer is a lot
+            of simultaneous animation for no extra legibility. */}
+        <Streamdown parseIncompleteMarkdown animated={{ animation: "fadeIn", sep: "word", duration: 260 }}>
+          {item.text}
+        </Streamdown>
       </StreamingResponse>
     );
   }

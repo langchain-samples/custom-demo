@@ -46,9 +46,11 @@ function formatResult(content: string): string {
 }
 
 export function ToolChip({ chip }: { chip: ChipData }) {
-  const m = toolMeta(chip.name);
-  const Icon = m.icon;
   const hasResult = chip.result !== null;
+  // Present tense until the result lands, past tense after. A stopped call keeps the
+  // past tense: it is not still happening.
+  const m = toolMeta(chip.name, !hasResult && !chip.stopped);
+  const Icon = m.icon;
   const isCode = !!chip.code;
 
   // Map the chip lifecycle to beUI's ToolResult status. A tool whose result

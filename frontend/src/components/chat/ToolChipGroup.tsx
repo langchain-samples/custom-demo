@@ -32,11 +32,14 @@ export function ToolChipGroup({ chips }: { chips: ChipData[] }) {
   // the work has got to, so the newest step is the useful one - and while the burst is
   // still growing the title narrates progress by itself. Naming the first call also
   // repeated it directly above the identical first row when expanded.
-  const m = toolMeta(chips[chips.length - 1].name);
+  const newest = chips[chips.length - 1];
+  const running = chips.some((c) => c.result === null && !c.stopped);
+  // Present tense while the newest call is still in flight, so the row reads "Writing a
+  // file" as it happens and "Wrote a file" once it has.
+  const m = toolMeta(newest.name, newest.result === null && !newest.stopped);
   const Icon = m.icon;
   // "+N steps" counts everything BEHIND the call the row names.
   const more = chips.length - 1;
-  const running = chips.some((c) => c.result === null && !c.stopped);
 
   return (
     <div className="flex flex-col overflow-hidden rounded-lg border border-border bg-panel-2 text-xs text-muted-foreground">

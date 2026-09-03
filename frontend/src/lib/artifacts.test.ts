@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { artifactName, isHtmlArtifactPath, safeHtmlPrefix } from "@/lib/artifacts";
+import {
+  artifactName,
+  hasRenderableBody,
+  isHtmlArtifactPath,
+  safeHtmlPrefix,
+} from "@/lib/artifacts";
 
 describe("isHtmlArtifactPath", () => {
   it("accepts html and htm under the artifact dir", () => {
@@ -95,5 +100,48 @@ describe("safeHtmlPrefix", () => {
       previous = out;
     }
     expect(previous).toBe(full);
+  });
+});
+
+describe("hasRenderableBody", () => {
+  it("is false for nothing, and for a document still in its head", () => {
+    expect(hasRenderableBody("")).toBe(false);
+    expect(hasRenderableBody("<!doctype html><html><head><title>x</title>")).toBe(false);
+  });
+
+  it("is false through a long style block, which is the case that motivated it", () => {
+    const head = '<!doctype html><html><head><style>body{margin:0}h1{font-size:2rem}';
+    expect(hasRenderableBody(head)).toBe(false);
+    expect(hasRenderableBody(head + "</style></head>")).toBe(false);
+  });
+
+  it("is false for an opened body with nothing in it yet", () => {
+    expect(hasRenderableBody("<html><head></head><body>")).toBe(false);
+    expect(hasRenderableBody("<html><head></head><body>\n  <div class='wrap'>\n")).toBe(false);
+  });
+
+  it("is false while the body tag itself is half written", () => {
+    expect(hasRenderableBody("<html><head></head><bod")).toBe(false);
+    expect(hasRenderableBody("<html><head></head><body class=\"re")).toBe(false);
+  });
+
+  it("is true as soon as real text lands in the body", () => {
+    expect(hasRenderableBody("<html><head></head><body><h1>Q3 brief")).toBe(true);
+  });
+
+  it("ignores script and style content inside the body", () => {
+    expect(hasRenderableBody("<body><style>.a{color:red}</style>")).toBe(false);
+    expect(hasRenderableBody("<body><script>const a = 1;</script>")).toBe(false);
+    expect(hasRenderableBody("<body><script>const a = 1;</script><p>hi")).toBe(true);
+  });
+
+  it("counts a self-contained visual with no text", () => {
+    expect(hasRenderableBody('<body><svg viewBox="0 0 1 1"></svg>')).toBe(true);
+    expect(hasRenderableBody('<body><img src="x.png">')).toBe(true);
+  });
+
+  it("treats a bare fragment as its own content", () => {
+    expect(hasRenderableBody("<p>just a fragment</p>")).toBe(true);
+    expect(hasRenderableBody("<div></div>")).toBe(false);
   });
 });

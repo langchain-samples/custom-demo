@@ -66,6 +66,10 @@ export function DashboardPane({
   // Newline-joined so the effect below compares on a plain string: a fresh array every
   // render would re-run it forever.
   const pathsKey = paths.join("\n");
+  const hasGraph = !!activity && activity.chips.length > 0;
+  // No widgets means no dashboard to show. The pane mounts for a graph or an artifact
+  // as well now, so the tab could sit there reading "LIVE DASHBOARD" over blank space.
+  const hasWidgets = widgets.length > 0;
   const [active, setActive] = useState<string>(CANVAS_TAB);
   const seen = useRef<Set<string>>(new Set());
   // Only the visible artifact is mounted (Tabs unmounts the rest), so one ref is enough
@@ -84,13 +88,21 @@ export function DashboardPane({
       setActive(firstSight);
       return;
     }
-    // A tab can disappear on reset; fall back rather than render an empty pane.
+    // A tab can disappear (a reset, or the agent deleting an artifact); fall back
+    // rather than render an empty pane.
     setActive((cur) =>
       cur !== CANVAS_TAB && cur !== GRAPH_TAB && !list.includes(cur) ? CANVAS_TAB : cur,
     );
   }, [pathsKey]);
 
-  const hasGraph = !!activity && activity.chips.length > 0;
+  // Dashboard is the default tab but no longer always exists, so land on the first tab
+  // that does rather than on a trigger that is not rendered.
+  useEffect(() => {
+    if (active !== CANVAS_TAB || hasWidgets) return;
+    const first = pathsKey ? pathsKey.split("\n")[0] : "";
+    setActive(first || (hasGraph ? GRAPH_TAB : CANVAS_TAB));
+  }, [active, hasWidgets, hasGraph, pathsKey]);
+
 
   // Nothing but widgets: render the canvas alone, exactly as before any of this.
   if (paths.length === 0 && !hasGraph) {
@@ -103,7 +115,7 @@ export function DashboardPane({
           tabs, which doubled the header's height for a single control. */}
       <div className="mx-4 mt-3 flex items-center gap-3 print:hidden">
         <TabsList className="w-fit min-w-0 flex-shrink overflow-x-auto">
-          <TabsTrigger value={CANVAS_TAB}>Dashboard</TabsTrigger>
+          {hasWidgets && <TabsTrigger value={CANVAS_TAB}>Dashboard</TabsTrigger>}
           {hasGraph && <TabsTrigger value={GRAPH_TAB}>Graph</TabsTrigger>}
           {paths.map((path) => (
             <TabsTrigger key={path} value={path} className="max-w-52">
@@ -130,9 +142,11 @@ export function DashboardPane({
           </Button>
         )}
       </div>
-      <TabsContent value={CANVAS_TAB} className="flex min-h-0 flex-1 flex-col">
-        <DashboardCanvas widgets={widgets} theme={theme} />
-      </TabsContent>
+      {hasWidgets && (
+        <TabsContent value={CANVAS_TAB} className="flex min-h-0 flex-1 flex-col">
+          <DashboardCanvas widgets={widgets} theme={theme} />
+        </TabsContent>
+      )}
       {hasGraph && (
         <TabsContent value={GRAPH_TAB} className="min-h-0 flex-1 overflow-auto">
           <AgentGraph

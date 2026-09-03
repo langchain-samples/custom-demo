@@ -104,6 +104,12 @@ export interface SettingsPanelProps {
    */
   onActiveAssistantChange?: (assistant: Assistant | null) => void;
   /**
+   * Fires once the first assistant load settles. Until then the app cannot tell "no
+   * assistant" from "not asked yet", and it was showing the empty state to everyone
+   * during the initial fetch.
+   */
+  onLoadedChange?: (loaded: boolean) => void;
+  /**
    * Fires when the assistant is switched or a new one is created — the parent
    * should reset the dashboard + chat and mint a fresh thread.
    */
@@ -246,7 +252,7 @@ function resolveRunContext(cfg: PanelConfig, project: string): RunContext {
 
 export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
   function SettingsPanel(
-    { open, onOpenChange, onActiveAssistantChange, onResetConversation },
+    { open, onOpenChange, onActiveAssistantChange, onLoadedChange, onResetConversation },
     ref,
   ) {
     const [assistants, setAssistants] = useState<Assistant[]>([]);
@@ -405,7 +411,8 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
       // Skip the prompt list when the workspace was just cleared: it is per-workspace,
       // and asking for "" is the same 403 in miniature.
       if (!stale) await loadHubPrompts(cfgRef.current.lsWorkspace);
-    }, [loadHubPrompts]);
+      onLoadedChange?.(true);
+    }, [loadHubPrompts, onLoadedChange]);
 
     // Initial load, and a refresh each time the panel opens (matches the SPA).
     useEffect(() => {

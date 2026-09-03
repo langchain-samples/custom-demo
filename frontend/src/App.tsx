@@ -70,6 +70,7 @@ export default function App() {
   const [filesOpen, setFilesOpen] = useState(false);
   const [evalsOpen, setEvalsOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [assistantsLoaded, setAssistantsLoaded] = useState(false);
   const [activeAssistant, setActiveAssistant] = useState<Assistant | null>(null);
   const [widgets, setWidgets] = useState<Widget[]>([]);
   // HTML files the agent wrote to /workspace/artifacts, keyed by path; each becomes a
@@ -423,7 +424,16 @@ export default function App() {
               setWidgets((prev) => [...prev, w]);
               setHasDashboard(true);
             }}
-            onArtifact={({ path, content, streaming }) => {
+            onArtifact={({ path, content, streaming, deleted }) => {
+              if (deleted) {
+                setArtifacts((prev) => {
+                  if (!(path in prev)) return prev;
+                  const next = { ...prev };
+                  delete next[path];
+                  return next;
+                });
+                return;
+              }
               setHasDashboard(true);
               setArtifacts((prev) => ({
                 ...prev,
@@ -460,6 +470,7 @@ export default function App() {
             logo={logo}
             industry={meta?.industry}
             hasAssistant={!!activeAssistant}
+            assistantsLoaded={assistantsLoaded}
             onOpenSettings={() => setSettingsOpen(true)}
           />
           {/* Drag handle to resize the rail (only when the split is shown). */}
@@ -512,6 +523,7 @@ export default function App() {
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
         onActiveAssistantChange={setActiveAssistant}
+        onLoadedChange={setAssistantsLoaded}
         onResetConversation={handleResetConversation}
       />
     </div>

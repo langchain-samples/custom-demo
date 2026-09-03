@@ -17,6 +17,7 @@ import {
   IconFolder,
   IconFileText,
   IconFilePencil,
+  IconTrash,
   IconCode,
   IconTerminal2,
 } from "@tabler/icons-react";
@@ -108,12 +109,20 @@ const TOOL_ICONS: Record<string, TablerIcon> = {
   read_file: IconFileText,
   write_file: IconFilePencil,
   edit_file: IconFilePencil,
+  delete: IconTrash,
 };
 
-export function toolMeta(name: string): { icon: TablerIcon; label: string } {
+export function toolMeta(
+  name: string,
+  /** Pass true while the call is in flight to get the present tense. */
+  active = false,
+): { icon: TablerIcon; label: string } {
+  const labels = TOOL_LABELS[name];
+  // Both tenses have been in TOOL_LABELS all along and only `done` was ever read, so a
+  // running call announced itself in the past tense ("Wrote a file" while writing).
   return {
     icon: TOOL_ICONS[name] || IconTool,
-    label: TOOL_LABELS[name]?.done || name,
+    label: (active ? labels?.active : labels?.done) || labels?.done || name,
   };
 }
 
@@ -164,6 +173,7 @@ export function chipArgSummary(name: string, args: Record<string, unknown>): str
     read_file: "file_path",
     write_file: "file_path",
     edit_file: "file_path",
+    delete: "file_path",
     glob: "pattern",
     grep: "pattern",
   };
