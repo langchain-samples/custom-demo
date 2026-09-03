@@ -31,6 +31,7 @@ import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from dashboard_agent.config import load_env  # noqa: E402
 from dashboard_agent.resource_tags import (  # noqa: E402
     application_for,
     tag_assistant_resources,
@@ -100,6 +101,10 @@ def main() -> int:
     ap.add_argument("--url", default=os.getenv("LG_URL") or DEFAULT_URL)
     args = ap.parse_args()
 
+    # Read .env like every other script here does. Without this the documented
+    # "env it needs" had to be exported by hand, and the script failed at the first
+    # line of real work saying APP_SHARED_SECRET was unset when it was sitting in .env.
+    load_env()
     token = os.getenv("APP_SHARED_SECRET", "")
     key = os.getenv("LS_CROSS_WORKSPACE_KEY") or os.getenv("LANGSMITH_API_KEY") or ""
     if not token:
