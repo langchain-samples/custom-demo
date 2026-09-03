@@ -528,9 +528,18 @@ export default function ChatPanel({
     // dispatch has no args in the stream at all; it is read back off the script.
     const taskArgs: Record<string, TaskDispatch> = {};
     let answer = "";
-    // Which message id the bubble's current text came from, so a message that later
-    // turns out to have been preamble can withdraw its own text and nothing else's.
-    let answerFromId: string | null = null;
+    /**
+     * What the bubble is currently SHOWING, which is not the same as the answer.
+     *
+     * The agent narrates before it acts ("I have the intake details, now I'll draft the
+     * letter"), and that narration is worth leaving on screen while the tools run. But
+     * it is not the answer: `answer` is returned from this function and read aloud by
+     * voice mode, and it gates the "Building your dashboard…" line below. Conflating the
+     * two meant a preamble got spoken as the answer; withdrawing the preamble the moment
+     * tool calls appeared meant it blinked out with nothing to replace it. Tracking both
+     * separately is what allows "linger until something replaces it".
+     */
+    let shownText = "";
     let runId: string | null = null;
     let errorMsg: string | null = null;
     let interrupt: ReviewInterrupt | null = null;
@@ -556,7 +565,10 @@ export default function ChatPanel({
         // "add a chart" follow-up appends (both charts stay), matching what the agent
         // tells the user, and a text-only turn leaves the dashboard untouched.
         onWidget(w);
-        if (!answer) setBubble({ text: "Building your dashboard…" });
+        // Only fills an EMPTY bubble: a narration already on screen says more than
+        // this does, and overwriting it would be the same blink-out by another route
+        // (push_widget is a tool, so it fires exactly when narration is showing).
+        if (!shownText) setBubble({ text: "Building your dashboard…" });
       }
     };
 
@@ -680,16 +692,12 @@ export default function ChatPanel({
         if (tcs.length > 0 && msg.id) toolMsgIds.add(msg.id);
         const text = contentToText(msg.content);
         const isPreamble = !!msg.id && toolMsgIds.has(msg.id);
-        if (isPreamble && answer && answerFromId === msg.id) {
-          // This id already put its preamble in the bubble. Take it back.
-          answer = "";
-          answerFromId = null;
-          setBubble({ text: PLACEHOLDER_TEXT, streaming: true, markdown: false });
-        }
-        if (text && !isPreamble && node !== "tools") {
-          answer = text; // partial content is cumulative per message id
-          answerFromId = msg.id ?? null;
-          setBubble({ text: answer, streaming: true, markdown: false });
+        if (text && node !== "tools") {
+          // Both kinds of text go on screen and STAY there until something replaces
+          // them: the next narration, or the answer. Only the answer becomes `answer`.
+          shownText = text; // partial content is cumulative per message id
+          if (!isPreamble) answer = text;
+          setBubble({ text, streaming: true, markdown: false });
         }
       } else if (msg.type === "tool" && msg.name !== "push_widget") {
         const cid = msg.tool_call_id;
@@ -948,7 +956,8 @@ export default function ChatPanel({
         // is dropped since the review card now explains the state. No feedback row
         // either — there is no answer to rate yet.
         const pending = interrupt;
-        const spoke = !!answer;
+        // Narration counts as having spoken: the comment below is about keeping it.
+        const spoke = !!shownText;
         setBubble({ streaming: false, markdown: false });
         setItems((prev) => [
           ...prev.filter((it) => spoke || it.id !== bubbleId),
