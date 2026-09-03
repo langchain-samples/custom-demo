@@ -22,6 +22,7 @@ import {
   IconRobot,
   IconFolders,
   IconFlask,
+  IconInfoCircle,
 } from "@tabler/icons-react";
 import { Button } from "@/components/motion/button";
 import { Tooltip } from "@/components/motion/tooltip";
@@ -34,6 +35,7 @@ import {
   type ActivityState,
   type ArtifactState,
 } from "@/components/DashboardPane";
+import { AboutPanel } from "@/components/AboutPanel";
 import { EvalPanel } from "@/components/EvalPanel";
 import { FileBrowser } from "@/components/FileBrowser";
 import { SettingsPanel, type SettingsHandle } from "@/components/SettingsPanel";
@@ -67,6 +69,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [evalsOpen, setEvalsOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [activeAssistant, setActiveAssistant] = useState<Assistant | null>(null);
   const [widgets, setWidgets] = useState<Widget[]>([]);
   // HTML files the agent wrote to /workspace/artifacts, keyed by path; each becomes a
@@ -299,6 +302,17 @@ export default function App() {
         >
           <IconSparkles size={16} /> New Chat
         </Button>
+        <Tooltip content="About this agent - what it is and how it is built" side="bottom">
+          <Button
+            variant="secondary"
+            size="icon"
+            className="print:hidden"
+            aria-label="About this agent"
+            onClick={() => setAboutOpen(true)}
+          >
+            <IconInfoCircle size={18} />
+          </Button>
+        </Tooltip>
         <Tooltip content="Browse the agent's files" side="bottom">
           <Button
             variant="secondary"
@@ -472,6 +486,14 @@ export default function App() {
           </section>
         )}
       </div>
+
+      <AboutPanel
+        open={aboutOpen}
+        onOpenChange={setAboutOpen}
+        meta={meta}
+        displayName={displayName}
+        logo={<BrandLogo logo={logo} />}
+      />
 
       <FileBrowser
         open={filesOpen}

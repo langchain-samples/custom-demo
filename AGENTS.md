@@ -416,7 +416,9 @@ Implementation notes, each of which is load-bearing:
   implemented — see the catalogue + "universal skills" above. `ask_user` gives HITL via a tool
   rather than `interrupt_on`.)
 - **Dynamic subagents** (`agent.py:_build`): behind `DA_DYNAMIC_SUBAGENTS` (build-time env, default
-  off locally, **`=1` in the deploy step** of `.github/workflows/ci.yml`), `create_deep_agent` gets
+  off, and **off in production** - it is not among the deployment's secrets. This used to say
+  `=1` in ci.yml's deploy step, but that job was deliberately removed when the deployment became
+  GitHub-connected, so nothing sets it any more), `create_deep_agent` gets
   `subagents=[researcher, analyst]` + `langchain-quickjs`'s `CodeInterpreterMiddleware`, so the
   agent can write a JS workflow script that fans out via a `task()` global. Pinned to
   `langchain-quickjs<0.3` to keep `deepagents<0.7`. Two code envs then coexist — the JS interpreter

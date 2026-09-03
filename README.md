@@ -158,6 +158,19 @@ deep agent, with the tool executed in the browser so the canvas, chips and trace
 from the normal run. Off unless an assistant's builder flag turns it on, and invisible
 without `GEMINI_API_KEY`. See [docs/voice-mode.md](docs/voice-mode.md).
 
+## About panel
+
+The header's ⓘ opens "About this agent": what this assistant is, the recommended demo
+flow, the deepagents framework story, and a brand-aware architecture diagram. The
+customer-specific half is `metadata.demo_brief` / `demo_flow`, written per customer by
+`build_demo_brief()` at setup, and rendered through the same components as the
+post-setup popup (`settings/BriefLists.tsx`) so the two cannot drift. Reopenable, which
+is what was missing: the brief used to appear once, right after setup, and then never
+again.
+
+Ported from the Super Group build (`joel-langchain`, `9115f8a`) minus its copy, which
+named that customer's brands and warehouses in shared prose.
+
 ## Graph mode
 
 A live, left-to-right graph of the agent working, as a **Graph** tab beside the widget
@@ -171,8 +184,11 @@ back, so the tab cannot change what the agent does. Ported from the Super Group 
 (`joel-langchain`, `9115f8a`), mounted as a tab rather than that build's header toggle
 because the pane is already tabbed here.
 
-Subagent lanes need `DA_DYNAMIC_SUBAGENTS=1` on the server. Without it you get the
-single-lane view, which is still the real picture.
+Subagent lanes appear whenever the agent dispatches `task`, which deepagents' built-in
+general-purpose subagent does out of the box. `DA_DYNAMIC_SUBAGENTS=1` is a different
+thing: it swaps that generalist for the named `researcher` / `analyst` pair and adds JS
+orchestration, so the lanes get real names and several can run at once. It is off in
+production.
 
 ## HTML artifacts
 
