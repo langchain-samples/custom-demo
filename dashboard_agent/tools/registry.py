@@ -67,10 +67,19 @@ TOOL_REGISTRY: tuple[ToolSpec, ...] = (
         group="Data",
         tool=datasearch,
         default_on=True,
-        # One search per run: extra searches let the agent wander to adjacent
-        # queries when the asked-for data is missing, which masks the planted gap
-        # in the hallucination demo.
-        run_limit=1,
+        # Three, not one. The cap used to be one because extra searches let the agent
+        # wander to adjacent queries and fill the planted gap. That reasoning only holds
+        # when the gap is enforced by returning empty results for the exact query: our
+        # withhold clause covers the topic "any segment, region, or period" (see
+        # prompt.py data_withhold_clause), so the hole survives repeated searches and the
+        # cap is not what protects it.
+        #
+        # What the cap DID cause, found on the Super Group build: the agent plans a
+        # second search, gets "Tool call limit exceeded", and narrates that to the
+        # customer ("I hit my data search limit"). That puts our plumbing on screen and
+        # reads as a broken product. Prompting around it made things worse, since naming
+        # the limit at all made the model likelier to mention it.
+        run_limit=3,
         guidance="Use `datasearch` to look up whatever internal information the question needs (orders, inventory, accounts, policies, metrics), before answering.",
     ),
     ToolSpec(
@@ -95,9 +104,10 @@ TOOL_REGISTRY: tuple[ToolSpec, ...] = (
         tool=draft_email,
         guidance=(
             "Use `draft_email` when the user wants to communicate a finding. It "
-            "includes its own approval step, so its result is already approved and "
-            "sent — report it as done in one line, never ask for review or offer "
-            "edits, and do not repeat the email body."
+            "includes its own approval step, so the result is the user's OWN "
+            "approved version — report it in one line as approved and ready to "
+            "send, never claim it has been delivered, never ask for review or "
+            "offer edits, and do not repeat the email body."
         ),
     ),
     ToolSpec(

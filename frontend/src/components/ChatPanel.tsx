@@ -34,6 +34,7 @@ import { ReviewCard } from "@/components/chat/ReviewCard";
 import { Button } from "@/components/motion/button";
 import { ToolChip, type ChipData } from "@/components/chat/ToolChip";
 import { ToolChipGroup } from "@/components/chat/ToolChipGroup";
+import type { GraphSubagent } from "@/lib/agentGraph";
 import { FeedbackRow } from "@/components/chat/FeedbackRow";
 import { IconChevronDown, IconChevronRight } from "@tabler/icons-react";
 // beUI agent surface (copy-paste registry components under @/components/agents).
@@ -167,6 +168,16 @@ export interface ChatPanelProps {
    * document has nowhere to go and the drop is refused with a reason.
    */
   sandboxTarget?: SandboxTarget;
+  /**
+   * Mirrors the current turn's tool chips and subagent groups out to the parent so the
+   * Graph tab (`AgentGraph`) can draw them. Read-only: the callback never feeds anything
+   * back in, so omitting it leaves ChatPanel behaving exactly as before.
+   */
+  onActivity?: (a: {
+    chips: ChipData[];
+    subagents: GraphSubagent[];
+    running: boolean;
+  }) => void;
 }
 
 /* ---- Internal message-list model ---- */
@@ -305,6 +316,7 @@ export default function ChatPanel({
   sandboxTarget,
   hasAssistant,
   onOpenSettings,
+  onActivity,
 }: ChatPanelProps) {
   const [items, setItems] = useState<Item[]>([]);
   const [input, setInput] = useState("");
@@ -365,6 +377,33 @@ export default function ChatPanel({
 
   const patchItem = (id: string, fn: (it: Item) => Item) =>
     setItems((prev) => prev.map((it) => (it.id === id ? fn(it) : it)));
+
+  /**
+   * Mirror the LATEST question's chips + subagent groups out for the Graph tab. The
+   * latest question, not the whole thread, so the graph shows the work being done now.
+   * Derived from `items` so it stays in step with the chat rail by construction rather
+   * than duplicating the streaming reducer.
+   */
+  useEffect(() => {
+    if (!onActivity) return;
+    let chips: ChipData[] = [];
+    let subagents: SubagentGroup[] = [];
+    for (const it of items) {
+      // Only a new USER turn resets the picture. Resuming a human-review interrupt
+      // appends a fresh (initially empty) activity item to the SAME question, so chips
+      // have to ACCUMULATE across activity items: taking only the latest blanked the
+      // graph the moment you hit Approve.
+      if (it.kind === "user") {
+        chips = [];
+        subagents = [];
+      } else if (it.kind === "activity") {
+        chips = chips.length ? [...chips, ...it.chips] : it.chips;
+      } else if (it.kind === "subagents") {
+        subagents = subagents.length ? [...subagents, ...it.groups] : it.groups;
+      }
+    }
+    onActivity({ chips, subagents, running: busy });
+  }, [items, busy, onActivity]);
 
   /**
    * Run one turn: either a new question, or a resume of a run paused at a

@@ -169,11 +169,15 @@ def draft_email(purpose: str, runtime: ToolRuntime, recipient: str = "", tone: s
 
     This tool INCLUDES the approval step. The user reviews and edits the draft in
     the UI, and the tool only returns once they have approved it — so the result
-    you get back (`status: "approved_by_user"`) is final and already sent. It may
-    differ from what was generated; the user's version is the real one.
+    you get back (`status: "approved_by_user"`) is final. It may differ from what
+    was generated; the user's version is the real one.
+
+    Nothing is actually delivered: no mail is transmitted, so do NOT say it was
+    sent, received, or delivered. It is approved and ready to send.
 
     Returns JSON {to, cc, subject, body, status}. In your written answer:
-      - report it as DONE, e.g. "Sent to <to> — <subject>." One or two lines.
+      - report it as APPROVED, e.g. "Approved and ready to send to <to> —
+        <subject>." One or two lines.
       - do NOT say it is "ready for your review", "drafted for approval", or
         "let me know if you'd like any edits" — they have already reviewed and
         edited it. Asking again is wrong and annoying.

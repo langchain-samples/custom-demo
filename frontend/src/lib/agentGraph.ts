@@ -1,0 +1,125 @@
+/**
+ * Pure helpers + layout constants for graph mode. Kept OUT of AgentGraph.tsx on
+ * purpose: a component file that also exports plain functions breaks React Fast
+ * Refresh, and Vite then does a full `invalidate` instead of a hot swap. During a
+ * live demo that reload wipes ChatPanel's state mid-run — the chat empties while
+ * the dashboard (held in App) survives. Same split as `lib/streamEvent.ts` and
+ * `lib/branding.ts`, so this is also the repo's existing convention.
+ */
+
+import type { ChipData } from "@/components/chat/ToolChip";
+
+/** One dispatched subagent's live work, mirrored from ChatPanel's own model. */
+export interface GraphSubagent {
+  key: string;
+  label: string;
+  type?: string;
+  chips: ChipData[];
+  invokedWith?: string;
+  done: boolean;
+}
+
+export interface Lane {
+  id: string;
+  label: string;
+  hint: string;
+}
+
+/**
+ * The lanes, in the order the agent actually moves through them. Ordering is
+ * editorial, not derived: it is the story the graph is meant to tell.
+ */
+export const LANES: Lane[] = [
+  { id: "plan", label: "Plan", hint: "todo list the agent wrote itself" },
+  { id: "skills", label: "Skills", hint: "codified workflow it consults first" },
+  { id: "sandbox", label: "Sandbox", hint: "its own VM: shell and Python" },
+  { id: "data", label: "Data", hint: "systems of record" },
+  { id: "web", label: "Web", hint: "external lookup" },
+  { id: "human", label: "Human", hint: "pauses for a person" },
+  { id: "delegate", label: "Delegate", hint: "hands work to a subagent" },
+  { id: "output", label: "Output", hint: "widgets on the dashboard" },
+];
+
+/**
+ * Which lane a call belongs to. Keyed on tool name first, then on the argument,
+ * because `read_file` is a skill read or a sandbox read depending on the path —
+ * and that distinction is the whole point of the Skills lane.
+ */
+export function laneFor(chip: ChipData): string {
+  const name = (chip.name || "").toLowerCase();
+  const arg = chip.arg || "";
+  if (name === "write_todos") return "plan";
+  if (name === "push_widget") return "output";
+  if (name === "datasearch" || name === "list_data_sources") return "data";
+  if (name === "web_search") return "web";
+  if (name === "draft_email" || name === "suggest_meeting_times" || name === "ask_user")
+    return "human";
+  if (name === "task" || name === "eval") return "delegate";
+  if (name === "read_file" && /\/skills?\//.test(arg)) return "skills";
+  return "sandbox";
+}
+
+/**
+ * Short label for a node: the most identifying thing available.
+ *
+ * `execute` carries its shell/Python in `code` and leaves `arg` empty, so a label
+ * built from `arg` alone renders as the bare word "execute" and the sandbox work
+ * looks hidden. Fall back to the first real line of `code`, which is what the
+ * agent actually ran.
+ */
+export function nodeLabel(chip: ChipData): string {
+  const arg = (chip.arg || "").trim();
+  if (arg) {
+    // A path: keep the last two segments, which is what identifies it.
+    if (arg.includes("/")) {
+      const parts = arg.split(/[?\s]/)[0].split("/").filter(Boolean);
+      if (parts.length > 1) return truncate(parts.slice(-2).join("/"));
+    }
+    return truncate(arg);
+  }
+  const code = (chip.code || "").trim();
+  if (code) {
+    // Skip heredoc/shebang noise and blank lines to reach the real first command.
+    const line = code
+      .split("\n")
+      .map((l) => l.trim())
+      .find((l) => l && !l.startsWith("#") && !l.startsWith("<<") && l !== "EOF");
+    if (line) return truncate(line);
+  }
+  return chip.name;
+}
+
+function truncate(s: string, max = 23): string {
+  return s.length > max ? s.slice(0, max - 1) + "…" : s;
+}
+
+/** Rough size of a tool's output, for showing that a step did real work. */
+export function resultSize(chip: ChipData): string {
+  if (chip.result === null) return "";
+  const lines = chip.result.split("\n").filter(Boolean).length;
+  if (lines > 1) return `${lines} lines`;
+  const n = chip.result.length;
+  return n > 0 ? `${n} chars` : "empty";
+}
+
+/** A call is pending until its tool result lands (or the run stops). */
+export const isPending = (c: ChipData) => c.result === null && !c.stopped;
+
+/* ---- Geometry ------------------------------------------------------------ */
+
+// Tuned to fit the right pane at a 420px chat rail on a 1440-wide screen without
+// horizontal scrolling. Wider screens get more whitespace; narrower ones scroll.
+export const ROOT_X = 16;
+export const ROOT_W = 132;
+export const LANE_X = 176;
+export const LANE_W = 112;
+export const NODE_X = 316;
+export const NODE_W = 236;
+export const ROW_H = 34;
+export const LANE_GAP = 16;
+
+/** A cubic bezier from the right edge of one box to the left edge of another. */
+export function edge(x1: number, y1: number, x2: number, y2: number): string {
+  const mid = x1 + (x2 - x1) / 2;
+  return `M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}`;
+}

@@ -16,10 +16,13 @@
 import { useEffect, useRef, useState } from "react";
 import { IconFileTypePdf } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
+import { AgentGraph } from "@/components/AgentGraph";
 import { DashboardCanvas } from "@/components/DashboardCanvas";
 import { HtmlArtifact, type HtmlArtifactHandle } from "@/components/HtmlArtifact";
+import type { ChipData } from "@/components/chat/ToolChip";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { artifactName } from "@/lib/artifacts";
+import type { GraphSubagent } from "@/lib/agentGraph";
 import type { Widget } from "@/lib/api";
 import type { Theme } from "@/lib/theme";
 
@@ -29,18 +32,36 @@ export interface ArtifactState {
   streaming: boolean;
 }
 
+/** The current question's tool activity, mirrored out of ChatPanel for the graph. */
+export interface ActivityState {
+  chips: ChipData[];
+  subagents: GraphSubagent[];
+  running: boolean;
+}
+
 export interface DashboardPaneProps {
   widgets: Widget[];
   theme: Theme;
   /** Keyed by absolute path. Insertion order is tab order. */
   artifacts: Record<string, ArtifactState>;
+  /** Drives the Graph tab. Omit and the tab does not appear. */
+  activity?: ActivityState;
+  /** Assistant display name, for the graph's root node. */
+  assistantName?: string;
 }
 
-/** Tab value for the widget canvas. Not a path, so it cannot collide with one. */
+/** Tab values for the two built-in views. Not paths, so they cannot collide with one. */
 const CANVAS_TAB = "dashboard";
+const GRAPH_TAB = "graph";
 
 /** Widget canvas plus an HTML artifact tab per file the agent wrote. */
-export function DashboardPane({ widgets, theme, artifacts }: DashboardPaneProps) {
+export function DashboardPane({
+  widgets,
+  theme,
+  artifacts,
+  activity,
+  assistantName = "Agent",
+}: DashboardPaneProps) {
   const paths = Object.keys(artifacts);
   // Newline-joined so the effect below compares on a plain string: a fresh array every
   // render would re-run it forever.
@@ -64,11 +85,15 @@ export function DashboardPane({ widgets, theme, artifacts }: DashboardPaneProps)
       return;
     }
     // A tab can disappear on reset; fall back rather than render an empty pane.
-    setActive((cur) => (cur !== CANVAS_TAB && !list.includes(cur) ? CANVAS_TAB : cur));
+    setActive((cur) =>
+      cur !== CANVAS_TAB && cur !== GRAPH_TAB && !list.includes(cur) ? CANVAS_TAB : cur,
+    );
   }, [pathsKey]);
 
-  // No artifacts yet: render the canvas alone, exactly as before this feature.
-  if (paths.length === 0) {
+  const hasGraph = !!activity && activity.chips.length > 0;
+
+  // Nothing but widgets: render the canvas alone, exactly as before any of this.
+  if (paths.length === 0 && !hasGraph) {
     return <DashboardCanvas widgets={widgets} theme={theme} />;
   }
 
@@ -79,6 +104,7 @@ export function DashboardPane({ widgets, theme, artifacts }: DashboardPaneProps)
       <div className="mx-4 mt-3 flex items-center gap-3 print:hidden">
         <TabsList className="w-fit min-w-0 flex-shrink overflow-x-auto">
           <TabsTrigger value={CANVAS_TAB}>Dashboard</TabsTrigger>
+          {hasGraph && <TabsTrigger value={GRAPH_TAB}>Graph</TabsTrigger>}
           {paths.map((path) => (
             <TabsTrigger key={path} value={path} className="max-w-52">
               {/* The full path lives here rather than in a header line: the tab names
@@ -89,7 +115,7 @@ export function DashboardPane({ widgets, theme, artifacts }: DashboardPaneProps)
             </TabsTrigger>
           ))}
         </TabsList>
-        {active !== CANVAS_TAB && (
+        {active !== CANVAS_TAB && active !== GRAPH_TAB && (
           <Button
             variant="ghost"
             size="sm"
@@ -107,6 +133,16 @@ export function DashboardPane({ widgets, theme, artifacts }: DashboardPaneProps)
       <TabsContent value={CANVAS_TAB} className="flex min-h-0 flex-1 flex-col">
         <DashboardCanvas widgets={widgets} theme={theme} />
       </TabsContent>
+      {hasGraph && (
+        <TabsContent value={GRAPH_TAB} className="min-h-0 flex-1 overflow-auto">
+          <AgentGraph
+            chips={activity.chips}
+            subagents={activity.subagents}
+            running={activity.running}
+            name={assistantName}
+          />
+        </TabsContent>
+      )}
       {paths.map((path) => (
         // forceMount would re-run every artifact's scripts on every render; artifacts
         // are cheap to remount and only the visible one needs to exist.

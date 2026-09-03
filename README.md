@@ -158,6 +158,22 @@ deep agent, with the tool executed in the browser so the canvas, chips and trace
 from the normal run. Off unless an assistant's builder flag turns it on, and invisible
 without `GEMINI_API_KEY`. See [docs/voice-mode.md](docs/voice-mode.md).
 
+## Graph mode
+
+A live, left-to-right graph of the agent working, as a **Graph** tab beside the widget
+dashboard. It appears once a turn has called a tool. Lanes (plan, skills, sandbox, data,
+web, human, delegate, output) are drawn only when they actually fire, nodes go solid as
+each tool result lands, and clicking one shows the argument and the output.
+
+It is a pure RENDERER over state the chat rail already streams: `ChatPanel` mirrors the
+current question's chips and subagent groups out through `onActivity`, and nothing feeds
+back, so the tab cannot change what the agent does. Ported from the Super Group build
+(`joel-langchain`, `9115f8a`), mounted as a tab rather than that build's header toggle
+because the pane is already tabbed here.
+
+Subagent lanes need `DA_DYNAMIC_SUBAGENTS=1` on the server. Without it you get the
+single-lane view, which is still the real picture.
+
 ## HTML artifacts
 
 Widgets are the answer surface, and the prompt says so: the agent reaches for

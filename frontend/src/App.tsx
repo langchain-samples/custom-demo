@@ -29,7 +29,11 @@ import ChatPanel, { type ChatPanelHandle } from "@/components/ChatPanel";
 import { VoiceButton } from "@/components/VoiceButton";
 import { VoiceStage } from "@/components/VoiceStage";
 import { useVoiceSession } from "@/lib/hooks/use-voice-session";
-import { DashboardPane, type ArtifactState } from "@/components/DashboardPane";
+import {
+  DashboardPane,
+  type ActivityState,
+  type ArtifactState,
+} from "@/components/DashboardPane";
 import { EvalPanel } from "@/components/EvalPanel";
 import { FileBrowser } from "@/components/FileBrowser";
 import { SettingsPanel, type SettingsHandle } from "@/components/SettingsPanel";
@@ -68,6 +72,13 @@ export default function App() {
   // HTML files the agent wrote to /workspace/artifacts, keyed by path; each becomes a
   // tab beside the widget canvas. Cleared with the dashboard on reset.
   const [artifacts, setArtifacts] = useState<Record<string, ArtifactState>>({});
+  // The current question's tool activity, mirrored out of ChatPanel to draw the Graph
+  // tab. Read-only: nothing here feeds back into a run.
+  const [activity, setActivity] = useState<ActivityState>({
+    chips: [],
+    subagents: [],
+    running: false,
+  });
   // Sticky: once a dashboard has appeared, keep the two-column layout until a
   // conversation reset (assistant switch/create) — matches the SPA's
   // has-dashboard class, which clearDashboard() empties but does not remove.
@@ -87,6 +98,8 @@ export default function App() {
     }
   });
   const [resizing, setResizing] = useState(false);
+  /** Whether the right pane exists at all: widgets, or tool activity to graph. */
+  const showPane = hasDashboard || activity.chips.length > 0;
 
   const startResize = (e: React.PointerEvent) => {
     e.preventDefault();
@@ -341,14 +354,14 @@ export default function App() {
           "grid min-h-0 flex-1 print:block print:h-auto print:overflow-visible " +
           (resizing ? "cursor-col-resize select-none " : "transition-[grid-template-columns] duration-500 ease-in-out ")
         }
-        style={{ gridTemplateColumns: hasDashboard ? `${chatWidth}px 1fr` : "1fr" }}
+        style={{ gridTemplateColumns: showPane ? `${chatWidth}px 1fr` : "1fr" }}
       >
         {/* Chat pane — centered on load, becomes the left rail once a dashboard exists.
             Hidden when printing a dashboard (Ctrl+P exports the dashboard only). */}
         <section
           className={
             "relative flex min-h-0 flex-col " +
-            (hasDashboard
+            (showPane
               ? "border-r border-border print:hidden"
               : "mx-auto w-full max-w-[760px]")
           }
@@ -391,6 +404,7 @@ export default function App() {
             }}
             presets={presets}
             getRunContext={getRunContext}
+            onActivity={setActivity}
             onWidget={(w) => {
               setWidgets((prev) => [...prev, w]);
               setHasDashboard(true);
@@ -434,8 +448,8 @@ export default function App() {
             hasAssistant={!!activeAssistant}
             onOpenSettings={() => setSettingsOpen(true)}
           />
-          {/* Drag handle to resize the rail (only when the dashboard split is shown). */}
-          {hasDashboard && (
+          {/* Drag handle to resize the rail (only when the split is shown). */}
+          {showPane && (
             <div
               onPointerDown={startResize}
               title="Drag to resize"
@@ -444,10 +458,17 @@ export default function App() {
           )}
         </section>
 
-        {/* Live dashboard pane — mounted once a dashboard has appeared. */}
-        {hasDashboard && (
+        {/* Right pane — mounted once there is a dashboard, an artifact, or tool work
+            to graph. */}
+        {showPane && (
           <section className="flex min-h-0 flex-col overflow-hidden print:overflow-visible">
-            <DashboardPane widgets={widgets} theme={effectiveTheme} artifacts={artifacts} />
+            <DashboardPane
+              widgets={widgets}
+              theme={effectiveTheme}
+              artifacts={artifacts}
+              activity={activity}
+              assistantName={displayName}
+            />
           </section>
         )}
       </div>
