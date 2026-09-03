@@ -45,7 +45,6 @@ import {
   chipArgSummary,
   chipCode,
   contentToText,
-  groupConsecutive,
   toolCallKey,
   widgetFromArgs,
   widgetLooksComplete,
@@ -1548,15 +1547,16 @@ function ItemView({
     if (!item.chips.length) return null;
     return (
       <div className="flex flex-col gap-1.5">
-        {/* Adjacent calls to the SAME tool collapse into one openable row. Keyed on the
-            first chip's id so a run keeps its component (and whether you opened it) as
-            it grows, and so a run that spans two model turns is still one row. */}
-        {groupConsecutive(item.chips).map((run) =>
-          run.length === 1 ? (
-            <ToolChip key={run[0].id} chip={run[0]} />
-          ) : (
-            <ToolChipGroup key={run[0].id} chips={run} />
-          ),
+        {/* The whole burst folds into ONE openable row, whatever mix of tools it used.
+            Grouping by tool name split a single stretch of work into a dozen rows the
+            moment the agent alternated between reading and running, which is most of
+            the time. Keyed on the first chip so the row keeps its component, and
+            whether you opened it, as the stream adds to it - which is also what lets
+            one row span several model turns. */}
+        {item.chips.length === 1 ? (
+          <ToolChip chip={item.chips[0]} />
+        ) : (
+          <ToolChipGroup key={item.chips[0].id} chips={item.chips} />
         )}
       </div>
     );

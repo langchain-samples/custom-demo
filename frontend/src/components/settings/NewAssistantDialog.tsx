@@ -122,6 +122,12 @@ interface Props {
   initialOwner: string;
   /** Org the workspaces belong to, shown under the picker. Empty hides the mention. */
   organization?: string;
+  /**
+   * True when a saved workspace was dropped because it no longer exists (an org move).
+   * The picker would otherwise appear with no explanation, looking like a bug rather
+   * than a question.
+   */
+  workspaceReset?: boolean;
   /** The panel's current workspace. Empty means the dialog must ask for one. */
   initialWorkspace: string;
   /** Offered only when `initialWorkspace` is empty. */
@@ -142,6 +148,7 @@ export function NewAssistantDialog({
   initialWorkspace,
   workspaces,
   organization = "",
+  workspaceReset = false,
   creating,
   onCreate,
   onCancel,
@@ -210,6 +217,13 @@ export function NewAssistantDialog({
         <div className="flex flex-col gap-2">
           {needsWorkspace && (
             <div className="flex flex-col gap-1.5">
+              {workspaceReset && (
+                <p className="m-0 rounded-md border border-border bg-panel-2 px-2 py-1.5 text-[11px] leading-snug text-foreground">
+                  Your saved workspace is not in{" "}
+                  {organization ? organization : "this organization"} any more, so it has
+                  been cleared. Pick one to carry on.
+                </p>
+              )}
               <Combobox
                 options={workspaces.map((w) => ({ value: w.id, label: w.name || w.id }))}
                 value={workspace}

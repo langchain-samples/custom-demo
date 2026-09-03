@@ -253,6 +253,9 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
     const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
     // Org the workspaces belong to, for labelling the create form's picker.
     const [organization, setOrganization] = useState("");
+    // Set when a saved workspace id turned out not to exist any more, so the create
+    // form can say why it is asking for one instead of looking arbitrary.
+    const [workspaceReset, setWorkspaceReset] = useState(false);
 
     // Width (px) of the Customize panel — drag-resizable from its left edge,
     // mirroring the chat rail (see App.tsx). Persisted across sessions.
@@ -367,6 +370,21 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
       setWorkspaces(wlist.workspaces);
       setOrganization(wlist.organization);
       setToolSpecs(tlist);
+      // A saved workspace id outlives the org it belonged to. After the move to a new
+      // org every stored id was still sent to the setup graph, which asked LangSmith
+      // about a workspace this key cannot see and failed the whole run with a raw
+      // "403 Forbidden on /settings" 30 seconds in. An id that is not in the list is
+      // not recoverable, so drop it and let the picker ask again.
+      const stale =
+        cfgRef.current.lsWorkspace &&
+        wlist.workspaces.length > 0 &&
+        !wlist.workspaces.some((w) => w.id === cfgRef.current.lsWorkspace);
+      if (stale) {
+        setCfg((c) => ({ ...c, lsWorkspace: "" }));
+        writeLS(WORKSPACE_LS_KEY, "");
+        setWorkspaceReset(true);
+        setShowNewForm(true);
+      }
       // First-run: no owner name saved yet ⇒ treat as a new DE and onboard once.
       // First run opens the ORDINARY create form. There used to be a separate onboarding
       // dialog: the same form with fewer fields, plus a workspace picker - two things to
@@ -384,7 +402,9 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           return configFromAssistant(a, c.lsWorkspace);
         });
       }
-      await loadHubPrompts(cfgRef.current.lsWorkspace);
+      // Skip the prompt list when the workspace was just cleared: it is per-workspace,
+      // and asking for "" is the same 403 in miniature.
+      if (!stale) await loadHubPrompts(cfgRef.current.lsWorkspace);
     }, [loadHubPrompts]);
 
     // Initial load, and a refresh each time the panel opens (matches the SPA).
@@ -731,6 +751,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           initialWorkspace={cfg.lsWorkspace}
           workspaces={workspaces}
           organization={organization}
+          workspaceReset={workspaceReset}
           creating={creating}
           onCreate={handleCreate}
           onCancel={() => setShowNewForm(false)}

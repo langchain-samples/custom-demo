@@ -201,24 +201,3 @@ export function describeInterrupt(review: ReviewInterrupt): string {
   return `The agent is waiting for approval on a ${String(review.kind || "step").replace(/_/g, " ")}.`;
 }
 
-/**
- * Split a list into runs of adjacent items sharing a `name`.
- *
- * Used to collapse a burst of identical tool calls into one row. Adjacency is the only
- * rule, so `execute ×3, read_file, execute ×6` is three runs rather than two: the second
- * burst of `execute` happened after reading a file and is a separate piece of work.
- *
- * Deliberately positional, which is what lets a run SPAN MODEL TURNS. The agent calls
- * some tools, reads the results, then calls more; those arrive in separate turns but land
- * next to each other in one flat chip list, and a reader does not care where the turn
- * boundary fell.
- */
-export function groupConsecutive<T extends { name: string }>(items: T[]): T[][] {
-  const runs: T[][] = [];
-  for (const item of items) {
-    const last = runs[runs.length - 1];
-    if (last && last[0].name === item.name) last.push(item);
-    else runs.push([item]);
-  }
-  return runs;
-}
