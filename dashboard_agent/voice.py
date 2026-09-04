@@ -93,6 +93,18 @@ def mint_token(model: str = "") -> dict:
     key = os.getenv("GEMINI_API_KEY", "").strip()
     if not key:
         raise RuntimeError("GEMINI_API_KEY is not set, so voice mode cannot mint a token")
+    # A Google API key starts "AIza". Checked because the failure it prevents is very
+    # expensive to read: a wrong-but-present key mints nothing and the UI just says
+    # "Connecting..." and drops back, with the real reason (a 400 whose body we used to
+    # discard) nowhere on screen. It happened for real - this machine's shell exported a
+    # stale GEMINI_API_KEY holding a LangSmith key, and since load_dotenv does not
+    # override an existing variable, .env's correct key never won.
+    if not key.startswith("AIza"):
+        raise RuntimeError(
+            "GEMINI_API_KEY does not look like a Google API key (expected it to start "
+            f"with 'AIza', got '{key[:8]}...'). A shell variable of the same name takes "
+            "precedence over .env, so check the environment as well as the file."
+        )
     chosen = model or voice_model()
     res = httpx.post(
         _TOKENS_URL,
@@ -100,7 +112,10 @@ def mint_token(model: str = "") -> dict:
         json=token_request(chosen),
         timeout=15,
     )
-    res.raise_for_status()
+    if res.status_code >= 400:
+        # Carry Google's own message. raise_for_status alone gives a bare status and a
+        # link, which is what made this take an hour to place.
+        raise RuntimeError(f"token mint failed (HTTP {res.status_code}): {res.text[:300]}")
     body = res.json() or {}
     # The token IS the resource `name` ("auth_tokens/..."), which the client then uses
     # in place of an API key. An empty name means a 200 we cannot use.

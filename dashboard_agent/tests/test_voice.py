@@ -65,12 +65,13 @@ def test_mint_token_returns_the_resource_name_as_the_token(monkeypatch):
     """The token the browser uses IS the resource `name`, not an `id` or a `token`."""
     # A distinctive value, so the "never in the URL" assertion below cannot pass by
     # accident (a short one like "k" is a substring of the endpoint path itself).
-    monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key-9f3a")
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaSy-not-a-real-key-9f3a")
     sink: dict = {}
 
     def _post(url, headers=None, json=None, timeout=None):  # noqa: A002
         sink.update({"url": url, "headers": headers, "json": json})
         return SimpleNamespace(
+            status_code=200,
             raise_for_status=lambda: None,
             json=lambda: {"name": "auth_tokens/abc", "expireTime": "2026-08-24T12:00:00Z"},
         )
@@ -81,17 +82,19 @@ def test_mint_token_returns_the_resource_name_as_the_token(monkeypatch):
     assert out == {"token": "auth_tokens/abc", "model": "m-1", "expires_at": "2026-08-24T12:00:00Z"}
     # The key travels in the header Google documents, and never in the URL (where it
     # would land in logs and referrers).
-    assert sink["headers"]["x-goog-api-key"] == "not-a-real-key-9f3a"
-    assert "not-a-real-key-9f3a" not in sink["url"]
+    assert sink["headers"]["x-goog-api-key"] == "AIzaSy-not-a-real-key-9f3a"
+    assert "AIzaSy-not-a-real-key-9f3a" not in sink["url"]
 
 
 def test_mint_token_raises_on_a_200_with_no_name(monkeypatch):
     """A token we cannot use is a failure, not a value to hand the browser."""
-    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaSy-k")
     monkeypatch.setattr(
         voice.httpx,
         "post",
-        lambda *_a, **_k: SimpleNamespace(raise_for_status=lambda: None, json=lambda: {}),
+        lambda *_a, **_k: SimpleNamespace(
+            status_code=200, raise_for_status=lambda: None, json=lambda: {}
+        ),
     )
     with pytest.raises(RuntimeError, match="no name"):
         voice.mint_token()
@@ -109,3 +112,30 @@ def test_the_default_model_is_a_live_model():
     model = voice_model()
     assert model.startswith("gemini-")
     assert "live" in model or "native-audio" in model
+
+
+def test_mint_rejects_a_key_that_is_not_a_google_key(monkeypatch):
+    """A wrong-but-present key must fail loudly, not as an opaque HTTP 400.
+
+    This is the shape of a real outage: the shell exported a GEMINI_API_KEY holding a
+    LangSmith key, load_dotenv left it alone because it was already set, and voice mode
+    showed "Connecting..." and dropped back with nothing to go on.
+    """
+    monkeypatch.setattr(voice, "load_env", lambda: None)
+    monkeypatch.setenv("GEMINI_API_KEY", "lsv2_sk_deadbeef")
+    with pytest.raises(RuntimeError, match="does not look like a Google API key"):
+        voice.mint_token()
+
+
+def test_mint_surfaces_googles_own_error_text(monkeypatch):
+    """The provider's message reaches the caller, instead of a bare status code."""
+    monkeypatch.setattr(voice, "load_env", lambda: None)
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaSyTestKeyNotReal")
+
+    class Res:
+        status_code = 400
+        text = '{"error": {"message": "API key not valid."}}'
+
+    monkeypatch.setattr(voice.httpx, "post", lambda *a, **k: Res())
+    with pytest.raises(RuntimeError, match="API key not valid"):
+        voice.mint_token()
