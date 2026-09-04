@@ -151,29 +151,32 @@ export function hasRenderableBody(partial: string): boolean {
 }
 
 /**
- * Typical bytes before the first visible element, from measurement: the head and its
- * stylesheet ran 4.1 to 6.2 KB across five real artifacts.
+ * How long the skeleton takes to reach its ceiling, in ms.
+ *
+ * Sized for both cases, because the wait varies enormously with how the agent writes.
+ * With the critical-CSS order the first visible element now arrives 5-8%% into the file
+ * (measured: body at 571-847 bytes of 8-12 KB), so the skeleton flashes a row or two and
+ * the real document takes over. When the model instead writes one big head stylesheet it
+ * is 30-44%%, which is tens of seconds. Ten seconds keeps it moving through the slow case
+ * without racing to the end of the fast one.
  */
-const TYPICAL_HEAD_BYTES = 6000;
+const REVEAL_MS = 10_000;
 
 /**
- * How much of the waiting skeleton to reveal, from the bytes written so far.
+ * How much of the waiting skeleton to reveal, from how long it has been building.
  *
- * Driven by real progress rather than a timer: the agent is streaming a document and
- * `content.length` is how far it has got.
+ * TIME, not bytes. Bytes were the first attempt and they have one hole: the tab appears
+ * as soon as `write_file`'s path argument is known, which is before its content argument
+ * starts streaming, so a byte-driven skeleton sits at one row through that gap - the
+ * exact moment it most needs to look alive. A clock keeps moving regardless of when the
+ * tokens land.
  *
- * LINEAR against a measured estimate, not the exponential curve this started as. An
- * exponential is the right shape when the total is unknown, but we do have an estimate,
- * and front-loading it meant two thirds of the rows appeared in the first couple of
- * seconds and then nothing moved for the remaining twenty - which looks exactly like
- * the static skeleton it replaced.
- *
- * Capped below 1 so the last row stays unfilled. We are working from an estimate, so
- * claiming to be finished is a claim we cannot make, and a bar that fills and waits
- * reads as hung.
+ * Linear, and capped below 1 so the last row stays unfilled: we cannot know how long
+ * this document will take, so claiming to be finished is a claim we cannot make, and a
+ * bar that fills and then waits reads as hung.
  */
-export function skeletonReveal(bytes: number): number {
+export function skeletonReveal(elapsedMs: number): number {
   const CEILING = 0.9;
-  if (!Number.isFinite(bytes) || bytes <= 0) return 0;
-  return Math.min(CEILING, bytes / TYPICAL_HEAD_BYTES);
+  if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) return 0;
+  return Math.min(CEILING, elapsedMs / REVEAL_MS);
 }

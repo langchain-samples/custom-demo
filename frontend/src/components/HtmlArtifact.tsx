@@ -124,9 +124,11 @@ const SKELETON_ROWS: { el: ReactNode; key: string }[] = [
  * than no skeleton at all - it resolves into something structurally unrelated. Every
  * brief produced so far has these same bones, which is what makes this one honest.
  *
- * It GROWS as the document is written. `reveal` comes from bytes streamed (see
- * skeletonReveal), so a row appearing means the agent really did write more, rather
- * than a timer ticking - and the pulse alone left no way to tell progress from a hang.
+ * It GROWS while the document is being written, on a clock (see skeletonReveal). Bytes
+ * were the first attempt and they have one hole: the tab appears as soon as write_file's
+ * path argument is known, which is before its content argument starts streaming, so a
+ * byte-driven skeleton sat at one row through exactly the gap where it most needs to
+ * look alive.
  *
  * aria-hidden: it carries no information. The rotating status text underneath is what
  * a screen reader should hear.
@@ -210,6 +212,30 @@ export function HtmlArtifact({ path, content, streaming, ref }: HtmlArtifactProp
   // stretch mid-document does not flip back to the loader.
   const building = !!streaming && !hasRenderableBody(rendered);
 
+  /**
+   * A clock for the skeleton's growth, running only while it is on screen.
+   *
+   * The start time is a ref rather than state so beginning to build does not itself
+   * cause a render, and it is cleared when building ends so a second artifact in the
+   * same tab starts from zero rather than inheriting the first one's age.
+   */
+  const buildStartedAt = useRef<number | null>(null);
+  const [buildElapsed, setBuildElapsed] = useState(0);
+  useEffect(() => {
+    if (!building) {
+      buildStartedAt.current = null;
+      setBuildElapsed(0);
+      return;
+    }
+    buildStartedAt.current ??= Date.now();
+    const tick = () => setBuildElapsed(Date.now() - (buildStartedAt.current ?? Date.now()));
+    tick();
+    // ~8fps: a row appears at most every second or so, so anything faster is work for
+    // no visible difference.
+    const id = window.setInterval(tick, 120);
+    return () => window.clearInterval(id);
+  }, [building]);
+
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <iframe
@@ -237,8 +263,7 @@ export function HtmlArtifact({ path, content, streaming, ref }: HtmlArtifactProp
         // On WHITE, matching the iframe, so handing over to the real document is not
         // also a change of background colour.
         <div className="absolute inset-0 overflow-hidden bg-white">
-          {/* Bytes of the real document, so the skeleton tracks the write. */}
-          <ArtifactSkeleton reveal={skeletonReveal(content.length)} />
+          <ArtifactSkeleton reveal={skeletonReveal(buildElapsed)} />
           {/* The skeleton says content is coming; only this says why the wait is long
               enough to notice, and it is the line a presenter talks over. */}
           <div className="absolute inset-x-0 bottom-8 flex justify-center">

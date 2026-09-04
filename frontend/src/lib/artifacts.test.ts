@@ -189,31 +189,29 @@ describe("skeletonReveal", () => {
 
   it("only ever grows", () => {
     let prev = -1;
-    for (let b = 0; b <= 20000; b += 250) {
-      const v = skeletonReveal(b);
+    for (let ms = 0; ms <= 30_000; ms += 250) {
+      const v = skeletonReveal(ms);
       expect(v).toBeGreaterThanOrEqual(prev);
       prev = v;
     }
   });
 
   it("never completes, so it cannot sit at 100% looking hung", () => {
-    for (const b of [5000, 20000, 1_000_000]) {
-      expect(skeletonReveal(b)).toBeLessThan(1);
+    for (const ms of [10_000, 60_000, 3_600_000]) {
+      expect(skeletonReveal(ms)).toBeLessThan(1);
     }
   });
 
-  it("is well advanced across the head sizes actually measured (4.1-6.2 KB)", () => {
-    expect(skeletonReveal(4100)).toBeGreaterThan(0.6);
-    expect(skeletonReveal(6200)).toBeGreaterThan(0.85);
-    // ...but still visibly moving at the start, not pinned near full.
-    expect(skeletonReveal(500)).toBeLessThan(0.25);
+  it("keeps moving through the middle of the wait", () => {
+    // The first attempt was exponential and was ~63% done almost immediately, then
+    // barely changed - which looked exactly like the static skeleton it replaced.
+    expect(skeletonReveal(2_000)).toBeCloseTo(0.2, 1);
+    expect(skeletonReveal(5_000)).toBeCloseTo(0.5, 1);
+    expect(skeletonReveal(8_000)).toBeCloseTo(0.8, 1);
   });
 
-  it("keeps moving through the MIDDLE of the write, which the exponential did not", () => {
-    // The old curve was already at ~0.63 by 2.6 KB and then barely changed, so the
-    // skeleton looked static for most of a 25-second write. Progress should be spread.
-    const mid = skeletonReveal(3000);
-    expect(mid).toBeGreaterThan(0.4);
-    expect(mid).toBeLessThan(0.6);
+  it("shows something immediately, so the pane is never blank", () => {
+    // The component floors this at one row; the curve itself may still be ~0 here.
+    expect(skeletonReveal(100)).toBeLessThan(0.1);
   });
 });
