@@ -19,9 +19,14 @@
  * inside a sandboxed frame.
  */
 import { useEffect, useImperativeHandle, useRef, useState } from "react";
-import type { Ref } from "react";
+import type { ReactNode, Ref } from "react";
 import { ReasoningText } from "@/components/agents/loading-states/reasoning-text";
-import { artifactName, hasRenderableBody, safeHtmlPrefix } from "@/lib/artifacts";
+import {
+  artifactName,
+  hasRenderableBody,
+  safeHtmlPrefix,
+  skeletonReveal,
+} from "@/lib/artifacts";
 
 /**
  * Smallest gap between iframe reloads while content streams.
@@ -77,6 +82,40 @@ function Bar({ w, h = "h-3" }: { w: string; h?: string }) {
 }
 
 /**
+ * The skeleton's rows, in the order a document is written.
+ *
+ * A flat list rather than nested JSX so the reveal below is a simple slice: how many
+ * rows are showing is then one number, driven by bytes written, instead of a spread of
+ * per-section conditionals.
+ */
+const SKELETON_ROWS: { el: ReactNode; key: string }[] = [
+  { key: "band", el: (
+    <div className="flex flex-col gap-3 rounded-xl bg-neutral-100 p-6">
+      <Bar w="w-2/5" h="h-2" />
+      <Bar w="w-3/4" h="h-6" />
+      <Bar w="w-1/2" h="h-2.5" />
+    </div>
+  ) },
+  { key: "h1", el: <Bar w="w-1/4" h="h-4" /> },
+  { key: "p1", el: <Bar w="w-full" /> },
+  { key: "p2", el: <Bar w="w-11/12" /> },
+  { key: "p3", el: <Bar w="w-4/5" /> },
+  { key: "cards", el: (
+    <div className="grid grid-cols-4 gap-3">
+      {[0, 1, 2, 3].map((i) => (
+        <div key={i} className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-4">
+          <Bar w="w-2/3" h="h-2" />
+          <Bar w="w-1/2" h="h-5" />
+        </div>
+      ))}
+    </div>
+  ) },
+  { key: "h2", el: <Bar w="w-1/3" h="h-4" /> },
+  { key: "p4", el: <Bar w="w-full" /> },
+  { key: "p5", el: <Bar w="w-10/12" /> },
+];
+
+/**
  * A placeholder shaped like the documents this agent writes: title band, meta line,
  * summary paragraph, a row of stat cards, then sections.
  *
@@ -85,39 +124,28 @@ function Bar({ w, h = "h-3" }: { w: string; h?: string }) {
  * than no skeleton at all - it resolves into something structurally unrelated. Every
  * brief produced so far has these same bones, which is what makes this one honest.
  *
+ * It GROWS as the document is written. `reveal` comes from bytes streamed (see
+ * skeletonReveal), so a row appearing means the agent really did write more, rather
+ * than a timer ticking - and the pulse alone left no way to tell progress from a hang.
+ *
  * aria-hidden: it carries no information. The rotating status text underneath is what
  * a screen reader should hear.
  */
-function ArtifactSkeleton() {
+function ArtifactSkeleton({ reveal }: { reveal: number }) {
+  // At least one row from the start, so the pane is never blank.
+  const shown = Math.max(1, Math.round(reveal * SKELETON_ROWS.length));
   return (
-    <div aria-hidden className="flex animate-pulse flex-col gap-6 p-8">
-      <div className="flex flex-col gap-3 rounded-xl bg-neutral-100 p-6">
-        <Bar w="w-2/5" h="h-2" />
-        <Bar w="w-3/4" h="h-6" />
-        <Bar w="w-1/2" h="h-2.5" />
-      </div>
-
-      <div className="flex flex-col gap-2.5">
-        <Bar w="w-1/4" h="h-4" />
-        <Bar w="w-full" />
-        <Bar w="w-11/12" />
-        <Bar w="w-4/5" />
-      </div>
-
-      <div className="grid grid-cols-4 gap-3">
-        {[0, 1, 2, 3].map((i) => (
-          <div key={i} className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-4">
-            <Bar w="w-2/3" h="h-2" />
-            <Bar w="w-1/2" h="h-5" />
-          </div>
-        ))}
-      </div>
-
-      <div className="flex flex-col gap-2.5">
-        <Bar w="w-1/3" h="h-4" />
-        <Bar w="w-full" />
-        <Bar w="w-10/12" />
-      </div>
+    <div aria-hidden className="flex flex-col gap-6 p-8">
+      {SKELETON_ROWS.slice(0, shown).map(({ key, el }, i) => (
+        <div
+          key={key}
+          // Only the newest row pulses: pulsing everything made the whole pane throb and
+          // hid the fact that rows were arriving at all.
+          className={i === shown - 1 ? "animate-pulse" : ""}
+        >
+          {el}
+        </div>
+      ))}
     </div>
   );
 }
@@ -209,7 +237,8 @@ export function HtmlArtifact({ path, content, streaming, ref }: HtmlArtifactProp
         // On WHITE, matching the iframe, so handing over to the real document is not
         // also a change of background colour.
         <div className="absolute inset-0 overflow-hidden bg-white">
-          <ArtifactSkeleton />
+          {/* Bytes of the real document, so the skeleton tracks the write. */}
+          <ArtifactSkeleton reveal={skeletonReveal(content.length)} />
           {/* The skeleton says content is coming; only this says why the wait is long
               enough to notice, and it is the line a presenter talks over. */}
           <div className="absolute inset-x-0 bottom-8 flex justify-center">

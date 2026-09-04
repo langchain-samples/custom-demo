@@ -4,6 +4,7 @@ import {
   hasRenderableBody,
   isHtmlArtifactPath,
   safeHtmlPrefix,
+  skeletonReveal,
 } from "@/lib/artifacts";
 
 describe("isHtmlArtifactPath", () => {
@@ -176,5 +177,35 @@ describe("the critical-CSS write order the prompt now asks for", () => {
 
   it("passes the finished document through unchanged", () => {
     expect(safeHtmlPrefix(doc)).toBe(doc);
+  });
+});
+
+describe("skeletonReveal", () => {
+  it("starts empty", () => {
+    expect(skeletonReveal(0)).toBe(0);
+    expect(skeletonReveal(-5)).toBe(0);
+    expect(skeletonReveal(NaN)).toBe(0);
+  });
+
+  it("only ever grows", () => {
+    let prev = -1;
+    for (let b = 0; b <= 20000; b += 250) {
+      const v = skeletonReveal(b);
+      expect(v).toBeGreaterThanOrEqual(prev);
+      prev = v;
+    }
+  });
+
+  it("never completes, so it cannot sit at 100% looking hung", () => {
+    for (const b of [5000, 20000, 1_000_000]) {
+      expect(skeletonReveal(b)).toBeLessThan(1);
+    }
+  });
+
+  it("is well advanced across the head sizes actually measured (4.1-6.2 KB)", () => {
+    expect(skeletonReveal(4100)).toBeGreaterThan(0.7);
+    expect(skeletonReveal(6200)).toBeGreaterThan(0.85);
+    // ...but still visibly moving at the start, not pinned near full.
+    expect(skeletonReveal(500)).toBeLessThan(0.25);
   });
 });

@@ -149,3 +149,29 @@ export function hasRenderableBody(partial: string): boolean {
   // No text yet, but a self-contained visual (an img/svg/canvas) counts as something.
   return /<(img|svg|canvas|video|table)\b/i.test(rest);
 }
+
+/**
+ * How much of the waiting skeleton to reveal, from the bytes written so far.
+ *
+ * Driven by real progress rather than a timer: the agent is streaming a document and
+ * `content.length` is how far it has got. What we do NOT know is the total, so this is
+ * asymptotic - it approaches 1 and never arrives. That is deliberate twice over: a bar
+ * that fills and then sits at 100%% reads as hung, and the real content can arrive at any
+ * point, at which case the iframe takes over and the skeleton is gone anyway.
+ *
+ * K is set from measurement, not taste: across five real artifacts the head and its
+ * stylesheet ran 4.1 to 6.2 KB before the first visible element, so the curve should be
+ * well advanced but unfinished across that range (63%% at 2.6 KB, 86%% at 5.2 KB).
+ */
+export function skeletonReveal(bytes: number): number {
+  const K = 2600;
+  /**
+   * Hard ceiling, for two reasons. The curve alone is not enough: at a large enough
+   * byte count `Math.exp` underflows to zero and the "asymptote" returns exactly 1,
+   * which a test caught. And independently, the last row should stay unfilled - we do
+   * not know the total, so claiming to be finished would be a claim we cannot make.
+   */
+  const CEILING = 0.9;
+  if (!Number.isFinite(bytes) || bytes <= 0) return 0;
+  return Math.min(CEILING, 1 - Math.exp(-bytes / K));
+}
