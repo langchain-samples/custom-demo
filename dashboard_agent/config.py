@@ -65,12 +65,16 @@ MODEL = os.getenv("DASHBOARD_MODEL", "claude-sonnet-5")
 # A `DASHBOARD_MODEL` carrying an explicit `provider:model` prefix picks the provider.
 # Bare ids (the historical form, e.g. "claude-sonnet-5") stay Anthropic, so every
 # existing demo keeps working untouched.
+# A tuple per provider: the FIRST name is what the docs and error messages use, the rest
+# are accepted aliases. Gemini has two because this repo already carries GEMINI_API_KEY
+# for voice mode, and asking for the same secret twice under a second name to try the
+# model would be silly.
 _PROVIDER_KEYS = {
-    "anthropic": "ANTHROPIC_API_KEY",
-    "azure_openai": "AZURE_OPENAI_API_KEY",
-    "openai": "OPENAI_API_KEY",
-    "google_genai": "GOOGLE_API_KEY",
-    "bedrock_converse": "AWS_ACCESS_KEY_ID",
+    "anthropic": ("ANTHROPIC_API_KEY",),
+    "azure_openai": ("AZURE_OPENAI_API_KEY",),
+    "openai": ("OPENAI_API_KEY",),
+    "google_genai": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
+    "bedrock_converse": ("AWS_ACCESS_KEY_ID",),
 }
 
 
@@ -90,18 +94,25 @@ def require_model_key(model_id: str | None = None) -> str:
     """
     load_env()
     provider = model_provider(model_id)
-    var = _PROVIDER_KEYS.get(provider)
-    if var is None:
+    names = _PROVIDER_KEYS.get(provider)
+    if names is None:
         # An unrecognized provider is not necessarily broken (it may authenticate
-        # some other way), so let init_chat_model be the one to complain.
+        # some other way), so let init_chat_model be the one to complain. This is also
+        # the path a `langsmith:` id takes, where the LangSmith key authenticates and
+        # there is no provider key to find.
         return ""
-    key = os.getenv(var)
-    if not key:
-        raise RuntimeError(
-            f"{var} is not set, and DASHBOARD_MODEL selects the '{provider}' provider. "
-            "Add it to dashboard-agent/.env or the environment."
-        )
-    return key
+    for name in names:
+        key = os.getenv(name)
+        if key:
+            # google_genai reads GOOGLE_API_KEY, so an alias has to be promoted into the
+            # name the client will actually look for.
+            if name != names[0]:
+                os.environ.setdefault(names[0], key)
+            return key
+    raise RuntimeError(
+        f"{names[0]} is not set, and DASHBOARD_MODEL selects the '{provider}' provider. "
+        "Add it to dashboard-agent/.env or the environment."
+    )
 
 
 def sampling_kwargs(default_temperature: float) -> dict[str, float]:
