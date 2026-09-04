@@ -132,12 +132,7 @@ export function HtmlArtifact({ path, content, streaming, ref }: HtmlArtifactProp
   const building = !!streaming && !hasRenderableBody(rendered);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {building && (
-        <div className="flex min-h-0 flex-1 items-center justify-center">
-          <ReasoningText phrases={BUILDING_PHRASES} />
-        </div>
-      )}
+    <div className="relative flex min-h-0 flex-1 flex-col">
       <iframe
         // Remounting per path (rather than reusing one frame) keeps two artifacts from
         // inheriting each other's scroll position and script state.
@@ -148,10 +143,21 @@ export function HtmlArtifact({ path, content, streaming, ref }: HtmlArtifactProp
         // See the SECURITY note above: allow-same-origin must never be added here.
         // allow-modals is what lets the document print itself.
         sandbox="allow-scripts allow-popups allow-modals allow-forms"
-        // Mounted throughout, only hidden: remounting on the first paintable byte would
-        // throw away the document the browser has already parsed.
-        className={building ? "hidden" : "min-h-0 flex-1 border-0 bg-white"}
+        // ALWAYS laid out, never display:none. Hiding it was a real bug: an iframe that
+        // is display:none when srcDoc is assigned does not load that document, and when
+        // it becomes visible again srcDoc has not CHANGED since the last commit, so
+        // nothing triggers a load and the pane stays blank. Switching tabs appeared to
+        // fix it only because that remounts the frame.
+        className="min-h-0 flex-1 border-0 bg-white"
       />
+      {building && (
+        // An overlay rather than a swap. The frame underneath is genuinely empty at this
+        // point, so covering it looks identical to replacing it, and the iframe keeps
+        // laying out and loading throughout.
+        <div className="absolute inset-0 flex items-center justify-center bg-background">
+          <ReasoningText phrases={BUILDING_PHRASES} />
+        </div>
+      )}
     </div>
   );
 }
