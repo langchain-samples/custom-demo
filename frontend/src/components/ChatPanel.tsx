@@ -310,6 +310,17 @@ function statusFromVerdict(result: string | undefined): Goal["status"] {
  * and the teardown all have to agree on it: three copies of the string is how a stopped
  * run kept shimmering.
  */
+/**
+ * One readable line from a server error payload.
+ *
+ * First line only, and capped: a provider error can arrive with a traceback attached,
+ * and a wall of Python in the chat bubble buries the sentence worth reading.
+ */
+function errorText(raw: string | undefined): string {
+  const first = (raw || "").split("\n")[0].trim();
+  return first.length > 300 ? first.slice(0, 299) + "…" : first;
+}
+
 const PLACEHOLDER_TEXT = "Working…";
 
 /**
@@ -873,7 +884,13 @@ export default function ChatPanel({
           // must not leak into the main answer.
           if (!isSubagentNamespace(namespace)) {
             const d = parsed as { error?: string; message?: string };
-            errorMsg = (d && (d.error || d.message)) || "run error";
+            // `message` FIRST. The server sends `error` as the exception class and
+            // `message` as the detail, and preferring the class put
+            // "AnthropicInvalidRequestError" on screen while discarding "Your credit
+            // balance is too low to access the Anthropic API" - the only part anyone
+            // can act on. That cost a trip through the traces to learn something the
+            // UI had already been handed.
+            errorMsg = errorText(d?.message) || errorText(d?.error) || "run error";
           }
           continue;
         }
