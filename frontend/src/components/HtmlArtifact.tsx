@@ -230,9 +230,9 @@ export function HtmlArtifact({ path, content, streaming, ref }: HtmlArtifactProp
     buildStartedAt.current ??= Date.now();
     const tick = () => setBuildElapsed(Date.now() - (buildStartedAt.current ?? Date.now()));
     tick();
-    // ~8fps: a row appears at most every second or so, so anything faster is work for
-    // no visible difference.
-    const id = window.setInterval(tick, 120);
+    // A row lands roughly every three seconds now, so a quarter-second tick is already
+    // far finer than anything visible.
+    const id = window.setInterval(tick, 250);
     return () => window.clearInterval(id);
   }, [building]);
 

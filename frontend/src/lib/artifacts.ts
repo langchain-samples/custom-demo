@@ -151,32 +151,33 @@ export function hasRenderableBody(partial: string): boolean {
 }
 
 /**
- * How long the skeleton takes to reach its ceiling, in ms.
+ * How long the skeleton takes to fill, in ms.
  *
- * Sized for both cases, because the wait varies enormously with how the agent writes.
- * With the critical-CSS order the first visible element now arrives 5-8%% into the file
- * (measured: body at 571-847 bytes of 8-12 KB), so the skeleton flashes a row or two and
- * the real document takes over. When the model instead writes one big head stylesheet it
- * is 30-44%%, which is tens of seconds. Ten seconds keeps it moving through the slow case
- * without racing to the end of the fast one.
+ * Thirty seconds, sized for the SLOW case, because that is the only case where the
+ * growth is seen at all. With the critical-CSS write order the first visible element
+ * arrives 5-8%% into the file (measured on three fresh artifacts: body at 571-847 bytes
+ * of 8-12 KB), so a fast write shows one row and hands straight over to the real
+ * document. When the model instead puts one big stylesheet in the head it is 30-44%% of
+ * the file, which is tens of seconds, and that is the wait this paces.
  */
-const REVEAL_MS = 10_000;
+const REVEAL_MS = 30_000;
 
 /**
  * How much of the waiting skeleton to reveal, from how long it has been building.
  *
  * TIME, not bytes. Bytes were the first attempt and they have one hole: the tab appears
  * as soon as `write_file`'s path argument is known, which is before its content argument
- * starts streaming, so a byte-driven skeleton sits at one row through that gap - the
- * exact moment it most needs to look alive. A clock keeps moving regardless of when the
- * tokens land.
+ * starts streaming, so a byte-driven skeleton sat at one row through exactly the gap
+ * where it most needs to look alive. A clock keeps moving regardless of when the tokens
+ * land.
  *
- * Linear, and capped below 1 so the last row stays unfilled: we cannot know how long
- * this document will take, so claiming to be finished is a claim we cannot make, and a
- * bar that fills and then waits reads as hung.
+ * It DOES reach the end, which reverses an earlier decision here. The argument for
+ * holding back the last row was that a filled bar reads as hung - but this is not a
+ * progress bar, it is a placeholder standing in for a page, and the newest row goes on
+ * pulsing at every stage, so a full skeleton still shows activity. Stopping one row
+ * short forever just left a gap where the document was about to be.
  */
 export function skeletonReveal(elapsedMs: number): number {
-  const CEILING = 0.9;
   if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) return 0;
-  return Math.min(CEILING, elapsedMs / REVEAL_MS);
+  return Math.min(1, elapsedMs / REVEAL_MS);
 }

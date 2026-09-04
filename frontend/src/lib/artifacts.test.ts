@@ -189,29 +189,25 @@ describe("skeletonReveal", () => {
 
   it("only ever grows", () => {
     let prev = -1;
-    for (let ms = 0; ms <= 30_000; ms += 250) {
+    for (let ms = 0; ms <= 90_000; ms += 250) {
       const v = skeletonReveal(ms);
       expect(v).toBeGreaterThanOrEqual(prev);
       prev = v;
     }
   });
 
-  it("never completes, so it cannot sit at 100% looking hung", () => {
-    for (const ms of [10_000, 60_000, 3_600_000]) {
-      expect(skeletonReveal(ms)).toBeLessThan(1);
-    }
+  it("paces the thirty seconds a slow write actually takes", () => {
+    expect(skeletonReveal(7_500)).toBeCloseTo(0.25, 2);
+    expect(skeletonReveal(15_000)).toBeCloseTo(0.5, 2);
+    expect(skeletonReveal(22_500)).toBeCloseTo(0.75, 2);
   });
 
-  it("keeps moving through the middle of the wait", () => {
-    // The first attempt was exponential and was ~63% done almost immediately, then
-    // barely changed - which looked exactly like the static skeleton it replaced.
-    expect(skeletonReveal(2_000)).toBeCloseTo(0.2, 1);
-    expect(skeletonReveal(5_000)).toBeCloseTo(0.5, 1);
-    expect(skeletonReveal(8_000)).toBeCloseTo(0.8, 1);
+  it("fills, and never exceeds full however long it runs", () => {
+    expect(skeletonReveal(30_000)).toBe(1);
+    expect(skeletonReveal(600_000)).toBe(1);
   });
 
-  it("shows something immediately, so the pane is never blank", () => {
-    // The component floors this at one row; the curve itself may still be ~0 here.
-    expect(skeletonReveal(100)).toBeLessThan(0.1);
+  it("is still near-empty in the first second, so a fast write barely shows it", () => {
+    expect(skeletonReveal(500)).toBeLessThan(0.05);
   });
 });
