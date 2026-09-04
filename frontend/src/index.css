@@ -1,6 +1,11 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+/* Streamdown's own stylesheet. REQUIRED for `animated` to do anything: the prop only
+   sets [data-sd-animate] plus --sd-duration/--sd-easing/--sd-delay, and the @keyframes
+   those refer to live here. Without it the markup was annotated and nothing animated,
+   which is why streamed text still arrived in jumps. */
+@import "streamdown/styles.css";
 /* Let Tailwind compile the classes Streamdown emits (streaming markdown renderer). */
 @source "../node_modules/streamdown/dist/index.js";
 /* Curated fallback families, spanning the personality space a brand might need.
