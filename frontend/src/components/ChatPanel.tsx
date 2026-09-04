@@ -312,6 +312,17 @@ function statusFromVerdict(result: string | undefined): Goal["status"] {
  */
 const PLACEHOLDER_TEXT = "Working…";
 
+/**
+ * Word-by-word fade-in for streamed answers.
+ *
+ * Module scope, not an inline literal: Streamdown memoizes on `animated === prev`, so a
+ * fresh object every render defeats that comparison on every chunk of the stream.
+ *
+ * Word-level rather than per character - per character on a long answer is a great deal
+ * of simultaneous animation for no extra legibility.
+ */
+const ANSWER_ANIMATION = { animation: "fadeIn", sep: "word", duration: 260 } as const;
+
 export default function ChatPanel({
   handleRef,
   voiceControl,
@@ -1767,7 +1778,7 @@ function ItemView({
         <Streamdown
           parseIncompleteMarkdown
           isAnimating={!!item.streaming}
-          animated={{ animation: "fadeIn", sep: "word", duration: 260 }}
+          animated={ANSWER_ANIMATION}
         >
           {item.text}
         </Streamdown>

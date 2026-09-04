@@ -203,9 +203,17 @@ describe("skeletonReveal", () => {
   });
 
   it("is well advanced across the head sizes actually measured (4.1-6.2 KB)", () => {
-    expect(skeletonReveal(4100)).toBeGreaterThan(0.7);
+    expect(skeletonReveal(4100)).toBeGreaterThan(0.6);
     expect(skeletonReveal(6200)).toBeGreaterThan(0.85);
     // ...but still visibly moving at the start, not pinned near full.
     expect(skeletonReveal(500)).toBeLessThan(0.25);
+  });
+
+  it("keeps moving through the MIDDLE of the write, which the exponential did not", () => {
+    // The old curve was already at ~0.63 by 2.6 KB and then barely changed, so the
+    // skeleton looked static for most of a 25-second write. Progress should be spread.
+    const mid = skeletonReveal(3000);
+    expect(mid).toBeGreaterThan(0.4);
+    expect(mid).toBeLessThan(0.6);
   });
 });

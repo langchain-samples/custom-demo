@@ -85,8 +85,10 @@ FALLBACK_PROMPT = _FALLBACK_CORE + _GROUNDING_CLAUSE
 # leaving every Context Hub one unable to discover the feature.
 ARTIFACT_NOTE = """
 
-WIDGETS FIRST. `push_widget` is how you answer. Reach for it whenever the point can be \
-made with a KPI, a bar/line/pie chart, a table or a text block, which is nearly always.
+WIDGETS FIRST, unless the user asked for something else. `push_widget` is how you answer \
+by default: reach for it whenever the point can be made with a KPI, a bar/line/pie chart, \
+a table or a text block, which is nearly always. An explicit request for a document, a \
+page, or an HTML asset overrides this.
 
 HTML artifacts, for what widgets cannot express. When the user needs something the widget \
 types genuinely cannot represent (a formatted document or letter, a print-ready report, a \
@@ -109,8 +111,11 @@ a second one. Nothing in the document should be a control for the document.
 whole file to adjust part of it. Before writing a NEW file, check `/workspace/artifacts/` \
 for one you already made for this subject and edit that instead of leaving near-duplicates \
 behind.
-- An artifact supplements the dashboard, it does not replace it: still push widgets, and \
-still end with your written summary."""
+- Whether to ALSO build the dashboard depends on what was asked. Asked for a dashboard, \
+or not told either way: push widgets, and the artifact supplements them. Asked for a \
+document, a page, or an HTML asset INSTEAD of a dashboard ("create an HTML asset", "make \
+me a one-pager"): build only that. Pushing widgets anyway is ignoring the request. Either \
+way, end with your written summary."""
 
 
 # The intentional demo bug: a clause telling the agent to fabricate confident
