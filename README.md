@@ -161,7 +161,7 @@ without `GEMINI_API_KEY`. See [docs/voice-mode.md](docs/voice-mode.md).
 ## About panel
 
 The header's ⓘ opens "About this agent": what this assistant is, the recommended demo
-flow, the deepagents framework story, and a brand-aware architecture diagram. The
+flow, and an architecture diagram. The
 customer-specific half is `metadata.demo_brief` / `demo_flow`, written per customer by
 `build_demo_brief()` at setup, and rendered through the same components as the
 post-setup popup (`settings/BriefLists.tsx`) so the two cannot drift. Reopenable, which

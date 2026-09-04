@@ -2,12 +2,16 @@
  * "About this agent" — a scene-setting overlay a presenter can open at the top of a
  * demo: WHAT this assistant is, and HOW it is built.
  *
- * Ported from the Super Group build (joel-langchain, 9115f8a), keeping the parts that
- * are true of every assistant: the deepagents framework story and the brand-aware
- * architecture diagram. What did NOT come over is that build's copy, which named Super
- * Group, Betway, Spin, Kambi and Snowflake in ordinary prose. Hardcoding one customer's
- * systems into a shared panel means every other demo shows a competitor's name, so the
- * customer-specific half is read from the assistant's own metadata instead.
+ * What it shows: this assistant in the setup agent's own words, the suggested demo flow,
+ * and an architecture diagram. The first two come from the assistant's own metadata, so
+ * they are correct per customer without anyone editing a string.
+ *
+ * Ported from the Super Group build (joel-langchain, 9115f8a). Two sections that came
+ * with it have since been dropped as pitch rather than explanation: a "Built on
+ * deepagents" list and a restatement of the quick-action prompts, which are already
+ * visible under the composer. Its copy never came over at all - it named Super Group,
+ * Betway, Spin, Kambi and Snowflake in ordinary prose, and hardcoding one customer's
+ * systems into a shared panel shows a competitor's name in every other demo.
  *
  * That metadata already exists and is already per-customer: `build_demo_brief()` writes
  * `demo_brief` and `demo_flow` during setup, and the post-setup popup shows the same two
@@ -40,7 +44,6 @@ export interface AboutPanelProps {
 
 export function AboutPanel({ open, onOpenChange, meta, displayName, logo }: AboutPanelProps) {
   const industry = meta?.industry;
-  const actions = meta?.actions ?? [];
   const brief = meta?.demo_brief ?? [];
   const flow = meta?.demo_flow ?? [];
 
@@ -83,31 +86,6 @@ export function AboutPanel({ open, onOpenChange, meta, displayName, logo }: Abou
             </section>
           )}
 
-          {/* How it is built. True of every assistant, so it stays as written. */}
-          <section className="rounded-xl border border-border bg-panel p-4">
-            <h3 className="text-sm font-semibold text-[var(--brand-primary)]">
-              Built on deepagents
-            </h3>
-            <ul className="mt-2 grid gap-2 text-sm leading-relaxed text-foreground/90 md:grid-cols-2">
-              <li>
-                <strong>Deepagents</strong> is LangChain&apos;s open-source framework for
-                long-running agents.
-              </li>
-              <li>
-                A strong agent is more than a model. Claude Code is roughly{" "}
-                <strong>500,000 lines of code</strong> around the model.
-              </li>
-              <li>
-                deepagents gives you that harness: planning, memory, filesystem,
-                sub-agents, skills, and tool use.
-              </li>
-              <li>
-                You bring the model and the domain, so you{" "}
-                <strong>own your own intelligence</strong> instead of renting a black box.
-              </li>
-            </ul>
-          </section>
-
           <section className="flex flex-col gap-2">
             <h3 className="text-sm font-semibold text-[var(--brand-primary)]">
               How it fits together
@@ -117,34 +95,6 @@ export function AboutPanel({ open, onOpenChange, meta, displayName, logo }: Abou
             </div>
           </section>
 
-          {actions.length > 0 && (
-            <section className="flex flex-col gap-2">
-              <h3 className="text-sm font-semibold text-[var(--brand-primary)]">
-                {actions.length === 1
-                  ? "The built-in prompt"
-                  : `The ${actions.length} built-in prompts`}
-              </h3>
-              <p className="text-sm leading-relaxed text-foreground/90">
-                The quick actions below the composer are ready-made prompts that show how
-                the system works end to end:
-              </p>
-              <ul className="flex flex-col gap-1.5">
-                {actions.map((a, i) => (
-                  <li
-                    key={i}
-                    className="rounded-lg border border-border bg-panel px-3 py-2 text-sm"
-                  >
-                    <span className="font-semibold">{(a.label || "").split(":")[0]}</span>
-                    <span className="text-muted-foreground">
-                      {(a.label || "").includes(":")
-                        ? ":" + (a.label || "").split(":").slice(1).join(":")
-                        : ""}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
         </div>
       </DialogContent>
     </Dialog>
