@@ -145,3 +145,36 @@ describe("hasRenderableBody", () => {
     expect(hasRenderableBody("<div></div>")).toBe(false);
   });
 });
+
+describe("the critical-CSS write order the prompt now asks for", () => {
+  // A short head style, then body content, then the rest of the CSS before </body>.
+  const doc =
+    '<!doctype html><html><head><style>body{font:16px system-ui;color:#111}</style>' +
+    "</head><body><h1>Q3 brief</h1><p>Summary text.</p>" +
+    "<style>.card{border-radius:12px;box-shadow:0 1px 2px #0001}</style></body></html>";
+
+  it("shows content early, which is the whole point of the reorder", () => {
+    // Under the old order the body began a third of the way in; here it is immediate.
+    const headOnly = doc.slice(0, doc.indexOf("<body"));
+    expect(hasRenderableBody(headOnly)).toBe(false);
+    const throughH1 = doc.slice(0, doc.indexOf("</h1>"));
+    expect(hasRenderableBody(throughH1)).toBe(true);
+  });
+
+  it("keeps the trailing style block from swallowing the document mid-write", () => {
+    const midTrailingStyle = doc.slice(0, doc.indexOf("box-shadow"));
+    const out = safeHtmlPrefix(midTrailingStyle);
+    expect((out.match(/<style/gi) || []).length).toBe((out.match(/<\/style/gi) || []).length);
+    // The content already written is still there, not eaten as CSS.
+    expect(out).toContain("Q3 brief");
+  });
+
+  it("still reports renderable content while the trailing CSS streams", () => {
+    const midTrailingStyle = doc.slice(0, doc.indexOf("box-shadow"));
+    expect(hasRenderableBody(midTrailingStyle)).toBe(true);
+  });
+
+  it("passes the finished document through unchanged", () => {
+    expect(safeHtmlPrefix(doc)).toBe(doc);
+  });
+});

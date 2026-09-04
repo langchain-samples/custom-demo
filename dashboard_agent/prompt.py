@@ -94,8 +94,14 @@ custom layout, a page they will download and send on, or an interactive view), w
 with `write_file` to `/workspace/artifacts/<name>.html`. It opens as its own tab beside \
 the dashboard and renders live as you write, so the user watches it build. Prefer this over \
 any drafting tool when the user asks for something to print, download, or keep.
-- Write ONE complete, standalone document: `<!doctype html>` through `</html>`, styles in \
-an inline `<style>`. External CDNs are available if you need a library.
+- Write ONE complete, standalone document: `<!doctype html>` through `</html>`.
+- ORDER MATTERS, because the tab renders as you type. Anything before the first visible \
+element is time the user spends watching a placeholder, and a full stylesheet in `<head>` \
+is typically a THIRD of the file. So: put a SHORT critical `<style>` in the head (font \
+stack, colours, page width, heading sizes - a dozen lines), then write the body content, \
+then put the rest of the CSS in a SECOND `<style>` just before `</body>`. CSS applies \
+whenever it arrives, so the document is readable almost immediately and finishes polished.
+- External CDNs are available if you need a library.
 - Write CONTENT ONLY. No print button, no download or save link, no "export" control: the \
 app already frames the artifact with its own Save as PDF, and yours appears next to it as \
 a second one. Nothing in the document should be a control for the document.

@@ -71,6 +71,57 @@ export interface HtmlArtifactHandle {
   savePdf: () => void;
 }
 
+/** One grey bar. `w` is a Tailwind width class so the rows can be ragged. */
+function Bar({ w, h = "h-3" }: { w: string; h?: string }) {
+  return <div className={`rounded bg-neutral-200/90 ${h} ${w}`} />;
+}
+
+/**
+ * A placeholder shaped like the documents this agent writes: title band, meta line,
+ * summary paragraph, a row of stat cards, then sections.
+ *
+ * Deliberately NOT the generic avatar-and-image card skeleton. A skeleton is a claim
+ * about the layout that is coming, so a circle where no artifact has an avatar is worse
+ * than no skeleton at all - it resolves into something structurally unrelated. Every
+ * brief produced so far has these same bones, which is what makes this one honest.
+ *
+ * aria-hidden: it carries no information. The rotating status text underneath is what
+ * a screen reader should hear.
+ */
+function ArtifactSkeleton() {
+  return (
+    <div aria-hidden className="flex animate-pulse flex-col gap-6 p-8">
+      <div className="flex flex-col gap-3 rounded-xl bg-neutral-100 p-6">
+        <Bar w="w-2/5" h="h-2" />
+        <Bar w="w-3/4" h="h-6" />
+        <Bar w="w-1/2" h="h-2.5" />
+      </div>
+
+      <div className="flex flex-col gap-2.5">
+        <Bar w="w-1/4" h="h-4" />
+        <Bar w="w-full" />
+        <Bar w="w-11/12" />
+        <Bar w="w-4/5" />
+      </div>
+
+      <div className="grid grid-cols-4 gap-3">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-4">
+            <Bar w="w-2/3" h="h-2" />
+            <Bar w="w-1/2" h="h-5" />
+          </div>
+        ))}
+      </div>
+
+      <div className="flex flex-col gap-2.5">
+        <Bar w="w-1/3" h="h-4" />
+        <Bar w="w-full" />
+        <Bar w="w-10/12" />
+      </div>
+    </div>
+  );
+}
+
 export interface HtmlArtifactProps {
   /** Absolute path on the agent's filesystem; also the tab key. */
   path: string;
@@ -154,8 +205,16 @@ export function HtmlArtifact({ path, content, streaming, ref }: HtmlArtifactProp
         // An overlay rather than a swap. The frame underneath is genuinely empty at this
         // point, so covering it looks identical to replacing it, and the iframe keeps
         // laying out and loading throughout.
-        <div className="absolute inset-0 flex items-center justify-center bg-background">
-          <ReasoningText phrases={BUILDING_PHRASES} />
+        //
+        // On WHITE, matching the iframe, so handing over to the real document is not
+        // also a change of background colour.
+        <div className="absolute inset-0 overflow-hidden bg-white">
+          <ArtifactSkeleton />
+          {/* The skeleton says content is coming; only this says why the wait is long
+              enough to notice, and it is the line a presenter talks over. */}
+          <div className="absolute inset-x-0 bottom-8 flex justify-center">
+            <ReasoningText phrases={BUILDING_PHRASES} />
+          </div>
         </div>
       )}
     </div>

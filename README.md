@@ -211,6 +211,14 @@ reads `write_file`'s `content` argument the same way. Because the artifact is a 
 file, the agent revises it with `edit_file` instead of rewriting it, and the existing
 file browser and `/sandbox-file` route serve it unchanged.
 
+**Write order matters, and the prompt says so.** The tab renders as the agent types, so
+anything before the first visible element is time on a placeholder - and a full stylesheet
+in `<head>` measured 30-44% of every artifact produced so far (4000-5966 bytes of CSS).
+The prompt asks for a short critical `<style>` in the head, then the body, then the rest
+of the CSS before `</body>`. CSS applies whenever it arrives, so the document is readable
+almost immediately and finishes polished. Until content exists the tab shows a
+document-shaped skeleton plus a rotating status line.
+
 `safeHtmlPrefix` (`frontend/src/lib/artifacts.ts`) is what makes a half-written document
 renderable. HTML5 parsing recovers from unclosed elements on its own, so it only repairs
 the three cases that do not: a half-written tag, an unclosed `<style>`, and an unclosed
