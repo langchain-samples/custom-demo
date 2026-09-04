@@ -108,6 +108,10 @@ export default function App() {
     subagents: [],
     running: false,
   });
+  // Gates the whole right-hand pane, and only OUTPUT opens it: widgets or an artifact,
+  // both of which set this. A tool call alone must not, or a turn that has merely
+  // started running shows an empty "LIVE DASHBOARD" beside the chat.
+  //
   // Sticky: once a dashboard has appeared, keep the two-column layout until a
   // conversation reset (assistant switch/create) — matches the SPA's
   // has-dashboard class, which clearDashboard() empties but does not remove.
@@ -127,8 +131,6 @@ export default function App() {
     }
   });
   const [resizing, setResizing] = useState(false);
-  /** Whether the right pane exists at all: widgets, or tool activity to graph. */
-  const showPane = hasDashboard || activity.chips.length > 0;
 
   const startResize = (e: React.PointerEvent) => {
     e.preventDefault();
@@ -406,14 +408,14 @@ export default function App() {
           "grid min-h-0 flex-1 print:block print:h-auto print:overflow-visible " +
           (resizing ? "cursor-col-resize select-none " : "transition-[grid-template-columns] duration-500 ease-in-out ")
         }
-        style={{ gridTemplateColumns: showPane ? `${chatWidth}px 1fr` : "1fr" }}
+        style={{ gridTemplateColumns: hasDashboard ? `${chatWidth}px 1fr` : "1fr" }}
       >
         {/* Chat pane — centered on load, becomes the left rail once a dashboard exists.
             Hidden when printing a dashboard (Ctrl+P exports the dashboard only). */}
         <section
           className={
             "relative flex min-h-0 flex-col " +
-            (showPane
+            (hasDashboard
               ? "border-r border-border print:hidden"
               : "mx-auto w-full max-w-[760px]")
           }
@@ -511,7 +513,7 @@ export default function App() {
             onOpenSettings={() => setSettingsOpen(true)}
           />
           {/* Drag handle to resize the rail (only when the split is shown). */}
-          {showPane && (
+          {hasDashboard && (
             <div
               onPointerDown={startResize}
               title="Drag to resize"
@@ -522,7 +524,7 @@ export default function App() {
 
         {/* Right pane — mounted once there is a dashboard, an artifact, or tool work
             to graph. */}
-        {showPane && (
+        {hasDashboard && (
           <section className="flex min-h-0 flex-col overflow-hidden print:overflow-visible">
             <DashboardPane
               widgets={widgets}
