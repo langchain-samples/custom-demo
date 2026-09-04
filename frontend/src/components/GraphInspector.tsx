@@ -32,7 +32,10 @@ import {
   type PanelRect,
 } from "@/lib/floatingPanel";
 
-const RECT_LS_KEY = "graphInspectorRect";
+// Suffixed so changing the DEFAULT placement actually reaches people who already have
+// a stored one. A saved panel position is not worth preserving across a deliberate
+// redesign of where it starts; anyone who liked theirs drags it back in a second.
+const RECT_LS_KEY = "graphInspectorRect.v2";
 
 export interface GraphInspectorProps {
   open: boolean;

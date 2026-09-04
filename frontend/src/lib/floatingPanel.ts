@@ -22,12 +22,29 @@ export const MIN_H = 220;
 /** Kept on screen by at least this much, so there is always something to grab. */
 const EDGE_KEEP = 80;
 
-/** Default: bottom-left, over the chat rail rather than over the dashboard. */
+/** Margin from the viewport edges for the default placement. */
+const MARGIN = 24;
+
+/**
+ * Default: bottom-RIGHT.
+ *
+ * Over the dashboard rather than the chat, which is the opposite of what I first
+ * guessed. The chat is what a presenter reads from and talks over while a turn runs, so
+ * covering it is the more costly choice; the dashboard is mostly empty until widgets
+ * land, and by then you have usually moved or closed the panel.
+ */
 export function defaultRect(viewW: number, viewH: number): PanelRect {
   // 680 fits the graph's own width (NODE_X + NODE_W + 16 = 646) without scrolling.
-  const w = Math.min(680, Math.max(MIN_W, viewW - 48));
-  const h = Math.min(460, Math.max(MIN_H, viewH - 160));
-  return { x: 24, y: Math.max(72, viewH - h - 24), w, h };
+  const w = Math.min(680, Math.max(MIN_W, viewW - 2 * MARGIN));
+  // Tall enough for the lanes a real turn produces: eight of them at ROW_H plus their
+  // call nodes overflowed 460 and made the panel scroll from the first question.
+  const h = Math.min(600, Math.max(MIN_H, viewH - 160));
+  return {
+    x: Math.max(MARGIN, viewW - w - MARGIN),
+    y: Math.max(72, viewH - h - MARGIN),
+    w,
+    h,
+  };
 }
 
 /**

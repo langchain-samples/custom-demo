@@ -11,11 +11,21 @@ import {
 const LAPTOP = { w: 1280, h: 800 };
 
 describe("defaultRect", () => {
-  it("sits at the bottom left, clear of the header", () => {
+  it("sits at the bottom right, clear of the header and the edges", () => {
     const r = defaultRect(LAPTOP.w, LAPTOP.h);
-    expect(r.x).toBe(24);
+    expect(r.x + r.w).toBe(LAPTOP.w - 24);
     expect(r.y).toBeGreaterThanOrEqual(72);
     expect(r.y + r.h).toBeLessThanOrEqual(LAPTOP.h);
+  });
+
+  it("is tall enough not to scroll on the first question", () => {
+    expect(defaultRect(LAPTOP.w, LAPTOP.h).h).toBe(600);
+  });
+
+  it("stays on screen when the viewport is narrower than the panel wants", () => {
+    const r = defaultRect(420, 400);
+    expect(r.x).toBeGreaterThanOrEqual(0);
+    expect(r.x).toBeLessThan(420);
   });
 
   it("shrinks to fit a small viewport instead of overflowing", () => {
