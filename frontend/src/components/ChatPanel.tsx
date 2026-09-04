@@ -1752,12 +1752,23 @@ function ItemView({
         showActions={false}
         contentClassName={PROSE_CLS}
       >
-        {/* `animated` fades each word in as it arrives instead of snapping the whole
-            block to its new size, which is what makes streamed text read as smooth
-            rather than jumpy. Streamdown has supported this all along and we had it
-            off. Word-level, not per character: per character on a long answer is a lot
-            of simultaneous animation for no extra legibility. */}
-        <Streamdown parseIncompleteMarkdown animated={{ animation: "fadeIn", sep: "word", duration: 260 }}>
+        {/* Word-by-word fade-in, which is what makes streamed text read as smooth
+            rather than snapping the block to its new size on every chunk.
+            
+            TWO props are required and they do different jobs: `animated` configures the
+            animation, but `isAnimating` is what actually adds the rehype plugin that
+            annotates each word (it defaults to false, so `animated` alone is inert -
+            and the animation is CSS, so streamdown/styles.css has to be imported too;
+            see index.css). Tied to `streaming` so a finished answer is not re-animated
+            when something else re-renders it.
+            
+            Word-level, not per character: per character on a long answer is a lot of
+            simultaneous animation for no extra legibility. */}
+        <Streamdown
+          parseIncompleteMarkdown
+          isAnimating={!!item.streaming}
+          animated={{ animation: "fadeIn", sep: "word", duration: 260 }}
+        >
           {item.text}
         </Streamdown>
       </StreamingResponse>
