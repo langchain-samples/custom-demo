@@ -579,12 +579,34 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
     );
 
     /* ---- Workspace ---- */
-    const handleWorkspace = useCallback((id: string) => {
-      setCfg((c) => ({ ...c, lsWorkspace: id }));
-      writeLS(WORKSPACE_LS_KEY, id);
-      // No explicit refetch: the prompt and agent queries are keyed on the workspace, so
-      // changing it here is the fetch. That is the whole reason they are queries.
-    }, []);
+    const handleWorkspace = useCallback(
+      (id: string) => {
+        setCfg((c) => ({ ...c, lsWorkspace: id }));
+        writeLS(WORKSPACE_LS_KEY, id);
+        // No explicit refetch: the prompt and agent queries are keyed on the workspace, so
+        // changing it here is the fetch. That is the whole reason they are queries.
+
+        // An assistant belonging to the workspace we just left cannot stay selected. It
+        // looked harmless - the picker still showed it - but every run it drove would
+        // trace into, and read prompts from, a workspace that does not contain it, which
+        // is how the stale-id 403 above happened in the first place.
+        //
+        // Only cleared when the assistant actually records a DIFFERENT workspace. Plenty
+        // of assistants carry no ls_workspace at all (created before it was recorded, or
+        // left behind by the org move), and yanking the selection out from under those
+        // would be a worse bug than the one being fixed: the list is not filtered by
+        // workspace, so there would be nothing obviously wrong with the screen to explain
+        // why the selection vanished.
+        const current = assistantsRef.current.find(
+          (a) => a.assistant_id === selectedIdRef.current,
+        );
+        const owner = current?.context?.ls_workspace;
+        if (current && typeof owner === "string" && owner && owner !== id) {
+          applySelection("", assistantsRef.current, true);
+        }
+      },
+      [applySelection],
+    );
 
     /* ---- Assistant selection / create / delete ---- */
     const handleSelectAssistant = useCallback(

@@ -368,3 +368,36 @@ input[type="color"]::-moz-color-swatch {
 .voice-orb[data-speaker="user"] .voice-orb__halo { filter: blur(22px); }
 .voice-orb[data-state="connecting"] .voice-orb__halo { animation: orb-float 1.6s ease-in-out infinite; }
 .voice-orb[data-state="error"] .voice-orb__sphere { filter: grayscale(0.7); }
+
+/**
+ * A thin, always-present scrollbar for lists that scroll inside a popup.
+ *
+ * shadcn's `no-scrollbar` sets `scrollbar-width: none`, which on a dropdown is not a
+ * cosmetic choice: the workspace picker holds 21 entries, shows nine, and gave no hint
+ * the other twelve existed - it was reported as the list being paginated and truncated.
+ * macOS overlay scrollbars would have hidden it most of the time anyway, so this forces
+ * a persistent one rather than relying on the platform default.
+ *
+ * Deliberately quiet - border-coloured, on a transparent track - because it is an
+ * affordance, not a control anyone aims at.
+ */
+@utility scrollbar-subtle {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+
+  &::-webkit-scrollbar {
+    width: 10px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    background-color: var(--border);
+    background-clip: content-box;
+    border: 3px solid transparent;
+    border-radius: 9999px;
+  }
+  &:hover::-webkit-scrollbar-thumb {
+    background-color: var(--muted-foreground);
+  }
+}
