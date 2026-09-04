@@ -93,9 +93,50 @@ export interface HtmlArtifactHandle {
   savePdf: () => void;
 }
 
-/** One grey bar. `w` is a Tailwind width class so the rows can be ragged. */
-function Bar({ w, h = "h-3" }: { w: string; h?: string }) {
-  return <div className={`rounded bg-neutral-200/90 ${h} ${w}`} />;
+/**
+ * Motion for the skeleton, as a document being written rather than a box being filled.
+ *
+ * Two things happen to a row when it arrives. It fades up (`row-in`), which is the same
+ * gesture the streamed chat text uses, so the two panes read as one process. And each
+ * bar in it is DRAWN left to right (`bar-in`, a scaleX from a left origin) instead of
+ * appearing at full width - that is the part that says writing. A bar that simply blinks
+ * into existence at its final length reads as layout, not authorship.
+ *
+ * The draw is staggered per bar so a three-bar row writes top line, then heading, then
+ * subtitle, in that order, the way the document itself is being produced.
+ */
+const SKELETON_KEYFRAMES = `
+@keyframes artifact-row-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes artifact-bar-in {
+  from { transform: scaleX(0.06); opacity: 0.5; }
+  to { transform: scaleX(1); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Growth still carries the information, so keep the rows arriving and drop the
+     movement rather than freezing the skeleton entirely. */
+  .artifact-row, .artifact-bar { animation: none !important; }
+}
+`;
+
+/**
+ * One grey bar. `w` is a Tailwind width class so the rows can be ragged.
+ *
+ * `i` staggers the draw within a row. It is the bar's index, not a delay in ms, so the
+ * rows stay declarative and the timing lives in one place.
+ */
+function Bar({ w, h = "h-3", i = 0 }: { w: string; h?: string; i?: number }) {
+  return (
+    <div
+      className={`artifact-bar origin-left rounded bg-neutral-200/90 ${h} ${w}`}
+      style={{
+        animation: "artifact-bar-in 620ms cubic-bezier(0.22, 1, 0.36, 1) both",
+        animationDelay: `${i * 130}ms`,
+      }}
+    />
+  );
 }
 
 /**
@@ -106,27 +147,36 @@ function Bar({ w, h = "h-3" }: { w: string; h?: string }) {
  * per-section conditionals.
  */
 const SKELETON_ROWS: { el: ReactNode; key: string }[] = [
-  { key: "band", el: (
-    <div className="flex flex-col gap-3 rounded-xl bg-neutral-100 p-6">
-      <Bar w="w-2/5" h="h-2" />
-      <Bar w="w-3/4" h="h-6" />
-      <Bar w="w-1/2" h="h-2.5" />
-    </div>
-  ) },
+  {
+    key: "band",
+    el: (
+      <div className="flex flex-col gap-3 rounded-xl bg-neutral-100 p-6">
+        <Bar w="w-2/5" h="h-2" i={0} />
+        <Bar w="w-3/4" h="h-6" i={1} />
+        <Bar w="w-1/2" h="h-2.5" i={2} />
+      </div>
+    ),
+  },
   { key: "h1", el: <Bar w="w-1/4" h="h-4" /> },
   { key: "p1", el: <Bar w="w-full" /> },
   { key: "p2", el: <Bar w="w-11/12" /> },
   { key: "p3", el: <Bar w="w-4/5" /> },
-  { key: "cards", el: (
-    <div className="grid grid-cols-4 gap-3">
-      {[0, 1, 2, 3].map((i) => (
-        <div key={i} className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-4">
-          <Bar w="w-2/3" h="h-2" />
-          <Bar w="w-1/2" h="h-5" />
-        </div>
-      ))}
-    </div>
-  ) },
+  {
+    key: "cards",
+    el: (
+      <div className="grid grid-cols-4 gap-3">
+        {[0, 1, 2, 3].map((i) => (
+          <div
+            key={i}
+            className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-4"
+          >
+            <Bar w="w-2/3" h="h-2" i={i} />
+            <Bar w="w-1/2" h="h-5" i={i + 1} />
+          </div>
+        ))}
+      </div>
+    ),
+  },
   { key: "h2", el: <Bar w="w-1/3" h="h-4" /> },
   { key: "p4", el: <Bar w="w-full" /> },
   { key: "p5", el: <Bar w="w-10/12" /> },
@@ -154,18 +204,27 @@ function ArtifactSkeleton({ reveal }: { reveal: number }) {
   // At least one row from the start, so the pane is never blank.
   const shown = Math.max(1, Math.round(reveal * SKELETON_ROWS.length));
   return (
-    <div aria-hidden className="flex flex-col gap-6 p-8">
-      {SKELETON_ROWS.slice(0, shown).map(({ key, el }, i) => (
-        <div
-          key={key}
-          // Only the newest row pulses: pulsing everything made the whole pane throb and
-          // hid the fact that rows were arriving at all.
-          className={i === shown - 1 ? "animate-pulse" : ""}
-        >
-          {el}
-        </div>
-      ))}
-    </div>
+    <>
+      <style>{SKELETON_KEYFRAMES}</style>
+      <div aria-hidden className="flex flex-col gap-6 p-8">
+        {SKELETON_ROWS.slice(0, shown).map(({ key, el }, i) => (
+          <div
+            key={key}
+            // Only the newest row pulses: pulsing everything made the whole pane throb and
+            // hid the fact that rows were arriving at all. The pulse starts AFTER the draw
+            // finishes, so a row is written first and only then sits there breathing.
+            className={`artifact-row ${i === shown - 1 ? "animate-pulse" : ""}`}
+            style={{
+              animation:
+                "artifact-row-in 420ms cubic-bezier(0.22, 1, 0.36, 1) both",
+              ...(i === shown - 1 ? { animationDelay: "0ms" } : {}),
+            }}
+          >
+            {el}
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -180,7 +239,12 @@ export interface HtmlArtifactProps {
 }
 
 /** Live preview of one HTML artifact. */
-export function HtmlArtifact({ path, content, streaming, ref }: HtmlArtifactProps) {
+export function HtmlArtifact({
+  path,
+  content,
+  streaming,
+  ref,
+}: HtmlArtifactProps) {
   const name = artifactName(path);
   // What the iframe is actually showing. Lags `content` by up to the interval.
   const [rendered, setRendered] = useState(() => safeHtmlPrefix(content));
@@ -252,7 +316,8 @@ export function HtmlArtifact({ path, content, streaming, ref }: HtmlArtifactProp
   // effect above has already recorded the start time by the time this first reads it.
   useEffect(() => {
     if (!building) return;
-    const tick = () => setBuildElapsed(Date.now() - (buildStarts.get(path) ?? Date.now()));
+    const tick = () =>
+      setBuildElapsed(Date.now() - (buildStarts.get(path) ?? Date.now()));
     tick();
     // Rows land about a second apart early on, so a quarter-second tick is already
     // finer than anything visible.

@@ -11,10 +11,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { HtmlArtifact } from "@/components/HtmlArtifact";
 
-/** Rows the skeleton is currently showing. */
+/** Rows the skeleton is currently showing. Counted by class, not by child index: the
+ *  container also carries a <style> block for the draw-in keyframes. */
 function rowCount(root: HTMLElement): number {
-  const skeleton = root.querySelector("[aria-hidden]");
-  return skeleton ? skeleton.children.length : 0;
+  return root.querySelectorAll(".artifact-row").length;
 }
 
 /** A document that has begun but has nothing paintable yet - the building case. */
