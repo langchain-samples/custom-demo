@@ -173,16 +173,22 @@ named that customer's brands and warehouses in shared prose.
 
 ## Graph mode
 
-A live, left-to-right graph of the agent working, as a **Graph** tab beside the widget
-dashboard. It appears once a turn has called a tool. Lanes (plan, skills, sandbox, data,
-web, human, delegate, output) are drawn only when they actually fire, nodes go solid as
-each tool result lands, and clicking one shows the argument and the output.
+A live, left-to-right graph of the agent working, opened from the header's graph icon as
+a **floating inspector**: draggable, resizable, and remembered (position, size and open
+state all persist). Lanes (plan, skills, sandbox, data, web, human, delegate, output) are
+drawn only when they actually fire, each carries a one-line hint saying what it is, nodes
+go solid as each tool result lands, and clicking one shows the argument and the output.
+
+It floats rather than sitting in the right-hand pane because the two have different
+audiences: the pane is output for whoever is watching the demo, and this is introspection
+for whoever is driving it. A panel you drag into place reads as an operator's tool. It is
+deliberately NOT a Radix dialog either - those are modal, and a focus trap would stop you
+typing in the chat while the graph fills in, which is the whole reason it is not a tab.
 
 It is a pure RENDERER over state the chat rail already streams: `ChatPanel` mirrors the
 current question's chips and subagent groups out through `onActivity`, and nothing feeds
-back, so the tab cannot change what the agent does. Ported from the Super Group build
-(`joel-langchain`, `9115f8a`), mounted as a tab rather than that build's header toggle
-because the pane is already tabbed here.
+back, so it cannot change what the agent does. Ported from the Super Group build
+(`joel-langchain`, `9115f8a`).
 
 Subagent lanes appear whenever the agent dispatches `task`, which deepagents' built-in
 general-purpose subagent does out of the box. `DA_DYNAMIC_SUBAGENTS=1` is a different

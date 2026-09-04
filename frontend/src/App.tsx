@@ -23,6 +23,7 @@ import {
   IconFolders,
   IconFlask,
   IconInfoCircle,
+  IconTopologyStar3,
 } from "@tabler/icons-react";
 import { Button } from "@/components/motion/button";
 import { Tooltip } from "@/components/motion/tooltip";
@@ -30,12 +31,10 @@ import ChatPanel, { type ChatPanelHandle } from "@/components/ChatPanel";
 import { VoiceButton } from "@/components/VoiceButton";
 import { VoiceStage } from "@/components/VoiceStage";
 import { useVoiceSession } from "@/lib/hooks/use-voice-session";
-import {
-  DashboardPane,
-  type ActivityState,
-  type ArtifactState,
-} from "@/components/DashboardPane";
+import { DashboardPane, type ArtifactState } from "@/components/DashboardPane";
 import { AboutPanel } from "@/components/AboutPanel";
+import { GraphInspector } from "@/components/GraphInspector";
+import type { ActivityState } from "@/lib/agentGraph";
 import { EvalPanel } from "@/components/EvalPanel";
 import { FileBrowser } from "@/components/FileBrowser";
 import { SettingsPanel, type SettingsHandle } from "@/components/SettingsPanel";
@@ -72,6 +71,25 @@ export default function App() {
   const [evalsOpen, setEvalsOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   /**
+   * The graph inspector's open state, remembered like its position and size. Someone
+   * presenting the internals wants it up across turns and reloads; the default is
+   * closed, so a demo never opens with a panel over the dashboard by surprise.
+   */
+  const [graphOpen, setGraphOpen] = useState(() => {
+    try {
+      return localStorage.getItem("graphInspectorOpen") === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("graphInspectorOpen", graphOpen ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, [graphOpen]);
+  /**
    * The same query SettingsPanel uses. react-query dedupes it to one request and one
    * cache entry, which is what let a hand-rolled `onLoadedChange` callback - threaded
    * from the panel through here into ChatPanel purely to say "the fetch finished" - be
@@ -83,8 +101,8 @@ export default function App() {
   // HTML files the agent wrote to /workspace/artifacts, keyed by path; each becomes a
   // tab beside the widget canvas. Cleared with the dashboard on reset.
   const [artifacts, setArtifacts] = useState<Record<string, ArtifactState>>({});
-  // The current question's tool activity, mirrored out of ChatPanel to draw the Graph
-  // tab. Read-only: nothing here feeds back into a run.
+  // The current question's tool activity, mirrored out of ChatPanel for the graph
+  // inspector. Read-only: nothing here feeds back into a run.
   const [activity, setActivity] = useState<ActivityState>({
     chips: [],
     subagents: [],
@@ -310,6 +328,18 @@ export default function App() {
         >
           <IconSparkles size={16} /> New Chat
         </Button>
+        <Tooltip content="Agent graph - every tool call this turn, by what it touched" side="bottom">
+          <Button
+            variant={graphOpen ? "primary" : "secondary"}
+            size="icon"
+            className="print:hidden"
+            aria-label="Agent graph"
+            aria-pressed={graphOpen}
+            onClick={() => setGraphOpen((v) => !v)}
+          >
+            <IconTopologyStar3 size={18} />
+          </Button>
+        </Tooltip>
         <Tooltip content="About this agent - what it is and how it is built" side="bottom">
           <Button
             variant="secondary"
@@ -498,12 +528,19 @@ export default function App() {
               widgets={widgets}
               theme={effectiveTheme}
               artifacts={artifacts}
-              activity={activity}
-              assistantName={displayName}
             />
           </section>
         )}
       </div>
+
+      <GraphInspector
+        open={graphOpen}
+        onClose={() => setGraphOpen(false)}
+        chips={activity.chips}
+        subagents={activity.subagents}
+        running={activity.running}
+        name={displayName}
+      />
 
       <AboutPanel
         open={aboutOpen}

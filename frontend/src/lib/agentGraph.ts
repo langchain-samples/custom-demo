@@ -19,6 +19,16 @@ export interface GraphSubagent {
   done: boolean;
 }
 
+/**
+ * One question's tool activity, mirrored out of ChatPanel so the graph can draw it.
+ * Read-only by contract: nothing here feeds back into a run.
+ */
+export interface ActivityState {
+  chips: ChipData[];
+  subagents: GraphSubagent[];
+  running: boolean;
+}
+
 export interface Lane {
   id: string;
   label: string;
@@ -107,13 +117,16 @@ export const isPending = (c: ChipData) => c.result === null && !c.stopped;
 
 /* ---- Geometry ------------------------------------------------------------ */
 
-// Tuned to fit the right pane at a 420px chat rail on a 1440-wide screen without
-// horizontal scrolling. Wider screens get more whitespace; narrower ones scroll.
+// The lane column is wide enough for its hint (the longest is 35 characters, about
+// 161px at fontSize 9), because SVG text does not wrap and a clipped explanation is
+// worse than none. The old widths were tuned to fit the right-hand pane without
+// horizontal scrolling; the graph lives in a resizable floating panel now, which
+// scrolls, so fitting a fixed pane is no longer the constraint.
 export const ROOT_X = 16;
 export const ROOT_W = 132;
 export const LANE_X = 176;
-export const LANE_W = 112;
-export const NODE_X = 316;
+export const LANE_W = 190;
+export const NODE_X = 394;
 export const NODE_W = 236;
 export const ROW_H = 34;
 export const LANE_GAP = 16;

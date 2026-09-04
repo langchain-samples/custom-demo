@@ -16,13 +16,10 @@
 import { useEffect, useRef, useState } from "react";
 import { IconFileTypePdf } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
-import { AgentGraph } from "@/components/AgentGraph";
 import { DashboardCanvas } from "@/components/DashboardCanvas";
 import { HtmlArtifact, type HtmlArtifactHandle } from "@/components/HtmlArtifact";
-import type { ChipData } from "@/components/chat/ToolChip";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { artifactName } from "@/lib/artifacts";
-import type { GraphSubagent } from "@/lib/agentGraph";
 import type { Widget } from "@/lib/api";
 import type { Theme } from "@/lib/theme";
 
@@ -32,41 +29,22 @@ export interface ArtifactState {
   streaming: boolean;
 }
 
-/** The current question's tool activity, mirrored out of ChatPanel for the graph. */
-export interface ActivityState {
-  chips: ChipData[];
-  subagents: GraphSubagent[];
-  running: boolean;
-}
-
 export interface DashboardPaneProps {
   widgets: Widget[];
   theme: Theme;
   /** Keyed by absolute path. Insertion order is tab order. */
   artifacts: Record<string, ArtifactState>;
-  /** Drives the Graph tab. Omit and the tab does not appear. */
-  activity?: ActivityState;
-  /** Assistant display name, for the graph's root node. */
-  assistantName?: string;
 }
 
-/** Tab values for the two built-in views. Not paths, so they cannot collide with one. */
+/** Tab value for the widget canvas. Not a path, so it cannot collide with one. */
 const CANVAS_TAB = "dashboard";
-const GRAPH_TAB = "graph";
 
 /** Widget canvas plus an HTML artifact tab per file the agent wrote. */
-export function DashboardPane({
-  widgets,
-  theme,
-  artifacts,
-  activity,
-  assistantName = "Agent",
-}: DashboardPaneProps) {
+export function DashboardPane({ widgets, theme, artifacts }: DashboardPaneProps) {
   const paths = Object.keys(artifacts);
   // Newline-joined so the effect below compares on a plain string: a fresh array every
   // render would re-run it forever.
   const pathsKey = paths.join("\n");
-  const hasGraph = !!activity && activity.chips.length > 0;
   // No widgets means no dashboard to show. The pane mounts for a graph or an artifact
   // as well now, so the tab could sit there reading "LIVE DASHBOARD" over blank space.
   const hasWidgets = widgets.length > 0;
@@ -90,9 +68,7 @@ export function DashboardPane({
     }
     // A tab can disappear (a reset, or the agent deleting an artifact); fall back
     // rather than render an empty pane.
-    setActive((cur) =>
-      cur !== CANVAS_TAB && cur !== GRAPH_TAB && !list.includes(cur) ? CANVAS_TAB : cur,
-    );
+    setActive((cur) => (cur !== CANVAS_TAB && !list.includes(cur) ? CANVAS_TAB : cur));
   }, [pathsKey]);
 
   // Dashboard is the default tab but no longer always exists, so land on the first tab
@@ -100,12 +76,12 @@ export function DashboardPane({
   useEffect(() => {
     if (active !== CANVAS_TAB || hasWidgets) return;
     const first = pathsKey ? pathsKey.split("\n")[0] : "";
-    setActive(first || (hasGraph ? GRAPH_TAB : CANVAS_TAB));
-  }, [active, hasWidgets, hasGraph, pathsKey]);
+    setActive(first || CANVAS_TAB);
+  }, [active, hasWidgets, pathsKey]);
 
 
   // Nothing but widgets: render the canvas alone, exactly as before any of this.
-  if (paths.length === 0 && !hasGraph) {
+  if (paths.length === 0) {
     return <DashboardCanvas widgets={widgets} theme={theme} />;
   }
 
@@ -116,7 +92,6 @@ export function DashboardPane({
       <div className="mx-4 mt-3 flex items-center gap-3 print:hidden">
         <TabsList className="w-fit min-w-0 flex-shrink overflow-x-auto">
           {hasWidgets && <TabsTrigger value={CANVAS_TAB}>Dashboard</TabsTrigger>}
-          {hasGraph && <TabsTrigger value={GRAPH_TAB}>Graph</TabsTrigger>}
           {paths.map((path) => (
             <TabsTrigger key={path} value={path} className="max-w-52">
               {/* The full path lives here rather than in a header line: the tab names
@@ -127,7 +102,7 @@ export function DashboardPane({
             </TabsTrigger>
           ))}
         </TabsList>
-        {active !== CANVAS_TAB && active !== GRAPH_TAB && (
+        {active !== CANVAS_TAB && (
           <Button
             variant="ghost"
             size="sm"
@@ -145,16 +120,6 @@ export function DashboardPane({
       {hasWidgets && (
         <TabsContent value={CANVAS_TAB} className="flex min-h-0 flex-1 flex-col">
           <DashboardCanvas widgets={widgets} theme={theme} />
-        </TabsContent>
-      )}
-      {hasGraph && (
-        <TabsContent value={GRAPH_TAB} className="min-h-0 flex-1 overflow-auto">
-          <AgentGraph
-            chips={activity.chips}
-            subagents={activity.subagents}
-            running={activity.running}
-            name={assistantName}
-          />
         </TabsContent>
       )}
       {paths.map((path) => (

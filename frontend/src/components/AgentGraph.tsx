@@ -184,19 +184,25 @@ export function AgentGraph({ chips, subagents, running, name }: AgentGraphProps)
             <g key={lane.id}>
               <rect
                 x={LANE_X}
-                y={lane.cy - 15}
+                y={lane.cy - 19}
                 width={LANE_W}
-                height={30}
+                height={38}
                 rx={8}
                 fill="var(--panel-2)"
                 stroke="var(--border)"
               />
-              <text x={LANE_X + 12} y={lane.cy + 4} fill="var(--foreground)" fontSize={12} fontWeight={600}>
+              <text x={LANE_X + 12} y={lane.cy - 3} fill="var(--foreground)" fontSize={12} fontWeight={600}>
                 {lane.label}
+              </text>
+              {/* The hint. Every lane has carried one since this was written and none of
+                  them were ever drawn, which is most of why the graph needed explaining
+                  out loud: "Skills" and "Delegate" mean nothing on their own. */}
+              <text x={LANE_X + 12} y={lane.cy + 11} fill="var(--muted-foreground)" fontSize={9}>
+                {lane.hint}
               </text>
               <text
                 x={LANE_X + LANE_W - 12}
-                y={lane.cy + 4}
+                y={lane.cy - 3}
                 fill="var(--muted-foreground)"
                 fontSize={11}
                 textAnchor="end"
