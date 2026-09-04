@@ -187,11 +187,23 @@ export function useReplaceAssistantInCache() {
  * rather than invalidate-and-refetch, which would be two requests. Returned as a stable
  * callback because the query object itself is new every render, and depending on that
  * from a useCallback churns it on every keystroke elsewhere in the panel.
+ *
+ * `staleTime: 0` is load-bearing and is NOT the client default (30s). fetchQuery serves
+ * the cache outright while data is fresh, so deleting an assistant returned the list
+ * that still contained it: the row stayed on screen, a second delete 404'd, and a
+ * refresh - the one path that bypasses the cache - made it vanish. Every caller here
+ * has just changed the thing it is asking about, so a cached answer is never the right
+ * one, however few seconds old it is.
  */
 export function useRefetchAssistants() {
   const qc = useQueryClient();
   return useCallback(
-    () => qc.fetchQuery({ queryKey: qk.assistants(), queryFn: () => listAssistants() }),
+    () =>
+      qc.fetchQuery({
+        queryKey: qk.assistants(),
+        queryFn: () => listAssistants(),
+        staleTime: 0,
+      }),
     [qc],
   );
 }

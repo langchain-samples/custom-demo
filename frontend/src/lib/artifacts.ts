@@ -150,16 +150,6 @@ export function hasRenderableBody(partial: string): boolean {
   return /<(img|svg|canvas|video|table)\b/i.test(rest);
 }
 
-/**
- * How long the skeleton takes to fill, in ms.
- *
- * Thirty seconds, sized for the SLOW case, because that is the only case where the
- * growth is seen at all. With the critical-CSS write order the first visible element
- * arrives 5-8%% into the file (measured on three fresh artifacts: body at 571-847 bytes
- * of 8-12 KB), so a fast write shows one row and hands straight over to the real
- * document. When the model instead puts one big stylesheet in the head it is 30-44%% of
- * the file, which is tens of seconds, and that is the wait this paces.
- */
 /** How long the skeleton takes to fill. Longer than most writes, deliberately: the
  *  point is that it is still moving when the document lands, not that it finishes. */
 const REVEAL_MS = 30_000;

@@ -70,6 +70,23 @@ const BUILDING_PHRASES = [
   "Placing the content",
 ];
 
+/**
+ * When each artifact's build started, by path, deliberately OUTSIDE React.
+ *
+ * It was component state, and a skeleton that had been on screen for well over the five
+ * seconds its first row needs was still showing one row. That was never reproducible in
+ * a DOM harness - not against this component, not against DashboardPane, not while
+ * streaming a realistic document - which is the argument for putting it here: whatever
+ * unmounts or re-keys this component in a real session, the answer to "how long has this
+ * file been building" does not depend on a React instance surviving to remember it. It
+ * is a fact about the artifact.
+ *
+ * Entries are removed when the write completes (`streaming` goes false), so the map
+ * holds at most one number per in-flight artifact, and a later edit_file to the same
+ * path starts a fresh clock rather than inheriting the first write's age.
+ */
+const buildStarts = new Map<string, number>();
+
 /** What the tab bar can ask of the artifact it is showing. */
 export interface HtmlArtifactHandle {
   /** Open the browser's print dialog on the document, for Save as PDF. */
@@ -212,29 +229,36 @@ export function HtmlArtifact({ path, content, streaming, ref }: HtmlArtifactProp
   // stretch mid-document does not flip back to the loader.
   const building = !!streaming && !hasRenderableBody(rendered);
 
-  /**
-   * A clock for the skeleton's growth, running only while it is on screen.
-   *
-   * The start time is a ref rather than state so beginning to build does not itself
-   * cause a render, and it is cleared when building ends so a second artifact in the
-   * same tab starts from zero rather than inheriting the first one's age.
-   */
-  const buildStartedAt = useRef<number | null>(null);
   const [buildElapsed, setBuildElapsed] = useState(0);
+
+  // How long this artifact has been building, from the module-level map. Two effects,
+  // because the two questions have different answers: when did the WRITE start, and
+  // when should the SKELETON tick.
+  //
+  // Owning the start time. Keyed on `streaming`, which is the write's real lifecycle,
+  // and NOT on `building` - `building` also depends on `rendered`, so anything that
+  // briefly made the document look non-empty and then not (a truncated prefix, a
+  // re-read landing) would silently restart the clock at zero rows.
   useEffect(() => {
-    if (!building) {
-      buildStartedAt.current = null;
+    if (!streaming) {
+      buildStarts.delete(path);
       setBuildElapsed(0);
       return;
     }
-    buildStartedAt.current ??= Date.now();
-    const tick = () => setBuildElapsed(Date.now() - (buildStartedAt.current ?? Date.now()));
+    if (!buildStarts.has(path)) buildStarts.set(path, Date.now());
+  }, [path, streaming]);
+
+  // Ticking, only while the skeleton is actually on screen. Declared second so the
+  // effect above has already recorded the start time by the time this first reads it.
+  useEffect(() => {
+    if (!building) return;
+    const tick = () => setBuildElapsed(Date.now() - (buildStarts.get(path) ?? Date.now()));
     tick();
-    // A row lands roughly every three seconds now, so a quarter-second tick is already
-    // far finer than anything visible.
+    // Rows land about a second apart early on, so a quarter-second tick is already
+    // finer than anything visible.
     const id = window.setInterval(tick, 250);
     return () => window.clearInterval(id);
-  }, [building]);
+  }, [building, path]);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">

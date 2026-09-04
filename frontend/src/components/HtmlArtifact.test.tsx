@@ -63,4 +63,35 @@ describe("the artifact skeleton", () => {
     }
     expect(rowCount(container)).toBeGreaterThan(1);
   });
+  it("keeps counting across a remount, so a re-keyed tab does not restart it", () => {
+    // The reported failure, which never reproduced any other way: the skeleton sat at
+    // one row long past the five seconds its second row needs. Every layer tested clean,
+    // so this asserts the property directly rather than a cause - however the component
+    // gets torn down and rebuilt mid-write, the elapsed time is the ARTIFACT's, not the
+    // instance's, and the skeleton picks up where it left off.
+    const P = "/workspace/artifacts/a.html";
+    const first = render(<HtmlArtifact path={P} content={HEAD_ONLY} streaming />);
+    act(() => void vi.advanceTimersByTime(12_000));
+    const before = rowCount(first.container);
+    expect(before).toBeGreaterThan(3);
+    first.unmount();
+
+    const second = render(<HtmlArtifact path={P} content={HEAD_ONLY} streaming />);
+    act(() => void vi.advanceTimersByTime(250)); // one tick, to read the clock
+    expect(rowCount(second.container)).toBeGreaterThanOrEqual(before);
+  });
+
+  it("starts a fresh clock when the same path is written again", () => {
+    // An edit_file to a path that already finished must not inherit the first write's
+    // age and open on a nearly-full skeleton.
+    const P = "/workspace/artifacts/a.html";
+    const { container, rerender } = render(
+      <HtmlArtifact path={P} content={HEAD_ONLY} streaming />,
+    );
+    act(() => void vi.advanceTimersByTime(25_000));
+    rerender(<HtmlArtifact path={P} content="<html><body><p>done</p></body></html>" />);
+    rerender(<HtmlArtifact path={P} content={HEAD_ONLY} streaming />);
+    act(() => void vi.advanceTimersByTime(250));
+    expect(rowCount(container)).toBe(1);
+  });
 });
