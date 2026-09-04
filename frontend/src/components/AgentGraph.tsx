@@ -28,7 +28,9 @@ import {
   LANE_GAP,
   LANE_W,
   LANE_X,
-  NODE_W,
+  graphWidthFor,
+  labelCharsFor,
+  nodeWidthFor,
   NODE_X,
   ROOT_W,
   ROOT_X,
@@ -50,11 +52,18 @@ export interface AgentGraphProps {
   running: boolean;
   /** Assistant display name for the root node. */
   name: string;
+  /**
+   * Panel width in px. The call column and its label budget are derived from it, so
+   * resizing the inspector gives longer labels rather than a wider empty margin.
+   */
+  width?: number;
 }
 
 /* ---- Component ----------------------------------------------------------- */
 
-export function AgentGraph({ chips, subagents, running, name }: AgentGraphProps) {
+export function AgentGraph({ chips, subagents, running, name, width }: AgentGraphProps) {
+  const nodeW = nodeWidthFor(width ?? 0);
+  const labelChars = labelCharsFor(nodeW);
   const [selected, setSelected] = useState<string | null>(null);
 
   // Group calls into lanes, keeping arrival order within each lane. Only lanes
@@ -126,7 +135,7 @@ export function AgentGraph({ chips, subagents, running, name }: AgentGraphProps)
 
       <div className="min-h-0 flex-1 overflow-auto px-5 pb-5">
         <svg
-          width={NODE_X + NODE_W + 16}
+          width={graphWidthFor(nodeW)}
           height={laid.height}
           className="max-w-none"
           role="img"
@@ -227,7 +236,7 @@ export function AgentGraph({ chips, subagents, running, name }: AgentGraphProps)
                   <rect
                     x={NODE_X}
                     y={y + 3}
-                    width={NODE_W}
+                    width={nodeW}
                     height={ROW_H - 8}
                     rx={7}
                     fill={isOpen ? "var(--brand-soft)" : "var(--panel)"}
@@ -242,10 +251,10 @@ export function AgentGraph({ chips, subagents, running, name }: AgentGraphProps)
                     className={busy ? "animate-pulse" : undefined}
                   />
                   <text x={NODE_X + 26} y={y + ROW_H / 2 + 3} fill="var(--foreground)" fontSize={11.5}>
-                    {nodeLabel(c)}
+                    {nodeLabel(c, labelChars)}
                   </text>
                   <text
-                    x={NODE_X + NODE_W - 10}
+                    x={NODE_X + nodeW - 10}
                     y={y + ROW_H / 2 + 3}
                     fill="var(--muted-foreground)"
                     fontSize={10}

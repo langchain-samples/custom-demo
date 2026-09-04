@@ -178,7 +178,15 @@ export function GraphInspector({
             Nothing yet. Ask a question and the lanes fill in as the agent works.
           </p>
         ) : (
-          <AgentGraph chips={chips} subagents={subagents} running={running} name={name} />
+          <AgentGraph
+            chips={chips}
+            subagents={subagents}
+            running={running}
+            name={name}
+            // Minus the scroll container's own padding, so the graph fills the panel
+            // rather than provoking a horizontal scrollbar at every width.
+            width={rect.w - 24}
+          />
         )}
       </div>
 

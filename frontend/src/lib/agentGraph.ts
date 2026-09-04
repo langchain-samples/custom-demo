@@ -77,15 +77,15 @@ export function laneFor(chip: ChipData): string {
  * looks hidden. Fall back to the first real line of `code`, which is what the
  * agent actually ran.
  */
-export function nodeLabel(chip: ChipData): string {
+export function nodeLabel(chip: ChipData, maxChars = DEFAULT_LABEL_CHARS): string {
   const arg = (chip.arg || "").trim();
   if (arg) {
     // A path: keep the last two segments, which is what identifies it.
     if (arg.includes("/")) {
       const parts = arg.split(/[?\s]/)[0].split("/").filter(Boolean);
-      if (parts.length > 1) return truncate(parts.slice(-2).join("/"));
+      if (parts.length > 1) return truncate(parts.slice(-2).join("/"), maxChars);
     }
-    return truncate(arg);
+    return truncate(arg, maxChars);
   }
   const code = (chip.code || "").trim();
   if (code) {
@@ -94,12 +94,12 @@ export function nodeLabel(chip: ChipData): string {
       .split("\n")
       .map((l) => l.trim())
       .find((l) => l && !l.startsWith("#") && !l.startsWith("<<") && l !== "EOF");
-    if (line) return truncate(line);
+    if (line) return truncate(line, maxChars);
   }
   return chip.name;
 }
 
-function truncate(s: string, max = 23): string {
+function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max - 1) + "…" : s;
 }
 
@@ -127,7 +127,43 @@ export const ROOT_W = 132;
 export const LANE_X = 176;
 export const LANE_W = 190;
 export const NODE_X = 394;
+/** Narrowest the call column goes; a wider panel grows it (see nodeWidthFor). */
 export const NODE_W = 236;
+
+/** Trailing margin right of the call column. */
+const GUTTER = 16;
+
+/**
+ * How wide the call column should be inside a panel of `panelW`.
+ *
+ * The column used to be fixed at 236px, so a resized panel just grew empty space to the
+ * right while labels stayed clipped to 23 characters - two `data/competitor_produc…`
+ * nodes were indistinguishable even with room to tell them apart.
+ */
+export function nodeWidthFor(panelW: number): number {
+  if (!Number.isFinite(panelW) || panelW <= 0) return NODE_W;
+  return Math.max(NODE_W, Math.floor(panelW) - NODE_X - GUTTER);
+}
+
+/** Total drawing width for a given call-column width. */
+export function graphWidthFor(nodeW: number): number {
+  return NODE_X + nodeW + GUTTER;
+}
+
+/**
+ * Characters that fit in a call node of `nodeW`.
+ *
+ * The label starts 26px in (past the status dot) and the size readout is right-aligned
+ * in roughly the last 70px, leaving `nodeW - 96`. At fontSize 11.5 a sans character
+ * averages about 6px, which is where the original 236px column's 23 characters came
+ * from - this just stops that number being a constant.
+ */
+export function labelCharsFor(nodeW: number): number {
+  return Math.max(12, Math.floor((nodeW - 96) / 6));
+}
+
+/** What a 236px column fits, kept as the default so callers need not pass a width. */
+export const DEFAULT_LABEL_CHARS = 23;
 export const ROW_H = 34;
 export const LANE_GAP = 16;
 
