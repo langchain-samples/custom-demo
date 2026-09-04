@@ -110,7 +110,27 @@ def test_temperature_can_be_forced(monkeypatch):
 
 
 def test_judge_model_is_independent_of_the_agent_model(monkeypatch):
-    """Swapping the agent must not swap the grader, or a comparison moves two things."""
+    """Swapping the agent must not swap the grader, or a comparison moves two things.
+
+    Asserts the PROPERTY, not a literal default. It used to assert an "anthropic:"
+    prefix, which only held while nobody had set DASHBOARD_JUDGE_MODEL in .env - and
+    `delenv` cannot prevent that, because judge_model() calls load_env() and dotenv puts
+    the value straight back. Pointing the judge at the gateway broke it, which is the
+    test being brittle rather than the judge losing its independence.
+    """
     monkeypatch.setenv("DASHBOARD_MODEL", "azure_openai:gpt-5.6-sol")
+    before = config.judge_model()
+    monkeypatch.setenv("DASHBOARD_MODEL", "anthropic:claude-opus-5")
+    assert config.judge_model() == before
+    assert config.judge_model() != config.MODEL
+
+
+def test_judge_model_defaults_to_a_pinned_haiku(monkeypatch):
+    """The documented default, isolated from whatever .env happens to say.
+
+    load_env is stubbed out: it is the thing that re-reads .env, so without this the
+    developer's own file decides the answer and the assertion means nothing.
+    """
+    monkeypatch.setattr(config, "load_env", lambda: None)
     monkeypatch.delenv("DASHBOARD_JUDGE_MODEL", raising=False)
-    assert config.judge_model().startswith("anthropic:")
+    assert config.judge_model() == "anthropic:claude-haiku-4-5-20251001"

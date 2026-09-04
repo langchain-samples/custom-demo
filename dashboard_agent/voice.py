@@ -29,6 +29,17 @@ import httpx
 
 from .config import load_env, voice_model
 
+# Google directly, NOT the LangSmith gateway - unlike every other model call in this
+# repo, which moved to `langsmith:` model ids. Checked 2026-09-04, three reasons:
+#   1. The gateway allow-lists paths, and this is not one:
+#      POST /gemini/v1beta/auth_tokens -> 501 "path not allow-listed by gateway".
+#   2. Live is a WebSocket protocol; the gateway is request/response over HTTPS.
+#      The browser dials wss://generativelanguage.googleapis.com itself (lib/voice.ts).
+#   3. The gateway's Gemini catalog has no interactive Live model - one transcribe-only
+#      entry, not the native-audio dialog model below.
+# So GEMINI_API_KEY stays required for voice even when everything else runs on gateway
+# credits. Ephemeral minting is what keeps that key server-side; do not hand the raw key
+# to the browser as a shortcut.
 _TOKENS_URL = "https://generativelanguage.googleapis.com/v1beta/auth_tokens"
 
 # Audio only. A native-audio model accepts ONLY this modality, so text for the chat
