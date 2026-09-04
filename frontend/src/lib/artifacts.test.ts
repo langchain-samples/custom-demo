@@ -196,18 +196,33 @@ describe("skeletonReveal", () => {
     }
   });
 
-  it("paces the thirty seconds a slow write actually takes", () => {
-    expect(skeletonReveal(7_500)).toBeCloseTo(0.25, 2);
-    expect(skeletonReveal(15_000)).toBeCloseTo(0.5, 2);
-    expect(skeletonReveal(22_500)).toBeCloseTo(0.75, 2);
-  });
-
   it("fills, and never exceeds full however long it runs", () => {
     expect(skeletonReveal(30_000)).toBe(1);
     expect(skeletonReveal(600_000)).toBe(1);
   });
 
-  it("is still near-empty in the first second, so a fast write barely shows it", () => {
-    expect(skeletonReveal(500)).toBeLessThan(0.05);
+  // The rows are what anyone actually sees, so the pacing is asserted in rows. There are
+  // nine of them and the count is `round(reveal * 9)`, floored at one.
+  const rowsAt = (ms: number) => Math.max(1, Math.round(skeletonReveal(ms) * 9));
+
+  it("adds a row inside the first second", () => {
+    // THE regression. Linear pacing over 30s did not reach two rows until t=5s, so the
+    // pane sat motionless through the whole window in which someone decides whether a
+    // loader is working. Reported as "still staying just this one line", three times.
+    expect(rowsAt(0)).toBe(1);
+    expect(rowsAt(1_000)).toBeGreaterThan(1);
+  });
+
+  it("is already half built by the time a typical write finishes", () => {
+    // Writes land around 10-20s. Under the linear curve that range showed 3-5 rows and
+    // the skeleton read as stalled; it should be well down the document by then.
+    expect(rowsAt(10_000)).toBeGreaterThanOrEqual(5);
+    expect(rowsAt(20_000)).toBeGreaterThanOrEqual(7);
+  });
+
+  it("takes most of the window to finish, so it is never done early", () => {
+    // The tail is deliberately slow: the last row lands around 27s, not at 5s.
+    expect(rowsAt(24_000)).toBeLessThan(9);
+    expect(rowsAt(30_000)).toBe(9);
   });
 });

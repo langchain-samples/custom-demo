@@ -160,24 +160,27 @@ export function hasRenderableBody(partial: string): boolean {
  * document. When the model instead puts one big stylesheet in the head it is 30-44%% of
  * the file, which is tens of seconds, and that is the wait this paces.
  */
+/** How long the skeleton takes to fill. Longer than most writes, deliberately: the
+ *  point is that it is still moving when the document lands, not that it finishes. */
 const REVEAL_MS = 30_000;
 
 /**
- * How much of the waiting skeleton to reveal, from how long it has been building.
+ * How much of the skeleton is showing, 0..1, from how long the write has been running.
  *
- * TIME, not bytes. Bytes were the first attempt and they have one hole: the tab appears
- * as soon as `write_file`'s path argument is known, which is before its content argument
- * starts streaming, so a byte-driven skeleton sat at one row through exactly the gap
- * where it most needs to look alive. A clock keeps moving regardless of when the tokens
- * land.
+ * EASED, not linear, and that is the whole substance of this function. Linear over 30s
+ * put the first row change at five seconds (round(t/30*9) only reaches 2 at t=5), and
+ * five motionless seconds is exactly how long someone looks before deciding a loader is
+ * broken - which is what was reported, three times. It was growing; nobody could tell.
  *
- * It DOES reach the end, which reverses an earlier decision here. The argument for
- * holding back the last row was that a filled bar reads as hung - but this is not a
- * progress bar, it is a placeholder standing in for a page, and the newest row goes on
- * pulsing at every stage, so a full skeleton still shows activity. Stopping one row
- * short forever just left a gap where the document was about to be.
+ * sqrt front-loads it: rows at roughly 0.8s, 2.3s, 4.5s, 7.5s, then slowing to 27s for
+ * the last one. Still 1 -> 9 across thirty seconds, so the brief is unchanged, but the
+ * early seconds - the only ones a fast write ever reaches - now visibly move. It also
+ * matches how these documents are really written: the shell appears almost at once and
+ * the detail accretes, so the curve is honest about what is coming rather than pacing
+ * evenly through a process that is not even.
  */
 export function skeletonReveal(elapsedMs: number): number {
   if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) return 0;
-  return Math.min(1, elapsedMs / REVEAL_MS);
+  return Math.min(1, Math.sqrt(elapsedMs / REVEAL_MS));
 }
+
