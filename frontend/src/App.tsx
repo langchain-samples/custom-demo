@@ -31,6 +31,7 @@ import ChatPanel, { type ChatPanelHandle } from "@/components/ChatPanel";
 import { VoiceButton } from "@/components/VoiceButton";
 import { VoiceStage } from "@/components/VoiceStage";
 import { useVoiceSession } from "@/lib/hooks/use-voice-session";
+import { provisionalDuplicates } from "@/lib/artifacts";
 import { DashboardPane, type ArtifactState } from "@/components/DashboardPane";
 import { AboutPanel } from "@/components/AboutPanel";
 import { GraphInspector } from "@/components/GraphInspector";
@@ -474,15 +475,25 @@ export default function App() {
                 return;
               }
               setHasDashboard(true);
-              setArtifacts((prev) => ({
-                ...prev,
+              setArtifacts((prev) => {
+                const next = { ...prev };
+                // Retire any tab opened from a half-written file_path (see
+                // provisionalDuplicates) before this one takes its place.
+                for (const dup of provisionalDuplicates(
+                  Object.keys(next),
+                  path,
+                  (p) => !!next[p]?.streaming,
+                )) {
+                  delete next[dup];
+                }
                 // A finishing write sends no content: keep whatever streamed, so the
                 // tab holds its last good render until the canonical read lands.
-                [path]: {
+                next[path] = {
                   content: content || prev[path]?.content || "",
                   streaming,
-                },
-              }));
+                };
+                return next;
+              });
               if (streaming) return;
               // The write completed. Re-read the file, because what streamed is the
               // TOOL ARGUMENT, and for edit_file that is a diff rather than the

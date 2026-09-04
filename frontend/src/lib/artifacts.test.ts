@@ -4,6 +4,7 @@ import {
   hasRenderableBody,
   isHtmlArtifactPath,
   safeHtmlPrefix,
+  provisionalDuplicates,
   skeletonReveal,
 } from "@/lib/artifacts";
 
@@ -224,5 +225,34 @@ describe("skeletonReveal", () => {
     // The tail is deliberately slow: the last row lands around 27s, not at 5s.
     expect(rowsAt(24_000)).toBeLessThan(9);
     expect(rowsAt(30_000)).toBe(9);
+  });
+});
+
+describe("provisionalDuplicates", () => {
+  const streaming = () => true;
+  const finished = () => false;
+
+  it("drops the .htm tab a half-streamed .html path opened", () => {
+    // The reported bug: one write_file, two tabs, one spinning forever.
+    const open = ["/workspace/artifacts/report.htm"];
+    expect(provisionalDuplicates(open, "/workspace/artifacts/report.html", streaming)).toEqual([
+      "/workspace/artifacts/report.htm",
+    ]);
+  });
+
+  it("drops nothing when the shorter path has finished writing", () => {
+    // A real report.htm alongside a real report.html: both keep their tabs.
+    const open = ["/workspace/artifacts/report.htm"];
+    expect(provisionalDuplicates(open, "/workspace/artifacts/report.html", finished)).toEqual([]);
+  });
+
+  it("leaves unrelated artifacts alone", () => {
+    const open = ["/workspace/artifacts/other.html", "/workspace/artifacts/rep.html"];
+    expect(provisionalDuplicates(open, "/workspace/artifacts/report.html", streaming)).toEqual([]);
+  });
+
+  it("never drops the path being registered", () => {
+    const open = ["/workspace/artifacts/report.html"];
+    expect(provisionalDuplicates(open, "/workspace/artifacts/report.html", streaming)).toEqual([]);
   });
 });

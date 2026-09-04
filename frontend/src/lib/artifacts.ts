@@ -174,3 +174,30 @@ export function skeletonReveal(elapsedMs: number): number {
   return Math.min(1, Math.sqrt(elapsedMs / REVEAL_MS));
 }
 
+/**
+ * Artifact paths to drop when `path` is registered, because they are half-streamed
+ * versions of it rather than files of their own.
+ *
+ * write_file's arguments arrive a character at a time, and the tab opens as soon as
+ * file_path looks like an artifact, so the pane fills while the document is being
+ * written rather than after. The cost is that ".../report.htm" is a valid-looking
+ * artifact path one frame before ".../report.html" is, so a single write opened two
+ * tabs: the real one, and a phantom that no tool result ever matched and that therefore
+ * span forever. Both truncate to the same label in the tab bar, so it read as the same
+ * file listed twice.
+ *
+ * A strict prefix is the exact signature of that: a real path is never a prefix of
+ * another real path AND still streaming. Finished artifacts are left alone, so a genuine
+ * pair like report.htm and report.html both survive once their writes complete.
+ */
+export function provisionalDuplicates(
+  paths: Iterable<string>,
+  path: string,
+  isStreaming: (p: string) => boolean,
+): string[] {
+  const out: string[] = [];
+  for (const p of paths) {
+    if (p !== path && path.startsWith(p) && isStreaming(p)) out.push(p);
+  }
+  return out;
+}

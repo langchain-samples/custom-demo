@@ -20,7 +20,6 @@
  */
 import { useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { ReactNode, Ref } from "react";
-import { ReasoningText } from "@/components/agents/loading-states/reasoning-text";
 import {
   artifactName,
   hasRenderableBody,
@@ -63,13 +62,6 @@ window.addEventListener("message", function (e) {
  * first ~30 seconds of a write are genuinely blank (see hasRenderableBody). The work is
  * real, so say what it is rather than showing an empty white pane.
  */
-const BUILDING_PHRASES = [
-  "Building the artifact",
-  "Laying out the document",
-  "Writing styles",
-  "Placing the content",
-];
-
 /**
  * When each artifact's build started, by path, deliberately OUTSIDE React.
  *
@@ -352,12 +344,10 @@ export function HtmlArtifact({
         // On WHITE, matching the iframe, so handing over to the real document is not
         // also a change of background colour.
         <div className="absolute inset-0 overflow-hidden bg-white">
+          {/* No status line under this. The skeleton draws itself row by row now, which
+              says "being written" more directly than a caption can, and a shimmering
+              phrase floating in the empty half of the pane competed with it. */}
           <ArtifactSkeleton reveal={skeletonReveal(buildElapsed)} />
-          {/* The skeleton says content is coming; only this says why the wait is long
-              enough to notice, and it is the line a presenter talks over. */}
-          <div className="absolute inset-x-0 bottom-8 flex justify-center">
-            <ReasoningText phrases={BUILDING_PHRASES} />
-          </div>
         </div>
       )}
     </div>
