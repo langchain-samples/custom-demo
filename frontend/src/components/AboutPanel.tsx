@@ -217,7 +217,7 @@ function ArchitectureDiagram() {
           ["Sandbox", "runs code in a VM"],
           ["Long-term memory", "remembers context"],
           ["Virtual filesystem", "read / write files"],
-          ["Sub-agents", "isolate context, parallelize work"],
+          ["Sub-agents", "isolate context and parallelize work"],
           ["Skills", "reusable procedures"],
           ["Human-in-the-loop", "pause for approval"],
         ].map(([title, sub], i) => {
@@ -227,7 +227,7 @@ function ArchitectureDiagram() {
           const y = 220 + row * 56;
           return (
             <g key={title}>
-              <rect x={x} y={y} width="215" height="46" rx="10" fill={C.face} stroke={C.stroke} />
+              <rect x={x} y={y} width="225" height="46" rx="10" fill={C.face} stroke={C.stroke} />
               <text x={x + 14} y={y + 20} fontSize="12" fontWeight="700" fill="currentColor">
                 {title}
               </text>
