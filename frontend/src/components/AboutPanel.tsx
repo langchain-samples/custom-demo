@@ -128,13 +128,13 @@ const C = {
 
 /**
  * A static architecture diagram: a question flows into the deepagents harness wrapping
- * the model (planning, memory, filesystem, skills, sub-agents, tools), which returns a
+ * the model (sandbox, memory, filesystem, skills, sub-agents, tools), which returns a
  * live dashboard and written answer, configured per assistant and traced in LangSmith.
  */
 function ArchitectureDiagram() {
   return (
     <svg
-      viewBox="0 0 940 560"
+      viewBox="0 0 940 576"
       className="h-auto w-full text-foreground"
       role="img"
       aria-label="Architecture: a question flows into the deepagents harness around the model, which returns a live dashboard and written answer; configured per assistant and traced in LangSmith."
@@ -214,7 +214,7 @@ function ArchitectureDiagram() {
 
         {/* Capability chips (2 columns) */}
         {[
-          ["Planning", "write_todos"],
+          ["Sandbox", "runs code in a VM"],
           ["Long-term memory", "remembers context"],
           ["Virtual filesystem", "read / write files"],
           ["Sub-agents", "task() fan-out"],
@@ -272,13 +272,13 @@ function ArchitectureDiagram() {
       </g>
 
       {/* Observability band (bottom) */}
-      <line x1="470" y1="490" x2="470" y2="502" stroke={C.accent} strokeWidth="2" markerEnd="url(#arrow)" />
+      <line x1="470" y1="490" x2="470" y2="518" stroke={C.accent} strokeWidth="2" markerEnd="url(#arrow)" />
       <g>
-        <rect x="20" y="504" width="900" height="46" rx="10" fill={C.bandWash} stroke={C.stroke} />
-        <text x="470" y="528" textAnchor="middle" fontSize="13" fontWeight="700" fill="currentColor">
+        <rect x="20" y="520" width="900" height="46" rx="10" fill={C.bandWash} stroke={C.stroke} />
+        <text x="470" y="544" textAnchor="middle" fontSize="13" fontWeight="700" fill="currentColor">
           LangSmith observability
         </text>
-        <text x="470" y="543" textAnchor="middle" fontSize="11" fill="currentColor" opacity="0.7">
+        <text x="470" y="559" textAnchor="middle" fontSize="11" fill="currentColor" opacity="0.7">
           every step traced, evaluated, and improvable
         </text>
       </g>
