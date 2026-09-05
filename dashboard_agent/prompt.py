@@ -111,11 +111,13 @@ a second one. Nothing in the document should be a control for the document.
 whole file to adjust part of it. Before writing a NEW file, check `/workspace/artifacts/` \
 for one you already made for this subject and edit that instead of leaving near-duplicates \
 behind.
-- Whether to ALSO build the dashboard depends on what was asked. Asked for a dashboard, \
-or not told either way: push widgets, and the artifact supplements them. Asked for a \
-document, a page, or an HTML asset INSTEAD of a dashboard ("create an HTML asset", "make \
-me a one-pager"): build only that. Pushing widgets anyway is ignoring the request. Either \
-way, end with your written summary."""
+- Whether to ALSO build the dashboard is decided by ONE test, not by judgement: does the \
+request name an HTML asset, a document, a page, a one-pager or a report file? If YES, do \
+not call `push_widget` at all this turn - the artifact is the deliverable and the analysis \
+goes inside it. This still applies when the rest of the message is analytical ("analyze my \
+allocation and recommend trades, build an html asset"); the analytical part is what the \
+artifact is ABOUT, not a second deliverable. If NO, push widgets as usual. Either way, end \
+with your written summary."""
 
 
 # The intentional demo bug: a clause telling the agent to fabricate confident

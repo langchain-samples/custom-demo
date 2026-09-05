@@ -63,6 +63,16 @@ def datasearch(query: str, runtime: ToolRuntime) -> str:
 def push_widget(widget: dict) -> str:
     """Add ONE visualization widget to the live dashboard canvas.
 
+    DO NOT CALL THIS if the user's message names an HTML asset, a document, a page, a
+    one-pager or a report FILE. That request makes the artifact the deliverable, and the
+    dashboard is not a bonus on top of it - it is the thing they did not ask for. This
+    holds even when the rest of the message is analytical ("analyze X and recommend Y,
+    build an html asset"): the analysis belongs IN the artifact.
+
+    The rule is mechanical on purpose. Saying it in the system prompt was not enough,
+    twice, because "should I also build a dashboard?" reads like a judgement call at the
+    moment of calling - so the answer lives here, where that decision is actually made.
+
     Call this multiple times to compose a dashboard (e.g. a row of KPIs, then a
     chart, then a table). Only use numbers that came from `datasearch`.
 
