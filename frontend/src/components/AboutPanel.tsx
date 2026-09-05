@@ -217,7 +217,7 @@ function ArchitectureDiagram() {
           ["Sandbox", "runs code in a VM"],
           ["Long-term memory", "remembers context"],
           ["Virtual filesystem", "read / write files"],
-          ["Sub-agents", "task() fan-out"],
+          ["Sub-agents", "isolate context, parallelize work"],
           ["Skills", "reusable procedures"],
           ["Human-in-the-loop", "pause for approval"],
         ].map(([title, sub], i) => {
