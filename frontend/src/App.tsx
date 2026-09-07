@@ -28,6 +28,7 @@ import {
 import { Button } from "@/components/motion/button";
 import { Tooltip } from "@/components/motion/tooltip";
 import ChatPanel, { type ChatPanelHandle } from "@/components/ChatPanel";
+import { usePointerLockGuard } from "@/lib/pointerLock";
 import { VoiceButton } from "@/components/VoiceButton";
 import { VoiceStage } from "@/components/VoiceStage";
 import { useVoiceSession } from "@/lib/hooks/use-voice-session";
@@ -67,6 +68,10 @@ function BrandLogo({ logo }: { logo: string }) {
 }
 
 export default function App() {
+  // A Radix overlay that closed while the tab was hidden can leave the whole page
+  // inert. See lib/pointerLock.ts.
+  usePointerLockGuard();
+
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [evalsOpen, setEvalsOpen] = useState(false);
