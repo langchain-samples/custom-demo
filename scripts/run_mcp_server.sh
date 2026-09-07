@@ -20,6 +20,19 @@ PATH_="${FIELDLINK_PATH:-/mcp}"
 TUNNEL=0
 [ "${1:-}" = "--tunnel" ] && TUNNEL=1
 
+# Which tunnel. cloudflared is PREFERRED and it is not a style choice: ngrok's
+# free tier answers any request carrying a browser User-Agent with an
+# interstitial warning page (ERR_NGROK_6024, content-type text/html) instead of
+# the resource. MCP itself is unaffected - the client is not a browser - but an
+# <img> in a generated proof-of-delivery document gets HTML and renders broken,
+# and a tag cannot send the `ngrok-skip-browser-warning` header that would opt
+# out. A trycloudflare URL has no interstitial, so images just work.
+#   brew install cloudflared
+TUNNEL_KIND="${FIELDLINK_TUNNEL:-auto}"
+if [ "$TUNNEL_KIND" = "auto" ]; then
+  if command -v cloudflared >/dev/null 2>&1; then TUNNEL_KIND=cloudflared; else TUNNEL_KIND=ngrok; fi
+fi
+
 if [ -x ".venv/bin/python" ]; then
   PY=".venv/bin/python"
 elif command -v uv >/dev/null 2>&1; then
@@ -31,8 +44,9 @@ else
   exit 1
 fi
 
-if [ "$TUNNEL" = "1" ] && ! command -v ngrok >/dev/null 2>&1; then
-  echo "ngrok is not installed. brew install ngrok  (then: ngrok config add-authtoken ...)" >&2
+if [ "$TUNNEL" = "1" ] && ! command -v "$TUNNEL_KIND" >/dev/null 2>&1; then
+  echo "$TUNNEL_KIND is not installed. brew install $TUNNEL_KIND" >&2
+  [ "$TUNNEL_KIND" = "ngrok" ] && echo "  (then: ngrok config add-authtoken ...)" >&2
   exit 1
 fi
 
@@ -46,29 +60,46 @@ if [ "$TUNNEL" = "0" ]; then
   exit 0
 fi
 
-# `--log stdout` because ngrok's TUI repaints the terminal and hides the server's
-# own output; the public URL is read back off the local agent API instead.
-ngrok http "$PORT" --log stdout > /tmp/ngrok-fieldlink.log 2>&1 &
-NGROK_PID=$!
-
+LOG=/tmp/fieldlink-tunnel.log
 URL=""
-for _ in $(seq 1 40); do
-  URL=$(curl -s http://127.0.0.1:4040/api/tunnels 2>/dev/null \
-    | "$PY" -c 'import json,sys
+
+if [ "$TUNNEL_KIND" = "cloudflared" ]; then
+  cloudflared tunnel --url "http://127.0.0.1:${PORT}" --no-autoupdate > "$LOG" 2>&1 &
+  NGROK_PID=$!
+  for _ in $(seq 1 60); do
+    URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$LOG" 2>/dev/null | head -1) || true
+    [ -n "$URL" ] && break
+    sleep 0.5
+  done
+else
+  # `--log stdout` because ngrok's TUI repaints the terminal and hides the server's
+  # own output; the public URL is read back off the local agent API instead.
+  ngrok http "$PORT" --log stdout > "$LOG" 2>&1 &
+  NGROK_PID=$!
+  for _ in $(seq 1 40); do
+    URL=$(curl -s http://127.0.0.1:4040/api/tunnels 2>/dev/null \
+      | "$PY" -c 'import json,sys
 try: print(next(t["public_url"] for t in json.load(sys.stdin)["tunnels"] if t["public_url"].startswith("https")))
 except Exception: pass' 2>/dev/null) || true
-  [ -n "$URL" ] && break
-  sleep 0.5
-done
+    [ -n "$URL" ] && break
+    sleep 0.5
+  done
+fi
 
 if [ -z "$URL" ]; then
-  echo "ngrok did not report a tunnel. See /tmp/ngrok-fieldlink.log" >&2
+  echo "$TUNNEL_KIND did not report a tunnel. See $LOG" >&2
   exit 1
 fi
 
 echo
 echo "  Connection string:  ${URL}${PATH_}"
 echo "  Paste that into Settings -> MCP servers, then press Test."
-echo "  The free tier hands out a NEW hostname each run, so re-paste after a restart."
+echo "  A new hostname is issued each run, so re-paste after a restart."
+if [ "$TUNNEL_KIND" = "ngrok" ]; then
+  echo
+  echo "  NOTE: ngrok free serves an interstitial to browser requests, so a signature"
+  echo "        image embedded in a generated document will render broken. MCP itself"
+  echo "        is fine. Install cloudflared for a tunnel without one."
+fi
 echo
 wait "$SERVER_PID"

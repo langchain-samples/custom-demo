@@ -176,9 +176,16 @@ There is a demo server in the box:
 ./scripts/run_mcp_server.sh              # local only: http://127.0.0.1:8765/mcp
 ```
 
-Paste the printed URL (including the `/mcp` path) into Settings. The free ngrok tier hands out a
-new hostname per run, so re-paste after a restart, and put a bearer token on anything you leave
-up — a tunnel is public.
+Paste the printed URL (including the `/mcp` path) into Settings. A new hostname is issued per
+run, so re-paste after a restart, and put a bearer token on anything you leave up — a tunnel is
+public.
+
+**Prefer cloudflared over ngrok** (`brew install cloudflared`; the script picks it automatically
+when present). Not a style preference: ngrok's free tier answers any request carrying a browser
+User-Agent with an interstitial warning page instead of the resource, so a signature image
+embedded in a generated document renders broken — and an `<img>` tag cannot send the
+`ngrok-skip-browser-warning` header that would opt out. MCP itself works fine either way, since
+the client is not a browser.
 
 **Fieldlink Logistics** (`mcp_demo_server/`) is a pretend field-operations system, written
 against the modern stateless MCP spec so it exercises the whole surface:
@@ -199,7 +206,8 @@ specific to Fieldlink — any MCP server that elicits gets the generic form for 
 that declares a `ui://` resource gets rendered.
 
 **Getting the signature into a document.** Ask for a proof-of-delivery document and the agent
-writes an HTML artifact containing `<img src="https://<tunnel>/signatures/FL-4417.png">`. The
+writes an HTML artifact containing `<img src="https://<tunnel>/signatures/FL-4417.png">` (see the
+ngrok caveat above if it renders broken). The
 image is never inlined as base64, for two reasons: it is thousands of tokens on every subsequent
 turn, and a model cannot retype 10KB of base64 without corrupting it. The bytes stay on the MCP
 server and travel as a URL. The model is still *shown* the signature as an image block, so "what

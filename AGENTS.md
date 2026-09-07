@@ -272,6 +272,14 @@ a tiny image with a 400 that kills the whole run, found with a 1x1 test fixture)
 built from the live request's forwarded headers rather than configured, so it is the tunnel's
 hostname and survives ngrok handing out a new one.
 
+**One environment trap.** ngrok's free tier answers any request with a browser User-Agent with
+an interstitial (`ERR_NGROK_6024`, `content-type: text/html`) instead of the resource, so the
+`<img>` in a generated document renders broken while MCP itself keeps working — the client is not
+a browser. An `<img>` cannot send the `ngrok-skip-browser-warning` header that opts out, so
+`scripts/run_mcp_server.sh` prefers cloudflared when it is installed. The other way out is a
+code-execution tool: fetch the URL there (with that header) and inline the image as a data URI,
+which also makes the document outlive the server that issued it.
+
 `submit.content` must match the elicitation's `requested_schema` (the host forwards it verbatim
 as the accept payload), which is a contract across three files and two languages with no shared
 type. `dashboard_agent/tests/signature_app_test.js` is what pins it: it loads the real HTML in

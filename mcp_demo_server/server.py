@@ -354,6 +354,14 @@ def collect_signature(
     as given. Never inline base64 image data and never invent a data URI: the
     image bytes are not in this result, and a fabricated one renders as a broken
     image on a delivery record.
+
+    If you have a code-execution tool, prefer downloading the URL there and
+    writing the document with the image inlined as a data URI. That keeps the
+    document readable after this server goes away, which matters because a
+    proof of delivery outlives the system that issued it. Fetch it with the
+    header `ngrok-skip-browser-warning: 1`, harmless everywhere and required
+    when this server is behind an ngrok tunnel. Let the code move the bytes;
+    never type them yourself.
     """
     shipment = _BY_ID.get(tracking_id.strip().upper())
     if shipment is None:
