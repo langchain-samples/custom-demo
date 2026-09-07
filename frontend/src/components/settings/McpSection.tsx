@@ -80,7 +80,7 @@ function ServerRow({
           value={server.label}
           onChange={(e) => onEdit({ label: e.target.value })}
           placeholder="Name, e.g. Fieldlink"
-          className="h-7 flex-1 text-[12.5px]"
+          className="flex-1"
           autoComplete="off"
         />
         <button
@@ -99,9 +99,9 @@ function ServerRow({
           value={server.url}
           onChange={(e) => onEdit({ url: e.target.value })}
           placeholder="https://your-tunnel.ngrok.app/mcp"
-          className="h-7 font-mono text-[11.5px]"
           spellCheck={false}
           autoComplete="off"
+          data-1p-ignore="true"
         />
       </div>
 
@@ -114,16 +114,16 @@ function ServerRow({
           value={server.token ?? ""}
           onChange={(e) => onEdit({ token: e.target.value })}
           placeholder="Sent as an Authorization header"
-          className="h-7 font-mono text-[11.5px]"
           autoComplete="off"
+          data-1p-ignore="true"
         />
       </div>
 
       <div className="flex items-center gap-2">
         <Button
+          type="button"
           size="sm"
-          variant="outline"
-          className="h-6 px-2 text-[11px]"
+          variant="secondary"
           disabled={testing || !server.url.trim()}
           onClick={onTest}
         >
@@ -217,12 +217,13 @@ export function McpSection({ servers, onChange, defaultOpen }: Props) {
         ))}
 
         <Button
+          type="button"
           size="sm"
           variant="outline"
-          className="h-7 w-fit gap-1 text-[11.5px]"
+          className="w-fit text-primary"
           onClick={add}
         >
-          <IconPlus size={13} /> Add a server
+          <IconPlus size={15} className="mr-1" /> Add a server
         </Button>
       </div>
     </CollapseSection>
