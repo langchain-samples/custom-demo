@@ -44,7 +44,10 @@ dashboard_agent/
   datasource.py       pluggable backend behind `datasearch`: static corpus | synthetic LLM
   corpus.py / rag.py  bundled humanitarian corpus + dependency-free TF-IDF retriever
   widgets.py          Pydantic widget schemas — the agent↔frontend contract
+  mcp_servers.py      REMOTE MCP: parse `context.mcp_servers`, discover + cache their tools,
+                      probe a server, read a paused tool's `ui://` MCP App
   webapp.py           extra Starlette routes: /feedback /projects /workspaces /hub-prompts /tools
+                      /mcp/probe + /mcp/app (the SPA cannot speak MCP; the deployment does)
                       /sandbox-files /sandbox-file (read-only browse of the assistant's VM)
                       /evals/run + /evals/status (per-assistant demo eval), /cleanup, /trace-url
   static/             LEGACY vanilla-JS SPA (superseded by frontend/, still on disk)
@@ -55,7 +58,11 @@ frontend/             React 19 + Vite + Tailwind 4 + shadcn SPA (the real UI)
   src/lib/fonts.ts      Google-Fonts loader + curated self-hosted fallbacks
 evals/                repo-level Tier-3 LLM evals, run by us before a release — score 1 = the
                       planted BUG fired. Not the per-assistant demo eval; see evals/README.md
-scripts/              seed_prompt, seed_data_prompt, seed_assistants, setup_assistant, serve_spa
+mcp_demo_server/      THE OTHER END: a FastMCP server (Fieldlink Logistics) on the modern
+                      stateless spec - cacheable tool list, guard-pattern elicitation, and an
+                      MCP App (`signature_app.html`). NOT shipped in the wheel.
+scripts/              seed_prompt, seed_data_prompt, seed_assistants, setup_assistant, serve_spa,
+                      run_mcp_server.sh (runs mcp_demo_server, `--tunnel` for a public ngrok URL)
 .claude/skills/setup-assistant/SKILL.md   interactive /setup-assistant flow (CLI path)
 langgraph.json        registers both graphs + http.app + wide-open CORS
 pyproject.toml        Python deps + dev group (uv); uv.lock pins them
@@ -197,6 +204,75 @@ customer-tailored content from `context.customer`/`industry`. They render as typ
 chat (`frontend/src/components/chat/ToolResultCard.tsx`); anything dashboard-worthy goes
 through the existing `push_widget` types rather than a new widget schema.
 
+**Remote MCP servers.** An assistant can also reach tools this repo does not own. Paste a
+server's URL into **Settings → MCP servers**, press Test, and its tools are in play on the next
+message — no code change, no redeploy. The connection lives on the assistant
+(`context.mcp_servers`), so it is per-customer config like everything else.
+
+Everything below follows from one constraint: **a deployed agent connects OUTBOUND to the
+server's URL**, so `localhost` inside the deployment's container is the container, not your
+laptop. A server on your machine needs a public address — hence
+`./scripts/run_mcp_server.sh --tunnel`, which prints an ngrok URL to paste in. Running the agent
+locally too (`./run.sh`) needs no tunnel; paste the `127.0.0.1` URL.
+
+- **MCP tools are bound per RUN, not at graph build** (`McpTools` in `agent.py`). Which servers
+  exist is per-assistant config and `create_deep_agent(tools=…)` is fixed at build time, so
+  `awrap_model_call` appends them to `request.tools` and `awrap_tool_call` hands the tool object
+  back when `ToolNode` (built without them) passes `tool=None`. **Both halves are load-bearing**:
+  without the second, every MCP call returns "tool not found", and defining it is also what stops
+  `create_agent` rejecting the unknown names the first half just added. Both hooks have **sync
+  pass-through twins** — a middleware with only async hooks makes every `invoke()` raise, and
+  `agent.run()` plus most of the test suite take that path.
+- **Tool names are namespaced `{server_id}_{tool}`** because every server is wrapped in a
+  `ClientGroup`, even a single one. Not cosmetic: a server offering a tool called `datasearch`
+  would collide with the catalogue and `ToolSelection` would filter the remote one out as an
+  unselected catalogue tool.
+- **Two caches** (`mcp_servers.py`). `Client(cache=True)` is the client-side `tools/list` cache
+  the modern spec added (SEP-2549), honouring the server's own TTL hint. `_TOOLS` is ours and
+  holds the *adapted LangChain tools*, so a warm model call does no I/O at all. Both key on a
+  fingerprint of URL + token, so editing either in Settings takes effect next turn.
+- **A dead server costs the turn its MCP tools, never the turn.** `load_tools` never raises and
+  briefly caches the emptiness, so an unreachable tunnel is not re-timed-out on every model call.
+  Connection problems are meant to surface in Settings' Test, not mid-demo.
+
+**Elicitation (MCP's own HITL).** A modern-spec server can stop part-way through a tool call and
+ask for something; `langchain.mcp` surfaces that as a LangGraph `interrupt()`, so it arrives on
+the same `__interrupt__` path as our own pauses. `ChatPanel` routes it by `type ===
+"mcp_elicitation"` to `chat/McpElicitationCard.tsx` instead of `ReviewCard`, and resumes with
+`{responses: {<the server's own request key>: {action, content}}}` — **answers are keyed by the
+server's key**, so a wrong or missing key fails the resume and the run stays stuck.
+
+Server-side this is the **guard pattern**, not `ctx.elicit()`. On the stateless protocol there is
+no session for a server to push a question down, and `ctx.elicit()` fails with "elicitation via
+server-initiated requests is unavailable". A guard tool instead returns an `InputRequiredResult`
+naming what it needs, and the client re-calls it with `input_responses` attached
+(`mcp_demo_server/server.py:_ask`/`_answer`). That retry-able shape is exactly why a pause can
+survive an interrupt. **The tool re-runs from the top on resume**, so do no real work before the
+ask.
+
+**MCP Apps (a tool that ships its own UI).** A tool can bind a `ui://` HTML resource
+(`_meta.ui.resourceUri`, MIME `text/html;profile=mcp-app`). `collect_signature` does: it needs a
+drawn signature, which no schema-generated form can collect. While the run is paused the SPA
+POSTs `/mcp/app` with the paused `tool_name`, the deployment resolves the tool's `resourceUri`
+and reads the resource over MCP, and the card renders that HTML in an iframe **sandboxed to
+`allow-scripts` only** — no `allow-same-origin`, so server-authored HTML cannot touch our origin,
+cookies or storage. It talks to us solely over `postMessage`:
+
+    in   mcp-app:init    {request, theme, accent}
+    out  mcp-app:ready | mcp-app:resize {height} | mcp-app:submit {content} | mcp-app:cancel
+
+`submit.content` must match the elicitation's `requested_schema` (the host forwards it verbatim
+as the accept payload), which is a contract across three files and two languages with no shared
+type. `dashboard_agent/tests/signature_app_test.js` is what pins it: it loads the real HTML in
+jsdom and asserts the keys. Any tool with no app falls back to a form generated from the schema,
+which is what every ordinary MCP server gets.
+
+**One boundary worth knowing:** `/mcp/probe` and `/mcp/app` fetch a URL supplied in the request
+body, so the deployment will connect wherever a caller points it. Both sit behind the same app
+token as every other custom route, and any caller who can reach them can already put that URL in
+the assistant's `context.mcp_servers` and have the agent call it, so this adds no reach — but
+do not widen these routes without revisiting that.
+
 **Human-in-the-loop.** `draft_email` and `suggest_meeting_times` generate, then call
 `interrupt()` (via `review()` in `tools/simulated.py`) — the run genuinely PAUSES. The payload
 arrives on the stream's `updates` event as `__interrupt__`, `ChatPanel` renders
@@ -229,6 +305,7 @@ collide with a real project of the same name; an explicit `context.ls_project` o
 | `customer`, `industry` | steer synthetic data + prompt templating |
 | `ls_workspace` | trace routing + which workspace's Prompt Hub to pull from |
 | `enabled_tools` | catalogue tool ids to expose (`None` = defaults, `[]` = optional all off) |
+| `mcp_servers` | remote MCP servers to connect to: `[{id, label, url, token?}]` (§ Remote MCP servers) |
 
 Everything else (middleware, checkpointer, backends, permissions, and the *implementation* of
 any tool) is **locked in code** — matching the plan's security boundary. Assistants pick from a
@@ -510,7 +587,8 @@ uv run ruff check dashboard_agent scripts evals   # + ruff format --check, ty ch
 node dashboard_agent/tests/branding_test.js     # colour maths (imports the real .ts)
 node dashboard_agent/tests/trace_test.js        # trace-project naming
 node dashboard_agent/tests/frontend_test.js     # legacy static/app.js — see rough edges
-cd frontend && npx tsc -b && npx oxlint
+node dashboard_agent/tests/signature_app_test.js  # the MCP App's postMessage contract (jsdom)
+cd frontend && npx tsc -b && npx oxlint && npm test
 ```
 Slow, real-LLM: `test_agent_e2e.py`, `test_hallucination_bug.py`.
 

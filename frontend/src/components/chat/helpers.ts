@@ -201,6 +201,13 @@ export function toolCallKey(msgId: string | undefined, tc: ToolCall): string {
  * cannot answer (the run only accepts one of them).
  */
 export function describeInterrupt(review: ReviewInterrupt): string {
+  // An MCP server asking mid-tool-call. Read its own question rather than falling
+  // through to the generic line, so voice mode says what is actually wanted.
+  if (review.type === "mcp_elicitation") {
+    const first = (review.requests || [])[0];
+    if (first?.message) return first.message;
+    return `A connected system is waiting for input before ${String(review.tool_name || "a tool")} can finish.`;
+  }
   const draft = (review.draft as Record<string, unknown> | undefined) || {};
   const question = String((review.question as string) ?? draft.question ?? "");
   const raw = (review.options ?? draft.options) as unknown;

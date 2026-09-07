@@ -136,6 +136,50 @@ export interface RunContext {
    * meaningful — "every optional tool off" — and must be sent, not omitted.
    */
   enabled_tools?: string[];
+  /** Remote MCP servers this assistant connects to. Omit when there are none. */
+  mcp_servers?: McpServerConfig[];
+}
+
+/**
+ * One remote MCP server on an assistant's context.
+ *
+ * `id` namespaces the server's tools as `{id}_{tool}` on the agent side, so it
+ * has to stay stable once tools are in use. `token` is write-only from the SPA's
+ * point of view: the backend turns it into an Authorization header and only ever
+ * reports back the header NAMES.
+ */
+export interface McpServerConfig {
+  id?: string;
+  label: string;
+  url: string;
+  token?: string;
+  enabled?: boolean;
+}
+
+/** One tool a probed MCP server advertises. `app` is its `ui://` MCP App, if any. */
+export interface McpToolInfo {
+  name: string;
+  description: string;
+  app: string | null;
+}
+
+/** What POST /mcp/probe reports for a single server. */
+export interface McpProbeResult {
+  id: string;
+  label: string;
+  url: string;
+  header_names: string[];
+  ok: boolean;
+  tools: McpToolInfo[];
+  error?: string;
+}
+
+/** The HTML an MCP App tool ships, from POST /mcp/app. */
+export interface McpAppResource {
+  tool_name: string;
+  resource_uri: string;
+  mime_type: string;
+  html: string;
 }
 
 /** One selectable capability, from GET /tools (the backend registry). */
@@ -377,13 +421,70 @@ export async function getThreadState(id: string): Promise<ThreadState> {
 
 /* --------------------------------- Runs --------------------------------- */
 
-/** A human-in-the-loop pause raised by a tool (see tools/simulated.py `review`). */
-export interface ReviewInterrupt {
-  /** Which editor to show — "email_draft" | "meeting_slots". */
-  kind: string;
-  /** The generated artifact awaiting review. */
-  draft: Record<string, unknown>;
+/**
+ * One question an MCP server asks part-way through a tool call.
+ *
+ * `key` is the server's own identifier for the question, and the answer has to
+ * come back under it, so it is carried through the pause untouched. A `form`
+ * request wants data matching `requested_schema`; a `url` request wants the
+ * person to go somewhere and come back.
+ */
+export interface McpElicitationRequest {
+  key: string;
+  message: string;
+  mode: "form" | "url";
+  requested_schema?: JsonSchema;
+  url?: string;
+}
+
+/** A JSON Schema object, as far as the elicitation form needs to read one. */
+export interface JsonSchema {
+  type?: string;
+  title?: string;
+  description?: string;
+  enum?: unknown[];
+  format?: string;
+  default?: unknown;
+  properties?: Record<string, JsonSchema>;
+  required?: string[];
   [key: string]: unknown;
+}
+
+/** An MCP elicitation answer: accept with content, or refuse this round / the call. */
+export type McpElicitationResponse =
+  | { action: "accept"; content?: Record<string, unknown> }
+  | { action: "decline" }
+  | { action: "cancel" };
+
+/**
+ * A human-in-the-loop pause. Two unrelated producers land here:
+ *
+ * 1. Our own simulated tools (`tools/simulated.py` `review`), which set `kind`
+ *    ("email_draft" | "meeting_slots" | "user_question") and a `draft`.
+ * 2. An MCP server pausing mid-tool-call, which `langchain.mcp` surfaces with
+ *    `type: "mcp_elicitation"`, the `tool_name`, and one or more `requests`.
+ *
+ * They share one carrier because the streaming loop treats both the same way
+ * (pause, render a card, resume with whatever it returns). Narrow with
+ * `isMcpElicitation` before reading either side's fields.
+ */
+export interface ReviewInterrupt {
+  /** Which editor to show, for our own tools' pauses. Absent on an MCP one. */
+  kind?: string;
+  /** The generated artifact awaiting review. Absent on an MCP one. */
+  draft?: Record<string, unknown>;
+  /** `"mcp_elicitation"` when an MCP server raised this. */
+  type?: string;
+  /** The MCP tool whose call is waiting, e.g. `fieldlink_collect_signature`. */
+  tool_name?: string;
+  /** Every question this round, in the order to ask them. */
+  requests?: McpElicitationRequest[];
+  [key: string]: unknown;
+}
+
+/** Whether this pause came from an MCP server rather than one of our own tools. */
+export function isMcpElicitation(review: ReviewInterrupt | null | undefined): boolean {
+  return !!review && review.type === "mcp_elicitation" && Array.isArray(review.requests);
 }
 
 export interface RunStreamOptions {
@@ -674,6 +775,51 @@ export async function listTools(): Promise<ToolSpec[]> {
     return Array.isArray(d.tools) ? d.tools : [];
   } catch {
     return [];
+  }
+}
+
+/**
+ * Connect to each MCP server and report its tools (POST /mcp/probe).
+ *
+ * A browser cannot speak MCP, so the deployment does the connecting. Per-server
+ * results, because one dead tunnel must not read as "MCP is broken".
+ */
+export async function probeMcpServers(servers: McpServerConfig[]): Promise<McpProbeResult[]> {
+  try {
+    const res = await fetch(`${getApiBase()}/mcp/probe`, {
+      method: "POST",
+      headers: apiHeaders(),
+      body: JSON.stringify({ servers }),
+    });
+    if (!res.ok) return [];
+    const d = await res.json();
+    return Array.isArray(d.servers) ? d.servers : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The MCP App HTML bound to a paused tool (POST /mcp/app), or null if it has none.
+ *
+ * Null is the ordinary answer for an ordinary tool, and the caller falls back to
+ * the generic schema form, so a failure here is not worth surfacing.
+ */
+export async function fetchMcpApp(
+  servers: McpServerConfig[],
+  toolName: string,
+): Promise<McpAppResource | null> {
+  try {
+    const res = await fetch(`${getApiBase()}/mcp/app`, {
+      method: "POST",
+      headers: apiHeaders(),
+      body: JSON.stringify({ servers, tool_name: toolName }),
+    });
+    if (!res.ok) return null;
+    const d = await res.json();
+    return d?.app?.html ? (d.app as McpAppResource) : null;
+  } catch {
+    return null;
   }
 }
 

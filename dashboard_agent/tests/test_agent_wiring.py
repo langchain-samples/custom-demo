@@ -4,8 +4,11 @@ Data-prompt gap, tool selection, and the capability note: pure functions and
 hand-built requests, no LLM, no network.
 """
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any, cast
+
+from langgraph.prebuilt.tool_node import ToolCallRequest
 
 from dashboard_agent import agent as A
 from dashboard_agent.prompt import build_data_prompt
@@ -150,3 +153,116 @@ def test_build_graph_has_no_write_todos_tool(monkeypatch):
     assert "write_todos" not in names  # TodoListMiddleware not opted in on 0.7
     # Sanity: other built-ins/tools are present (only the todo one is absent).
     assert {"task", "read_file", "datasearch"} <= names
+
+
+# --- MCP tools are bound per run, not at graph build (#mcp) ---
+
+
+class _McpReq:
+    """Minimal ModelRequest stand-in for McpTools.awrap_model_call."""
+
+    def __init__(self, tool_names, servers):
+        self.tools = [SimpleNamespace(name=n) for n in tool_names]
+        self.runtime = SimpleNamespace(context={"mcp_servers": servers})
+
+    def override(self, **kw):
+        self.tools = kw.get("tools", self.tools)
+        return self
+
+
+_SERVER = [{"label": "Fieldlink", "url": "https://x.ngrok.app/mcp"}]
+
+
+def _stub_tools(monkeypatch, tools):
+    """Stand in for discovery, so these tests never touch a network."""
+
+    async def load(_servers, **_kw):
+        return tools
+
+    monkeypatch.setattr("dashboard_agent.mcp_servers.load_tools", load)
+
+
+def test_mcp_tools_are_offered_alongside_the_built_in_ones(monkeypatch):
+    remote = SimpleNamespace(name="fieldlink_get_shipment")
+    _stub_tools(monkeypatch, [remote])
+    req = _McpReq(["datasearch"], _SERVER)
+
+    async def handler(r):
+        return r
+
+    out = asyncio.run(A.McpTools().awrap_model_call(cast("Any", req), handler))
+    assert [t.name for t in out.tools] == ["datasearch", "fieldlink_get_shipment"]
+
+
+def test_no_mcp_server_configured_leaves_the_request_untouched(monkeypatch):
+    _stub_tools(monkeypatch, [])
+    req = _McpReq(["datasearch"], None)
+
+    async def handler(r):
+        return r
+
+    out = asyncio.run(A.McpTools().awrap_model_call(cast("Any", req), handler))
+    assert [t.name for t in out.tools] == ["datasearch"]
+
+
+def test_an_mcp_tool_call_is_given_the_tool_the_tool_node_lacks(monkeypatch):
+    """ToolNode passes `tool=None` for a name it was not built with.
+
+    Substituting the real tool here is the whole reason an MCP call executes
+    instead of coming back as "tool not found".
+    """
+    remote = SimpleNamespace(name="fieldlink_get_shipment")
+    _stub_tools(monkeypatch, [remote])
+    request = ToolCallRequest(
+        tool_call={"name": "fieldlink_get_shipment", "args": {}, "id": "1", "type": "tool_call"},
+        tool=None,
+        state={},
+        runtime=cast("Any", SimpleNamespace(context={"mcp_servers": _SERVER})),
+    )
+
+    seen = {}
+
+    async def handler(r):
+        seen["tool"] = r.tool
+        return "ran"
+
+    assert asyncio.run(A.McpTools().awrap_tool_call(request, handler)) == "ran"
+    assert seen["tool"] is remote
+
+
+def test_a_registered_tool_is_left_alone(monkeypatch):
+    """Our own tools already carry a tool object; the hook must not swap them."""
+    _stub_tools(monkeypatch, [SimpleNamespace(name="fieldlink_get_shipment")])
+    ours = SimpleNamespace(name="datasearch")
+    request = ToolCallRequest(
+        tool_call={"name": "datasearch", "args": {}, "id": "1", "type": "tool_call"},
+        tool=cast("Any", ours),
+        state={},
+        runtime=cast("Any", SimpleNamespace(context={"mcp_servers": _SERVER})),
+    )
+
+    seen = {}
+
+    async def handler(r):
+        seen["tool"] = r.tool
+        return "ran"
+
+    asyncio.run(A.McpTools().awrap_tool_call(request, handler))
+    assert seen["tool"] is ours
+
+
+def test_mcp_note_names_the_server_behind_each_tool(monkeypatch):
+    remote = SimpleNamespace(
+        name="fieldlink_get_shipment", description="Look one consignment up.\nMore detail."
+    )
+    token = A._mcp_tools.set((remote,))
+    try:
+        note = A._mcp_note(SimpleNamespace(context={"mcp_servers": _SERVER}))
+    finally:
+        A._mcp_tools.reset(token)
+    assert "Fieldlink" in note
+    assert "`fieldlink_get_shipment` (Fieldlink): Look one consignment up." in note
+
+
+def test_mcp_note_is_empty_without_mcp_tools():
+    assert A._mcp_note(SimpleNamespace(context={"mcp_servers": None})) == ""

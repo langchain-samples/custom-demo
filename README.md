@@ -32,6 +32,8 @@ dashboard_agent/
   static/       # LEGACY vanilla-JS SPA, superseded by frontend/
   tests/        # rag, widgets, streaming, tool-registry (fast) + e2e, hallucination (slow)
 frontend/       # React + Vite + Tailwind SPA (the real UI)
+mcp_demo_server/# a local FastMCP server to connect the agent to (stateless spec, elicitation,
+                #   an MCP App); run it with scripts/run_mcp_server.sh --tunnel
 langgraph.json  # deployment config: both graphs + http.app + CORS
 ```
 
@@ -56,6 +58,10 @@ langgraph.json  # deployment config: both graphs + http.app + CORS
 
 - **deepagents built-ins**, always present and never filtered: `write_todos`, the filesystem
   set (`ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`) and `task`.
+
+- **Remote MCP servers** — tools this repo does not own. Paste a server URL into
+  **Settings → MCP servers**, press Test, and its tools are in play on the next message. See
+  [Connecting an MCP server](#connecting-an-mcp-server) below.
 
 Changing an assistant's capabilities is a config edit that takes effect on the next message —
 no new assistant, no redeploy. Adding a *new* tool to the catalogue is a code change.
@@ -150,6 +156,52 @@ or no `langgraph` CLI, and `npm ci` in `frontend/` if `node_modules` is absent. 
 warns (but still starts) when `.env` is missing. Plain `./run.sh` works too once
 you've synced — the `uv run` prefix just guarantees the env is current first.
 Set `PORT` / `SPA_PORT` to override the ports.
+
+## Connecting an MCP server
+
+Give an assistant tools this repo does not own. Paste a server's URL into
+**Settings → MCP servers**, press **Test** to see the tools it advertises, and they are in play
+on the next message. The connection is saved on the assistant, so it is per-customer config like
+branding or the prompt.
+
+**Do I need ngrok?** Only for a *deployed* agent. The agent connects **outbound** to the URL you
+give it, so `localhost` inside the deployment's container is the container, not your machine. A
+server running on your laptop therefore needs a public address. Running the agent locally
+(`./run.sh`) needs no tunnel at all.
+
+There is a demo server in the box:
+
+```bash
+./scripts/run_mcp_server.sh --tunnel     # prints https://<random>.ngrok-free.dev/mcp
+./scripts/run_mcp_server.sh              # local only: http://127.0.0.1:8765/mcp
+```
+
+Paste the printed URL (including the `/mcp` path) into Settings. The free ngrok tier hands out a
+new hostname per run, so re-paste after a restart, and put a bearer token on anything you leave
+up — a tunnel is public.
+
+**Fieldlink Logistics** (`mcp_demo_server/`) is a pretend field-operations system, written
+against the modern stateless MCP spec so it exercises the whole surface:
+
+| tool | what it shows |
+|---|---|
+| `find_shipments`, `get_shipment` | ordinary tools; the tool list is **cacheable**, so discovery is not a round trip per run |
+| `schedule_delivery` | **elicitation** — the server stops mid-call to ask for a date and window, and the SPA renders a form built from the schema it asked for |
+| `collect_signature` | an **MCP App** — the server ships a signature pad as a `ui://` HTML resource, and the SPA renders it in a sandboxed iframe |
+
+Tools arrive namespaced by server (`fieldlink_get_shipment`), which keeps them clear of the
+built-in catalogue and shows where each one came from.
+
+An elicitation is a genuine pause: the run stops, you answer in chat, and the server's tool
+resumes and finishes with your answer. In the signature case you draw on the pad, hit Confirm,
+and the tool returns a proof-of-delivery record the agent then reports. Nothing about that is
+specific to Fieldlink — any MCP server that elicits gets the generic form for free, and any tool
+that declares a `ui://` resource gets rendered.
+
+Writing your own is worth knowing two things about: use the **guard pattern**
+(return an `InputRequiredResult`) rather than `ctx.elicit()`, which the stateless protocol cannot
+deliver, and expect the tool to **re-run from the top** when the answer comes back, so do no real
+work before you ask. `mcp_demo_server/server.py` is commented as a worked example.
 
 ## Voice mode (spike)
 
@@ -249,12 +301,16 @@ uv run pytest dashboard_agent/tests/test_rag.py dashboard_agent/tests/test_widge
               dashboard_agent/tests/test_streaming_unit.py \
               dashboard_agent/tests/test_tool_registry.py -q
 
+# MCP: config parsing + caching, and the demo server driven in-process (no socket)
+uv run pytest dashboard_agent/tests/test_mcp_servers.py -q
+
 # frontend pure logic (Node — imports the real .ts modules via native type stripping)
 node dashboard_agent/tests/branding_test.js    # colour maths, contrast, chart palette
 node dashboard_agent/tests/trace_test.js       # trace-project naming
+node dashboard_agent/tests/signature_app_test.js  # the MCP App's postMessage contract, in jsdom
 
-# frontend typecheck / lint / build
-cd frontend && npx tsc -b && npx oxlint && npm run build
+# frontend typecheck / lint / build / component tests
+cd frontend && npx tsc -b && npx oxlint && npm run build && npm test
 
 # real agent e2e across all 3 personas (slow, ~2 min, costs tokens)
 uv run pytest dashboard_agent/tests/test_agent_e2e.py -v

@@ -39,6 +39,7 @@ import {
   updateAssistant,
   type Assistant,
   type AssistantMetadata,
+  type McpServerConfig,
   type QuickAction,
   type RunContext,
   type ToolSpec,
@@ -63,6 +64,7 @@ import { BrandSection } from "./settings/BrandSection";
 import { TypographySection } from "./settings/TypographySection";
 import { AgentConfig } from "./settings/AgentConfig";
 import { ToolsSection } from "./settings/ToolsSection";
+import { McpSection } from "./settings/McpSection";
 import { DeleteAssistant } from "./settings/DeleteAssistant";
 import { DemoTraffic } from "./settings/DemoTraffic";
 import type { PanelConfig, PromptMode } from "./settings/types";
@@ -200,6 +202,7 @@ function configFromAssistant(a: Assistant, workspace: string): PanelConfig {
     dataGap: (ctx.data_gap as string) || "",
     // null = no saved selection (backend defaults); [] = everything optional off.
     enabledTools: Array.isArray(ctx.enabled_tools) ? (ctx.enabled_tools as string[]) : null,
+    mcpServers: Array.isArray(ctx.mcp_servers) ? (ctx.mcp_servers as McpServerConfig[]) : [],
     // Reflect whichever prompt source the assistant is configured with.
     promptMode: ctx.prompt ? "inline" : ctx.agent_repo ? "context_hub" : "prompt_hub",
   };
@@ -230,6 +233,7 @@ function blankConfig(workspace: string): PanelConfig {
     dataGap: "",
     dataPrompt: "",
     enabledTools: null,
+    mcpServers: [],
   };
 }
 
@@ -251,6 +255,10 @@ function resolveRunContext(cfg: PanelConfig, project: string): RunContext {
   // Deliberately a null check, NOT a length check: [] means "every optional tool
   // off" and must reach the backend. Omitting it would restore the defaults.
   if (cfg.enabledTools !== null) ctx.enabled_tools = cfg.enabledTools;
+  // Only the ones actually switched on and pointed somewhere: a half-typed row in
+  // the settings form must not reach the agent as a server to connect to.
+  const servers = cfg.mcpServers.filter((s) => s.enabled !== false && s.url.trim());
+  if (servers.length) ctx.mcp_servers = servers;
   return ctx;
 }
 
@@ -547,6 +555,35 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
         }
       }, 600);
     }, [replaceAssistant]);
+
+    /* ---- MCP servers: run context AND persisted onto the assistant ---- */
+    const mcpTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+    const editMcpServers = useCallback(
+      (servers: McpServerConfig[]) => {
+        setCfg((c) => ({ ...c, mcpServers: servers }));
+        const id = selectedIdRef.current;
+        if (!isAssistantId(id)) return;
+        clearTimeout(mcpTimer.current);
+        // Debounced like the tool selection, and for a stronger reason: this form
+        // is text fields, so an un-debounced PATCH would fire per keystroke.
+        mcpTimer.current = setTimeout(async () => {
+          const src = assistantsRef.current.find((a) => a.assistant_id === id);
+          try {
+            // PATCH replaces `context` wholesale - spread the existing one or this
+            // wipes prompt_name / ls_workspace / enabled_tools.
+            replaceAssistant(
+              await updateAssistant(id, {
+                context: { ...(src?.context || {}), mcp_servers: servers },
+              }),
+            );
+          } catch {
+            /* non-fatal: the connection still applies to this session's runs */
+          }
+        }, 800);
+      },
+      [replaceAssistant],
+    );
 
     /* ---- Imperative handle (send-time context + guards + theme) ---- */
     useImperativeHandle(
@@ -875,6 +912,8 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
                   enabled={cfg.enabledTools}
                   onChange={editTools}
                 />
+
+                <McpSection servers={cfg.mcpServers} onChange={editMcpServers} />
 
                 <DemoTraffic
                   target={

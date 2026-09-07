@@ -1,0 +1,293 @@
+<!--
+  MCP App: the proof-of-delivery signature pad.
+
+  Served as the `ui://fieldlink/signature.html` resource with the MCP Apps MIME
+  type (`text/html;profile=mcp-app`). The host reads it over `resources/read`
+  and renders it in a sandboxed iframe while `collect_signature` is paused on an
+  elicitation, so this file is the whole UI for that pause.
+
+  Two contracts hold it together, both spoken over postMessage with the parent:
+
+    in   { type: "mcp-app:init", request: {message, requested_schema}, theme, accent }
+    out  { type: "mcp-app:ready" }                        once, on load
+         { type: "mcp-app:resize", height }               whenever the body grows
+         { type: "mcp-app:submit", content: {...} }       the elicitation answer
+         { type: "mcp-app:cancel" }                       the user backed out
+
+  `content` must satisfy the elicitation's `requested_schema` (signature,
+  signed_by, signed_at) because the host sends it straight back to the server as
+  the accept payload. Everything is inline: the iframe is sandboxed without
+  allow-same-origin, so there is no origin to load an external script from.
+-->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Signature</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #ffffff;
+        --panel: #f6f7f9;
+        --ink: #14161a;
+        --muted: #6b7280;
+        --border: #e4e6ea;
+        --accent: #2f6feb;
+        --accent-fg: #ffffff;
+      }
+      [data-theme="dark"] {
+        color-scheme: dark;
+        --bg: #16181d;
+        --panel: #1e2127;
+        --ink: #f2f3f5;
+        --muted: #9aa1ad;
+        --border: #2c3038;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 12px;
+        background: var(--bg);
+        color: var(--ink);
+        font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      .msg { margin: 0 0 10px; font-size: 13px; }
+      label {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 10.5px;
+        font-weight: 700;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      input[type="text"] {
+        width: 100%;
+        padding: 7px 9px;
+        margin-bottom: 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--bg);
+        color: var(--ink);
+        font: inherit;
+      }
+      input[type="text"]:focus-visible,
+      button:focus-visible,
+      canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+      .pad {
+        position: relative;
+        border: 1px dashed var(--border);
+        border-radius: 10px;
+        background: var(--panel);
+        overflow: hidden;
+      }
+      canvas { display: block; width: 100%; height: 150px; touch-action: none; cursor: crosshair; }
+      .hint {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        font-size: 12px;
+        color: var(--muted);
+        pointer-events: none;
+      }
+      .pad.inked .hint { display: none; }
+      .baseline {
+        position: absolute;
+        left: 14px;
+        right: 14px;
+        bottom: 30px;
+        border-bottom: 1px solid var(--border);
+        pointer-events: none;
+      }
+      .row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+      button {
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--ink);
+        padding: 6px 11px;
+        font: inherit;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--accent-fg);
+      }
+      button[disabled] { opacity: 0.5; cursor: not-allowed; }
+      .spacer { flex: 1; }
+      .stamp { font-size: 11px; color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <p class="msg" id="msg">Sign to confirm delivery.</p>
+
+    <label for="who">Received by</label>
+    <input id="who" type="text" autocomplete="off" placeholder="Full name" />
+
+    <label for="pad">Signature</label>
+    <div class="pad" id="pad">
+      <div class="baseline"></div>
+      <canvas id="canvas" tabindex="0" aria-label="Signature pad"></canvas>
+      <div class="hint">Draw your signature here</div>
+    </div>
+
+    <div class="row">
+      <button type="button" id="clear">Clear</button>
+      <span class="spacer"></span>
+      <span class="stamp" id="stamp"></span>
+    </div>
+    <div class="row">
+      <button type="button" class="primary" id="submit" disabled>Confirm delivery</button>
+      <button type="button" id="cancel">Cancel</button>
+    </div>
+
+    <script>
+      (function () {
+        "use strict";
+
+        var canvas = document.getElementById("canvas");
+        var pad = document.getElementById("pad");
+        var who = document.getElementById("who");
+        var submit = document.getElementById("submit");
+        var stamp = document.getElementById("stamp");
+        var ctx = canvas.getContext("2d");
+        var inked = false;
+        var drawing = false;
+
+        function send(msg) {
+          // The parent frame is the host; it knows which pause this iframe belongs to.
+          parent.postMessage(msg, "*");
+        }
+
+        /**
+         * Match the backing store to the CSS box at the device's pixel ratio, so
+         * strokes are sharp and hit-testing lines up. Redrawing is not needed:
+         * resizing clears the pad, and the only resize is the initial layout.
+         */
+        function fit() {
+          var ratio = window.devicePixelRatio || 1;
+          var rect = canvas.getBoundingClientRect();
+          if (!rect.width) return;
+          canvas.width = Math.round(rect.width * ratio);
+          canvas.height = Math.round(rect.height * ratio);
+          ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+          ctx.lineWidth = 2;
+          ctx.lineCap = "round";
+          ctx.lineJoin = "round";
+          ctx.strokeStyle = getComputedStyle(document.body).color;
+        }
+
+        function point(event) {
+          var rect = canvas.getBoundingClientRect();
+          return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+        }
+
+        canvas.addEventListener("pointerdown", function (event) {
+          drawing = true;
+          canvas.setPointerCapture(event.pointerId);
+          var p = point(event);
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y);
+          // A tap with no drag is still a mark, so draw a dot rather than nothing.
+          ctx.lineTo(p.x + 0.01, p.y);
+          ctx.stroke();
+          mark();
+        });
+
+        canvas.addEventListener("pointermove", function (event) {
+          if (!drawing) return;
+          var p = point(event);
+          ctx.lineTo(p.x, p.y);
+          ctx.stroke();
+        });
+
+        function stop(event) {
+          if (!drawing) return;
+          drawing = false;
+          if (event && event.pointerId !== undefined && canvas.hasPointerCapture(event.pointerId)) {
+            canvas.releasePointerCapture(event.pointerId);
+          }
+        }
+        canvas.addEventListener("pointerup", stop);
+        canvas.addEventListener("pointercancel", stop);
+        canvas.addEventListener("pointerleave", stop);
+
+        function mark() {
+          if (inked) return;
+          inked = true;
+          pad.classList.add("inked");
+          refresh();
+        }
+
+        function refresh() {
+          submit.disabled = !(inked && who.value.trim());
+        }
+
+        who.addEventListener("input", refresh);
+
+        document.getElementById("clear").addEventListener("click", function () {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          inked = false;
+          pad.classList.remove("inked");
+          refresh();
+        });
+
+        document.getElementById("cancel").addEventListener("click", function () {
+          send({ type: "mcp-app:cancel" });
+        });
+
+        submit.addEventListener("click", function () {
+          if (submit.disabled) return;
+          submit.disabled = true;
+          // Keys are exactly the elicitation's requested_schema properties: the
+          // host forwards this object to the server as the accept content.
+          send({
+            type: "mcp-app:submit",
+            content: {
+              signature: canvas.toDataURL("image/png"),
+              signed_by: who.value.trim(),
+              signed_at: new Date().toISOString(),
+            },
+          });
+        });
+
+        window.addEventListener("message", function (event) {
+          var data = event.data;
+          if (!data || data.type !== "mcp-app:init") return;
+          if (data.theme === "dark") document.documentElement.setAttribute("data-theme", "dark");
+          if (data.accent) document.documentElement.style.setProperty("--accent", data.accent);
+          if (data.accentFg) document.documentElement.style.setProperty("--accent-fg", data.accentFg);
+          var request = data.request || {};
+          if (request.message) document.getElementById("msg").textContent = request.message;
+          var props = (request.requested_schema || {}).properties || {};
+          if (props.signed_by && props.signed_by.description) {
+            who.placeholder = props.signed_by.description;
+          }
+          fit();
+          measure();
+        });
+
+        function measure() {
+          send({ type: "mcp-app:resize", height: document.body.scrollHeight + 4 });
+        }
+
+        window.addEventListener("resize", function () {
+          fit();
+          measure();
+        });
+
+        stamp.textContent = new Date().toLocaleString(undefined, {
+          day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+        });
+
+        fit();
+        send({ type: "mcp-app:ready" });
+        measure();
+      })();
+    </script>
+  </body>
+</html>

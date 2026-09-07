@@ -3,7 +3,7 @@
  * editable fields of the original SPA's `dashboardConfig`, split into branding
  * (persisted to the assistant's metadata) and agent config (per-run context).
  */
-import type { QuickAction, ToolSpec } from "@/lib/api";
+import type { McpServerConfig, QuickAction, ToolSpec } from "@/lib/api";
 import type { Theme } from "@/lib/theme";
 
 export type { QuickAction };
@@ -68,6 +68,12 @@ export interface PanelConfig {
    * optional tool is off. The two are NOT interchangeable.
    */
   enabledTools: string[] | null;
+  /**
+   * Agent config: remote MCP servers this assistant connects to. Unlike
+   * `enabledTools`, an empty list is simply "none connected" - there is no
+   * unset/empty distinction to preserve.
+   */
+  mcpServers: McpServerConfig[];
 }
 
 /** Shared field-label typography (uppercase micro-label), matching the SPA. */

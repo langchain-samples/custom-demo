@@ -31,6 +31,7 @@ import { ensureThread, resetThread, runStream } from "@/lib/api";
 import { PROSE_CLS } from "@/lib/markdown";
 import { isHtmlArtifactPath } from "@/lib/artifacts";
 import { ReviewCard } from "@/components/chat/ReviewCard";
+import { McpElicitationCard } from "@/components/chat/McpElicitationCard";
 import { Button } from "@/components/motion/button";
 import { ToolChip, type ChipData } from "@/components/chat/ToolChip";
 import { ToolChipGroup } from "@/components/chat/ToolChipGroup";
@@ -51,6 +52,8 @@ import {
   describeInterrupt,
 } from "@/components/chat/helpers";
 import {
+  isMcpElicitation,
+  type McpServerConfig,
   IMAGE_MIME_TYPES,
   imageContent,
   readImageAttachment,
@@ -109,6 +112,12 @@ export interface ChatPanelHandle {
   resumeWith(value: unknown): Promise<TurnResult>;
   busy(): boolean;
 }
+
+/**
+ * Stable empty list for "this assistant has no MCP servers". A fresh `[]` each
+ * render would re-fire the elicitation card's app lookup on every keystroke.
+ */
+const EMPTY_MCP_SERVERS: McpServerConfig[] = [];
 
 export interface ChatPanelProps {
   /**
@@ -1251,7 +1260,15 @@ export default function ChatPanel({
     [handleRef],
   );
 
-  /** Human approved a paused artifact — resume the run with their version. */
+  /**
+   * MCP servers on the active assistant, read from the same run context every
+   * turn is sent with, so the elicitation card can never disagree with what the
+   * agent is actually connected to. Recomputed per render: settings can change
+   * between turns, and the value is a small array off an existing call.
+   */
+  const mcpServers = getRunContext().mcp_servers ?? EMPTY_MCP_SERVERS;
+
+  /** Human answered a paused artifact — resume the run with their version. */
   const approveReview = (itemId: string, value: Record<string, unknown>) => {
     setItems((prev) =>
       prev.map((it) => (it.id === itemId && it.kind === "review" ? { ...it, done: true } : it)),
@@ -1536,7 +1553,12 @@ export default function ChatPanel({
               prevSide = side;
               return (
                 <Row key={it.id} side={side} showAvatar={showAvatar} logo={logo}>
-                  <ItemView item={it} busy={busy} onApproveReview={approveReview} />
+                  <ItemView
+                    item={it}
+                    busy={busy}
+                    onApproveReview={approveReview}
+                    mcpServers={mcpServers}
+                  />
                 </Row>
               );
             });
@@ -1658,18 +1680,38 @@ function ItemView({
   item,
   busy,
   onApproveReview,
+  mcpServers,
 }: {
   item: Item;
   busy?: boolean;
   onApproveReview?: (id: string, value: Record<string, unknown>) => void;
+  /** MCP servers on the active assistant, for reading a paused tool's own UI. */
+  mcpServers: McpServerConfig[];
 }) {
   if (item.kind === "review") {
-    // Once approved the editor is spent — the tool result is shown by its chip.
+    const mcp = isMcpElicitation(item.review);
+    // Once answered the editor is spent — the tool result is shown by its chip.
     if (item.done) {
       return (
         <div className="rounded-xl border border-border bg-panel-2 px-3 py-2 text-xs text-muted-foreground">
-          {item.review.kind === "meeting_slots" ? "✓ Time confirmed" : "✓ Approved and sent"}
+          {mcp
+            ? "✓ Sent to the connected system"
+            : item.review.kind === "meeting_slots"
+              ? "✓ Time confirmed"
+              : "✓ Approved and sent"}
         </div>
+      );
+    }
+    // An MCP server's pause is answered in its own shape (`{responses: {...}}`),
+    // and may be rendered by HTML the server itself ships.
+    if (mcp) {
+      return (
+        <McpElicitationCard
+          review={item.review}
+          busy={busy}
+          servers={mcpServers}
+          onApprove={(v) => onApproveReview?.(item.id, v)}
+        />
       );
     }
     return (

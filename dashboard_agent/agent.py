@@ -15,6 +15,7 @@ return them alongside the chat text.
 from __future__ import annotations
 
 import contextvars
+import dataclasses
 import json
 import os
 import time
@@ -85,6 +86,9 @@ class Context:
     ls_workspace: str | None = None  # workspace to pull Hub prompts from (matches trace routing)
     enabled_tools: list[str] | None = None  # catalogue tool ids to expose; None = defaults
     sandbox_seed: list[dict] | None = None  # files to plant in the VM (see render_seed_script)
+    # Remote MCP servers this assistant connects to: [{id?, label, url, token?, headers?}].
+    # Their tools are discovered per run and namespaced `{id}_{tool}` (mcp_servers.py).
+    mcp_servers: list[dict] | None = None
 
 
 # The system prompt is sourced from LangSmith Prompt Hub (see prompt.py). We pull
@@ -131,6 +135,7 @@ def _hub_system_prompt(request: ModelRequest) -> str:
     ours = (
         base
         + _capability_note(request.runtime)
+        + _mcp_note(request.runtime)
         + _sandbox_note(request.runtime)
         + ARTIFACT_NOTE
         + _subagents_note()
@@ -265,6 +270,118 @@ def _capability_note(runtime) -> str:
             "the request is off-topic."
         )
     return note
+
+
+# The MCP tools discovered for the model call in flight. `_hub_system_prompt` is a
+# sync `@dynamic_prompt`, so it cannot await discovery itself; `McpTools` runs
+# first (it sits earlier in the middleware list, so it wraps further out), loads
+# the tools, and leaves them here for the prompt to describe.
+_mcp_tools: contextvars.ContextVar[tuple[Any, ...]] = contextvars.ContextVar(
+    "mcp_tools", default=()
+)
+
+
+def _mcp_note(runtime) -> str:
+    """Tell the model which remote MCP tools it has, and who they belong to.
+
+    Without this the tools are still bound and still callable, but a stored prompt
+    that only describes the dashboard workflow makes the model treat them as
+    off-script. Naming the server is what turns `fieldlink_get_shipment` from an
+    odd identifier into "the customer's own system of record".
+    """
+    tools = _mcp_tools.get()
+    if not tools:
+        return ""
+    servers = {s.id: s.label for s in _mcp_parse(_ctx(runtime, "mcp_servers"))}
+    lines = []
+    for tool in tools:
+        owner = next(
+            (label for sid, label in servers.items() if tool.name.startswith(f"{sid}_")), ""
+        )
+        summary = (tool.description or "").strip().split("\n")[0][:160]
+        lines.append(f"- `{tool.name}`{f' ({owner})' if owner else ''}: {summary}")
+    names = ", ".join(sorted(servers.values())) or "a connected MCP server"
+    return (
+        f"\n\nCONNECTED SYSTEMS ({names}). These tools reach the customer's own live systems "
+        "through MCP. Prefer them over `datasearch` for anything they cover, and never invent a "
+        "value one of them could return (a tracking id, a status, a date):\n" + "\n".join(lines)
+    )
+
+
+def _mcp_parse(raw: Any):
+    """`context.mcp_servers` as server records. Local import keeps graph load light."""
+    from .mcp_servers import parse_servers
+
+    return parse_servers(raw)
+
+
+class McpTools(AgentMiddleware):
+    """Bind the assistant's remote MCP tools for the duration of a run.
+
+    Which servers exist is per-assistant config, and the graph's tool list is
+    fixed at build time, so MCP tools cannot be registered the ordinary way. They
+    are added to `request.tools` at model-call time and handed back as concrete
+    tool objects at execution time. Both halves are required:
+
+    * `awrap_model_call` is what the model sees. Discovery is cached in
+      `mcp_servers.load_tools`, so a warm call adds no latency.
+    * `awrap_tool_call` is what actually runs. `ToolNode` looks a tool call up in
+      the tools it was BUILT with, finds nothing for an MCP name, and passes
+      `tool=None`; substituting the real tool here is what makes the call execute
+      instead of erroring. Defining this hook also tells `create_agent` that this
+      agent has dynamic tools, which is what stops it rejecting the unknown names
+      we just added to `request.tools`.
+
+    Async only, deliberately. MCP is an async protocol and the deployment runs the
+    graph async; the sync path exists for local in-process runs and unit tests,
+    where no MCP server is configured. A sync run simply sees no MCP tools.
+    """
+
+    async def _load(self, runtime) -> list[Any]:
+        from .mcp_servers import load_tools
+
+        servers = _mcp_parse(_ctx(runtime, "mcp_servers"))
+        return await load_tools(servers) if servers else []
+
+    def wrap_model_call(self, request, handler):
+        """Pass through untouched on the sync path.
+
+        MCP is an async protocol, so there is nothing to add here. This exists
+        because a middleware that implements ONLY the async hook makes every
+        synchronous `invoke()` raise: `agent.run()` and the unit tests both take
+        that path, and neither has an MCP server configured.
+        """
+        return handler(request)
+
+    async def awrap_model_call(self, request, handler):
+        """Offer the assistant's MCP tools alongside the built-in ones."""
+        tools = await self._load(request.runtime)
+        token = _mcp_tools.set(tuple(tools))
+        try:
+            if tools:
+                request = request.override(tools=[*request.tools, *tools])
+            return await handler(request)
+        finally:
+            _mcp_tools.reset(token)
+
+    def wrap_tool_call(self, request, handler):
+        """Pass through untouched on the sync path (see `wrap_model_call`).
+
+        Defining it also keeps `create_agent`'s dynamic-tool detection true on
+        both paths, which is what stops it rejecting the names the async hook
+        adds to `request.tools`.
+        """
+        return handler(request)
+
+    async def awrap_tool_call(self, request, handler):
+        """Execute an MCP tool call by handing `ToolNode` the tool it lacks."""
+        if request.tool is None:
+            name = request.tool_call.get("name")
+            tool = next((t for t in await self._load(request.runtime) if t.name == name), None)
+            if tool is not None:
+                # `override()` does not accept `tool`, so rebuild the record.
+                request = dataclasses.replace(request, tool=tool)
+        return await handler(request)
 
 
 def build_chat_model(model_id: str):
@@ -984,6 +1101,9 @@ def _build(model: str | None, checkpointer):
         "list[AgentMiddleware]",
         [
             ConfigurableModel(),
+            # Before the prompt middleware, so the tools it discovers are already
+            # in the ContextVar when `_mcp_note` describes them to the model.
+            McpTools(),
             _hub_system_prompt,
             # Per-run call caps declared by the registry (e.g. datasearch is capped
             # at 1/run so the agent can't wander to adjacent queries and mask the

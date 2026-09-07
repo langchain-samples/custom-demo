@@ -279,9 +279,13 @@ const META: Record<string, { icon: typeof IconMail; title: string }> = {
 };
 
 export function ReviewCard(props: Props) {
-  const meta = META[props.review.kind] || { icon: IconPencil, title: "Review" };
+  // An MCP elicitation carries no `kind` and never reaches here (ChatPanel routes
+  // it to McpElicitationCard), but the two pauses share a carrier type, so read
+  // the field defensively rather than indexing with `undefined`.
+  const kind = props.review.kind ?? "";
+  const meta = META[kind] || { icon: IconPencil, title: "Review" };
   const Icon = meta.icon;
-  const known = props.review.kind in META;
+  const known = kind in META;
 
   return (
     <div className="flex animate-in flex-col gap-2.5 rounded-xl border border-brand/40 bg-panel-2 p-3 duration-200 fade-in slide-in-from-bottom-1">
@@ -291,9 +295,9 @@ export function ReviewCard(props: Props) {
           paused for you
         </span>
       </div>
-      {props.review.kind === "meeting_slots" ? (
+      {kind === "meeting_slots" ? (
         <MeetingReview {...props} />
-      ) : props.review.kind === "user_question" ? (
+      ) : kind === "user_question" ? (
         <QuestionReview {...props} />
       ) : known ? (
         <EmailReview {...props} />
