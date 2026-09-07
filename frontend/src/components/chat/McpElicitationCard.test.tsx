@@ -130,6 +130,16 @@ describe("a tool that ships its own UI", () => {
     expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
     // The generic form is NOT also rendered.
     expect(screen.queryByRole("button", { name: /send to the server/i })).toBeNull();
+    // The app is handed the message on init and renders it itself, so the card
+    // must not print it too - that showed the same sentence twice.
+    expect(screen.queryByText("Sign for FL-4501.")).toBeNull();
+  });
+
+  it("names the server in the header, matching the tool's namespace", async () => {
+    fetchMcpApp.mockResolvedValue(null);
+    render(<McpElicitationCard review={APP_PAUSE} servers={SERVERS} onApprove={vi.fn()} />);
+    await settled();
+    expect(screen.getByText(/Fieldlink needs input/i)).toBeTruthy();
   });
 
   it("falls back to the generic form when the app cannot be read", async () => {

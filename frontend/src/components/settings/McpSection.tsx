@@ -43,6 +43,8 @@ interface Props {
  * renames every tool, which invalidates the model's memory of them mid-demo.
  */
 function idFor(label: string, taken: Set<string>): string {
+  // "mcp" only when there is nothing to derive from: an unnamed server still
+  // needs a prefix, and the backend's slugify falls back the same way.
   const base = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "mcp";
   let id = base;
   let n = 2;
@@ -171,13 +173,31 @@ export function McpSection({ servers, onChange, defaultOpen }: Props) {
   const [results, setResults] = useState<Record<string, McpProbeResult>>({});
   const [testing, setTesting] = useState<string | null>(null);
 
+  /**
+   * Edit one row, keeping its id in step with its name.
+   *
+   * The id namespaces this server's tools as `{id}_{tool}`, so it has to come
+   * from the name. It used to be stamped at creation, before a name existed,
+   * which is how every server ended up prefixing its tools `mcp_`. It now
+   * follows the name until the server has answered a probe, and freezes after
+   * that: renaming it once tools are in play would rename every tool the model
+   * has already been told about, mid-conversation.
+   */
   const edit = (index: number, patch: Partial<McpServerConfig>) =>
-    onChange(servers.map((s, i) => (i === index ? { ...s, ...patch } : s)));
+    onChange(
+      servers.map((s, i) => {
+        if (i !== index) return s;
+        const next = { ...s, ...patch };
+        const frozen = !!s.id && !!results[s.id];
+        if (patch.label !== undefined && !frozen) {
+          const taken = new Set(servers.filter((_, j) => j !== index).map((x) => x.id || ""));
+          next.id = idFor(next.label, taken);
+        }
+        return next;
+      }),
+    );
 
-  const add = () => {
-    const taken = new Set(servers.map((s) => s.id || ""));
-    onChange([...servers, { id: idFor("mcp", taken), label: "", url: "", enabled: true }]);
-  };
+  const add = () => onChange([...servers, { label: "", url: "", enabled: true }]);
 
   const test = async (index: number) => {
     const server = servers[index];
@@ -206,7 +226,9 @@ export function McpSection({ servers, onChange, defaultOpen }: Props) {
 
         {servers.map((server, index) => (
           <ServerRow
-            key={server.id || index}
+            // Index, not id: the id follows the name as it is typed, and a key
+            // that changes per keystroke remounts the row and loses focus.
+            key={index}
             server={server}
             result={server.id ? results[server.id] : undefined}
             testing={testing !== null && testing === server.id}

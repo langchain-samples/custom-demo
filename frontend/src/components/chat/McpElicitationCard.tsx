@@ -314,7 +314,12 @@ export function McpElicitationCard({ review, busy, servers, onApprove }: Props) 
 
   if (!first) return null;
 
-  const server = servers.find((s) => toolName.startsWith(`${s.id || ""}_`));
+  const server = servers.find((s) => !!s.id && toolName.startsWith(`${s.id}_`));
+  // When the server ships a UI it owns the presentation, including the prompt:
+  // the app is handed `request.message` on init and renders it itself. Printing
+  // it here too showed the same sentence twice. Held back while the app lookup
+  // is still in flight, so it does not flash in and out on the way.
+  const ownsPresentation = first.mode !== "url" && (looking || !!app);
 
   return (
     <div className="flex animate-in flex-col gap-2.5 rounded-xl border border-brand/40 bg-panel-2 p-3 duration-200 fade-in slide-in-from-bottom-1">
@@ -326,7 +331,7 @@ export function McpElicitationCard({ review, busy, servers, onApprove }: Props) 
         </span>
       </div>
 
-      {first.message && (
+      {first.message && !ownsPresentation && (
         <p className="m-0 text-sm leading-relaxed text-foreground">{first.message}</p>
       )}
 

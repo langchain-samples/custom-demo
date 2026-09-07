@@ -422,6 +422,16 @@ export default function ChatPanel({
     setItems((prev) => prev.map((it) => (it.id === id ? fn(it) : it)));
 
   /**
+   * The rendered items, readable synchronously. A resume has to look at the
+   * PAUSED turn's chips before its own turn starts, and `items` in a closure is
+   * a render-old snapshot.
+   */
+  const itemsRef = useRef<Item[]>(items);
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+
+  /**
    * Mirror the LATEST question's chips + subagent groups out for the Graph tab. The
    * latest question, not the whole thread, so the graph shows the work being done now.
    * Derived from `items` so it stays in step with the chat rail by construction rather
@@ -513,6 +523,33 @@ export default function ChatPanel({
     // subagent's own model/tool output would leak into the answer/dashboard.
     const chipOrder: string[] = [];
     const chipMap: Record<string, ChipData> = {};
+
+    // A resume continues a tool call that is still OPEN: the tool is blocked
+    // inside `interrupt()`, so its chip sits in the previous turn's activity
+    // item with no result. Move those chips into this turn, because a chip is
+    // only ever created from an AI message's `tool_calls` and those are not
+    // re-streamed on a resume - so without this the ToolMessage that finally
+    // arrives has nothing to attach to, and a call that succeeded reads as
+    // cancelled forever.
+    if (isResume) {
+      const paused = [...itemsRef.current]
+        .reverse()
+        .find(
+          (it): it is Extract<Item, { kind: "activity" }> =>
+            it.kind === "activity" && it.chips.some((c) => c.result === null),
+        );
+      if (paused) {
+        for (const chip of paused.chips) {
+          if (chip.result !== null) continue;
+          // Un-freeze: the run is moving again, so it is not stopped after all.
+          chipMap[chip.id] = { ...chip, stopped: false };
+          chipOrder.push(chip.id);
+        }
+        patchItem(paused.id, (it) =>
+          it.kind === "activity" ? { ...it, chips: it.chips.filter((c) => c.result !== null) } : it,
+        );
+      }
+    }
     const wOrder: string[] = [];
     const wLatest: Record<string, Widget> = {};
     const wFlushed = new Set<string>();
@@ -1053,25 +1090,37 @@ export default function ChatPanel({
       // The run is over: freeze any chip still without a result so its spinner +
       // elapsed timer stop (a tool whose result never streamed shouldn't count
       // forever). No syncChips runs after this, so patching the item is safe.
-      patchItem(activityId, (it) =>
-        it.kind === "activity"
-          ? { ...it, chips: it.chips.map((c) => (c.result === null ? { ...c, stopped: true } : c)) }
-          : it,
-      );
-      // Same freeze for each subagent: mark done (stops the card spinner) and
-      // stop any chip whose result never streamed.
-      patchItem(subagentId, (it) =>
-        it.kind === "subagents"
-          ? {
-              ...it,
-              groups: it.groups.map((g) => ({
-                ...g,
-                done: true,
-                chips: g.chips.map((c) => (c.result === null ? { ...c, stopped: true } : c)),
-              })),
-            }
-          : it,
-      );
+      //
+      // A run that PAUSED is the exception, and it is not over: the tool sitting
+      // in `interrupt()` is still open, waiting on the review card below it, and
+      // the resume carries its chip forward to collect the result. Freezing it
+      // here rendered a live call as "Cancelled" and left it that way even after
+      // the tool went on to succeed. (An `if`, not an early return: a `return`
+      // inside `finally` replaces the value the `try` already returned.)
+      if (!interrupt) {
+        patchItem(activityId, (it) =>
+          it.kind === "activity"
+            ? {
+                ...it,
+                chips: it.chips.map((c) => (c.result === null ? { ...c, stopped: true } : c)),
+              }
+            : it,
+        );
+        // Same freeze for each subagent: mark done (stops the card spinner) and
+        // stop any chip whose result never streamed.
+        patchItem(subagentId, (it) =>
+          it.kind === "subagents"
+            ? {
+                ...it,
+                groups: it.groups.map((g) => ({
+                  ...g,
+                  done: true,
+                  chips: g.chips.map((c) => (c.result === null ? { ...c, stopped: true } : c)),
+                })),
+              }
+            : it,
+        );
+      }
     }
   };
 
