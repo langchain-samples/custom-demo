@@ -17,6 +17,12 @@ written against the **modern (stateless) MCP spec** so it exercises everything
   * **An MCP App.** `collect_signature` binds a `ui://` HTML resource, so a host
     that understands the Apps extension renders a real signature pad instead of
     a text field for a data URI.
+  * **A multimodal result.** That same tool returns the drawn signature as an
+    IMAGE block, which `langchain.mcp` converts to a LangChain image block, so
+    the model can actually look at it. The base64 never appears in the text: the
+    bytes are served at `/signatures/<id>.png` and the result carries the URL, so
+    a proof-of-delivery document can embed the picture without it passing through
+    the model, which could not reproduce it faithfully anyway.
 
 Run it with `python -m mcp_demo_server` (see `__main__.py`), or expose it with
 `./scripts/run_mcp_server.sh --tunnel`.
@@ -28,6 +34,9 @@ Deliberately NOT part of the deployment: the hatch wheel packages only
 
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 import os
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -36,6 +45,9 @@ from typing import Annotated, Any, Literal
 
 from fastmcp import Context, FastMCP
 from fastmcp.apps import UI_MIME_TYPE, AppConfig
+from fastmcp.server.dependencies import get_http_request
+from fastmcp.tools.base import ToolResult
+from fastmcp.utilities.types import Image
 from mcp.types import (
     ElicitRequest,
     ElicitRequestFormParams,
@@ -43,11 +55,16 @@ from mcp.types import (
     InputRequiredResult,
 )
 from pydantic import BaseModel, Field
+from starlette.responses import JSONResponse, Response
 
 SIGNATURE_URI = "ui://fieldlink/signature.html"
 """The MCP App resource `collect_signature` renders (MCP Apps: `_meta.ui.resourceUri`)."""
 
 _APP_HTML = Path(__file__).with_name("signature_app.html")
+
+# Only used to build a URL when there is no HTTP request to read one off (the
+# in-process transport the tests use). A real call always has one.
+HOST_HINT = f"{os.getenv('FIELDLINK_HOST', '127.0.0.1')}:{os.getenv('FIELDLINK_PORT', '8765')}"
 
 # How long a client may serve `tools/list` from its cache before re-asking. Short
 # enough that adding a tool shows up in the next run or two, long enough that a
@@ -100,6 +117,55 @@ _BY_ID = {s.tracking_id: s for s in _SHIPMENTS}
 # than session state on purpose: the server is stateless, so there is no session
 # to hang it off, and a demo only ever runs one process.
 _DELIVERIES: dict[str, dict[str, Any]] = {}
+
+
+def _decode_png(data_uri: str) -> bytes | None:
+    """The PNG bytes out of a `data:image/png;base64,...` URI, or None if malformed."""
+    _, _, payload = (data_uri or "").partition("base64,")
+    if not payload:
+        return None
+    try:
+        return base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+
+
+# Below this, a provider rejects the image outright ("Could not process image")
+# and the 400 kills the whole run, not just the picture. A real pad canvas is
+# hundreds of pixels wide, so this only ever catches a degenerate one.
+_MIN_IMAGE_EDGE = 16
+
+
+def _renderable(png: bytes) -> bool:
+    """Whether a model provider will accept this PNG, judged from its header.
+
+    The dimensions live in the IHDR chunk, which is always first: bytes 16-24
+    after the 8-byte signature. Anything we cannot parse is treated as not
+    renderable, because the cost of guessing wrong is a failed run.
+    """
+    if len(png) < 24 or png[12:16] != b"IHDR":
+        return False
+    width = int.from_bytes(png[16:20], "big")
+    height = int.from_bytes(png[20:24], "big")
+    return width >= _MIN_IMAGE_EDGE and height >= _MIN_IMAGE_EDGE
+
+
+def _public_base() -> str:
+    """The address a CLIENT can reach this server on, as seen from the request.
+
+    Read off the live request rather than configured, because the useful answer
+    is the tunnel's hostname and that changes every time ngrok restarts. ngrok
+    sets the forwarded headers, so this resolves to the public https URL rather
+    than the loopback one the server is bound to.
+    """
+    try:
+        request = get_http_request()
+    except Exception:  # noqa: BLE001 - in-process transport has no HTTP request
+        return f"http://{HOST_HINT}"
+    headers = request.headers
+    scheme = headers.get("x-forwarded-proto") or request.url.scheme
+    host = headers.get("x-forwarded-host") or headers.get("host") or request.url.netloc
+    return f"{scheme}://{host}"
 
 
 def _as_dict(shipment: Shipment) -> dict[str, Any]:
@@ -278,6 +344,16 @@ def collect_signature(
     Call it with only the tracking id. Never ask the user to type a signature,
     describe one, or supply `signed_by` yourself: the pad collects all of it and
     the signed record comes back as the result.
+
+    The result carries the signature two ways. You are shown the drawn signature
+    as an IMAGE, so you can describe or check it. And `signature_url` is a real
+    PNG served by Fieldlink.
+
+    To put the signature in a proof-of-delivery document, embed that URL:
+    `<img src="{signature_url}" alt="Recipient signature">`. Use the URL exactly
+    as given. Never inline base64 image data and never invent a data URI: the
+    image bytes are not in this result, and a fabricated one renders as a broken
+    image on a delivery record.
     """
     shipment = _BY_ID.get(tracking_id.strip().upper())
     if shipment is None:
@@ -300,26 +376,72 @@ def collect_signature(
         }
 
     capture = SignatureCapture.model_validate(answer.content or {})
+    png = _decode_png(capture.signature)
     record = {
         "tracking_id": shipment.tracking_id,
         "signed_by": capture.signed_by,
         "signed_at": capture.signed_at,
         "destination": shipment.destination,
         "pallets": shipment.pallets,
-        # Kept out of everything the model reads: a base64 PNG is thousands of
-        # useless tokens. `get_shipment` strips it too.
+        # The bytes stay here. They are served over `signature_url` and shown to
+        # the model as an image block; the base64 itself never enters a result,
+        # because it is thousands of tokens and a model cannot copy it faithfully
+        # into a document anyway. `get_shipment` strips it too.
         "signature": capture.signature,
     }
     _DELIVERIES[shipment.tracking_id] = record
 
-    return {
+    summary = {
         "status": "signed",
         "tracking_id": shipment.tracking_id,
         "signed_by": capture.signed_by,
         "signed_at": capture.signed_at,
         "pod_reference": f"POD-{shipment.tracking_id}-{capture.signed_at[:10]}",
-        "note": "Signature image stored against the consignment.",
+        # A URL, not the image. This is what goes in an <img src="..."> when the
+        # agent builds a proof-of-delivery document.
+        "signature_url": f"{_public_base()}/signatures/{shipment.tracking_id}.png",
     }
+    if png is None:
+        # A malformed data URI is the recipient's UI misbehaving, not a failed
+        # delivery: keep the signed record, but do not promise an image.
+        summary["signature_url"] = None
+        summary["note"] = "The signature image could not be decoded and was not stored."
+        return ToolResult(structured_content=summary)
+
+    # Two content blocks. The text is what the model reasons over; the image is
+    # so it can actually SEE the signature (MCP multimodal results convert to a
+    # LangChain image block), which is what makes "does this look signed?" a
+    # question it can answer. The image is dropped rather than risked when it is
+    # too small to be accepted: the URL and the record still stand, and losing
+    # the picture beats losing the run.
+    content: list[Any] = [json.dumps(summary)]
+    if _renderable(png):
+        content.append(Image(data=png, format="png").to_image_content())
+    return ToolResult(content=content, structured_content=summary)
+
+
+@mcp.custom_route("/signatures/{tracking_id}.png", methods=["GET"])
+async def signature_png(request) -> Response:
+    """Serve a stored signature as a real PNG.
+
+    The reason this exists rather than returning base64 in the tool result: a
+    proof-of-delivery document needs the image, and the only way to get it there
+    without the bytes passing through the model (which cannot reproduce them) is
+    a URL it can put in an `<img>`. Public and unauthenticated, like the rest of
+    this demo server: the tunnel is the boundary.
+    """
+    tracking_id = request.path_params["tracking_id"].upper()
+    record = _DELIVERIES.get(tracking_id)
+    png = _decode_png((record or {}).get("signature", ""))
+    if png is None:
+        return JSONResponse({"error": f"No signature on file for {tracking_id}."}, status_code=404)
+    return Response(
+        png,
+        media_type="image/png",
+        # A signature never changes once collected, and a document may load it
+        # long after the run that captured it.
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @mcp.resource(SIGNATURE_URI, mime_type=UI_MIME_TYPE, name="Signature pad")

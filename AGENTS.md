@@ -261,6 +261,17 @@ cookies or storage. It talks to us solely over `postMessage`:
     in   mcp-app:init    {request, theme, accent}
     out  mcp-app:ready | mcp-app:resize {height} | mcp-app:submit {content} | mcp-app:cancel
 
+The signed result is **multimodal**, which is the other half of making an App useful. The tool
+returns a text block (the record, including a `signature_url`) AND an image block of the drawn
+signature, and `langchain.mcp` converts the latter into a LangChain image block so the model can
+see it. The base64 is in neither: the bytes are served from the MCP server at
+`/signatures/<id>.png`, because a document needs the picture and it cannot get there through the
+model - thousands of tokens per turn, and it cannot retype them faithfully. Two consequences
+worth keeping: an image under `_MIN_IMAGE_EDGE` is dropped rather than sent (a provider answers
+a tiny image with a 400 that kills the whole run, found with a 1x1 test fixture), and the URL is
+built from the live request's forwarded headers rather than configured, so it is the tunnel's
+hostname and survives ngrok handing out a new one.
+
 `submit.content` must match the elicitation's `requested_schema` (the host forwards it verbatim
 as the accept payload), which is a contract across three files and two languages with no shared
 type. `dashboard_agent/tests/signature_app_test.js` is what pins it: it loads the real HTML in

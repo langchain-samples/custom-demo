@@ -187,7 +187,7 @@ against the modern stateless MCP spec so it exercises the whole surface:
 |---|---|
 | `find_shipments`, `get_shipment` | ordinary tools; the tool list is **cacheable**, so discovery is not a round trip per run |
 | `schedule_delivery` | **elicitation** — the server stops mid-call to ask for a date and window, and the SPA renders a form built from the schema it asked for |
-| `collect_signature` | an **MCP App** — the server ships a signature pad as a `ui://` HTML resource, and the SPA renders it in a sandboxed iframe |
+| `collect_signature` | an **MCP App** — the server ships a signature pad as a `ui://` HTML resource, and the SPA renders it in a sandboxed iframe. Its result is **multimodal**: the drawn signature comes back as an image block the model can see, plus a `signature_url` it can embed |
 
 Tools arrive namespaced by server (`fieldlink_get_shipment`), which keeps them clear of the
 built-in catalogue and shows where each one came from.
@@ -197,6 +197,13 @@ resumes and finishes with your answer. In the signature case you draw on the pad
 and the tool returns a proof-of-delivery record the agent then reports. Nothing about that is
 specific to Fieldlink — any MCP server that elicits gets the generic form for free, and any tool
 that declares a `ui://` resource gets rendered.
+
+**Getting the signature into a document.** Ask for a proof-of-delivery document and the agent
+writes an HTML artifact containing `<img src="https://<tunnel>/signatures/FL-4417.png">`. The
+image is never inlined as base64, for two reasons: it is thousands of tokens on every subsequent
+turn, and a model cannot retype 10KB of base64 without corrupting it. The bytes stay on the MCP
+server and travel as a URL. The model is still *shown* the signature as an image block, so "what
+does the signature look like?" is a question it can answer.
 
 Writing your own is worth knowing two things about: use the **guard pattern**
 (return an `InputRequiredResult`) rather than `ctx.elicit()`, which the stateless protocol cannot

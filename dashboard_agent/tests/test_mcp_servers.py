@@ -261,6 +261,180 @@ def test_an_interactive_tool_asks_before_it_answers(fieldlink):
     assert "signature" not in record
 
 
+def _png(width: int, height: int) -> bytes:
+    """A real PNG of the given size, standing in for what the pad draws.
+
+    Generated rather than hard-coded because the SIZE is load-bearing here: a
+    provider rejects a tiny image, so a fixture that happened to be 1x1 would
+    test the wrong branch.
+    """
+    import struct
+    import zlib
+
+    raw = b"".join(b"\x00" + bytes([255, 255, 255] * width) for _ in range(height))
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw, 9))
+        + chunk(b"IEND", b"")
+    )
+
+
+# What a signature pad actually hands over: a canvas-sized image.
+_PNG_BYTES = _png(480, 200)
+
+
+def _sign(client, tracking_id: str):
+    """Run both rounds of `collect_signature` and return the terminal result."""
+    import base64
+
+    from mcp.types import ElicitResult
+
+    uri = "data:image/png;base64," + base64.b64encode(_PNG_BYTES).decode()
+
+    async def go():
+        async with client as c:
+            asked = await c.session.call_tool(
+                "collect_signature", {"tracking_id": tracking_id}, allow_input_required=True
+            )
+            return await c.session.call_tool(
+                "collect_signature",
+                {"tracking_id": tracking_id},
+                input_responses={
+                    "signature": ElicitResult(
+                        action="accept",
+                        content={
+                            "signature": uri,
+                            "signed_by": "Grace Achieng",
+                            "signed_at": "2026-09-07T14:02:00Z",
+                        },
+                    )
+                },
+                request_state=asked.request_state,
+                allow_input_required=True,
+            )
+
+    return asyncio.run(go())
+
+
+def test_a_signature_comes_back_as_an_image_and_a_url(fieldlink):
+    """The model both SEES the signature and gets a way to embed it.
+
+    Two blocks, deliberately: the image is what makes the signature reviewable,
+    and the URL is what makes it placeable in a document. The base64 is in
+    neither - a model cannot copy 10KB of it into an `<img>` without corrupting
+    it, which is the whole reason the URL exists.
+    """
+    result = _sign(fieldlink, "FL-4417")
+
+    assert [block.type for block in result.content] == ["text", "image"]
+    image = result.content[1]
+    assert image.mime_type == "image/png"
+
+    record = result.structured_content
+    assert record["status"] == "signed"
+    assert record["signature_url"].endswith("/signatures/FL-4417.png")
+    # Not the bytes, anywhere the model reads.
+    assert "signature" not in record
+    assert "base64" not in result.content[0].text
+
+
+def test_a_signature_too_small_to_render_keeps_the_url_and_drops_the_image(fieldlink):
+    """A provider rejects a tiny image with a 400 that would kill the whole run.
+
+    Found the hard way: a 1x1 test PNG came back as "Could not process image"
+    from Anthropic and ended the turn after the tool had already succeeded.
+    """
+    import base64
+
+    from mcp.types import ElicitResult
+
+    uri = "data:image/png;base64," + base64.b64encode(_png(1, 1)).decode()
+
+    async def go():
+        async with fieldlink as c:
+            asked = await c.session.call_tool(
+                "collect_signature", {"tracking_id": "FL-4418"}, allow_input_required=True
+            )
+            return await c.session.call_tool(
+                "collect_signature",
+                {"tracking_id": "FL-4418"},
+                input_responses={
+                    "signature": ElicitResult(
+                        action="accept",
+                        content={
+                            "signature": uri,
+                            "signed_by": "Grace Achieng",
+                            "signed_at": "2026-09-07T14:02:00Z",
+                        },
+                    )
+                },
+                request_state=asked.request_state,
+                allow_input_required=True,
+            )
+
+    result = asyncio.run(go())
+    assert [block.type for block in result.content] == ["text"], "the image should be dropped"
+    # The delivery is still signed, and the picture is still fetchable by URL.
+    assert result.structured_content["status"] == "signed"
+    assert result.structured_content["signature_url"].endswith("/signatures/FL-4418.png")
+
+
+def test_the_signature_png_is_served_over_http(fieldlink):
+    """The URL in the result resolves to real image bytes, and 404s otherwise."""
+    from starlette.testclient import TestClient
+
+    from mcp_demo_server.server import mcp
+
+    _sign(fieldlink, "FL-4502")
+    with TestClient(mcp.http_app(stateless_http=True)) as http:
+        ok = http.get("/signatures/FL-4502.png")
+        assert ok.status_code == 200
+        assert ok.headers["content-type"] == "image/png"
+        assert ok.content == _PNG_BYTES
+        assert http.get("/signatures/FL-9999.png").status_code == 404
+
+
+def test_a_signature_the_pad_mangled_is_recorded_without_promising_an_image(fieldlink):
+    """A bad data URI must not claim a picture that cannot be served."""
+    from mcp.types import ElicitResult
+
+    async def go():
+        async with fieldlink as c:
+            asked = await c.session.call_tool(
+                "collect_signature", {"tracking_id": "FL-4390"}, allow_input_required=True
+            )
+            return await c.session.call_tool(
+                "collect_signature",
+                {"tracking_id": "FL-4390"},
+                input_responses={
+                    "signature": ElicitResult(
+                        action="accept",
+                        content={
+                            "signature": "not-a-data-uri",
+                            "signed_by": "Grace Achieng",
+                            "signed_at": "2026-09-07T14:02:00Z",
+                        },
+                    )
+                },
+                request_state=asked.request_state,
+                allow_input_required=True,
+            )
+
+    record = asyncio.run(go()).structured_content
+    assert record["status"] == "signed"
+    assert record["signature_url"] is None
+
+
 def test_a_declined_signature_leaves_the_shipment_unsigned(fieldlink):
     from mcp.types import ElicitResult
 
