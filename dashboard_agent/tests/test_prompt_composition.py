@@ -8,6 +8,7 @@ COMPOSE deepagents' base (filesystem + skills) with our prompt; an assistant wit
 neither must NOT.
 """
 
+from deepagents.backends import StateBackend
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
@@ -44,8 +45,6 @@ def _capture(monkeypatch, context, *, mock_ctxhub=False):
     monkeypatch.setattr(A, "build_chat_model", lambda model_id: _RecordingModel())
     if mock_ctxhub:
         # Avoid the real Context Hub network: an in-state backend + a canned AGENTS.md.
-        from deepagents.backends import StateBackend
-
         monkeypatch.setattr(A, "_resolve_backends", lambda runtime: (StateBackend(), {}))
         monkeypatch.setattr(A, "pull_agent_prompt", lambda repo, workspace=None: _AGENTS_MD)
     agent = A.build_agent()

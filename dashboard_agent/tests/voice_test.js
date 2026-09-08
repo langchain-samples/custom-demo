@@ -154,7 +154,7 @@ function ok(name, fn) {
       "ask_user",
       "draft_email",
       // Not exempt for that reason but for a duller one: langchain-quickjs binds `eval`
-      // only when DA_DYNAMIC_SUBAGENTS=1, so it is not a tool the agent can always call.
+      // only when DYNAMIC_SUBAGENTS=1, so it is not a tool the agent can always call.
       "eval",
     ]);
     const unspoken = Object.keys(TOOL_LABELS)

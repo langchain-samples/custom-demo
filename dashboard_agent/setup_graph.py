@@ -61,7 +61,7 @@ def _run(state: SetupState) -> dict:
         return {"status": "error", "error": "workspace and customer are required"}
     try:
         return {"result": prepare_assistant(payload), "status": "ok"}
-    except Exception as exc:  # surface to the SPA rather than 500
+    except Exception as exc:  # noqa: BLE001 - surface to the SPA rather than 500
         return {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
 
 

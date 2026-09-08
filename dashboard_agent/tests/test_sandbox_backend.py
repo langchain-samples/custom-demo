@@ -15,7 +15,7 @@ The spec:
 - Assistant with skills + sandbox available → sandbox default (⇒ `execute` offered) +
   `/skills/` route to Context Hub. World: skills readable/writable in CH, code
   runnable in the VM.
-- Sandbox unavailable / `DA_SANDBOX=0` → StateBackend default (no `execute`); skills
+- Sandbox unavailable / `SANDBOX_ENABLED=0` → StateBackend default (no `execute`); skills
   still mount if present.
 - Back-compat: an old Context Hub assistant (`agent_repo`, no `skills_repo`) keeps the
   whole-repo ContextHubBackend (today's behavior, no execute).
@@ -115,7 +115,7 @@ def _rt(**ctx):
 
 def _install_client(monkeypatch, client=None):
     client = client or _FakeClient()
-    monkeypatch.setenv("DA_SANDBOX", "1")
+    monkeypatch.setenv("SANDBOX_ENABLED", "1")
     # `_get_or_create_sandbox` short-circuits to None when no LangSmith key is set
     # (CI has none — this avoids a real network attempt). Tests that exercise the
     # sandbox path must supply a placeholder so the FAKE client below is reached.
@@ -149,7 +149,7 @@ def test_skills_and_sandbox_compose(monkeypatch):
 
 
 def test_skills_mount_without_sandbox_has_no_execute(monkeypatch):
-    monkeypatch.setenv("DA_SANDBOX", "0")  # sandbox off
+    monkeypatch.setenv("SANDBOX_ENABLED", "0")  # sandbox off
     _stub_ctxhub(monkeypatch)
     default, routes = A._resolve_backends(_rt(customer="Eval Co", skills_repo="eval-skills"))
     assert isinstance(default, StateBackend)
@@ -184,7 +184,7 @@ def test_available_seeds_data_stack_and_dataset_once(monkeypatch):
 
 
 def test_client_failure_falls_back_to_statebackend(monkeypatch):
-    monkeypatch.setenv("DA_SANDBOX", "1")
+    monkeypatch.setenv("SANDBOX_ENABLED", "1")
     monkeypatch.setenv(
         "LANGSMITH_API_KEY", "test-key"
     )  # reach the client (its raise), not the no-key guard
@@ -200,8 +200,8 @@ def test_client_failure_falls_back_to_statebackend(monkeypatch):
 
 def test_no_langsmith_key_skips_sandbox(monkeypatch):
     # No LangSmith credentials (e.g. CI) → skip the sandbox cleanly, no network
-    # attempt — even with DA_SANDBOX on and a client installed.
-    monkeypatch.setenv("DA_SANDBOX", "1")
+    # attempt — even with SANDBOX_ENABLED on and a client installed.
+    monkeypatch.setenv("SANDBOX_ENABLED", "1")
     monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
     monkeypatch.delenv("LS_CROSS_WORKSPACE_KEY", raising=False)
     client = _FakeClient()
@@ -213,7 +213,7 @@ def test_no_langsmith_key_skips_sandbox(monkeypatch):
 
 def test_env_kill_switch_disables_sandbox(monkeypatch):
     client = _FakeClient()
-    monkeypatch.setenv("DA_SANDBOX", "0")
+    monkeypatch.setenv("SANDBOX_ENABLED", "0")
     monkeypatch.setattr(A, "SandboxClient", lambda **kw: client)
     default, _routes = A._resolve_backends(_rt(customer="Eval Co"))
     assert isinstance(default, StateBackend)
@@ -260,7 +260,7 @@ def test_prewarm_uses_agent_repo_precedence(monkeypatch):
 
 def test_prewarm_noop_when_disabled(monkeypatch):
     client = _FakeClient()
-    monkeypatch.setenv("DA_SANDBOX", "0")
+    monkeypatch.setenv("SANDBOX_ENABLED", "0")
     monkeypatch.setattr(A, "SandboxClient", lambda **kw: client)
     A.prewarm_sandbox(customer="Eval Co")
     assert client.created == []  # kill switch respected — no VM at provisioning
@@ -454,7 +454,7 @@ def test_a_stopped_vm_is_kept_for_a_week(monkeypatch):
 
 
 def test_sandbox_note_points_at_seeded_data(monkeypatch):
-    monkeypatch.setenv("DA_SANDBOX", "1")
+    monkeypatch.setenv("SANDBOX_ENABLED", "1")
     note = A._sandbox_note(_rt())
     assert "execute" in note and "/workspace/data" in note and "push_widget" in note
 
@@ -465,7 +465,7 @@ def test_sandbox_note_never_promises_a_particular_dataset(monkeypatch):
     The seed is sales-shaped for every assistant, so the prompt must send the model to
     LOOK rather than assert what is there.
     """
-    monkeypatch.setenv("DA_SANDBOX", "1")
+    monkeypatch.setenv("SANDBOX_ENABLED", "1")
     note = A._sandbox_note(_rt())
     assert "ls /workspace/data" in note
     assert "never assume a particular file exists" in note
@@ -478,7 +478,7 @@ def test_sandbox_note_routes_file_requests_to_the_upload_button(monkeypatch):
     There is exactly one channel now, and the prompt has to name it and rule out the
     plausible-sounding alternatives that strand the conversation.
     """
-    monkeypatch.setenv("DA_SANDBOX", "1")
+    monkeypatch.setenv("SANDBOX_ENABLED", "1")
     note = A._sandbox_note(_rt())
     assert "Files panel" in note
     assert "paste" in note and "attach it to the chat" in note
@@ -493,7 +493,7 @@ def test_sandbox_note_says_there_is_no_data_access_when_disabled(monkeypatch):
     or apologise for its own competence, and left a presenter unable to tell a
     misconfiguration from a bad answer.
     """
-    monkeypatch.setenv("DA_SANDBOX", "0")
+    monkeypatch.setenv("SANDBOX_ENABLED", "0")
     note = A._sandbox_note(_rt())
     assert "NO DATA ACCESS" in note
     assert "no data source" in note
@@ -594,7 +594,7 @@ def test_a_lazily_created_vm_seeds_from_the_runs_context(monkeypatch):
 
 
 def test_sandbox_note_names_the_seeded_files(monkeypatch):
-    monkeypatch.setenv("DA_SANDBOX", "1")
+    monkeypatch.setenv("SANDBOX_ENABLED", "1")
     note = A._sandbox_note(_rt(sandbox_seed=_MEDICAL_SEED))
     assert "/workspace/data/intake_2026-01.pdf: Scanned patient intake form" in note
     assert "/workspace/data/claims.csv" in note

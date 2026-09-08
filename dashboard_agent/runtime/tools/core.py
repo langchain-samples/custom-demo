@@ -11,7 +11,7 @@ import contextvars
 
 from langchain.tools import tool
 
-from ..widgets import validate_widget
+from dashboard_agent.runtime.widgets import validate_widget
 
 # Per-invocation collector for widgets emitted by push_widget. Set by
 # `agent.run()`; the streaming path re-parses widgets from the token stream

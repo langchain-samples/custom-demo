@@ -33,6 +33,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from langchain_core.messages import AIMessage
+from langgraph.types import Command
 
 import dashboard_agent.provisioning.evals as AE
 from dashboard_agent.provisioning.evals import (
@@ -46,6 +48,7 @@ from dashboard_agent.provisioning.evals import (
 )
 from dashboard_agent.provisioning.setup import slugify
 from dashboard_agent.runtime.prompt import FAILURE_MODES
+from dashboard_agent.runtime.tools import widget_sink
 
 # --- the fixtures the demo actually runs on ------------------------------------------
 
@@ -484,16 +487,13 @@ class _ScriptedAgent:
 
 def _ai(text: str, tool_calls: list[dict] | None = None):
     """An AI message with Anthropic's LIST content — text alongside a tool_use block."""
-    from langchain_core.messages import AIMessage
-
     return AIMessage(content=[{"type": "text", "text": text}], tool_calls=tool_calls or [])
 
 
 def _run_target(monkeypatch, states: list[dict]) -> tuple[dict, _ScriptedAgent]:
-    import dashboard_agent.runtime.agent as A
-
     agent = _ScriptedAgent(states)
-    monkeypatch.setattr(A, "build_agent", lambda *_a, **_k: agent)
+    # Patched on evals.py, which is where `_agent_target` looks the name up.
+    monkeypatch.setattr(AE, "build_agent", lambda *_a, **_k: agent)
     return AE._agent_target({})({"question": "Draft a note about the stock gap"}), agent
 
 
@@ -506,8 +506,6 @@ def test_target_answers_a_human_in_the_loop_interrupt_and_grades_what_follows(mo
     a badge that can never reach 3/3 no matter how the presenter fixes the prompt. The
     target has to play the human and grade the answer that comes after.
     """
-    from langgraph.types import Command
-
     parked = {
         "messages": [_ai("Let me draft that.", [{"name": "draft_email", "args": {}, "id": "1"}])],
         "__interrupt__": (_Interrupt({"kind": "email_draft", "purpose": "stock gap"}),),
@@ -579,8 +577,6 @@ def test_a_run_that_stays_parked_says_so_instead_of_reading_as_no_answer(monkeyp
 
 def test_target_collects_the_widgets_the_agent_pushed(monkeypatch):
     """The evaluator grades the dashboard too, so the target has to capture it."""
-    from dashboard_agent.runtime.tools import widget_sink
-
     widget = {"type": "kpi", "title": "On-time rate", "value": "94%"}
 
     class _PushingAgent(_ScriptedAgent):
@@ -591,9 +587,7 @@ def test_target_collects_the_widgets_the_agent_pushed(monkeypatch):
             return super().invoke(payload, config, context)
 
     agent = _PushingAgent([{"messages": [_ai("On-time delivery held steady.")]}])
-    import dashboard_agent.runtime.agent as A
-
-    monkeypatch.setattr(A, "build_agent", lambda *_a, **_k: agent)
+    monkeypatch.setattr(AE, "build_agent", lambda *_a, **_k: agent)
     out = AE._agent_target({})({"question": "What is our on-time delivery rate?"})
     assert out["widgets"] == [widget]
     # And the sink is torn down again — a leaked ContextVar would append the next
@@ -790,7 +784,7 @@ class _FakeRulesClient(_FakeClient):
         self.secrets = ["OPENAI_API_KEY"] if secrets is None else secrets
         self.commits: dict[str, dict] = dict(commits or {})
 
-    def push_prompt(self, name: str, object: Any = None, **_) -> str:  # noqa: A002
+    def push_prompt(self, name: str, object: Any = None, **_) -> str:
         self.pushed.append((name, object))
         self.commits[name] = object if isinstance(object, dict) else {}
         return f"http://hub/{name}"
@@ -817,7 +811,7 @@ def _bare_prompt_commit() -> dict:
 
 
 def _post_ok(rule_id: str, sink: dict):
-    def _post(url, headers=None, json=None, timeout=None):  # noqa: A002
+    def _post(url, headers=None, json=None, timeout=None):
         sink.update({"url": url, "headers": headers, "json": json})
         return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"id": rule_id})
 
@@ -895,7 +889,7 @@ def test_judge_variable_mapping_reaches_the_widgets():
 def _attach_posts(sink: dict, evaluator_id: str = "ev-9", rule_id: str = "rule-9"):
     """Stand in for both POSTs: create the evaluator, then create the rule."""
 
-    def _post(url, headers=None, json=None, timeout=None):  # noqa: A002
+    def _post(url, headers=None, json=None, timeout=None):
         sink.setdefault("calls", []).append({"url": url, "headers": headers, "json": json})
         body = (
             {"evaluator": {"id": evaluator_id, "feedback_keys": [AE.EVAL_FEEDBACK_KEY]}}

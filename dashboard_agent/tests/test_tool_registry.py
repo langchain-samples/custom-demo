@@ -7,6 +7,7 @@ The invariants that matter:
   * tools outside the catalogue (every deepagents built-in) are never stripped
 """
 
+import json
 from types import SimpleNamespace
 
 from dashboard_agent.runtime.agent import ToolSelection
@@ -54,8 +55,6 @@ def test_registry_ids_are_unique_and_match_tool_names():
 
 
 def test_registry_json_is_serializable_and_has_no_tool_objects():
-    import json
-
     payload = registry_json()
     json.dumps(payload)  # must not raise
     assert all("tool" not in row for row in payload)

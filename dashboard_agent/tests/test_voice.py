@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from dashboard_agent.config import voice_model
 from dashboard_agent.voice import session as voice
 
 
@@ -68,7 +69,7 @@ def test_mint_token_returns_the_resource_name_as_the_token(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "AIzaSy-not-a-real-key-9f3a")
     sink: dict = {}
 
-    def _post(url, headers=None, json=None, timeout=None):  # noqa: A002
+    def _post(url, headers=None, json=None, timeout=None):
         sink.update({"url": url, "headers": headers, "json": json})
         return SimpleNamespace(
             status_code=200,
@@ -107,8 +108,6 @@ def test_the_default_model_is_a_live_model():
     because the two-phase tool response (voice.ts) is what keeps the model talking during a
     long run, not the 2.5-only `NON_BLOCKING` flag. See `config.voice_model`.
     """
-    from dashboard_agent.config import voice_model
-
     model = voice_model()
     assert model.startswith("gemini-")
     assert "live" in model or "native-audio" in model

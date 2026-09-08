@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import os
 
+from mcp_demo_server.server import mcp
+
 HOST = os.getenv("MERIDIAN_HOST", "127.0.0.1")
 PORT = int(os.getenv("MERIDIAN_PORT", "8765"))
 PATH = os.getenv("MERIDIAN_PATH", "/mcp")
@@ -22,8 +24,6 @@ PATH = os.getenv("MERIDIAN_PATH", "/mcp")
 
 def main() -> None:
     """Run the demo server until interrupted."""
-    from mcp_demo_server.server import mcp
-
     print(f"{mcp.name} (stateless HTTP) -> http://{HOST}:{PORT}{PATH}")
     mcp.run(
         transport="http",

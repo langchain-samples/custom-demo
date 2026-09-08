@@ -6,10 +6,14 @@ prompt-source branching, tool selection, the failure-mode gap, the skill push,
 and the `ls_artifacts` cleanup manifest. Pure and fast — runs in CI, no API key.
 """
 
+import threading
+
 import pytest
 import yaml
 
+from dashboard_agent import setup_graph
 from dashboard_agent.provisioning import setup as S
+from dashboard_agent.setup_graph import _INPUT_KEYS, SetupState
 
 
 def _analysis(**over):
@@ -130,11 +134,10 @@ def test_judge_prompt_is_recorded_only_when_the_evaluator_attached(rec, monkeypa
     `_try` no-ops on a falsy handle, so recording a name for an assistant that never got
     an evaluator would put a spurious 404 in every cleanup report.
     """
-    from dashboard_agent.provisioning import evals as AE
-
-    monkeypatch.setattr(AE, "ensure_eval_dataset", lambda *a, **k: "acme-ds")
+    # Patched on setup.py, which is where `prepare_assistant` looks these up.
+    monkeypatch.setattr(S, "ensure_eval_dataset", lambda *a, **k: "acme-ds")
     monkeypatch.setattr(
-        AE,
+        S,
         "ensure_dataset_evaluator",
         lambda *a, **k: {"rule_id": "", "evaluator_id": "", "error": "503"},
     )
@@ -144,7 +147,7 @@ def test_judge_prompt_is_recorded_only_when_the_evaluator_attached(rec, monkeypa
     assert art["eval_judge_prompt"] == ""
 
     monkeypatch.setattr(
-        AE,
+        S,
         "ensure_dataset_evaluator",
         lambda *a, **k: {"rule_id": "rule-7", "evaluator_id": "ev-7", "error": ""},
     )
@@ -153,7 +156,7 @@ def test_judge_prompt_is_recorded_only_when_the_evaluator_attached(rec, monkeypa
     # The evaluator is a separate object from the rule; /cleanup needs both ids or it
     # leaves a row on the customer's Evaluators page forever.
     assert art["eval_evaluator_id"] == "ev-7"
-    assert art["eval_judge_prompt"] == AE.judge_prompt_name("acme-ds")
+    assert art["eval_judge_prompt"] == S.judge_prompt_name("acme-ds")
 
 
 # --- tool selection (#4) ---
@@ -362,11 +365,9 @@ def traffic(monkeypatch):
     ingests — which contradicts this module's no-network contract and leaves threads
     racing the rest of the suite. Tests that assert on it just request the fixture.
     """
-    from dashboard_agent.provisioning import traffic as DT
-
     started: list[tuple] = []
     monkeypatch.setattr(
-        DT, "start_demo_traffic", lambda ws, project, **kw: started.append((ws, project, kw))
+        S, "start_demo_traffic", lambda ws, project, **kw: started.append((ws, project, kw))
     )
     return started
 
@@ -421,8 +422,6 @@ def test_the_graph_forwards_every_input_it_declares():
     Asserted as a set relationship rather than by listing keys, so the next field added to
     the state is covered without anyone remembering to extend this test.
     """
-    from dashboard_agent.setup_graph import _INPUT_KEYS, SetupState
-
     outputs = {"result", "status", "error"}
     declared = set(SetupState.__annotations__) - outputs
     assert declared - set(_INPUT_KEYS) == set(), "declared on SetupState but never forwarded"
@@ -430,8 +429,6 @@ def test_the_graph_forwards_every_input_it_declares():
 
 def test_demo_traffic_reaches_prepare_assistant(monkeypatch):
     """The specific key that was dropped. Opt-in, so both directions matter."""
-    from dashboard_agent import setup_graph
-
     seen: dict = {}
     monkeypatch.setattr(
         setup_graph, "prepare_assistant", lambda payload: seen.update(payload) or {}
@@ -527,8 +524,6 @@ def test_each_assistant_gets_its_own_sandbox_key(rec, monkeypatch):
 
 def test_the_prewarm_is_given_the_same_key_it_will_be_asked_for(rec, monkeypatch):
     """A prewarm under a different name leaves an orphan VM and a cold first turn."""
-    import threading
-
     seen: dict = {}
     called = threading.Event()
 
@@ -538,7 +533,7 @@ def test_the_prewarm_is_given_the_same_key_it_will_be_asked_for(rec, monkeypatch
 
     # The prewarm is fire-and-forget on its own thread, so the assertion has to wait
     # for it rather than race it.
-    monkeypatch.setattr("dashboard_agent.runtime.agent.prewarm_sandbox", _record)
+    monkeypatch.setattr(S, "prewarm_sandbox", _record)
     ctx = _prep(monkeypatch, _analysis())["context"]
     assert called.wait(5), "prewarm was never called"
     assert seen.get("sandbox_key") == ctx["sandbox_key"]

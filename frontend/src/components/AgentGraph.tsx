@@ -12,7 +12,7 @@
  * Nodes light up as calls arrive (dashed + pulsing while pending, solid once the
  * tool result lands) and each is clickable to see the argument and the result.
  * Subagent lanes appear only when the agent actually dispatches `task`, which
- * needs DA_DYNAMIC_SUBAGENTS=1 on the server; without it you get the single-lane
+ * needs DYNAMIC_SUBAGENTS=1 on the server; without it you get the single-lane
  * view, which is still the real picture: plan, skills, sandbox, data, output.
  *
  * This file exports ONLY components. The pure helpers live in `lib/agentGraph.ts`

@@ -133,22 +133,37 @@ def check_imports() -> None:
 # --- 4. environment ------------------------------------------------------------
 
 
-def _provider() -> str:
-    from dashboard_agent.config import MODEL, model_provider
+def _model_id() -> str:
+    """The configured agent model id.
 
-    return model_provider(os.getenv("DASHBOARD_MODEL") or MODEL)
+    `AGENT_MODEL`, or the deprecated `DASHBOARD_MODEL` it replaced, or the built-in
+    default. Read here rather than trusting `config.MODEL` alone because that constant
+    is resolved at import time, before `check_env` loads `.env`.
+    """
+    # Local: deferred past check_imports, so a missing dep prints a fix, not a traceback.
+    from dashboard_agent.config import MODEL  # noqa: PLC0415
+
+    return os.getenv("AGENT_MODEL") or os.getenv("DASHBOARD_MODEL") or MODEL
+
+
+def _provider() -> str:
+    # Local: deferred past check_imports, so a missing dep prints a fix, not a traceback.
+    from dashboard_agent.config import model_provider  # noqa: PLC0415
+
+    return model_provider(_model_id())
 
 
 def check_env() -> str:
     """Load .env and report which model provider it selects. Returns the provider."""
     head(4, "Environment")
-    from dashboard_agent.config import load_env
+    # Local: deferred past check_imports, so a missing dep prints a fix, not a traceback.
+    from dashboard_agent.config import load_env  # noqa: PLC0415
 
     if not (ROOT / ".env").exists():
         warn("env", "No .env file. Relying on variables already in your shell.")
     load_env()
 
-    model_id = os.getenv("DASHBOARD_MODEL") or "claude-sonnet-5"
+    model_id = _model_id()
     provider = _provider()
     ok(f".env loaded — model '{model_id}' (provider: {provider})")
 
@@ -170,9 +185,10 @@ def check_env() -> str:
 def check_model(provider: str) -> None:
     """Make one cheap real call against whichever provider is configured."""
     head(5, "Model provider (one real call)")
-    from dashboard_agent.config import MODEL, require_model_key
+    # Local: deferred past check_imports, so a missing dep prints a fix, not a traceback.
+    from dashboard_agent.config import require_model_key  # noqa: PLC0415
 
-    model_id = os.getenv("DASHBOARD_MODEL") or MODEL
+    model_id = _model_id()
     try:
         require_model_key(model_id)
     except RuntimeError as exc:
@@ -180,7 +196,7 @@ def check_model(provider: str) -> None:
         if provider == "azure_openai":
             fix = (
                 "An Azure OpenAI deployment needs all four:\n"
-                "  DASHBOARD_MODEL=azure_openai:<deployment>\n"
+                "  AGENT_MODEL=azure_openai:<deployment>\n"
                 "  AZURE_OPENAI_ENDPOINT=https://<host>/<base>   (NOT including /openai/...)\n"
                 "  AZURE_OPENAI_API_KEY=...\n"
                 "  OPENAI_API_VERSION=2024-12-01-preview"
@@ -199,7 +215,8 @@ def check_model(provider: str) -> None:
                 return
 
     try:
-        from dashboard_agent.runtime.agent import build_chat_model
+        # Local: deferred past check_imports, so a missing dep prints a fix, not a traceback.
+        from dashboard_agent.runtime.agent import build_chat_model  # noqa: PLC0415
 
         llm = build_chat_model(model_id)
         reply = llm.invoke("Reply with exactly: OK")
@@ -210,7 +227,7 @@ def check_model(provider: str) -> None:
         hint = "Check the key and, for Azure, that the endpoint excludes /openai/deployments/..."
         if "temperature" in detail.lower():
             hint = (
-                "This model rejects the temperature we send. Set DASHBOARD_TEMPERATURE=\n"
+                "This model rejects the temperature we send. Set MODEL_TEMPERATURE=\n"
                 "(empty) in .env to omit the parameter entirely."
             )
         fail("model", f"Call failed. {detail[:220]}", hint)
@@ -231,7 +248,8 @@ def check_langsmith() -> None:
         )
         return
     try:
-        from dashboard_agent.config import make_client, workspace_id
+        # Local: deferred past check_imports, so a missing dep prints a fix, not a traceback.
+        from dashboard_agent.config import make_client, workspace_id  # noqa: PLC0415
 
         client = make_client()
         list(client.list_projects(limit=1))
@@ -254,7 +272,8 @@ def check_context_hub() -> None:
         warn("hub", "Skipped: no LangSmith key.")
         return
     try:
-        from dashboard_agent.config import make_client
+        # Local: deferred past check_imports, so a missing dep prints a fix, not a traceback.
+        from dashboard_agent.config import make_client  # noqa: PLC0415
 
         client = make_client()
         if not hasattr(client, "pull_agent"):
@@ -274,8 +293,8 @@ def check_agent_server() -> None:
     """Check the langgraph CLI that run.sh needs is present."""
     head(8, "Agent Server")
     try:
-        proc = subprocess.run(  # noqa: S603
-            ["uv", "run", "langgraph", "--version"],  # noqa: S607
+        proc = subprocess.run(
+            ["uv", "run", "langgraph", "--version"],
             cwd=ROOT,
             capture_output=True,
             text=True,

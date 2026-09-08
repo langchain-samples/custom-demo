@@ -13,7 +13,7 @@
  * bumping SandboxBrowser's `key`, so a reload is a remount rather than manual
  * cache invalidation.
  *
- * The sandbox is legitimately optional (DA_SANDBOX=0, no entitlement, no key,
+ * The sandbox is legitimately optional (SANDBOX_ENABLED=0, no entitlement, no key,
  * or simply never warmed) and opening this must never create one — so every
  * outcome has visible copy: no assistant, loading, unavailable (with Retry), or
  * a browsable tree.

@@ -567,7 +567,7 @@ export default function App() {
               if (streaming) return;
               // The write completed. Re-read the file, because what streamed is the
               // TOOL ARGUMENT, and for edit_file that is a diff rather than the
-              // document. Best effort: with no sandbox (DA_SANDBOX=0, no entitlement)
+              // document. Best effort: with no sandbox (SANDBOX_ENABLED=0, no entitlement)
               // the file lives in graph state and this 503s, leaving the streamed
               // content in place, which is the right fallback for write_file.
               readSandboxTextFile(sandboxTarget, path)

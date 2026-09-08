@@ -33,7 +33,7 @@ import uuid
 
 from langsmith import Client, RunTree
 
-from ..config import routing_key, scoped_client
+from dashboard_agent.config import routing_key, scoped_client
 
 # session_id -> the conversation's root span, plus its open tool spans by id.
 _SESSIONS: dict[str, dict] = {}
@@ -155,7 +155,7 @@ def close_tool(session_id: str, tool_id: str, outputs: dict) -> bool:
     run_id = str(outputs.get("run_id") or "")
     if run_id:
         try:
-            url = getattr(session["run"].ls_client.read_run(run_id), "url", "")
+            url = session["run"].ls_client.read_run(run_id).url
             if url:
                 outputs = {**outputs, "agent_trace": url}
         except Exception:  # noqa: BLE001 - the id on its own is enough to find the run

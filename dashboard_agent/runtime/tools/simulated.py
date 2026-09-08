@@ -20,10 +20,13 @@ import re
 from datetime import date
 from typing import Any
 
+from langchain.chat_models import init_chat_model
 from langchain.tools import ToolRuntime, tool
+from langchain_core.messages import HumanMessage, SystemMessage
+from langgraph.types import interrupt
 
-from ...config import simulated_model
-from ...core.ctx import ctx_get
+from dashboard_agent.config import simulated_model
+from dashboard_agent.core.ctx import ctx_get
 
 _JSON_RE = re.compile(r"\{[\s\S]*\}")
 
@@ -55,8 +58,6 @@ _MODEL_CACHE: dict[str, Any] = {}
 def _model(model_id: str):
     llm = _MODEL_CACHE.get(model_id)
     if llm is None:
-        from langchain.chat_models import init_chat_model
-
         # Low-ish temperature: plausible and varied, not wild.
         llm = init_chat_model(model_id, temperature=0.4)
         _MODEL_CACHE[model_id] = llm
@@ -78,8 +79,6 @@ def simulate(runtime: ToolRuntime, role: str, shape: str, instruction: str) -> s
     Returns the JSON string on success, or a JSON error object — never raises, so
     a flaky model call degrades the card rather than the whole run.
     """
-    from langchain_core.messages import HumanMessage, SystemMessage
-
     system = (
         f"{role} You are standing in for a real system in a live product demo for "
         f"{_who(runtime)}.\n\n"
@@ -96,14 +95,14 @@ def simulate(runtime: ToolRuntime, role: str, shape: str, instruction: str) -> s
     model_id = simulated_model()
     try:
         resp = _model(model_id).invoke([SystemMessage(system), HumanMessage(instruction)])
-        content = getattr(resp, "content", "")
+        content = resp.content
         if isinstance(content, list):  # some providers return content blocks
             content = "".join(b.get("text", "") for b in content if isinstance(b, dict))
         parsed = _parse_json(content or "")
         if not isinstance(parsed, dict):
             return json.dumps({"error": "the simulated service returned no usable result"})
         return json.dumps(parsed, ensure_ascii=False)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - a flaky model call degrades this one card, never the run
         return json.dumps({"error": f"{type(exc).__name__}: {exc}"})
 
 
@@ -121,9 +120,7 @@ def review(runtime: ToolRuntime, kind: str, payload: dict, build) -> dict:
     one. The tool still works with no human in the loop — if nothing ever resumes,
     the run simply stays interrupted, which is the intended HITL behaviour.
     """
-    from langgraph.types import interrupt
-
-    call_id = getattr(runtime, "tool_call_id", "") or ""
+    call_id = runtime.tool_call_id or ""
     data = _pending.get(call_id)
     if data is None:
         data = build()
@@ -161,8 +158,6 @@ def ask_user(question: str, options: list[str]) -> str:
     can type (an account number, a specific date): ask a choosable question
     instead, or look it up.
     """
-    from langgraph.types import interrupt
-
     choices = [str(o).strip() for o in (options or []) if str(o).strip()]
     # A no-artifact interrupt: nothing is generated or cached, so (unlike `review`)
     # no `_pending` guard is needed — `interrupt` raises on the first pass and, when

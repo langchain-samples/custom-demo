@@ -20,8 +20,10 @@ import json
 from typing import Any
 
 from langchain.tools import tool
+from langchain_tavily import TavilySearch
+from langchain_tavily._utilities import TavilySearchAPIWrapper
 
-from ...config import require_tavily_key
+from dashboard_agent.config import require_tavily_key
 
 # How many results to request. Matches what the simulated tool used to return,
 # which is what the card was laid out for.
@@ -39,9 +41,6 @@ def _client() -> Any:
     """
     global _CLIENT
     if _CLIENT is None:
-        from langchain_tavily import TavilySearch
-        from langchain_tavily._utilities import TavilySearchAPIWrapper
-
         # Raises when unset; callers below turn that into an error payload.
         key = require_tavily_key()
         _CLIENT = TavilySearch(
@@ -88,7 +87,7 @@ def web_search(query: str) -> str:
         if not isinstance(raw, dict):
             return json.dumps({"error": "web search returned an unexpected response"})
         return _shape(raw)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - see below - a search outage degrades this one card, never the run
         # Never raise: a search outage should degrade this one card, not kill the
         # run — same convention as `simulated.simulate`. Covers the missing-key
         # RuntimeError and the ToolException raised on zero results.

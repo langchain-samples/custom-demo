@@ -169,6 +169,11 @@ def mock_tool(real: BaseTool) -> BaseTool:
         return inner_func(*args, **kwargs)
 
     clone = real.model_copy()
+    # `object.__setattr__`, not `clone.func = ...`: these are pydantic fields, and
+    # plain assignment goes through the model's `__setattr__` — which is free to
+    # validate or reject a bare closure depending on the installed pydantic /
+    # langchain-core. Writing through `object` bypasses that entirely, so the swap
+    # cannot start failing under a version bump. Do not "simplify" this.
     object.__setattr__(clone, "func", _mocked if inner_func is not None else None)
     object.__setattr__(clone, "coroutine", _mocked_async)
     return clone

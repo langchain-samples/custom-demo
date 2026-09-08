@@ -27,7 +27,7 @@ import os
 
 import httpx
 
-from ..config import load_env, voice_model
+from dashboard_agent.config import load_env, voice_model
 
 # Google directly, NOT the LangSmith gateway - unlike every other model call in this
 # repo, which moved to `langsmith:` model ids. Checked 2026-09-04, three reasons:

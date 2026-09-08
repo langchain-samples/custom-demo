@@ -82,8 +82,8 @@ jobs:
   # Runs the real-LLM hallucination test off the PR path: slow, costs tokens, and
   # model-flaky by nature. Schedule, not per-PR.
   #
-  # It needs BOTH a key and a sandbox. `conftest.py` forces DA_SANDBOX=0 for the whole
-  # suite, so this job must point at the file directly and set DA_SANDBOX=1, or the test
+  # It needs BOTH a key and a sandbox. `conftest.py` forces SANDBOX_ENABLED=0 for the whole
+  # suite, so this job must point at the file directly and set SANDBOX_ENABLED=1, or the test
   # skips itself and the job passes having asserted nothing.
   #
   # live-tests:
@@ -100,7 +100,7 @@ jobs:
   #       env:
   #         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
   #         LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
-  #         DA_SANDBOX: "1"
+  #         SANDBOX_ENABLED: "1"
   #
   # To enable the nightly schedule, also add at the top of `on:`:
   #   schedule:

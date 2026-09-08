@@ -79,7 +79,7 @@ This is also why the model choice is free. Google documents `behavior: NON_BLOCK
 2.5-only, and 3.1's function calling as synchronous only - but the two-phase response
 needs no model support, so both work. The flag is sent only where it is supported
 (`supportsNonBlocking`). Default is `gemini-3.1-flash-live-preview`; set
-`DASHBOARD_VOICE_MODEL` to switch.
+`VOICE_MODEL` to switch.
 
 ## What it speaks
 

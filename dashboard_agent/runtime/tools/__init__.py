@@ -4,8 +4,8 @@
 which an assistant may expose; `core` and `simulated` hold the implementations.
 """
 
-from .core import push_widget, widget_sink
-from .registry import (
+from dashboard_agent.runtime.tools.core import push_widget, widget_sink
+from dashboard_agent.runtime.tools.registry import (
     ALWAYS_ON,
     CATALOGUE_IDS,
     DEFAULT_ENABLED,

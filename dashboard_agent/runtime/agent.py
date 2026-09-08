@@ -41,28 +41,31 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.runtime import get_runtime
 from langsmith import Client
 
-from ..config import (
+from dashboard_agent.config import (
     MODEL,
+    dynamic_subagents_enabled,
     goal_max_iterations,
     goal_model,
     model_provider,
     require_model_key,
+    sandbox_enabled,
     scoped_client,
 )
-from ..core.ctx import ctx_get as _ctx
-from .mocking import enable_mocking
-from .prompt import ARTIFACT_NOTE, FALLBACK_PROMPT, pull_agent_prompt
-from .tools import (
+from dashboard_agent.core.ctx import ctx_get as _ctx
+from dashboard_agent.runtime.mcp_servers import load_tools, parse_servers
+from dashboard_agent.runtime.mocking import enable_mocking
+from dashboard_agent.runtime.prompt import ARTIFACT_NOTE, FALLBACK_PROMPT, pull_agent_prompt
+from dashboard_agent.runtime.tools import (
     all_tools,
     allowed_tool_names,
     call_limit_middlewares,
     guidance_for,
     is_allowed,
 )
-from .tools import (
+from dashboard_agent.runtime.tools import (
     widget_sink as _widget_sink,
 )
-from .widgets import validate_widget
+from dashboard_agent.runtime.widgets import validate_widget
 
 
 @dataclass
@@ -152,10 +155,10 @@ def _sandbox_note(runtime) -> str:
 
     deepagents already injects its own execution + host-path prompt when the
     `execute` tool is live; this is a thin, demo-specific pointer to the seeded
-    data and the analyse-then-visualize workflow. Gated on the same `DA_SANDBOX`
+    data and the analyse-then-visualize workflow. Gated on the same `SANDBOX_ENABLED`
     flag as the backend so it stays off when the sandbox is disabled.
     """
-    if os.getenv("DA_SANDBOX", "1") == "0":
+    if not sandbox_enabled():
         # The agent reads files for everything, so
         # with no sandbox it has no way to look anything up. Say so plainly: left
         # unsaid, the model either invents figures or blames itself, and the
@@ -312,9 +315,7 @@ def _mcp_note(runtime) -> str:
 
 
 def _mcp_parse(raw: Any):
-    """`context.mcp_servers` as server records. Local import keeps graph load light."""
-    from .mcp_servers import parse_servers
-
+    """`context.mcp_servers` as server records."""
     return parse_servers(raw)
 
 
@@ -341,8 +342,6 @@ class McpTools(AgentMiddleware):
     """
 
     async def _load(self, runtime) -> list[Any]:
-        from .mcp_servers import load_tools
-
         servers = _mcp_parse(_ctx(runtime, "mcp_servers"))
         return await load_tools(servers) if servers else []
 
@@ -392,7 +391,7 @@ def build_chat_model(model_id: str):
 
     Everything here used to be Anthropic-specific kwargs on a hardcoded
     `ChatAnthropic`, which is what made the model unswappable: a customer on an
-    Azure OpenAI deployment could set `DASHBOARD_MODEL` and still get Claude.
+    Azure OpenAI deployment could set `AGENT_MODEL` and still get Claude.
 
     `thinking` is the reason this needs a branch rather than one kwargs dict. It is
     an Anthropic-only argument, and passing it to any other provider is a TypeError
@@ -530,7 +529,8 @@ def _import_sandbox_client() -> Any:
     Imported inside a function so a missing extra can never break graph load.
     """
     try:
-        from langsmith.sandbox import SandboxClient
+        # Optional `[sandbox]` extra: a missing one must not break graph load.
+        from langsmith.sandbox import SandboxClient  # noqa: PLC0415
 
         return SandboxClient
     except Exception:  # noqa: BLE001
@@ -759,7 +759,7 @@ def _sandbox_key_credentials() -> tuple[str | None, dict[str, str]]:
 
 def _sandbox_enabled() -> bool:
     """Whether a sandbox can be built at all (extra present, flag on, creds set)."""
-    if SandboxClient is None or os.getenv("DA_SANDBOX", "1") == "0":
+    if SandboxClient is None or not sandbox_enabled():
         return False
     return bool(_sandbox_key_credentials()[0])
 
@@ -835,7 +835,7 @@ def _acquire_raw(client: Any, name: str, *, create: bool) -> tuple[Any, bool] | 
     `create` is False. `created` is True only for a brand-new VM — the only case that
     needs seeding, since a restarted one still has the filesystem it was stopped with.
     """
-    raw = next((s for s in client.list_sandboxes() if getattr(s, "name", None) == name), None)
+    raw = next((s for s in client.list_sandboxes() if s.name == name), None)
     if raw is not None:
         if str(getattr(raw, "status", "") or "").lower() != "stopped":
             return raw, False
@@ -983,7 +983,7 @@ def _resolve_backends(runtime) -> tuple[BackendProtocol, dict[str, BackendProtoc
     prompt lives in Context Hub.
 
     Degrades gracefully:
-    - sandbox unavailable (`DA_SANDBOX=0`, no entitlement, no network) → StateBackend
+    - sandbox unavailable (`SANDBOX_ENABLED=0`, no entitlement, no network) → StateBackend
       default (no `execute`); skills still mount if present.
     - no skills + no sandbox → plain StateBackend (exactly today's default).
     - Back-compat: an old Context Hub assistant has `agent_repo` but no `skills_repo`
@@ -1059,7 +1059,7 @@ class DynamicBackend(CompositeBackend):
 # Dynamic subagents (deepagents + a QuickJS code-interpreter, langchain-quickjs):
 # the agent writes a JS orchestration script that fans work out to these subagents
 # via a `task()` global. A small fixed generalist set — the value is the
-# orchestration, not per-domain specialization. Gated behind DA_DYNAMIC_SUBAGENTS
+# orchestration, not per-domain specialization. Gated behind DYNAMIC_SUBAGENTS
 # (build-time env; off by default) because the interpreter middleware is fixed at
 # build and we want a deploy-safe default we can flip on after verification.
 _SUBAGENTS: list[SubAgent] = [
@@ -1083,7 +1083,7 @@ _SUBAGENTS: list[SubAgent] = [
 
 
 def _dynamic_subagents_enabled() -> bool:
-    return os.getenv("DA_DYNAMIC_SUBAGENTS", "0") == "1"
+    return dynamic_subagents_enabled()
 
 
 def _rubric_middleware():
@@ -1099,7 +1099,8 @@ def _rubric_middleware():
     load. Beta API (deepagents>=0.6.5).
     """
     try:
-        from deepagents import RubricMiddleware
+        # Optional beta API: an older deepagents must not break graph load.
+        from deepagents import RubricMiddleware  # noqa: PLC0415
 
         return RubricMiddleware(model=goal_model(), max_iterations=goal_max_iterations())
     except Exception:  # noqa: BLE001 - an optional capability, never a load failure
@@ -1144,7 +1145,8 @@ def _build_agent(model: str | None, checkpointer):
     subagents = None
     if _dynamic_subagents_enabled():
         try:
-            from langchain_quickjs import CodeInterpreterMiddleware
+            # Optional extra: a missing one degrades to no subagents.
+            from langchain_quickjs import CodeInterpreterMiddleware  # noqa: PLC0415
 
             middleware = cast(
                 "list[AgentMiddleware]",
@@ -1324,12 +1326,12 @@ def run_stream(question: str, thread_id: str = "demo", agent=None):
             # Tool results -> a tool_result event the client attaches to the
             # matching tool chip (so it can be expanded). Skip push_widget results.
             if isinstance(msg, ToolMessage):
-                tname = getattr(msg, "name", "") or ""
+                tname = msg.name or ""
                 if tname != "push_widget":
-                    content = _content_to_text(getattr(msg, "content", None))
+                    content = _content_to_text(msg.content)
                     yield {
                         "type": "tool_result",
-                        "id": getattr(msg, "tool_call_id", None),
+                        "id": msg.tool_call_id,
                         "name": tname,
                         "content": content[:8000],
                     }
@@ -1339,8 +1341,8 @@ def run_stream(question: str, thread_id: str = "demo", agent=None):
             if not isinstance(msg, (AIMessage, AIMessageChunk)):
                 continue
 
-            mid = getattr(msg, "id", None)
-            text = _content_to_text(getattr(msg, "content", None), strip=False)
+            mid = msg.id
+            text = _content_to_text(msg.content, strip=False)
             if text:
                 text_mids.add(mid)
                 # `mid` lets the client reset per message so pre-tool narration
@@ -1382,7 +1384,7 @@ def run_stream(question: str, thread_id: str = "demo", agent=None):
                         continue
                     try:
                         widget = validate_widget(spec)
-                    except Exception:
+                    except Exception:  # noqa: BLE001 - a half-streamed widget is not valid yet; wait for more chunks
                         continue  # incomplete/invalid so far — wait for more
                     emitted.add(key)
                     yield {"type": "widget", "widget": widget}
@@ -1398,7 +1400,7 @@ def run_stream(question: str, thread_id: str = "demo", agent=None):
 
         yield {"type": "run_id", "run_id": root_id}
         yield {"type": "done"}
-    except Exception as exc:  # surface upstream/model errors to the client
+    except Exception as exc:  # noqa: BLE001 - surface upstream/model errors to the client
         yield {"type": "error", "error": f"{type(exc).__name__}: {exc}"}
     finally:
         _prompt_override.reset(prompt_token)

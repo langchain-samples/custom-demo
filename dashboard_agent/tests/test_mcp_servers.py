@@ -10,12 +10,19 @@ round, the MCP App resource) are verified without a socket or a tunnel.
 from __future__ import annotations
 
 import asyncio
+import base64
+import struct
+import zlib
 from types import SimpleNamespace
 from typing import Literal
 
 import pytest
+from fastmcp import Client
+from mcp.types import ElicitResult, InputRequiredResult
+from starlette.testclient import TestClient
 
 from dashboard_agent.runtime import mcp_servers as m
+from mcp_demo_server.server import mcp
 
 # What a client is allowed to answer an elicitation with. Spelled out rather
 # than `str` because `ElicitResult` takes the literal union, and a typo in a
@@ -176,10 +183,6 @@ def test_probe_reports_the_reason_a_server_failed(monkeypatch):
 @pytest.fixture
 def meridian():
     """The bundled demo MCP server, reached over FastMCP's in-memory transport."""
-    from fastmcp import Client
-
-    from mcp_demo_server.server import mcp
-
     return Client(mcp)
 
 
@@ -198,7 +201,6 @@ def _rounds(
     same call with the answer attached. Nothing is held open in between, which is
     what lets a real run put a checkpoint there.
     """
-    from mcp.types import ElicitResult, InputRequiredResult
 
     async def go():
         async with client as c:
@@ -500,9 +502,6 @@ def _png(width: int, height: int) -> bytes:
     provider rejects a tiny image, so a fixture that happened to be 1x1 would
     test the wrong branch.
     """
-    import struct
-    import zlib
-
     raw = b"".join(b"\x00" + bytes([255, 255, 255] * width) for _ in range(height))
 
     def chunk(tag: bytes, data: bytes) -> bytes:
@@ -526,8 +525,6 @@ _PNG_BYTES = _png(480, 200)
 
 
 def _data_uri(png: bytes) -> str:
-    import base64
-
     return "data:image/png;base64," + base64.b64encode(png).decode()
 
 
@@ -608,10 +605,6 @@ def test_a_declined_signature_leaves_the_document_unsigned(meridian):
 
 def test_the_signature_png_is_served_over_http(meridian):
     """The URL in the result resolves to real image bytes, and 404s otherwise."""
-    from starlette.testclient import TestClient
-
-    from mcp_demo_server.server import mcp
-
     record = _sign(meridian, "Custody transfer", _data_uri(_PNG_BYTES)).structured_content
     with TestClient(mcp.http_app(stateless_http=True)) as http:
         ok = http.get(f"/signatures/{record['reference']}.png")

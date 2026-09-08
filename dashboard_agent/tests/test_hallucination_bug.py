@@ -18,7 +18,7 @@ import re
 import pytest
 
 import dashboard_agent.runtime.agent as agent_mod
-from dashboard_agent.config import load_env
+from dashboard_agent.config import load_env, sandbox_enabled
 from dashboard_agent.runtime.prompt import _FALLBACK_CORE, FALLBACK_PROMPT, HALLUCINATION_CLAUSE
 
 load_env()
@@ -31,7 +31,7 @@ load_env()
 pytestmark = [
     pytest.mark.skipif(not os.getenv("ANTHROPIC_API_KEY"), reason="ANTHROPIC_API_KEY not set"),
     pytest.mark.skipif(
-        os.getenv("DA_SANDBOX", "1") == "0",
+        not sandbox_enabled(),
         reason="needs the sandbox: with no data tool the agent declines instead of fabricating",
     ),
 ]

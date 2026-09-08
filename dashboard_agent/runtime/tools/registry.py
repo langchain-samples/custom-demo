@@ -26,12 +26,12 @@ from typing import Any
 from langchain.agents.middleware import ToolCallLimitMiddleware
 from langchain_core.tools import BaseTool
 
-from .core import push_widget
-from .simulated import (
+from dashboard_agent.runtime.tools.core import push_widget
+from dashboard_agent.runtime.tools.simulated import (
     ask_user,
     draft_email,
 )
-from .web_search import web_search
+from dashboard_agent.runtime.tools.web_search import web_search
 
 
 @dataclass(frozen=True)

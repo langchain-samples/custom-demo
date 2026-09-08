@@ -154,8 +154,8 @@ def _install_client(monkeypatch, fake: _FakeClient) -> _FakeClient:
 
 
 def _install_runner(monkeypatch, fn) -> None:
-    """Replace the experiment runner the background thread imports."""
-    monkeypatch.setattr(AE, "run_experiment", fn)
+    """Replace the experiment runner, on webapp — where the thread looks it up."""
+    monkeypatch.setattr(W, "run_experiment", fn)
 
 
 def _raise(exc_name: str, message: str):

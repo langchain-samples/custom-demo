@@ -14,7 +14,7 @@ dependencies = [
     "langchain[mcp]>=1.4.0",
     "langchain-core>=1.4.0",
     "langchain-anthropic>=1.4.3",
-    # Azure OpenAI / OpenAI-compatible deployments (DASHBOARD_MODEL=azure_openai:<deployment>).
+    # Azure OpenAI / OpenAI-compatible deployments (AGENT_MODEL=azure_openai:<deployment>).
     "langchain-openai>=0.3",
     "langgraph>=1.2.1",
     # [sandbox] extra: the SandboxClient behind the agent's code-execution VM
@@ -29,7 +29,7 @@ dependencies = [
     # Dynamic subagents: the QuickJS code-interpreter (CodeInterpreterMiddleware).
     # 0.3.x requires deepagents>=0.7 and makes `task()`-from-code dispatches stream as
     # named, namespaced delegated subagents (the point of the 0.7 upgrade — so the SPA
-    # panel can see eval-launched subagents). Gated by DA_DYNAMIC_SUBAGENTS (default
+    # panel can see eval-launched subagents). Gated by DYNAMIC_SUBAGENTS (default
     # off); the native quickjs-rs dep ships cp313 wheels for the deploy image.
     "langchain-quickjs>=0.3,<0.4",
     # Real web search behind the `web_search` tool (tools/web_search.py). Without
@@ -63,9 +63,18 @@ target-version = "py313"
 [tool.ruff.lint]
 # pycodestyle(E/W), pyflakes(F), isort(I), pyupgrade(UP), bugbear(B),
 # comprehensions(C4), pydocstyle(D — docstrings required + formatted).
-select = ["E", "W", "F", "I", "UP", "B", "C4", "D"]
+# Two single rules rather than their whole groups (PL and TID would each light up
+# hundreds of unrelated findings): PLC0415 keeps imports at the top of the file, and
+# TID252 keeps them absolute. Both are waivable with an inline `# noqa` + a reason —
+# a real import cycle, or a dependency that must not be required at import time.
+select = ["E", "W", "F", "I", "UP", "B", "C4", "D", "PLC0415", "TID252", "BLE001", "RUF100"]
 # Long lines are common in the prompt/data string literals; the formatter owns wrapping.
 ignore = ["E501"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+# "all", not the default "parents": `from .client import ...` is as unhelpful as
+# `from ..config import ...` when the reader has to know which package they are in.
+ban-relative-imports = "all"
 
 [tool.ruff.lint.pydocstyle]
 # Google style — picks the compatible D subset (no conflicting D203/D212/etc.).
@@ -80,11 +89,3 @@ convention = "google"
 
 [tool.ty.environment]
 python-version = "3.13"
-
-
-[tool.pyrefly.errors]
-bad-assignment = "warn"
-bad-argument-type = "warn"
-bad-return = "warn"
-bad-specialization = "warn"
-no-matching-overload = "warn"

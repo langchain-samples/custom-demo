@@ -21,6 +21,7 @@ import types
 import uuid
 
 import pytest
+from langsmith import get_tracing_context
 
 from dashboard_agent.provisioning import traffic as DT
 
@@ -325,7 +326,6 @@ def test_collected_trace_id_survives_a_run_without_a_start_time():
 
 
 def test_run_seeds_traces_with_the_workspace_client(monkeypatch):
-    from langsmith import get_tracing_context
 
     seen: dict = {}
 
@@ -336,8 +336,10 @@ def test_run_seeds_traces_with_the_workspace_client(monkeypatch):
             seen.update(get_tracing_context())
             return {}
 
-    monkeypatch.setattr("dashboard_agent.runtime.agent.build_agent", lambda: _Agent())
-    monkeypatch.setattr("dashboard_agent.provisioning.evals.make_run_context", lambda c: c)
+    # Patched on traffic.py: both are top-level imports there, so that is where
+    # `run_seeds` looks them up.
+    monkeypatch.setattr(DT, "build_agent", lambda: _Agent())
+    monkeypatch.setattr(DT, "make_run_context", lambda c: c)
     client = _FakeClient()
 
     DT.run_seeds({}, [{"question": "q", "is_gap": False}], project="P", client=client)
@@ -360,8 +362,8 @@ def test_run_seeds_keeps_going_when_one_question_raises(monkeypatch):
             return {}
 
     agent = _Agent()
-    monkeypatch.setattr("dashboard_agent.runtime.agent.build_agent", lambda: agent)
-    monkeypatch.setattr("dashboard_agent.provisioning.evals.make_run_context", lambda c: c)
+    monkeypatch.setattr(DT, "build_agent", lambda: agent)
+    monkeypatch.setattr(DT, "make_run_context", lambda c: c)
 
     DT.run_seeds({}, [{"question": "a"}, {"question": "b"}], project="P", client=_FakeClient())
 

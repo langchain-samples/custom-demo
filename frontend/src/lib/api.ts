@@ -940,7 +940,7 @@ function sandboxQuery(target: SandboxTarget, extra: Record<string, string>): URL
  * List ONE directory on the assistant's sandbox (GET /sandbox-files); omit
  * `path` for the root. Lazy by design — the tree calls this per expanded node.
  *
- * Never throws: the sandbox is legitimately absent (DA_SANDBOX=0, no key, no
+ * Never throws: the sandbox is legitimately absent (SANDBOX_ENABLED=0, no key, no
  * entitlement), so failures come back as an empty listing carrying `error`.
  */
 export async function listSandboxFiles(

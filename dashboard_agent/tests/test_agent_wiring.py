@@ -70,16 +70,16 @@ def test_capability_note_empty_for_unset_selection():
     assert A._capability_note(_rt(None)) == ""  # default selection → no note (unchanged path)
 
 
-# --- dynamic-subagents gate (DA_DYNAMIC_SUBAGENTS, build-time env) ---
+# --- dynamic-subagents gate (DYNAMIC_SUBAGENTS, build-time env) ---
 
 
 def test_subagents_note_off_by_default(monkeypatch):
-    monkeypatch.delenv("DA_DYNAMIC_SUBAGENTS", raising=False)
+    monkeypatch.delenv("DYNAMIC_SUBAGENTS", raising=False)
     assert A._subagents_note() == ""  # gated off → no orchestration note
 
 
 def test_subagents_note_on_when_enabled(monkeypatch):
-    monkeypatch.setenv("DA_DYNAMIC_SUBAGENTS", "1")
+    monkeypatch.setenv("DYNAMIC_SUBAGENTS", "1")
     note = A._subagents_note()
     assert "task()" in note and "orchestrat" in note.lower()  # distinguishes JS orchestration
     assert "execute" in note  # ...from the Python data sandbox
@@ -90,7 +90,7 @@ def test_subagents_note_on_when_enabled(monkeypatch):
 
 def test_rubric_middleware_is_built_with_the_goal_model(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setenv("DASHBOARD_GOAL_MAX_ITERATIONS", "2")
+    monkeypatch.setenv("GOAL_MAX_ITERATIONS", "2")
     mw = A._rubric_middleware()
     assert mw is not None
     assert mw.max_iterations == 2
@@ -102,7 +102,7 @@ def test_graph_accepts_a_rubric_on_its_input(monkeypatch):
     If it isn't in the input schema the server drops it and nothing is graded.
     """
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setenv("DA_DYNAMIC_SUBAGENTS", "0")
+    monkeypatch.setenv("DYNAMIC_SUBAGENTS", "0")
     props = A.build_agent(deployed=True).get_input_jsonschema()["properties"]
     assert "rubric" in props
 
@@ -110,7 +110,7 @@ def test_graph_accepts_a_rubric_on_its_input(monkeypatch):
 def test_graph_still_builds_when_the_rubric_middleware_cannot_be_made(monkeypatch):
     """An optional capability must never take graph load down with it."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setenv("DA_DYNAMIC_SUBAGENTS", "0")
+    monkeypatch.setenv("DYNAMIC_SUBAGENTS", "0")
     monkeypatch.setattr(A, "_rubric_middleware", lambda: None)
     assert "rubric" not in A.build_agent(deployed=True).get_input_jsonschema()["properties"]
 
@@ -137,7 +137,7 @@ def test_deployed_agent_has_no_write_todos_tool(monkeypatch):
     # Compiling the graph never calls the model, so a fake key is enough and this
     # runs in key-stripped CI. Asserts the real assembled harness, not just config.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setenv("DA_DYNAMIC_SUBAGENTS", "0")
+    monkeypatch.setenv("DYNAMIC_SUBAGENTS", "0")
     names = _bound_tool_names(A.build_agent(deployed=True))
     assert "write_todos" not in names  # TodoListMiddleware not opted in on 0.7
     # Sanity: other built-ins/tools are present (only the todo one is absent).
@@ -168,7 +168,9 @@ def _stub_tools(monkeypatch, tools):
     async def load(_servers, **_kw):
         return tools
 
-    monkeypatch.setattr("dashboard_agent.runtime.mcp_servers.load_tools", load)
+    # Patched on agent.py: that is where the name is looked up, now that it is a
+    # top-level import there rather than a call-time one.
+    monkeypatch.setattr(A, "load_tools", load)
 
 
 def test_mcp_tools_are_offered_alongside_the_built_in_ones(monkeypatch):

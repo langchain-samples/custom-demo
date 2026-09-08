@@ -7,7 +7,7 @@ so they run in the normal suite.
 
 from __future__ import annotations
 
-from .evaluators import _read_skill_first
+from evals.evaluators import _read_skill_first
 
 
 def test_a_directory_listing_before_computing_counts_as_reading_the_skill():

@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 import secrets
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from typing import cast
@@ -18,17 +19,31 @@ from typing import cast
 import httpx
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage
+from langsmith.schemas import FileEntry, SkillEntry
 from pydantic import BaseModel, Field
 
-from ..config import load_env, sampling_kwargs, setup_model
-from ..runtime.prompt import (
+from dashboard_agent.config import load_env, sampling_kwargs, setup_model
+from dashboard_agent.provisioning.client import _ws_client, slugify
+from dashboard_agent.provisioning.evals import (
+    ensure_dataset_evaluator,
+    ensure_eval_dataset,
+    judge_prompt_name,
+)
+from dashboard_agent.provisioning.resource_tags import tag_assistant_resources
+from dashboard_agent.provisioning.traffic import annotation_queue_name, start_demo_traffic
+from dashboard_agent.runtime.agent import prewarm_sandbox
+from dashboard_agent.runtime.prompt import (
     DASHBOARD_SKILL_DESCRIPTION,
     DASHBOARD_SKILL_INSTRUCTIONS,
     build_system_prompt,
     failure_mode_needs_gap,
 )
-from ..runtime.tools import CATALOGUE_IDS, DEFAULT_ENABLED, EXPLICIT_ONLY, TOOL_REGISTRY
-from .client import _ws_client, slugify
+from dashboard_agent.runtime.tools import (
+    CATALOGUE_IDS,
+    DEFAULT_ENABLED,
+    EXPLICIT_ONLY,
+    TOOL_REGISTRY,
+)
 
 DEFAULT_ACCENT = "#0072BC"
 # Logo.dev publishable key (safe client-side; Clearbit's logo API shut down 2025-12).
@@ -108,7 +123,7 @@ def _brandfetch_brand(domain: str) -> dict | None:
         if r.status_code != 200:  # 401/402/404/429 → quota, unknown, etc.
             return None
         data = r.json()
-    except Exception:
+    except Exception:  # noqa: BLE001 - an optional brand lookup; any failure falls through to the LLM guess
         return None
 
     colors = [c for c in (data.get("colors") or []) if isinstance(c, dict) and c.get("hex")]
@@ -190,7 +205,7 @@ def fetch_brand(customer: str, website: str | None = None) -> dict:
                 if m:
                     accent_scraped = m.group(1)
                     break
-        except Exception:
+        except Exception:  # noqa: BLE001 - scraping someone else's HTML; a miss just leaves accent_scraped unset
             pass
 
     return {
@@ -561,8 +576,6 @@ def push_agent_prompt(workspace: str, repo: str, text: str, skill_links: dict | 
     skill repo handle, linked into the agent so it surfaces under /skills/ at runtime.
     Re-pushing identical content is treated as success.
     """
-    from langsmith.schemas import FileEntry, SkillEntry
-
     files: dict = {"AGENTS.md": FileEntry(content=text)}
     for path, handle in (skill_links or {}).items():
         files[path] = SkillEntry(repo_handle=handle)
@@ -699,8 +712,6 @@ def push_workflow_skills(workspace: str, slug: str, customer: str, skills) -> di
     Returns {mount_path: repo_handle} links to compose into the agent repo.
     Best-effort: a skill that fails to push is skipped rather than breaking setup.
     """
-    from langsmith.schemas import FileEntry
-
     links: dict[str, str] = {}
     for sk in skills or []:
         name = sk.get("name") or ""
@@ -720,7 +731,7 @@ def push_workflow_skills(workspace: str, slug: str, customer: str, skills) -> di
                 files={"SKILL.md": FileEntry(content=md)},
                 description=f"{customer} skill: {name}",
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - the SDK signals 'nothing to commit' only in the message, inspected below
             # A re-push of identical content ("nothing to commit") means the skill
             # already exists — still link it. Any other failure: skip this skill.
             msg = str(e).lower()
@@ -741,8 +752,6 @@ def push_skills_bundle(workspace: str, slug: str, customer: str, skills) -> str:
     agent repo that holds the prompt. Idempotent (a re-push of identical
     content is treated as success). Returns the repo handle, or "" if no valid skills.
     """
-    from langsmith.schemas import FileEntry
-
     files: dict = {}
     for sk in skills or []:
         name = sk.get("name") or ""
@@ -975,10 +984,6 @@ def prepare_assistant(payload: dict) -> dict:
     # keyed like the runtime (agent_repo → customer) so the first turn reattaches the
     # same warm VM. No-op when the sandbox is disabled/unavailable.
     if push:
-        import threading
-
-        from ..runtime.agent import prewarm_sandbox
-
         threading.Thread(
             target=prewarm_sandbox,
             kwargs={
@@ -1045,17 +1050,14 @@ def prepare_assistant(payload: dict) -> dict:
     # the baseline experiment grades exactly what the presenter is about to click.
     # Done here rather than in a route because this is where the workspace, the
     # failure mode, the finalized actions and the data gap are all in hand — and where
-    # the `ls_artifacts` manifest that /cleanup cascades from is written. Function-local
-    # import: assistant_evals imports THIS module, so importing it at the top would be
-    # a cycle. Best-effort by contract — ensure_eval_dataset returns "" on any
+    # the `ls_artifacts` manifest that /cleanup cascades from is written.
+    # Best-effort by contract — ensure_eval_dataset returns "" on any
     # LangSmith failure, and "" simply means this assistant has no eval panel.
     eval_dataset = ""
     eval_rule_id = ""
     eval_evaluator_id = ""
     eval_judge_prompt = ""
     if push:
-        from .evals import ensure_dataset_evaluator, ensure_eval_dataset
-
         eval_dataset = ensure_eval_dataset(workspace, customer, failure_mode, actions, planted_gap)
         # Attach the judge to that dataset, so the evaluator is configured in LangSmith
         # (visible on the Evaluators page and the dataset's Evaluators tab) instead of
@@ -1075,8 +1077,6 @@ def prepare_assistant(payload: dict) -> dict:
         # round trip. Recorded only when the attach succeeded — otherwise there is
         # nothing to delete and a blank entry keeps the cascade quiet.
         if eval_rule_id:
-            from .evals import judge_prompt_name
-
             eval_judge_prompt = judge_prompt_name(eval_dataset)
 
     # Tag everything this assistant just created with its own Application, so a workspace
@@ -1089,10 +1089,6 @@ def prepare_assistant(payload: dict) -> dict:
     # tags, or a key without `workspaces:manage` to mint the value, leaves the assistant
     # untagged and nothing else changes.
     if push:
-        import threading
-
-        from .resource_tags import tag_assistant_resources
-
         threading.Thread(
             target=lambda: print(
                 "[setup] application tag: "
@@ -1128,8 +1124,7 @@ def prepare_assistant(payload: dict) -> dict:
     # running, and a presenter clicking Generate mid-backfill is refused instead of
     # doubling the traffic.
     # Deterministic, so the manifest below can name the review queue the backfill will
-    # create minutes from now (function-local import: demo_traffic imports THIS module,
-    # so a module-level import here would be a cycle).
+    # create minutes from now.
     #
     # OPT-IN (`demo_traffic` in the payload, default off). It is thousands of runs
     # in the customer's own project, carrying a LangSmith cost estimate in the
@@ -1137,14 +1132,10 @@ def prepare_assistant(payload: dict) -> dict:
     # never ran and a "$240" they think they owe. The Settings panel can still
     # generate it later (`POST /demo-traffic`), so defaulting off defers it rather
     # than losing it.
-    from .traffic import annotation_queue_name
-
     traffic_project = context.get("ls_project") or customer
     queue_name = annotation_queue_name(traffic_project)
     want_traffic = bool(payload.get("demo_traffic"))
     if push and want_traffic:
-        from .traffic import start_demo_traffic
-
         start_demo_traffic(
             workspace,
             traffic_project,

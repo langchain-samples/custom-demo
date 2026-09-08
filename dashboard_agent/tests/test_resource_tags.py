@@ -8,6 +8,8 @@ and that is the expected state until someone grants it.
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -143,8 +145,6 @@ def test_everything_resolvable_is_tagged_and_the_rest_is_reported(monkeypatch):
         if path.endswith("/tags"):
             return httpx.Response(200, json=_tags(["assistant-acme-co"]))
         if path.endswith("/taggings"):
-            import json
-
             posted.append(json.loads(request.content))
             return httpx.Response(200, json={"id": "tagging"})
         if path == "/api/v1/sessions":
@@ -187,8 +187,6 @@ def test_a_project_that_does_not_exist_yet_is_created_pre_tagged(monkeypatch):
     created: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        import json
-
         path = request.url.path
         if path.endswith("/tags"):
             return httpx.Response(200, json=_tags(["assistant-acme-co"]))

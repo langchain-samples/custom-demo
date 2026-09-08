@@ -34,19 +34,20 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import os
 import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from dashboard_agent.config import mcp_timeout_seconds, mcp_tools_ttl_seconds
+
 # Tool discovery is cached for this long. The client-side cache already honours
 # the server's TTL hint; this one only avoids re-adapting tools we hold.
-TOOLS_TTL_SECONDS = float(os.getenv("DA_MCP_TOOLS_TTL", "120"))
+TOOLS_TTL_SECONDS = mcp_tools_ttl_seconds()
 
 # A server that has gone away must not hang a turn. Both the probe route and the
 # per-run load are bounded by this.
-CONNECT_TIMEOUT_SECONDS = float(os.getenv("DA_MCP_TIMEOUT", "20"))
+CONNECT_TIMEOUT_SECONDS = mcp_timeout_seconds()
 
 _SLUG = re.compile(r"[^a-z0-9]+")
 
@@ -145,10 +146,15 @@ def build_group(servers: tuple[McpServer, ...]):
     `mode="auto"` lets FastMCP negotiate: a modern server gets the stateless
     protocol (and with it cacheable discovery and interrupt-driven elicitation),
     one that has not upgraded still connects over the handshake era.
+
+    The fastmcp imports are function-local on purpose: fastmcp pulls the whole `mcp`
+    client stack (~300ms), and this module is on the graph's import path, so a
+    deployment with no MCP server configured would pay that at every cold start.
     """
-    from fastmcp import Client
-    from fastmcp.client.group import ClientGroup
-    from fastmcp.client.transports import StreamableHttpTransport
+    # Local (see the docstring): keeps the mcp client stack off graph load.
+    from fastmcp import Client  # noqa: PLC0415
+    from fastmcp.client.group import ClientGroup  # noqa: PLC0415
+    from fastmcp.client.transports import StreamableHttpTransport  # noqa: PLC0415
 
     return ClientGroup(
         {
@@ -213,7 +219,8 @@ async def load_tools(servers: tuple[McpServer, ...], *, refresh: bool = False) -
 
 async def _discover(servers: tuple[McpServer, ...], *, refresh: bool) -> list[Any]:
     """One real discovery pass: connect, list, adapt."""
-    from langchain.mcp import MCPAdapter
+    # Local like `build_group`'s: keeps the mcp client stack off graph load.
+    from langchain.mcp import MCPAdapter  # noqa: PLC0415
 
     async with MCPAdapter(build_group(servers)) as adapter:
         # `use` reads the client-side cache when the server's TTL hint says it is
@@ -267,7 +274,7 @@ def app_uri(tool: Any) -> str | None:
     The MCP Apps extension stamps `_meta.ui.resourceUri` on the tool, and the
     adapter carries the tool's MCP provenance through on `metadata["mcp"]`.
     """
-    meta = (getattr(tool, "metadata", None) or {}).get("mcp") or {}
+    meta = (tool.metadata or {}).get("mcp") or {}
     ui = ((meta.get("tool") or {}).get("_meta") or {}).get("ui") or {}
     uri = ui.get("resourceUri")
     return str(uri) if isinstance(uri, str) and uri.startswith("ui://") else None

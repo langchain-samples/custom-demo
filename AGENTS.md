@@ -109,7 +109,7 @@ once, here:
 | 3 | `McpTools` | discovers the assistant's remote MCP tools for this run. |
 | 4 | `_hub_system_prompt` | `@dynamic_prompt`: pulls the prompt per question (Context Hub, or `FALLBACK_PROMPT`) and appends the capability, MCP, sandbox and artifact notes. |
 | 5 | `*call_limit_middlewares()` | the per-run call caps declared by `TOOL_REGISTRY`. Each is inert when its tool is not offered. |
-| 6 | QuickJS `CodeInterpreterMiddleware` | only when `DA_DYNAMIC_SUBAGENTS=1`, inserted *before* `ToolSelection`. Guarded, so a missing extra degrades to no subagents rather than failing graph load. |
+| 6 | QuickJS `CodeInterpreterMiddleware` | only when `DYNAMIC_SUBAGENTS=1`, inserted *before* `ToolSelection`. Guarded, so a missing extra degrades to no subagents rather than failing graph load. |
 | 7 | `ToolSelection` | filters `request.tools` down to the assistant's selection. **Last**, so it has the final word on what reaches the model. |
 
 Two of those positions are the parts someone could re-break:
@@ -152,7 +152,7 @@ The VM is **assistant-scoped and cached** (`_SANDBOX_CACHE`), since the backend 
 on every model/tool call; idle VMs self-reap via TTL, and a fresh VM is seeded from the
 assistant's own `context.sandbox_seed` spec at `/workspace/data/` (the synthetic 24-month
 `sales.csv` is only the fallback for an assistant with no spec). Degrades gracefully: no `[sandbox]` extra, no
-`LANGSMITH_API_KEY`, or `DA_SANDBOX=0` → StateBackend default (no `execute`), skills still mount.
+`LANGSMITH_API_KEY`, or `SANDBOX_ENABLED=0` → StateBackend default (no `execute`), skills still mount.
 **Back-compat:** a pre-existing Context Hub assistant has `agent_repo` but no `skills_repo`; it
 keeps the whole-repo `ContextHubBackend` (skills under its `skills/`, no execute) until recreated.
 
@@ -163,7 +163,7 @@ page of one file, `limit` lines, `next_offset` for "Show more"). Two rules shape
 **attach-only** - `_ensure_sandbox(key, create=False)`, so a UI click can never provision a VM
 (~30s boot + pip install) and "no sandbox" is a calm 503 the dialog renders as copy; and
 **read-only, allowlisted** - extensions outside `_TEXT_EXTS` (and anything named `.env*`) never
-reach the VM, and the browsable root is `DA_FILES_ROOT` (default `/workspace`). The dialog's
+reach the VM, and the browsable root is `SANDBOX_FILES_ROOT` (default `/workspace`). The dialog's
 Refresh is a remount, so there is no cache-invalidation code.
 
 **Goals (`/goal`) and rubric grading.** Typing `/goal <what done looks like>` in the composer is a
@@ -362,7 +362,7 @@ any tool) is **locked in code** - matching the plan's security boundary. Assista
 vetted catalogue; they cannot introduce a tool, and there is no code path where assistant
 config can select a filesystem/shell backend. (The default backend is now a LangSmith
 code-execution sandbox - chosen in code by `_backend_for`, still never selectable via config;
-`DA_SANDBOX=0` is the code-side kill switch.)
+`SANDBOX_ENABLED=0` is the code-side kill switch.)
 
 **Display config lives separately, in the assistant's `metadata`:** `display_name`, `logo`,
 `actions[]`, `theme`, `owner_name`, `customer`, `industry`, plus the brand system -
@@ -545,7 +545,7 @@ Implementation notes, each of which is load-bearing:
   `interrupt_on` (HITL as a config knob), `name`. (`tools` selection and `skills` are now
   implemented - see the catalogue + "universal skills" above. `ask_user` gives HITL via a tool
   rather than `interrupt_on`.)
-- **Dynamic subagents** (`agent.py:_build`): behind `DA_DYNAMIC_SUBAGENTS` (build-time env, default
+- **Dynamic subagents** (`agent.py:_build`): behind `DYNAMIC_SUBAGENTS` (build-time env, default
   off, and **off in production** - it is not among the deployment's secrets. This used to say
   `=1` in ci.yml's deploy step, but that job was deliberately removed when the deployment became
   GitHub-connected, so nothing sets it any more), `create_deep_agent` gets
@@ -572,7 +572,7 @@ Implementation notes, each of which is load-bearing:
 
 - **README is stale.** It documents a `query_sql` tool and a `database.py`/SQLite backend that no
   longer exist, and a `tests/test_database.py` that isn't in the repo (the documented test command
-  will fail). `DASHBOARD_MODEL` default is listed as `claude-sonnet-4-5-20250929`; `config.py`
+  will fail). `AGENT_MODEL` default is listed as `claude-sonnet-4-5-20250929`; `config.py`
   says `claude-sonnet-5`. It also predates the tool catalogue and the branding system.
   (The dead `query_sql` entries in the frontend's `TOOL_META`/`chipArgSummary` are now removed.)
 - **`ToolSelection` does not reach inside `task`.** The auto-added general-purpose subagent gets
@@ -597,10 +597,9 @@ Implementation notes, each of which is load-bearing:
   langgraph_api mounts a custom `http.app`'s routes with no auth middleware at all. That auth is
   one shared token (`APP_SHARED_SECRET`) that ships in the SPA bundle, so treat "anyone with the
   bundle can read the VM's files" as the real posture; `.env*` and non-allowlisted extensions are
-  excluded server-side, and `DA_FILES_ROOT` narrows the browsable root. `POST /evals/run` sits
+  excluded server-side, and `SANDBOX_FILES_ROOT` narrows the browsable root. `POST /evals/run` sits
   behind the same one shared token and *spends real model tokens* (3 agent runs per click) - the
   one custom route where an unauthenticated-in-practice caller costs money, not just data.
-- Local-run env fallbacks (`DASHBOARD_DATASET` etc.) coexist with assistant context; context wins.
 
 ---
 

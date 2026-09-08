@@ -10,14 +10,15 @@ See evals/README.md.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 
 from dashboard_agent.config import load_env
 from dashboard_agent.provisioning.setup import analyze_customer
-
-from .evaluators import actions_relevant, agent_behavior
-from .fixtures import (
+from dashboard_agent.runtime.agent import build_agent
+from evals.evaluators import actions_relevant, agent_behavior
+from evals.fixtures import (
     GAP,
     MARKER,
     ensure_ctxhub_agent,
@@ -79,8 +80,6 @@ def _setup_target(inputs: dict) -> dict:
 
 
 def _agent_target_factory(repo: str):
-    from dashboard_agent.runtime.agent import build_agent
-
     agent = build_agent()
 
     def target(inputs: dict) -> dict:
@@ -96,7 +95,7 @@ def _agent_target_factory(repo: str):
                     context=ctx,
                 )
                 break
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 if "529" in str(exc) or "overload" in str(exc).lower():
                     time.sleep(8)
                     continue
@@ -138,8 +137,6 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Run dashboard-agent Tier-3 LLM evals.")
     ap.add_argument("--only", choices=["setup", "agent"], help="run just one group")
     args = ap.parse_args()
-
-    import os
 
     if not (os.getenv("ANTHROPIC_API_KEY") and eval_workspace()):
         print(

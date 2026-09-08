@@ -27,9 +27,26 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-# Absolute import: Agent Server loads http.app as a top-level module (no package
-# parent), so a relative `from .config` import would fail here.
-from dashboard_agent.config import load_env, make_client, routing_key, scoped_client
+from dashboard_agent.config import (
+    load_env,
+    make_client,
+    routing_key,
+    sandbox_files_root,
+    scoped_client,
+)
+from dashboard_agent.provisioning.evals import (
+    _rules_api,
+    delete_judge_evaluator,
+    run_experiment,
+)
+from dashboard_agent.provisioning.traffic import (
+    SYNTHETIC_TAG,
+    demo_traffic_state,
+    start_demo_traffic,
+)
+from dashboard_agent.runtime.agent import _ensure_sandbox, _sandbox_enabled, _sandbox_key_from
+from dashboard_agent.runtime.mcp_servers import parse_servers, probe, read_app
+from dashboard_agent.runtime.tools import registry_json
 from dashboard_agent.voice import mint_token, voice_configured
 from dashboard_agent.voice import trace as voice_trace_mod
 
@@ -62,7 +79,7 @@ async def feedback(request):
     """Record user feedback on a run (create, or update an existing feedback)."""
     try:
         body = await request.json()
-    except Exception:
+    except Exception:  # noqa: BLE001 - an unreadable body is a client error; answer 400, not 500
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
 
     run_id = body.get("run_id")
@@ -79,7 +96,7 @@ async def feedback(request):
 
     def _create(client):
         fb = client.create_feedback(run_id=run_id, key="user_score", score=score, comment=comment)
-        return str(getattr(fb, "id", "") or "")
+        return str(fb.id or "")
 
     try:
         client = _scoped_client(workspace) if workspace else make_client()
@@ -92,7 +109,7 @@ async def feedback(request):
                 # tenant before this fix). Create a fresh one so the comment lands.
                 return JSONResponse({"ok": True, "feedback_id": _create(client)})
         return JSONResponse({"ok": True, "feedback_id": _create(client)})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - route boundary: report the failure to the SPA as a 500 body
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
 
@@ -122,11 +139,9 @@ async def projects(request):
             client.create_project(project_name=name, upsert=True)
             return JSONResponse({"ok": True, "name": name})
         client = _scoped_client(request.query_params.get("workspace"))
-        names = sorted(
-            {n for p in client.list_projects(limit=200) if (n := getattr(p, "name", None))}
-        )
+        names = sorted({n for p in client.list_projects(limit=200) if (n := p.name)})
         return JSONResponse({"projects": names})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - route boundary: report the failure to the SPA as a 500 body
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
 
@@ -163,7 +178,7 @@ async def workspaces(request):
         except Exception:  # noqa: BLE001 - label only
             organization = ""
         return JSONResponse({"workspaces": out, "organization": organization})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - label only
         return JSONResponse({"workspaces": [], "note": f"{type(exc).__name__}: {exc}"})
 
 
@@ -181,7 +196,7 @@ async def agents(request):
             }
         )
         return JSONResponse({"agents": names})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - route boundary: report the failure to the SPA as a 500 body
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
 
@@ -196,7 +211,7 @@ async def cleanup(request):
     """
     try:
         body = await request.json()
-    except Exception:
+    except Exception:  # noqa: BLE001 - an unreadable body is a client error; answer 400, not 500
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
 
     client = _scoped_client(body.get("workspace"))
@@ -209,7 +224,7 @@ async def cleanup(request):
         try:
             fn()
             deleted.append(f"{kind}:{name}")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - per-artifact: collected into `failed` so the rest of the cascade runs
             failed.append({"artifact": f"{kind}:{name}", "error": _delete_error(exc)})
 
     _try(
@@ -272,20 +287,14 @@ def _delete_judge_evaluator(workspace: str | None, evaluator_id: str) -> None:
     """DELETE the workspace evaluator `evaluator_id`. Raises so `_try` records it.
 
     Kept as a wrapper despite forwarding both arguments unchanged. An audit
-    flagged it as a pure pass-through, and inlining it would have moved the
-    import below to module scope, which this file avoids on purpose: it is loaded
-    by Agent Server as a top-level module, the local import keeps that load light
-    and dodges the agent/webapp cycle, and two tests patch this name.
+    flagged it as a pure pass-through, but two tests patch this name, so removing
+    it would take the seam they use with it.
     """
-    from dashboard_agent.provisioning.evals import delete_judge_evaluator
-
     delete_judge_evaluator(workspace, evaluator_id)
 
 
 def _delete_eval_rule(workspace: str | None, rule_id: str) -> None:
     """DELETE the run rule `rule_id`. Raises on failure, so `_try` records it."""
-    from dashboard_agent.provisioning.evals import _rules_api
-
     url, headers = _rules_api(workspace)
     res = httpx.delete(f"{url}/{rule_id}", headers=headers, timeout=30)
     res.raise_for_status()
@@ -315,11 +324,11 @@ async def trace_url(request):
         return JSONResponse({"error": "run_id is required"}, status_code=400)
     try:
         client = _scoped_client(request.query_params.get("workspace"))
-        url = getattr(client.read_run(run_id), "url", None)
+        url = client.read_run(run_id).url
         if not url:
             return JSONResponse({"error": "no url for run"}, status_code=404)
         return JSONResponse({"url": url})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - route boundary: report the failure to the SPA as a 500 body
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
 
@@ -339,7 +348,7 @@ async def project_url(request):
         return JSONResponse({"error": "project is required"}, status_code=400)
     try:
         client = _scoped_client(request.query_params.get("workspace"))
-        url = getattr(client.read_project(project_name=project), "url", None)
+        url = client.read_project(project_name=project).url
         if not url:
             return JSONResponse({"error": f"no url for project {project!r}"}, status_code=404)
         return JSONResponse({"url": url})
@@ -347,7 +356,7 @@ async def project_url(request):
         return JSONResponse(
             {"error": f"No traces yet for {project!r}. Ask a question first."}, status_code=404
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - route boundary: report the failure to the SPA as a 500 body
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
 
@@ -368,7 +377,7 @@ async def voice_token(request):
         )
     try:
         return JSONResponse(mint_token())
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - see below - no degraded mode; tell the client the mint failed
         # No degraded mode worth having: without a token the client cannot connect, so
         # say so rather than handing back something it will fail on.
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=502)
@@ -395,7 +404,7 @@ async def voice_trace(request):
     """
     try:
         body = await request.json()
-    except Exception:
+    except Exception:  # noqa: BLE001 - an unreadable body is a client error; answer 400, not 500
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     action = str(body.get("action") or "")
     try:
@@ -441,7 +450,7 @@ async def voice_trace(request):
                 {"ok": voice_trace_mod.end_session(session_id, body.get("outputs") or {}, wav)}
             )
         return JSONResponse({"error": f"unknown action {action!r}"}, status_code=400)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - a corrupt base64 blob loses the audio, not the span
         # Logged, not raised: losing a span is not worth ending a conversation over.
         traceback.print_exc()
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=200)
@@ -453,8 +462,6 @@ async def tools(request):
     Served from the backend registry so adding a capability needs no frontend
     change. Static data — no LangSmith call, no auth.
     """
-    from dashboard_agent.runtime.tools import registry_json
-
     return JSONResponse({"tools": registry_json()})
 
 
@@ -469,8 +476,6 @@ async def tools(request):
 
 def _mcp_servers_from(payload: dict):
     """Parse the `servers` array out of a request body."""
-    from dashboard_agent.runtime.mcp_servers import parse_servers
-
     return parse_servers(payload.get("servers"))
 
 
@@ -481,8 +486,6 @@ async def mcp_probe(request):
     per-server `ok: false` with the reason, not a failed request, because the SPA
     renders one row per server and one dead tunnel must not blank the others.
     """
-    from dashboard_agent.runtime.mcp_servers import probe
-
     try:
         payload = await request.json()
     except Exception:  # noqa: BLE001 - a malformed body is a client error, not a crash
@@ -501,8 +504,6 @@ async def mcp_app(request):
     ordinary answer for a tool with no UI, and the SPA falls back to the generic
     schema-driven form, so this is not an error path.
     """
-    from dashboard_agent.runtime.mcp_servers import read_app
-
     try:
         payload = await request.json()
     except Exception:  # noqa: BLE001 - a malformed body is a client error, not a crash
@@ -614,8 +615,8 @@ def _eval_status(workspace: str | None, dataset: str) -> dict:
         # LangSmith 5xx dressed up as "no dataset" would hide a real failure.
         return {**local, "dataset_name": dataset, "exists": False, "running": bool(inflight)}
 
-    examples = int(getattr(ds, "example_count", 0) or 0)
-    dataset_url = getattr(ds, "url", None) or ""
+    examples = int(ds.example_count or 0)
+    dataset_url = ds.url or ""
     out: dict = {
         **local,
         "dataset_name": dataset,
@@ -632,19 +633,17 @@ def _eval_status(workspace: str | None, dataset: str) -> dict:
     if latest is None:
         return {**out, "running": bool(inflight), "experiment_name": None, "url": None}
 
-    passed, scored = _score_from_feedback(getattr(latest, "feedback_stats", None))
+    passed, scored = _score_from_feedback(latest.feedback_stats)
     started = _started_ts(latest)
-    start_time = getattr(latest, "start_time", None)
+    start_time = latest.start_time
     return {
         **out,
-        "experiment_name": getattr(latest, "name", None),
+        "experiment_name": latest.name,
         # The dataset's compare view, which is where a reviewer wants to land (the
         # SDK's own `session.url` is the bare project page). Falls back to it when
         # LangSmith gave us no dataset URL to hang the query off.
         "url": (
-            f"{dataset_url}/compare?selectedSessions={latest.id}"
-            if dataset_url
-            else getattr(latest, "url", None)
+            f"{dataset_url}/compare?selectedSessions={latest.id}" if dataset_url else latest.url
         ),
         "passed": passed,
         "scored": scored,
@@ -672,11 +671,6 @@ def _run_experiment_bg(workspace: str, dataset: str, context: dict, prefix: str)
     `GET /evals/status` hands the panel.
     """
     try:
-        # Function-local import (house style, cf. /tools): provisioning/evals.py pulls in
-        # agent.py to run the target in-process, and that import is heavy. Resolving
-        # at call time is also what lets tests stub the runner on the module.
-        from dashboard_agent.provisioning.evals import run_experiment
-
         run_experiment(workspace, dataset, context, experiment_prefix=prefix)
     except Exception as exc:  # noqa: BLE001 - a detached demo run must never crash the server
         traceback.print_exc()
@@ -697,7 +691,7 @@ async def evals_run(request):
     """
     try:
         body = await request.json()
-    except Exception:
+    except Exception:  # noqa: BLE001 - an unreadable body is a client error; answer 400, not 500
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
 
     # `dataset_name` accepted as an alias because that is the key /evals/status
@@ -732,7 +726,7 @@ async def evals_run(request):
             ),
             daemon=True,
         ).start()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - a thread that won't start is reported, and the inflight lock released
         with _RUN_LOCK:
             _INFLIGHT.pop(dataset, None)
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
@@ -758,7 +752,7 @@ async def evals_status(request):
         return JSONResponse(
             await asyncio.to_thread(_eval_status, request.query_params.get("workspace"), dataset)
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - route boundary: report the failure to the SPA as a 500 body
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
 
@@ -840,12 +834,13 @@ _READ_ERROR_STATUS = {
 
 
 def _files_root() -> str:
-    """Root the browser is confined to (`DA_FILES_ROOT`, default `/workspace`).
+    """Root the browser is confined to (`SANDBOX_FILES_ROOT`, default `/workspace`).
 
-    Configurable so the surface can be tightened without a code change.
+    Configurable so the surface can be tightened without a code change. `config`
+    resolves the name (and the deprecated `DA_FILES_ROOT` behind it, and `load_env`);
+    confining the result stays here, because a relative root is a route-layer problem.
     """
-    load_env()
-    root = posixpath.normpath(os.getenv("DA_FILES_ROOT") or "/workspace")
+    root = posixpath.normpath(sandbox_files_root())
     return root if root.startswith("/") else "/workspace"
 
 
@@ -919,11 +914,6 @@ async def _resolve_backend(request, params: dict | None = None):
     browser sees the SAME VM a chat turn warmed — and, because webapp.py and the
     graph share one process, usually straight out of `_SANDBOX_CACHE` with no network.
     """
-    # Function-local ABSOLUTE import (house style, cf. /tools): keeps module load off
-    # agent.py's heavy deepagents imports, dodges an import cycle, and — because it
-    # resolves at call time — is what lets tests monkeypatch these on the module.
-    from dashboard_agent.runtime.agent import _ensure_sandbox, _sandbox_enabled, _sandbox_key_from
-
     load_env()  # `_sandbox_enabled()` reads os.getenv directly and never loads .env itself
     if not _sandbox_enabled():
         return None, _err(
@@ -1065,7 +1055,7 @@ async def sandbox_files(request):
                 "sandbox_id": _sandbox_id(backend),
             }
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - route boundary: report the failure to the SPA as a 500 body
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
 
@@ -1240,7 +1230,7 @@ async def sandbox_file(request):
                 "next_offset": offset + whole_lines if truncated and whole_lines else None,
             }
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - route boundary: report the failure to the SPA as a 500 body
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
 
@@ -1291,7 +1281,7 @@ async def sandbox_upload(request):
     """
     try:
         body = await request.json()
-    except Exception:
+    except Exception:  # noqa: BLE001 - an unreadable body is a client error; answer 400, not 500
         return _err(400, "invalid_body", "Body must be JSON.")
     if not isinstance(body, dict):
         return _err(400, "invalid_body", "Body must be a JSON object.")
@@ -1343,13 +1333,13 @@ async def sandbox_upload(request):
             )
     except TimeoutError:
         return _err(504, "timeout", "The sandbox did not respond.")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - route boundary: report the failure to the SPA as a 500 body
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
     written: list[dict] = []
     for res in results or []:
-        path = str(getattr(res, "path", "") or "")
-        error = getattr(res, "error", None)
+        path = str(res.path or "")
+        error = res.error
         entry = {"name": posixpath.basename(path), "path": path}
         if error:
             failed.append({**entry, "error": str(error)})
@@ -1379,14 +1369,12 @@ async def demo_traffic(request):
     """
     try:
         body = await request.json()
-    except Exception:
+    except Exception:  # noqa: BLE001 - an unreadable body is a client error; answer 400, not 500
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
 
     project = (body.get("project") or body.get("ls_project") or "").strip()
     if not project:
         return JSONResponse({"error": "project is required"}, status_code=400)
-
-    from dashboard_agent.provisioning.traffic import start_demo_traffic
 
     ack = start_demo_traffic(
         body.get("workspace") or "",
@@ -1416,7 +1404,7 @@ def _project_links(workspace: str | None, project: str) -> dict:
     Blocking (one read_project round trip) — call it off the event loop.
     """
     session = _scoped_client(workspace).read_project(project_name=project)
-    base = str(getattr(session, "url", "") or "").rstrip("/")
+    base = str(session.url or "").rstrip("/")
     if not base:
         return {}
     # The SDK hands back a bare project URL today, but it is a URL and may grow a
@@ -1438,8 +1426,6 @@ def _synthetic_traffic(workspace: str | None, project: str) -> dict:
 
     Blocking — call it off the event loop.
     """
-    from dashboard_agent.provisioning.traffic import SYNTHETIC_TAG
-
     stats = _scoped_client(workspace).get_run_stats(
         project_names=[project], is_root=True, filter=f'has(tags, "{SYNTHETIC_TAG}")'
     )
@@ -1466,8 +1452,6 @@ async def demo_traffic_status(request):
     project = (request.query_params.get("project") or "").strip()
     if not project:
         return JSONResponse({"project": "", "running": False, "links": {}})
-
-    from dashboard_agent.provisioning.traffic import demo_traffic_state
 
     workspace = request.query_params.get("workspace")
     out: dict = {"project": project, **demo_traffic_state(project)}

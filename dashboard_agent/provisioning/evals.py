@@ -46,23 +46,21 @@ import json
 import os
 import time
 import traceback
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 import httpx
 from langchain.chat_models import init_chat_model
+from langchain_core.load import dumpd
 from langchain_core.messages import HumanMessage
+from langchain_core.prompts.structured import StructuredPrompt
+from langgraph.types import Command
 from pydantic import BaseModel, Field
 
-from ..config import judge_model, routing_key, sampling_kwargs
-from ..runtime.mocking import install_mocks, restore_mocks
-
-# `assistant_setup` imports THIS module lazily (inside prepare_assistant), so the
-# dependency only runs one way at import time and there is no cycle.
-from .client import _ws_client, slugify
-
-if TYPE_CHECKING:  # pragma: no cover - typing only, keeps agent.py off the import path
-    from ..runtime.agent import Context
-
+from dashboard_agent.config import judge_model, routing_key, sampling_kwargs
+from dashboard_agent.provisioning.client import _ws_client, slugify
+from dashboard_agent.runtime.agent import Context, build_agent
+from dashboard_agent.runtime.mocking import install_mocks, restore_mocks
+from dashboard_agent.runtime.tools import widget_sink
 
 # The single feedback key every example is scored on, and therefore the column the
 # experiment's `feedback_stats` reports (what `GET /evals/status` turns into the
@@ -74,7 +72,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, keeps agent.py off the impo
 # also scores the `none` mode, where nothing is planted and every example is grounded.
 EVAL_FEEDBACK_KEY = "grounded"
 
-# Judge model: a small/fast model, set by DASHBOARD_JUDGE_MODEL so a customer without
+# Judge model: a small/fast model, set by JUDGE_MODEL so a customer without
 # an Anthropic key can still grade. Deliberately NOT tied to the agent model —
 # pinning the judge is what keeps two experiments comparable when the agent model
 # changes underneath them.
@@ -498,10 +496,6 @@ def judge_model_manifest(client) -> tuple[str, dict]:
 
 def judge_prompt_manifest(customer: str) -> dict:
     """The judge's `StructuredPrompt` (template + output schema), serialized."""
-    # Function-local imports keep langchain_core off the agent path's import cost.
-    from langchain_core.load import dumpd
-    from langchain_core.prompts.structured import StructuredPrompt
-
     prompt = StructuredPrompt(
         judge_prompt_messages(customer),
         schema=judge_output_schema(),
@@ -534,7 +528,7 @@ def _push_judge(client, repo: str, manifest: dict) -> None:
     """
     try:
         client.push_prompt(repo, object=manifest)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         msg = str(exc).lower()
         if not ("nothing to commit" in msg or "409" in msg or "conflict" in msg):
             raise
@@ -896,8 +890,6 @@ def make_run_context(context: dict | None) -> Context:
     the demo runs with, or it grades a different agent. Unknown keys are dropped —
     stored context can carry fields a newer/older `Context` doesn't declare.
     """
-    from ..runtime.agent import Context
-
     known = {f.name for f in dataclasses.fields(Context)}
     return Context(**{k: v for k, v in (context or {}).items() if k in known})
 
@@ -931,7 +923,7 @@ def _final_answer(messages: list) -> str:
     for msg in reversed(messages):
         if getattr(msg, "type", None) != "ai" or getattr(msg, "tool_calls", None):
             continue
-        text = _message_text(getattr(msg, "content", None))
+        text = _message_text(msg.content)
         if text:
             return text
     return ""
@@ -982,11 +974,6 @@ def _agent_target(context: dict | None):
     the same ContextVar sink `agent.run` uses, because the figures live there rather
     than in the prose and the evaluator has to see them (see `_GROUNDED_CRITERION`).
     """
-    from langgraph.types import Command
-
-    from ..runtime.agent import build_agent
-    from ..runtime.tools import widget_sink
-
     agent = build_agent()
     ctx = make_run_context(context)
 
@@ -1013,7 +1000,7 @@ def _agent_target(context: dict | None):
                         context=ctx,
                     )
                     break
-                except Exception as exc:  # noqa: BLE001 - retry overloads, re-raise the rest
+                except Exception as exc:  # retry overloads, re-raise the rest
                     if attempt < 3 and ("529" in str(exc) or "overload" in str(exc).lower()):
                         time.sleep(8)
                         continue
@@ -1054,10 +1041,10 @@ def _tally(results: Any) -> tuple[int, int]:
     try:
         for row in results:
             for res in (row.get("evaluation_results") or {}).get("results", []):
-                if getattr(res, "key", "") != EVAL_FEEDBACK_KEY:
+                if res.key != EVAL_FEEDBACK_KEY:
                     continue
                 total += 1
-                passed += int(bool(getattr(res, "score", 0)))
+                passed += int(bool(res.score))
     except Exception:  # noqa: BLE001 - the score is a nicety; the experiment already ran
         pass
     return passed, total
@@ -1106,7 +1093,7 @@ def run_experiment(
     )
     passed, total = _tally(results)
     return {
-        "experiment_name": str(getattr(results, "experiment_name", "") or ""),
+        "experiment_name": str(results.experiment_name or ""),
         "passed": passed,
         "total": total,
         "graded_by": "langsmith" if attached else "in_process",

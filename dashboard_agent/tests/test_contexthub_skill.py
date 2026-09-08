@@ -32,6 +32,7 @@ from langsmith import testing as t
 from dashboard_agent.config import load_env
 from dashboard_agent.provisioning.setup import (
     _SKILLS_CLAUSE,
+    _ws_client,
     push_agent_prompt,
     push_workflow_skills,
 )
@@ -62,17 +63,15 @@ def _cleanup_fixture_repos():
     silently if the key lacks delete permission (older org keys could not delete).
     """
     yield
-    from dashboard_agent.provisioning.setup import _ws_client
-
     client = _ws_client(_WS)
     for repo in (_AGENT_REPO, _FS_AGENT_REPO):
         try:
             client.delete_agent(repo)
-        except Exception:
+        except Exception:  # noqa: BLE001 - best-effort cleanup; an older key may lack delete permission
             pass
     try:
         client.delete_skill(f"{_SLUG}-returns-eligibility-skill")
-    except Exception:
+    except Exception:  # noqa: BLE001 - best-effort cleanup; an older key may lack delete permission
         pass
 
 
@@ -184,8 +183,6 @@ def test_context_hub_filesystem_read_write():
     assert marker in answer, f"agent did not report the file contents ({marker} missing)"
 
     # The write must have persisted to the Context Hub agent repo as a file.
-    from dashboard_agent.provisioning.setup import _ws_client
-
     files = _ws_client(_WS).pull_agent(_FS_AGENT_REPO).files
     entry = files.get("notes/probe.md")
     assert entry is not None, f"notes/probe.md not persisted in the repo (paths: {list(files)})"

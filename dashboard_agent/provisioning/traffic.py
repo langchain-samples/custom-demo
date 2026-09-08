@@ -45,11 +45,13 @@ import traceback
 import uuid
 from typing import Any, cast
 
+from langchain_core.tracers.context import collect_runs
+from langsmith import tracing_context
 from langsmith.uuid import uuid7_from_datetime
 
-# `assistant_setup` imports THIS module lazily (inside prepare_assistant), so the
-# dependency only runs one way at import time and there is no cycle.
-from .client import _ws_client, playground_model_id
+from dashboard_agent.provisioning.client import _ws_client, playground_model_id
+from dashboard_agent.provisioning.evals import make_run_context
+from dashboard_agent.runtime.agent import build_agent
 
 # --- shape of a backfill -------------------------------------------------------
 
@@ -188,7 +190,7 @@ def fetch_trace(
         seen = len(runs)
         if attempt < attempts - 1:
             time.sleep(delay)
-    return sorted(runs, key=lambda r: str(getattr(r, "dotted_order", "") or ""))
+    return sorted(runs, key=lambda r: str(r.dotted_order or ""))
 
 
 def shift_trace(
@@ -216,7 +218,7 @@ def shift_trace(
     if not runs:
         return []
     root = runs[0]
-    origin = _as_dt(getattr(root, "start_time", None))
+    origin = _as_dt(root.start_time)
     if origin is None:
         return []
 
@@ -234,8 +236,8 @@ def shift_trace(
     # Runs arrive sorted by dotted_order, so a parent is always rebuilt before its
     # children and `orders[parent]` is populated by the time a child needs it.
     for run in runs:
-        old_id = str(getattr(run, "id", "") or "")
-        start = moved(getattr(run, "start_time", None))
+        old_id = str(run.id or "")
+        start = moved(run.start_time)
         if not old_id or start is None:
             continue
         new_id = uuid7_from_datetime(start)  # uuid7 embeds the backdated time, as real runs do
@@ -243,15 +245,15 @@ def shift_trace(
         if root_id is None:
             root_id = new_id
 
-        old_parent = getattr(run, "parent_run_id", None)
+        old_parent = run.parent_run_id
         parent_key = str(old_parent) if old_parent else ""
         parent_order = orders.get(parent_key, "")
         order = f"{parent_order}.{_seg(start, new_id)}" if parent_order else _seg(start, new_id)
         orders[old_id] = order
 
-        end = moved(getattr(run, "end_time", None)) or start + dt.timedelta(milliseconds=50)
+        end = moved(run.end_time) or start + dt.timedelta(milliseconds=50)
 
-        extra = dict(getattr(run, "extra", None) or {})
+        extra = dict(run.extra or {})
         meta = dict(extra.get("metadata") or {})
         usage = meta.get("usage_metadata")
         if isinstance(usage, dict):
@@ -265,18 +267,18 @@ def shift_trace(
             meta.update(extra_metadata)
         extra["metadata"] = meta
 
-        tags = [t for t in (getattr(run, "tags", None) or []) if t != SYNTHETIC_TAG]
+        tags = [t for t in (run.tags or []) if t != SYNTHETIC_TAG]
         payload: dict[str, Any] = {
             "id": str(new_id),
             "trace_id": str(root_id),
             "dotted_order": order,
             "session_name": project,
-            "name": getattr(run, "name", "") or "run",
-            "run_type": getattr(run, "run_type", "chain") or "chain",
+            "name": run.name or "run",
+            "run_type": run.run_type or "chain",
             "start_time": start.isoformat(),
             "end_time": end.isoformat(),
-            "inputs": getattr(run, "inputs", None) or {},
-            "outputs": getattr(run, "outputs", None) or {},
+            "inputs": run.inputs or {},
+            "outputs": run.outputs or {},
             "extra": extra,
             "tags": [*tags, SYNTHETIC_TAG],
         }
@@ -285,7 +287,7 @@ def shift_trace(
         # `serialized` is dropped by the client for anything but llm/prompt runs
         # (client.py:2328), so only carry it where it survives.
         if payload["run_type"] in ("llm", "prompt"):
-            serialized = getattr(run, "serialized", None)
+            serialized = run.serialized
             if serialized:
                 payload["serialized"] = serialized
         out.append(payload)
@@ -378,8 +380,8 @@ def collected_trace_id(traced_runs: list[Any]) -> str:
     if not traced_runs:
         return ""
     far_future = dt.datetime.max.replace(tzinfo=dt.UTC)
-    outermost = min(traced_runs, key=lambda r: _as_dt(getattr(r, "start_time", None)) or far_future)
-    return str(getattr(outermost, "id", "") or "")
+    outermost = min(traced_runs, key=lambda r: _as_dt(r.start_time) or far_future)
+    return str(outermost.id or "")
 
 
 def run_seeds(
@@ -398,19 +400,12 @@ def run_seeds(
     the real project, and the backfill dies with "no seed traces" having already paid
     for the runs. `graph.py` routes per-run traces the same way, for the same reason.
     """
-    from langchain_core.tracers.context import collect_runs
-    from langsmith import tracing_context
-
-    from .evals import make_run_context
-
     ctx = make_run_context(context)
     out: list[dict] = []
     agent = None
     for item in questions:
         try:
             if agent is None:  # built lazily so a bad context fails one question, not all
-                from ..runtime.agent import build_agent
-
                 agent = build_agent()
             # `collect_runs` captures the runs of this call synchronously as they
             # complete (see `collected_trace_id` for which one to read).
@@ -426,7 +421,7 @@ def run_seeds(
                     config={"configurable": {"thread_id": str(uuid.uuid4())}},
                     context=ctx,
                 )
-            trace_id = collected_trace_id(getattr(collected, "traced_runs", None) or [])
+            trace_id = collected_trace_id(collected.traced_runs)
             if trace_id:
                 out.append({"trace_id": trace_id, "is_gap": item.get("is_gap", False)})
         except Exception:  # noqa: BLE001 - one bad seed must not lose the others
@@ -738,7 +733,7 @@ def _ensure_feedback_configs(client: Any) -> None:
                 feedback_config=cast("Any", config),
                 is_lower_score_better=lower_better,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             msg = str(exc).lower()
             if not ("409" in msg or "conflict" in msg or "already exists" in msg):
                 raise

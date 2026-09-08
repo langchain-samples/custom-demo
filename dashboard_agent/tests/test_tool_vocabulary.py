@@ -43,7 +43,7 @@ BUILTINS = frozenset(
         "glob",
         "grep",
         "delete",
-        # From langchain-quickjs, bound only when DA_DYNAMIC_SUBAGENTS is on.
+        # From langchain-quickjs, bound only when DYNAMIC_SUBAGENTS is on.
         "eval",
     }
 )

@@ -57,17 +57,17 @@ nothing but a spinner. Measured on a real first turn: 210s, of which the VM boot
 25s (`_SANDBOX_WAIT_SECONDS`) and the rest is the seed script installing pandas, numpy,
 statsmodels and scikit-learn into the VM. So create the assistant, ask one throwaway question,
 and wait for it to answer before you present. The same wait returns if the VM is left idle for
-an hour and gets reaped. With `DA_SANDBOX=0` there is no VM at all, and the agent will say
+an hour and gets reaped. With `SANDBOX_ENABLED=0` there is no VM at all, and the agent will say
 plainly that it has no data source.
 
 ### If something doesn't work
 
 | Symptom | Cause |
 | :-- | :-- |
-| "I have no data source", or no figures | `DA_SANDBOX=0`, or the VM is still booting. Ask again in 30s |
-| `ANTHROPIC_API_KEY is not set` on a non-Anthropic setup | `DASHBOARD_MODEL` still defaults to Anthropic. Set it to your `provider:model` and that provider's key |
+| "I have no data source", or no figures | `SANDBOX_ENABLED=0`, or the VM is still booting. Ask again in 30s |
+| `ANTHROPIC_API_KEY is not set` on a non-Anthropic setup | `AGENT_MODEL` still defaults to Anthropic. Set it to your `provider:model` and that provider's key |
 | Azure calls 404 | `AZURE_OPENAI_ENDPOINT` includes `/openai/deployments/...`. It must stop before that; the client appends it |
-| The model rejects `temperature` | Reasoning-tuned models allow only their own default. Set `DASHBOARD_TEMPERATURE=` (empty) to omit it |
+| The model rejects `temperature` | Reasoning-tuned models allow only their own default. Set `MODEL_TEMPERATURE=` (empty) to omit it |
 | Editing the prompt changes nothing | You edited a different assistant's repo. Each one has its own, named `<slug>-agent` |
 | Model calls go somewhere unexpected | `ANTHROPIC_BASE_URL` is set in your shell and redirects everything. Preflight warns about this |
 
@@ -262,14 +262,29 @@ rather than *with* it.
 | `LANGSMITH_ENDPOINT` | `https://api.smith.langchain.com` | LangSmith API base URL |
 | `WORKSPACE_ID` | the API key's workspace | scopes the LangSmith client when your key spans several workspaces. Unset is correct for a single-workspace key |
 | `PROJECT_NAME` | `dashboard-agent` | fallback tracing project. An assistant traces to its customer name, or to `context.ls_project` when set |
-| `DASHBOARD_MODEL` | `claude-sonnet-5` | agent model |
-| `DASHBOARD_SIMULATED_MODEL` | a Haiku id | fast model behind the simulated tools |
-| `DA_SANDBOX` | `1` | `0` disables the code-execution VM, which leaves the agent with no data source |
+| `AGENT_MODEL` | `claude-sonnet-5` | agent model |
+| `MODEL_TEMPERATURE` | each call site's own | empty omits `temperature` entirely, for models that reject any but their default |
+| `JUDGE_MODEL` | a Haiku id | demo-eval judge; pinned separately so swapping the agent model does not move it |
+| `SIMULATED_MODEL` | a Haiku id | fast model behind the simulated tools |
+| `SANDBOX_ENABLED` | `1` | exactly `0` disables the code-execution VM, which leaves the agent with no data source |
 | `TAVILY_API_KEY` | unset | required by `web_search` |
 | `GEMINI_API_KEY` | unset | enables voice mode |
 | `BRANDFETCH_API_KEY` | unset | accurate brand palette and typefaces at setup; falls back to an LLM guess |
 | `LOGODEV_TOKEN` | bundled key | Logo.dev key for customer logos |
 | `LANGGRAPH_URL` | `http://127.0.0.1:2024` | Agent Server the `scripts/` helpers talk to |
+
+The model variables were once `DASHBOARD_*` (`DASHBOARD_MODEL`, `DASHBOARD_TEMPERATURE`,
+`DASHBOARD_JUDGE_MODEL`, `DASHBOARD_GOAL_MODEL`, `DASHBOARD_GOAL_MAX_ITERATIONS`,
+`DASHBOARD_SETUP_MODEL`, `DASHBOARD_SIMULATED_MODEL`, `DASHBOARD_VOICE_MODEL`), from when
+building dashboards was the whole of what this did. Every old name is still read as a
+fallback, so an existing `.env` or deployment secret keeps working; new ones should use the
+names above. `DASHBOARD_DATA_MODEL` is the one exception - it was a fallback for the deleted
+synthetic data source and is gone.
+
+The `DA_*` knobs went the same way, because the `DA` was "Dashboard Agent" too:
+`DA_SANDBOX` -> `SANDBOX_ENABLED`, `DA_DYNAMIC_SUBAGENTS` -> `DYNAMIC_SUBAGENTS`,
+`DA_FILES_ROOT` -> `SANDBOX_FILES_ROOT`, `DA_MCP_TOOLS_TTL` -> `MCP_TOOLS_TTL`,
+`DA_MCP_TIMEOUT` -> `MCP_TIMEOUT`. Same fallback, so nothing breaks.
 
 ## Further reading
 

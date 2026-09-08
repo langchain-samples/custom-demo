@@ -11,7 +11,7 @@ bug-free prompt, so the app still works offline.
 
 from __future__ import annotations
 
-from ..config import make_client, scoped_client
+from dashboard_agent.config import make_client, scoped_client
 
 
 def _prompt_client(workspace: str | None):
@@ -260,5 +260,5 @@ def pull_agent_prompt(repo: str, workspace: str | None = None) -> str:
         entry = (agent.files or {}).get("AGENTS.md")
         text = getattr(entry, "content", None)
         return text or FALLBACK_PROMPT
-    except Exception:
+    except Exception:  # noqa: BLE001 - a run must never hard-fail on prompt sourcing; fall back to the bundled one
         return FALLBACK_PROMPT
