@@ -15,6 +15,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -126,6 +127,7 @@ export function Tooltip({
   const id = useId();
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const anchorRef = useRef<HTMLSpanElement>(null);
+  const bubbleRef = useRef<HTMLSpanElement>(null);
   const reduce = useReducedMotion();
   const canHover = useHoverCapable();
 
@@ -182,6 +184,32 @@ export function Tooltip({
     };
   }, [open, place]);
 
+  /**
+   * Nudge a top/bottom tooltip back inside the viewport.
+   *
+   * The bubble is `whitespace-nowrap` and centred on the trigger with
+   * translateX(-50%), so a long label on a right-aligned toolbar button hangs
+   * off the edge with nothing to stop it. Measured after paint (the width is not
+   * known before) and applied by moving the anchor point, which keeps the
+   * centring transform and the enter animation untouched.
+   *
+   * Only the horizontal axis, and only for top/bottom: for `left`/`right` the
+   * anchor's x IS the trigger edge, so moving it would detach the tooltip from
+   * what it describes.
+   */
+  useLayoutEffect(() => {
+    if (!open || !coords || (side !== "top" && side !== "bottom")) return;
+    const el = bubbleRef.current;
+    if (!el) return;
+    const half = el.offsetWidth / 2;
+    const margin = 8;
+    const min = margin + half;
+    const max = window.innerWidth - margin - half;
+    // A bubble wider than the viewport has no satisfying position; centre it.
+    const clamped = min > max ? window.innerWidth / 2 : Math.min(Math.max(coords.left, min), max);
+    if (Math.abs(clamped - coords.left) > 0.5) setCoords({ ...coords, left: clamped });
+  }, [open, coords, side]);
+
   const variants = useMemo(
     () => (reduce ? REDUCED_VARIANTS : buildVariants(side)),
     [reduce, side],
@@ -222,6 +250,7 @@ export function Tooltip({
                   }}
                 >
                   <motion.span
+                    ref={bubbleRef}
                     id={id}
                     role="tooltip"
                     variants={variants}

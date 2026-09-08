@@ -833,6 +833,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
             <WorkspaceSelect
               value={cfg.lsWorkspace}
               workspaces={workspaces}
+              organization={organization}
               onChange={handleWorkspace}
             />
 

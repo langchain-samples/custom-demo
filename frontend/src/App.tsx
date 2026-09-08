@@ -336,7 +336,7 @@ export default function App() {
         >
           <IconSparkles size={16} /> New Chat
         </Button>
-        <Tooltip content="Agent graph - every tool call this turn, by what it touched" side="bottom">
+        <Tooltip content="Agent graph" side="bottom">
           <Button
             variant={graphOpen ? "primary" : "secondary"}
             size="icon"
@@ -348,7 +348,7 @@ export default function App() {
             <IconTopologyStar3 size={18} />
           </Button>
         </Tooltip>
-        <Tooltip content="About this agent - what it is and how it is built" side="bottom">
+        <Tooltip content="About" side="bottom">
           <Button
             variant="secondary"
             size="icon"
@@ -359,7 +359,7 @@ export default function App() {
             <IconInfoCircle size={18} />
           </Button>
         </Tooltip>
-        <Tooltip content="Browse the agent's files" side="bottom">
+        <Tooltip content="Files" side="bottom">
           <Button
             variant="secondary"
             size="icon"
@@ -370,7 +370,7 @@ export default function App() {
             <IconFolders size={18} />
           </Button>
         </Tooltip>
-        <Tooltip content="Evals - run this assistant's demo dataset in LangSmith" side="bottom">
+        <Tooltip content="Evals" side="bottom">
           <Button
             variant="secondary"
             size="icon"
@@ -395,7 +395,7 @@ export default function App() {
             {effectiveTheme === "dark" ? <IconSun size={18} /> : <IconMoon size={18} />}
           </Button>
         </Tooltip>
-        <Tooltip content="Customize appearance" side="bottom">
+        <Tooltip content="Appearance" side="bottom">
           <Button
             variant="secondary"
             size="icon"
