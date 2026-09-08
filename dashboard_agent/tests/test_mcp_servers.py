@@ -343,9 +343,11 @@ def test_a_signature_comes_back_as_an_image_and_a_url(fieldlink):
     record = result.structured_content
     assert record["status"] == "signed"
     assert record["signature_url"].endswith("/signatures/FL-4417.png")
-    # Not the bytes, anywhere the model reads.
+    # The data URI is the one a document embeds: no fetch, so the picture
+    # survives this server going away and prints into a PDF.
+    assert record["signature_data_uri"].startswith("data:image/png;base64,")
+    # The raw column the record is stored under never reaches the model.
     assert "signature" not in record
-    assert "base64" not in result.content[0].text
 
 
 def test_a_signature_too_small_to_render_keeps_the_url_and_drops_the_image(fieldlink):
@@ -453,3 +455,216 @@ def test_a_declined_signature_leaves_the_shipment_unsigned(fieldlink):
 
     record = asyncio.run(decline()).structured_content
     assert record["status"] == "unsigned"
+
+
+# ---------------------------------------------------------------------------
+# Meridian Wealth: the three MCP Apps
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def meridian():
+    """The wealth demo server, over FastMCP's in-memory transport."""
+    from fastmcp import Client
+
+    from mcp_demo_server.wealth import mcp
+
+    return Client(mcp)
+
+
+def _rounds(client, tool: str, args: dict, key: str, content: dict):
+    """Both legs of a guard tool: the ask, then the answer. Returns (schema, result)."""
+    from mcp.types import ElicitResult, InputRequiredResult
+
+    async def go():
+        async with client as c:
+            asked = await c.session.call_tool(tool, args, allow_input_required=True)
+            assert isinstance(asked, InputRequiredResult), f"{tool} answered without asking"
+            answered = await c.session.call_tool(
+                tool,
+                args,
+                input_responses={key: ElicitResult(action="accept", content=content)},
+                request_state=asked.request_state,
+                allow_input_required=True,
+            )
+            return asked.input_requests[key].params.requested_schema, answered
+
+    return asyncio.run(go())
+
+
+_BALANCED = {
+    "us_equity": 38.0,
+    "intl_equity": 17.0,
+    "fixed_income": 30.0,
+    "alternatives": 10.0,
+    "cash": 5.0,
+    "approved": True,
+}
+
+
+def test_every_interactive_wealth_tool_ships_its_own_ui(meridian):
+    """Each of the three earns an App by collecting what a form cannot."""
+
+    async def check():
+        async with meridian as c:
+            return {
+                t.name: (t.meta or {}).get("ui", {}).get("resourceUri")
+                for t in await c.list_tools()
+            }
+
+    apps = asyncio.run(check())
+    assert apps["propose_rebalance"] == "ui://meridian/rebalance.html"
+    assert apps["project_goal"] == "ui://meridian/projection.html"
+    assert apps["confirm_trade"] == "ui://meridian/trade.html"
+    # The read-only lookups are ordinary tools; an App there would be decoration.
+    assert apps["list_accounts"] is None
+    assert apps["get_account"] is None
+
+
+def test_an_app_gets_its_render_context_on_a_property(meridian):
+    """The context has to survive the wire, and only property extras do.
+
+    The SDK strips unknown ROOT keys off `requested_schema`. This is the test
+    that catches someone moving the context back there, where it vanishes with
+    no error and the app renders empty.
+    """
+    schema, _ = _rounds(
+        meridian, "propose_rebalance", {"account_id": "MW-10241"}, "rebalance", _BALANCED
+    )
+    assert "x-app" not in schema, "context at the schema root is dropped in transit"
+    context = schema["properties"]["approved"]["x-app"]
+    assert [s["label"] for s in context["sleeves"]] == [
+        "US equity",
+        "Intl equity",
+        "Fixed income",
+        "Alternatives",
+        "Cash",
+    ]
+    assert context["portfolio_value"] == 4_820_000
+
+
+def test_the_rebalance_schema_is_flat(meridian):
+    """One number per sleeve, because elicitation content allows only primitives.
+
+    A nested `allocation` object is rejected by `ElicitResult` before it ever
+    reaches the server, so the schema cannot ask for one.
+    """
+    schema, _ = _rounds(
+        meridian, "propose_rebalance", {"account_id": "MW-10241"}, "rebalance", _BALANCED
+    )
+    kinds = {k: v["type"] for k, v in schema["properties"].items()}
+    assert kinds == {
+        "us_equity": "number",
+        "intl_equity": "number",
+        "fixed_income": "number",
+        "alternatives": "number",
+        "cash": "number",
+        "approved": "boolean",
+    }
+
+
+def test_an_approved_rebalance_comes_back_as_trades(meridian):
+    _, result = _rounds(
+        meridian, "propose_rebalance", {"account_id": "MW-10241"}, "rebalance", _BALANCED
+    )
+    record = result.structured_content
+    assert record["status"] == "approved"
+    # Moving every sleeve onto policy leaves nothing to drift.
+    assert record["residual_drift"] == 0.0
+    sells = {t["sleeve"] for t in record["trades"] if t["side"] == "SELL"}
+    assert sells == {"US equity", "Alternatives", "Cash"}
+    # Only sales realise a gain, so only sales are taxed.
+    assert record["estimated_tax"] > 0
+
+
+def test_an_allocation_that_is_not_a_portfolio_is_refused(meridian):
+    _, result = _rounds(
+        meridian,
+        "propose_rebalance",
+        {"account_id": "MW-10241"},
+        "rebalance",
+        {**_BALANCED, "us_equity": 80.0},
+    )
+    assert "not 100%" in result.structured_content["error"]
+    assert "Nothing was submitted" in result.structured_content["error"]
+
+
+def test_a_goal_plan_is_saved_against_the_account(meridian):
+    schema, result = _rounds(
+        meridian,
+        "project_goal",
+        {"account_id": "MW-10388"},
+        "plan",
+        {"retirement_age": 62, "monthly_contribution": 3000, "risk_level": "Growth"},
+    )
+    context = schema["properties"]["retirement_age"]["x-app"]
+    assert context["current_age"] == 45
+    assert context["goal"] == 2_000_000
+    record = result.structured_content
+    assert record["status"] == "saved"
+    assert record["years_to_goal"] == 17
+
+
+def test_a_confirmed_ticket_becomes_an_order(meridian):
+    schema, result = _rounds(
+        meridian,
+        "confirm_trade",
+        {"account_id": "MW-10241", "symbol": "AAPL", "side": "sell"},
+        "ticket",
+        {
+            "quantity": 500,
+            "order_type": "limit",
+            "limit_price": 230.0,
+            "time_in_force": "gtc",
+            "confirmed": True,
+        },
+    )
+    context = schema["properties"]["quantity"]["x-app"]
+    # The ticket needs the position to stop the advisor overselling it.
+    assert context["max_qty"] == 4200
+    assert context["last"] == 227.14
+    order = result.structured_content
+    assert order["status"] == "accepted"
+    assert order["estimated_principal"] == 500 * 230.0
+
+
+def test_an_order_cannot_sell_more_than_is_held(meridian):
+    """The app blocks it, and so does the server: the app is not the boundary."""
+    _, result = _rounds(
+        meridian,
+        "confirm_trade",
+        {"account_id": "MW-10241", "symbol": "AAPL", "side": "sell"},
+        "ticket",
+        {
+            "quantity": 99_999,
+            "order_type": "market",
+            "limit_price": None,
+            "time_in_force": "day",
+            "confirmed": True,
+        },
+    )
+    assert "only 4200 held" in result.structured_content["error"]
+    assert "Nothing placed" in result.structured_content["error"]
+
+
+def test_every_app_resource_is_a_complete_document(meridian):
+    """A `ui://` that 404s or arrives half-built is a blank iframe on stage."""
+
+    async def read():
+        async with meridian as c:
+            uris = [str(r.uri) for r in await c.list_resources()]
+            return uris, {u: (await c.read_resource(u))[0].text for u in uris}
+
+    uris, docs = asyncio.run(read())
+    assert set(uris) == {
+        "ui://meridian/rebalance.html",
+        "ui://meridian/projection.html",
+        "ui://meridian/trade.html",
+        "ui://meridian/signature.html",
+    }
+    for uri, html in docs.items():
+        assert html.startswith("<!doctype html>"), uri
+        # The bridge is injected, not imported: the iframe has no origin to
+        # fetch a script from.
+        assert "window.McpApp" in html, uri
+        assert "McpApp.ready()" in html, uri

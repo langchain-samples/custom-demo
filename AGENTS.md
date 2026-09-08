@@ -58,9 +58,12 @@ frontend/             React 19 + Vite + Tailwind 4 + shadcn SPA (the real UI)
   src/lib/fonts.ts      Google-Fonts loader + curated self-hosted fallbacks
 evals/                repo-level Tier-3 LLM evals, run by us before a release — score 1 = the
                       planted BUG fired. Not the per-assistant demo eval; see evals/README.md
-mcp_demo_server/      THE OTHER END: a FastMCP server (Fieldlink Logistics) on the modern
-                      stateless spec - cacheable tool list, guard-pattern elicitation, and an
-                      MCP App (`signature_app.html`). NOT shipped in the wheel.
+mcp_demo_server/      THE OTHER END: two FastMCP servers on the modern stateless spec, one
+                      per business (a logistics book with a rebalancer in it convinces nobody).
+                      server.py = Fieldlink Logistics; wealth.py = Meridian Wealth, whose three
+                      interactive tools are all MCP Apps. elicit.py holds the guard-pattern
+                      helpers both share; apps/ holds the app HTML plus the bridge.js and
+                      shell.css injected into each at serve time. NOT shipped in the wheel.
 scripts/              seed_prompt, seed_data_prompt, seed_assistants, setup_assistant, serve_spa,
                       run_mcp_server.sh (runs mcp_demo_server, `--tunnel` for a public ngrok URL)
 .claude/skills/setup-assistant/SKILL.md   interactive /setup-assistant flow (CLI path)
@@ -271,6 +274,14 @@ worth keeping: an image under `_MIN_IMAGE_EDGE` is dropped rather than sent (a p
 a tiny image with a 400 that kills the whole run, found with a 1x1 test fixture), and the URL is
 built from the live request's forwarded headers rather than configured, so it is the tunnel's
 hostname and survives ngrok handing out a new one.
+
+**Two protocol traps, both silent.** `ElicitResult.content` allows only primitives, so an
+elicitation schema cannot ask for a nested object - the rebalance sends one number per sleeve
+rather than an `allocation` map, and a nested answer is rejected by pydantic before it reaches
+the server. And the SDK normalizes `requested_schema`, keeping only `type`, `properties` and
+`required` at the ROOT while passing property-level extras through untouched: an app's render
+context therefore hangs off a property (`elicit.attach_context`), and moving it to the root
+loses it with no error and an app that renders empty. There is a test for each.
 
 **One environment trap.** ngrok's free tier answers any request with a browser User-Agent with
 an interstitial (`ERR_NGROK_6024`, `content-type: text/html`) instead of the resource, so the

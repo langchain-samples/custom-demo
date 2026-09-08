@@ -18,11 +18,19 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const ROOT = path.join(__dirname, "..", "..");
-const APP = path.join(ROOT, "mcp_demo_server", "signature_app.html");
+const APPS = path.join(ROOT, "mcp_demo_server", "apps");
 // jsdom is a devDependency of the SPA, which is the only place node_modules lives.
 const { JSDOM } = require(path.join(ROOT, "frontend", "node_modules", "jsdom"));
 
-const HTML = fs.readFileSync(APP, "utf8");
+/** Compose the app the way apps.py serves it: shared shell + bridge, then the app. */
+const HTML =
+  "<!doctype html><html><head><style>" +
+  fs.readFileSync(path.join(APPS, "shell.css"), "utf8") +
+  "</style><script>" +
+  fs.readFileSync(path.join(APPS, "bridge.js"), "utf8") +
+  "</script></head><body>" +
+  fs.readFileSync(path.join(APPS, "signature.html"), "utf8") +
+  "</body></html>";
 
 let passed = 0;
 async function ok(name, fn) {
@@ -41,6 +49,7 @@ async function ok(name, fn) {
  */
 function mount() {
   const posted = [];
+  const draws = [];
   const dom = new JSDOM(HTML, {
     runScripts: "dangerously",
     pretendToBeVisual: true,
@@ -50,6 +59,11 @@ function mount() {
       // stroke is observable without a native canvas build.
       window.HTMLCanvasElement.prototype.getContext = () => ({
         setTransform() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, clearRect() {},
+        // Records the crop the export asks for, which is the thing worth checking:
+        // a full-pad export is what made the PNG an order of magnitude too big.
+        drawImage(...args) {
+          draws.push(args.slice(1));
+        },
       });
       window.HTMLCanvasElement.prototype.toDataURL = () => "data:image/png;base64,STUB";
       window.addEventListener("message", (event) => {
@@ -60,7 +74,7 @@ function mount() {
       });
     },
   });
-  return { dom, posted, doc: dom.window.document };
+  return { dom, posted, draws, doc: dom.window.document };
 }
 
 /** postMessage is queued, not synchronous: let the queue drain. */
@@ -146,6 +160,22 @@ function name(dom, value) {
     assert.ok(submitted.content.signature.startsWith("data:image/png;base64,"));
     assert.strictEqual(submitted.content.signed_by, "Grace Achieng");
     assert.ok(!Number.isNaN(Date.parse(submitted.content.signed_at)));
+  });
+
+  await ok("exports only the ink, not the whole pad", async () => {
+    const { dom, doc, draws } = mount();
+    sign(dom);
+    name(dom, "Grace Achieng");
+    doc.getElementById("submit").click();
+    await flush();
+
+    assert.strictEqual(draws.length, 1, "the export should composite exactly once");
+    const [sx, sy, sw, sh] = draws[0];
+    // The stroke is a dot at (40, 40) with an 8px margin, so the source rect is
+    // a small box near the origin - NOT the 300x150 pad. Device pixels, so the
+    // ratio is folded in; jsdom reports 1.
+    assert.ok(sw < 40 && sh < 40, `expected a cropped source rect, got ${sw}x${sh}`);
+    assert.ok(sx >= 0 && sy >= 0 && sx < 40 && sy < 40, `crop is not around the ink: ${sx},${sy}`);
   });
 
   await ok("lets the recipient back out, which the host turns into a cancel", async () => {

@@ -40,7 +40,6 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from fastmcp import Context, FastMCP
@@ -48,19 +47,15 @@ from fastmcp.apps import UI_MIME_TYPE, AppConfig
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.tools.base import ToolResult
 from fastmcp.utilities.types import Image
-from mcp.types import (
-    ElicitRequest,
-    ElicitRequestFormParams,
-    ElicitResult,
-    InputRequiredResult,
-)
+from mcp.types import InputRequiredResult
 from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse, Response
 
+from mcp_demo_server.apps import render_app
+from mcp_demo_server.elicit import answer_for, ask
+
 SIGNATURE_URI = "ui://fieldlink/signature.html"
 """The MCP App resource `collect_signature` renders (MCP Apps: `_meta.ui.resourceUri`)."""
-
-_APP_HTML = Path(__file__).with_name("signature_app.html")
 
 # Only used to build a URL when there is no HTTP request to read one off (the
 # in-process transport the tests use). A real call always has one.
@@ -134,6 +129,10 @@ def _decode_png(data_uri: str) -> bytes | None:
 # and the 400 kills the whole run, not just the picture. A real pad canvas is
 # hundreds of pixels wide, so this only ever catches a degenerate one.
 _MIN_IMAGE_EDGE = 16
+
+# Roughly 2k tokens of base64. Above this the model is being asked to copy more
+# than it reliably can, and the picture is not worth the context.
+MAX_INLINE_CHARS = int(os.getenv("FIELDLINK_MAX_INLINE", "8000"))
 
 
 def _renderable(png: bytes) -> bool:
@@ -235,33 +234,6 @@ def get_shipment(
 # `interrupt()`: a retry-able round survives the pause, an open socket would not.
 
 
-def _ask(key: str, message: str, schema: type[BaseModel]) -> InputRequiredResult:
-    """One round of asking, as the result of this leg of the call.
-
-    `key` is how the answer comes back in `ctx.input_responses`, and it is also
-    what the host resumes against, so it has to stay stable across rounds.
-    """
-    return InputRequiredResult(
-        input_requests={
-            key: ElicitRequest(
-                params=ElicitRequestFormParams(
-                    message=message,
-                    requested_schema=schema.model_json_schema(),
-                )
-            )
-        }
-    )
-
-
-def _answer(ctx: Context, key: str) -> ElicitResult | None:
-    """The client's answer to `key`, or None on the round where nothing was asked yet."""
-    responses = ctx.input_responses
-    if not responses:
-        return None
-    answer = responses.get(key)
-    return answer if isinstance(answer, ElicitResult) else None
-
-
 class DeliverySlot(BaseModel):
     """What the caller must supply before a delivery can be booked."""
 
@@ -290,16 +262,16 @@ def schedule_delivery(
     if shipment.status == "delivered":
         return {"error": f"{shipment.tracking_id} was already delivered; nothing to schedule."}
 
-    answer = _answer(ctx, "slot")
+    answer = answer_for(ctx, "slot")
     if answer is None:
         # Nothing above this line does real work, which matters: the client
         # re-calls this tool from the top with the answer attached, so cheap
         # lookups repeat harmlessly where a write would repeat too.
-        return _ask(
+        return ask(
             "slot",
             f"When should {shipment.tracking_id} ({shipment.contents}) be delivered to "
             f"{shipment.destination}?",
-            DeliverySlot,
+            DeliverySlot.model_json_schema(),
         )
 
     if answer.action == "decline":
@@ -349,31 +321,29 @@ def collect_signature(
     as an IMAGE, so you can describe or check it. And `signature_url` is a real
     PNG served by Fieldlink.
 
-    To put the signature in a proof-of-delivery document, embed that URL:
-    `<img src="{signature_url}" alt="Recipient signature">`. Use the URL exactly
-    as given. Never inline base64 image data and never invent a data URI: the
-    image bytes are not in this result, and a fabricated one renders as a broken
-    image on a delivery record.
+    To put the signature in a proof-of-delivery document, copy `signature_data_uri`
+    verbatim into an image tag:
+    `<img src="{signature_data_uri}" alt="Recipient signature">`. It is a complete
+    `data:image/png;base64,...` value and a few KB at most, so the document needs
+    no network: it renders offline, prints to PDF, and still shows the signature
+    after this server has gone away. Copy every character; do not truncate it, do
+    not abbreviate it with an ellipsis, and do not invent one.
 
-    If you have a code-execution tool, prefer downloading the URL there and
-    writing the document with the image inlined as a data URI. That keeps the
-    document readable after this server goes away, which matters because a
-    proof of delivery outlives the system that issued it. Fetch it with the
-    header `ngrok-skip-browser-warning: 1`, harmless everywhere and required
-    when this server is behind an ngrok tunnel. Let the code move the bytes;
-    never type them yourself.
+    `signature_url` is the same image over HTTP, for when `signature_data_uri` is
+    null because the signature was too large to inline. Prefer the data URI
+    whenever it is present.
     """
     shipment = _BY_ID.get(tracking_id.strip().upper())
     if shipment is None:
         return {"error": f"No shipment {tracking_id!r} in Fieldlink."}
 
-    answer = _answer(ctx, "signature")
+    answer = answer_for(ctx, "signature")
     if answer is None:
-        return _ask(
+        return ask(
             "signature",
             f"Signature for {shipment.tracking_id}, {shipment.pallets} pallets of "
             f"{shipment.contents} at {shipment.destination}.",
-            SignatureCapture,
+            SignatureCapture.model_json_schema(),
         )
 
     if answer.action != "accept":
@@ -399,16 +369,29 @@ def collect_signature(
     }
     _DELIVERIES[shipment.tracking_id] = record
 
-    summary = {
+    summary: dict[str, Any] = {
         "status": "signed",
         "tracking_id": shipment.tracking_id,
         "signed_by": capture.signed_by,
         "signed_at": capture.signed_at,
         "pod_reference": f"POD-{shipment.tracking_id}-{capture.signed_at[:10]}",
-        # A URL, not the image. This is what goes in an <img src="..."> when the
-        # agent builds a proof-of-delivery document.
+        # Both, and the data URI is the one to use. The pad crops to the ink and
+        # exports at CSS scale, so a signature is a couple of KB rather than the
+        # 13.7KB a full-pad export at device resolution produced: small enough to
+        # paste straight into an <img>, which means a document that needs no
+        # network at all, renders in a PDF, and survives this server going away.
+        # The URL stays as the fallback for one too big to inline.
+        "signature_data_uri": capture.signature,
         "signature_url": f"{_public_base()}/signatures/{shipment.tracking_id}.png",
     }
+    # Past this, inlining costs more context than the picture is worth, and the
+    # model starts truncating it rather than copying it.
+    if len(capture.signature) > MAX_INLINE_CHARS:
+        summary["signature_data_uri"] = None
+        summary["note"] = (
+            f"Signature is {len(capture.signature) // 1024}KB, too large to inline; "
+            "use signature_url."
+        )
     if png is None:
         # A malformed data URI is the recipient's UI misbehaving, not a failed
         # delivery: keep the signed record, but do not promise an image.
@@ -455,4 +438,4 @@ async def signature_png(request) -> Response:
 @mcp.resource(SIGNATURE_URI, mime_type=UI_MIME_TYPE, name="Signature pad")
 def signature_app() -> str:
     """Serve the signature pad's HTML to a host that supports MCP Apps."""
-    return _APP_HTML.read_text(encoding="utf-8")
+    return render_app("signature", title="Signature")

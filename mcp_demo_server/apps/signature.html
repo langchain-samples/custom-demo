@@ -1,0 +1,226 @@
+<style>
+  .pad {
+    position: relative;
+    border: 1px dashed var(--border);
+    border-radius: 10px;
+    background: var(--panel);
+    overflow: hidden;
+  }
+  canvas { display: block; width: 100%; height: 150px; touch-action: none; cursor: crosshair; }
+  .hint {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    font-size: 12px;
+    color: var(--muted);
+    pointer-events: none;
+  }
+  .pad.inked .hint { display: none; }
+  .baseline {
+    position: absolute;
+    left: 14px; right: 14px; bottom: 30px;
+    border-bottom: 1px solid var(--border);
+    pointer-events: none;
+  }
+  #who { margin-bottom: 10px; }
+  .stamp { font-size: 11px; color: var(--muted); }
+</style>
+
+<p class="msg" id="msg">Sign to confirm.</p>
+
+<label class="lbl" for="who">Received by</label>
+<input id="who" type="text" autocomplete="off" placeholder="Full name" />
+
+<span class="lbl">Signature</span>
+<div class="pad" id="pad">
+  <div class="baseline"></div>
+  <canvas id="canvas" tabindex="0" aria-label="Signature pad"></canvas>
+  <div class="hint">Draw your signature here</div>
+</div>
+
+<div class="row">
+  <button type="button" id="clear">Clear</button>
+  <span class="spacer"></span>
+  <span class="stamp" id="stamp"></span>
+</div>
+<div class="row">
+  <button type="button" class="primary" id="submit" disabled>Confirm</button>
+  <button type="button" id="cancel">Cancel</button>
+</div>
+
+<script>
+  (function () {
+    "use strict";
+
+    var canvas = document.getElementById("canvas");
+    var pad = document.getElementById("pad");
+    var who = document.getElementById("who");
+    var submit = document.getElementById("submit");
+    var ctx = canvas.getContext("2d");
+    var inked = false;
+    var drawing = false;
+    // The drawn extent, in CSS pixels. Exporting the whole pad at device
+    // resolution produced a 1244x300 PNG (13.7KB) for a stroke covering a
+    // fraction of it: a signature is line art, and the empty margin is most of
+    // the file. Tracked as we draw so the export can crop to it, which is what
+    // makes the result small enough to travel inline in the tool result.
+    var ink = null;
+
+    /**
+     * Match the backing store to the CSS box at the device's pixel ratio, so
+     * strokes are sharp and hit-testing lines up. Redrawing is not needed:
+     * resizing clears the pad, and the only resize is the initial layout.
+     */
+    function fit() {
+      var ratio = window.devicePixelRatio || 1;
+      var rect = canvas.getBoundingClientRect();
+      if (!rect.width) return;
+      canvas.width = Math.round(rect.width * ratio);
+      canvas.height = Math.round(rect.height * ratio);
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      ctx.lineWidth = 2;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = getComputedStyle(document.body).color;
+    }
+
+    function point(event) {
+      var rect = canvas.getBoundingClientRect();
+      return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    }
+
+    /** Grow the ink box to include a point. */
+    function extend(p) {
+      if (!ink) ink = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+      else {
+        ink.x0 = Math.min(ink.x0, p.x);
+        ink.y0 = Math.min(ink.y0, p.y);
+        ink.x1 = Math.max(ink.x1, p.x);
+        ink.y1 = Math.max(ink.y1, p.y);
+      }
+    }
+
+    /**
+     * The signature as a compact PNG data URI: cropped to the ink (plus a small
+     * margin so the stroke is not clipped) and drawn at CSS scale rather than
+     * device scale, capped at EXPORT_MAX wide. A couple of KB instead of a
+     * dozen, which is what lets the document embed it directly and need no
+     * network to render, print, or survive this server going away.
+     */
+    function exportSignature() {
+      var ratio = window.devicePixelRatio || 1;
+      var margin = 8;
+      var w = canvas.width / ratio;
+      var h = canvas.height / ratio;
+      var box = ink
+        ? {
+            x: Math.max(0, ink.x0 - margin),
+            y: Math.max(0, ink.y0 - margin),
+            w: Math.min(w, ink.x1 + margin) - Math.max(0, ink.x0 - margin),
+            h: Math.min(h, ink.y1 + margin) - Math.max(0, ink.y0 - margin),
+          }
+        : { x: 0, y: 0, w: w, h: h };
+      if (!(box.w > 0 && box.h > 0)) return canvas.toDataURL("image/png");
+
+      var EXPORT_MAX = 480;
+      var scale = Math.min(1, EXPORT_MAX / box.w);
+      var out = document.createElement("canvas");
+      out.width = Math.max(1, Math.round(box.w * scale));
+      out.height = Math.max(1, Math.round(box.h * scale));
+      var octx = out.getContext("2d");
+      if (!octx) return canvas.toDataURL("image/png");
+      // Source rect is in the backing store's device pixels; the destination is
+      // the CSS-scaled box, which is the downscale.
+      octx.drawImage(
+        canvas,
+        box.x * ratio, box.y * ratio, box.w * ratio, box.h * ratio,
+        0, 0, out.width, out.height,
+      );
+      return out.toDataURL("image/png");
+    }
+
+    canvas.addEventListener("pointerdown", function (event) {
+      drawing = true;
+      canvas.setPointerCapture(event.pointerId);
+      var p = point(event);
+      extend(p);
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      // A tap with no drag is still a mark, so draw a dot rather than nothing.
+      ctx.lineTo(p.x + 0.01, p.y);
+      ctx.stroke();
+      mark();
+    });
+
+    canvas.addEventListener("pointermove", function (event) {
+      if (!drawing) return;
+      var p = point(event);
+      extend(p);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+    });
+
+    function stop(event) {
+      if (!drawing) return;
+      drawing = false;
+      if (event && event.pointerId !== undefined && canvas.hasPointerCapture(event.pointerId)) {
+        canvas.releasePointerCapture(event.pointerId);
+      }
+    }
+    canvas.addEventListener("pointerup", stop);
+    canvas.addEventListener("pointercancel", stop);
+    canvas.addEventListener("pointerleave", stop);
+
+    function mark() {
+      if (inked) return;
+      inked = true;
+      pad.classList.add("inked");
+      refresh();
+    }
+
+    function refresh() {
+      submit.disabled = !(inked && who.value.trim());
+    }
+
+    who.addEventListener("input", refresh);
+
+    document.getElementById("clear").addEventListener("click", function () {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      inked = false;
+      ink = null;
+      pad.classList.remove("inked");
+      refresh();
+    });
+
+    document.getElementById("cancel").addEventListener("click", McpApp.cancel);
+
+    submit.addEventListener("click", function () {
+      if (submit.disabled) return;
+      submit.disabled = true;
+      // Keys are exactly the elicitation's requested_schema properties: the host
+      // forwards this object to the server as the accept content.
+      McpApp.submit({
+        signature: exportSignature(),
+        signed_by: who.value.trim(),
+        signed_at: new Date().toISOString(),
+      });
+    });
+
+    McpApp.onInit(function (request) {
+      if (request.message) document.getElementById("msg").textContent = request.message;
+      var props = (request.requested_schema || {}).properties || {};
+      if (props.signed_by && props.signed_by.description) {
+        who.placeholder = props.signed_by.description;
+      }
+      fit();
+    });
+
+    document.getElementById("stamp").textContent = new Date().toLocaleString(undefined, {
+      day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+    });
+
+    fit();
+    McpApp.ready();
+  })();
+</script>

@@ -1,0 +1,233 @@
+<style>
+  .ticket { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .field { display: flex; flex-direction: column; gap: 3px; }
+  .stepper { display: flex; align-items: stretch; gap: 0; }
+  .stepper button { border-radius: 8px 0 0 8px; width: 30px; padding: 0; font-size: 15px; }
+  .stepper button:last-child { border-radius: 0 8px 8px 0; }
+  .stepper input { border-radius: 0; text-align: center; border-left: 0; border-right: 0; }
+  .seg { display: flex; gap: 0; }
+  .seg label {
+    flex: 1; text-align: center; padding: 6px 0; font-size: 12px; cursor: pointer;
+    border: 1px solid var(--border); background: transparent;
+  }
+  .seg label:first-child { border-radius: 8px 0 0 8px; }
+  .seg label:last-child { border-radius: 0 8px 8px 0; border-left: 0; }
+  .seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .seg input:checked + span { font-weight: 600; }
+  .seg label:has(input:checked) { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+  .est { display: flex; justify-content: space-between; font-size: 12px; padding: 3px 0; }
+  .est b { font-variant-numeric: tabular-nums; }
+  .side { font-weight: 700; letter-spacing: 0.04em; }
+  .side.buy { color: var(--up); }
+  .side.sell { color: var(--down); }
+  /* The hold-to-confirm fill, which is the whole point of this app. */
+  #confirm { position: relative; overflow: hidden; }
+  #fill {
+    position: absolute; inset: 0; width: 0%;
+    background: rgb(255 255 255 / 0.28); pointer-events: none;
+  }
+  #confirm span { position: relative; }
+</style>
+
+<p class="msg" id="msg">Review the order.</p>
+
+<div class="card" style="margin-bottom: 10px">
+  <div class="est">
+    <span><span class="side" id="side">BUY</span> <b id="symbol">-</b> <span class="muted" id="name"></span></span>
+    <span class="muted num" id="last"></span>
+  </div>
+</div>
+
+<div class="ticket">
+  <div class="field">
+    <span class="lbl">Quantity</span>
+    <div class="stepper">
+      <button type="button" id="minus" aria-label="Decrease quantity">-</button>
+      <input type="number" id="qty" min="1" step="1" value="100" aria-label="Quantity" />
+      <button type="button" id="plus" aria-label="Increase quantity">+</button>
+    </div>
+  </div>
+  <div class="field">
+    <span class="lbl">Order type</span>
+    <div class="seg" id="type">
+      <label><input type="radio" name="ot" value="market" checked /><span>Market</span></label>
+      <label><input type="radio" name="ot" value="limit" /><span>Limit</span></label>
+    </div>
+  </div>
+  <div class="field" id="limit-field" style="display: none">
+    <span class="lbl">Limit price</span>
+    <input type="number" id="limit" step="0.01" aria-label="Limit price" />
+  </div>
+  <div class="field">
+    <span class="lbl">Time in force</span>
+    <select id="tif" aria-label="Time in force">
+      <option value="day">Day</option>
+      <option value="gtc">Good til cancelled</option>
+      <option value="ioc">Immediate or cancel</option>
+    </select>
+  </div>
+</div>
+
+<div class="card" style="margin-top: 10px">
+  <div class="est"><span class="muted">Estimated principal</span><b id="principal">-</b></div>
+  <div class="est"><span class="muted">Commission</span><b id="fee">-</b></div>
+  <div class="est" style="border-top: 1px solid var(--border); margin-top: 3px; padding-top: 5px">
+    <span>Estimated total</span><b id="total">-</b>
+  </div>
+</div>
+
+<div id="warn" class="warn" style="display: none; margin-top: 8px"></div>
+
+<div class="row">
+  <button type="button" class="primary" id="confirm"><span id="confirm-label">Hold to submit</span><i id="fill"></i></button>
+  <button type="button" id="cancel">Cancel</button>
+</div>
+<div class="muted" style="font-size: 10.5px; margin-top: 6px">
+  Press and hold to place the order. Estimates exclude taxes and are not a quote.
+</div>
+
+<script>
+  (function () {
+    "use strict";
+
+    // How long the button must be held. An order is irreversible, so submitting
+    // one should not be reachable by the same reflex click that dismisses a
+    // dialog: the hold is the confirmation, not a decoration.
+    var HOLD_MS = 900;
+
+    var order = { side: "BUY", symbol: "-", name: "", last: 0, currency: "$", fee: 0, max_qty: 0 };
+    var els = {
+      qty: document.getElementById("qty"),
+      limit: document.getElementById("limit"),
+      tif: document.getElementById("tif"),
+      warn: document.getElementById("warn"),
+      confirm: document.getElementById("confirm"),
+      fill: document.getElementById("fill"),
+      label: document.getElementById("confirm-label"),
+    };
+
+    var money = function (n) {
+      return order.currency + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    };
+    var orderType = function () {
+      return document.querySelector('input[name="ot"]:checked').value;
+    };
+
+    function price() {
+      return orderType() === "limit" ? Number(els.limit.value) || 0 : order.last;
+    }
+
+    function problem() {
+      var qty = Number(els.qty.value);
+      if (!(qty > 0)) return "Quantity has to be at least 1.";
+      if (order.max_qty && qty > order.max_qty) {
+        return "Only " + order.max_qty.toLocaleString() + " shares are held in this account.";
+      }
+      if (orderType() === "limit" && !(Number(els.limit.value) > 0)) return "Set a limit price.";
+      return "";
+    }
+
+    function render() {
+      document.getElementById("limit-field").style.display = orderType() === "limit" ? "" : "none";
+      var qty = Number(els.qty.value) || 0;
+      var principal = qty * price();
+      document.getElementById("principal").textContent = money(principal);
+      document.getElementById("fee").textContent = money(order.fee);
+      // A sale returns proceeds net of the fee; a purchase costs principal plus.
+      var total = order.side === "SELL" ? principal - order.fee : principal + order.fee;
+      document.getElementById("total").textContent = money(total);
+
+      var msg = problem();
+      els.warn.style.display = msg ? "" : "none";
+      els.warn.textContent = msg;
+      els.confirm.disabled = !!msg;
+      McpApp.resize();
+    }
+
+    document.getElementById("minus").addEventListener("click", function () {
+      els.qty.value = String(Math.max(1, Number(els.qty.value) - 10));
+      render();
+    });
+    document.getElementById("plus").addEventListener("click", function () {
+      els.qty.value = String(Number(els.qty.value) + 10);
+      render();
+    });
+    ["qty", "limit", "tif"].forEach(function (id) {
+      document.getElementById(id).addEventListener("input", render);
+    });
+    document.getElementById("type").addEventListener("change", render);
+
+    /* ---- hold to confirm ---- */
+    var held = null;
+    var start = 0;
+
+    function tick() {
+      var progress = Math.min(1, (Date.now() - start) / HOLD_MS);
+      els.fill.style.width = progress * 100 + "%";
+      if (progress >= 1) return place();
+      held = requestAnimationFrame(tick);
+    }
+
+    function beginHold(event) {
+      if (els.confirm.disabled) return;
+      event.preventDefault();
+      start = Date.now();
+      els.label.textContent = "Keep holding...";
+      held = requestAnimationFrame(tick);
+    }
+
+    function endHold() {
+      if (held === null) return;
+      cancelAnimationFrame(held);
+      held = null;
+      els.fill.style.width = "0%";
+      els.label.textContent = "Hold to submit";
+    }
+
+    function place() {
+      endHold();
+      els.confirm.disabled = true;
+      els.label.textContent = "Submitting...";
+      McpApp.submit({
+        quantity: Number(els.qty.value),
+        order_type: orderType(),
+        limit_price: orderType() === "limit" ? Number(els.limit.value) : null,
+        time_in_force: els.tif.value,
+        confirmed: true,
+      });
+    }
+
+    els.confirm.addEventListener("pointerdown", beginHold);
+    ["pointerup", "pointerleave", "pointercancel"].forEach(function (e) {
+      els.confirm.addEventListener(e, endHold);
+    });
+
+    document.getElementById("cancel").addEventListener("click", McpApp.cancel);
+
+    McpApp.onInit(function (request) {
+      if (request.message) document.getElementById("msg").textContent = request.message;
+      // On a property, not the schema root: the SDK drops unknown root keys.
+      var schema = request.requested_schema || {};
+      var ctx = ((schema.properties || {}).quantity || {})["x-app"] || {};
+      order.side = String(ctx.side || "BUY").toUpperCase();
+      order.symbol = ctx.symbol || "-";
+      order.name = ctx.name || "";
+      order.last = Number(ctx.last || 0);
+      order.fee = Number(ctx.fee || 0);
+      order.max_qty = Number(ctx.max_qty || 0);
+
+      var side = document.getElementById("side");
+      side.textContent = order.side;
+      side.className = "side " + (order.side === "SELL" ? "sell" : "buy");
+      document.getElementById("symbol").textContent = order.symbol;
+      document.getElementById("name").textContent = order.name;
+      document.getElementById("last").textContent = order.last ? "last " + money(order.last) : "";
+      if (ctx.default_qty) els.qty.value = String(ctx.default_qty);
+      els.limit.value = order.last ? order.last.toFixed(2) : "";
+      render();
+    });
+
+    render();
+    McpApp.ready();
+  })();
+</script>

@@ -1,0 +1,215 @@
+<style>
+  .sleeve { display: grid; grid-template-columns: 92px 1fr 92px; align-items: center; gap: 8px; margin-bottom: 7px; }
+  .sleeve .name { font-size: 12px; font-weight: 500; }
+  .sleeve .name small { display: block; font-weight: 400; font-size: 10px; color: var(--muted); }
+  .figures { text-align: right; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .figures .drift { font-size: 10px; }
+  .drift.over { color: var(--down); }
+  .drift.under { color: var(--up); }
+  .drift.ok { color: var(--muted); }
+  .totals { display: flex; gap: 14px; align-items: baseline; margin-top: 10px; font-size: 11.5px; }
+  .totals b { font-size: 13px; font-variant-numeric: tabular-nums; }
+  .off { color: var(--down); }
+  #trades td { border-top: 1px solid var(--border); font-size: 11.5px; }
+  .buy { color: var(--up); }
+  .sell { color: var(--down); }
+</style>
+
+<p class="msg" id="msg">Adjust the target allocation.</p>
+
+<div id="sleeves"></div>
+
+<div class="totals">
+  <span>Allocated <b id="total" class="num">100.0%</b></span>
+  <span class="muted">Drift from policy <b id="drift" class="num">0.0</b></span>
+  <span class="muted">Est. tax <b id="tax" class="num">$0</b></span>
+</div>
+
+<div id="warn" class="warn" style="display: none; margin-top: 8px"></div>
+
+<div class="card" style="margin-top: 10px">
+  <span class="lbl">Resulting trades</span>
+  <table id="trades">
+    <tbody></tbody>
+  </table>
+  <div id="notrades" class="muted" style="font-size: 11.5px">No change from the current allocation.</div>
+</div>
+
+<div class="row">
+  <button type="button" class="primary" id="submit">Approve rebalance</button>
+  <button type="button" id="reset">Reset to policy</button>
+  <button type="button" id="cancel">Cancel</button>
+</div>
+
+<script>
+  (function () {
+    "use strict";
+
+    // Filled from the elicitation's schema on init. Each sleeve carries its
+    // current weight, the policy target, and the dollars behind it, which is
+    // what turns a slider move into a trade rather than a number.
+    var sleeves = [];
+    var portfolioValue = 0;
+    var taxRate = 0;
+
+    var host = document.getElementById("sleeves");
+    var totalEl = document.getElementById("total");
+    var driftEl = document.getElementById("drift");
+    var taxEl = document.getElementById("tax");
+    var warnEl = document.getElementById("warn");
+    var submit = document.getElementById("submit");
+
+    var money = function (n) {
+      return (n < 0 ? "-$" : "$") + Math.abs(Math.round(n)).toLocaleString();
+    };
+    var pct = function (n) { return n.toFixed(1) + "%"; };
+
+    /** Current slider values, in order. */
+    function weights() {
+      return sleeves.map(function (s) { return s.input ? Number(s.input.value) : s.weight; });
+    }
+
+    /**
+     * Re-render every derived number.
+     *
+     * Recomputed wholesale on each input rather than patched, because the
+     * interesting quantities (drift, tax, the trade list) all depend on every
+     * slider at once, and a partial update is how those drift out of step.
+     */
+    function render() {
+      var w = weights();
+      var total = w.reduce(function (a, b) { return a + b; }, 0);
+      var drift = 0;
+      var turnover = 0;
+      var trades = [];
+
+      sleeves.forEach(function (s, i) {
+        var delta = w[i] - s.weight;
+        drift += Math.abs(w[i] - s.target);
+        turnover += Math.abs(delta);
+        s.figures.innerHTML =
+          '<span class="num">' + pct(w[i]) + "</span>" +
+          '<span class="drift ' + driftClass(w[i] - s.target) + '">' +
+          (w[i] - s.target >= 0 ? "+" : "") + (w[i] - s.target).toFixed(1) + " vs policy</span>";
+        if (Math.abs(delta) >= 0.05) {
+          trades.push({
+            sleeve: s.label,
+            side: delta > 0 ? "BUY" : "SELL",
+            amount: Math.abs((delta / 100) * portfolioValue),
+            // Only a sale realises a gain, so only a sale carries tax here.
+            tax: delta < 0 ? (Math.abs(delta) / 100) * portfolioValue * s.gain * taxRate : 0,
+          });
+        }
+      });
+
+      totalEl.textContent = pct(total);
+      totalEl.className = "num" + (Math.abs(total - 100) > 0.05 ? " off" : "");
+      driftEl.textContent = drift.toFixed(1);
+      var tax = trades.reduce(function (a, t) { return a + t.tax; }, 0);
+      taxEl.textContent = money(tax);
+
+      var body = document.querySelector("#trades tbody");
+      body.innerHTML = trades
+        .map(function (t) {
+          return (
+            "<tr><td>" + t.sleeve + "</td>" +
+            '<td class="' + (t.side === "BUY" ? "buy" : "sell") + '">' + t.side + "</td>" +
+            '<td class="n">' + money(t.amount) + "</td>" +
+            '<td class="n muted">' + (t.tax ? money(t.tax) + " tax" : "") + "</td></tr>"
+          );
+        })
+        .join("");
+      document.getElementById("notrades").style.display = trades.length ? "none" : "";
+
+      // The one hard rule: an allocation that does not sum to 100 is not a
+      // portfolio, so it cannot be submitted.
+      var off = Math.abs(total - 100) > 0.05;
+      warnEl.style.display = off ? "" : "none";
+      warnEl.textContent = off
+        ? "Allocation is " + pct(total) + ". It has to total 100% before it can be approved."
+        : "";
+      submit.disabled = off || !trades.length;
+      submit.textContent = trades.length ? "Approve " + trades.length + " trades" : "No trades to approve";
+      McpApp.resize();
+    }
+
+    function driftClass(d) {
+      if (Math.abs(d) < 0.5) return "ok";
+      return d > 0 ? "over" : "under";
+    }
+
+    function build() {
+      host.innerHTML = "";
+      sleeves.forEach(function (s) {
+        var row = document.createElement("div");
+        row.className = "sleeve";
+
+        var name = document.createElement("div");
+        name.className = "name";
+        name.innerHTML = s.label + "<small>policy " + pct(s.target) + "</small>";
+
+        var input = document.createElement("input");
+        input.type = "range";
+        input.min = "0";
+        input.max = "100";
+        input.step = "0.5";
+        input.value = String(s.weight);
+        input.setAttribute("aria-label", s.label + " allocation");
+        input.addEventListener("input", render);
+        s.input = input;
+
+        var figures = document.createElement("div");
+        figures.className = "figures";
+        s.figures = figures;
+
+        row.appendChild(name);
+        row.appendChild(input);
+        row.appendChild(figures);
+        host.appendChild(row);
+      });
+      render();
+    }
+
+    document.getElementById("reset").addEventListener("click", function () {
+      sleeves.forEach(function (s) { s.input.value = String(s.target); });
+      render();
+    });
+
+    document.getElementById("cancel").addEventListener("click", McpApp.cancel);
+
+    submit.addEventListener("click", function () {
+      if (submit.disabled) return;
+      submit.disabled = true;
+      var w = weights();
+      // Flat, one key per sleeve: MCP elicitation content allows primitives
+      // only, so a nested allocation object would be rejected on the wire.
+      var content = { approved: true };
+      sleeves.forEach(function (s, i) { content[s.key] = Number(w[i].toFixed(2)); });
+      McpApp.submit(content);
+    });
+
+    McpApp.onInit(function (request) {
+      if (request.message) document.getElementById("msg").textContent = request.message;
+      // The server puts the account's real sleeves on the schema, so the app
+      // renders whatever portfolio it was called for rather than a fixed list.
+      // On a property, not the schema root: the SDK drops unknown root keys.
+      var schema = request.requested_schema || {};
+      var ctx = ((schema.properties || {}).approved || {})["x-app"] || {};
+      var meta = ctx.sleeves || [];
+      portfolioValue = Number(ctx.portfolio_value || 0);
+      taxRate = Number(ctx.tax_rate || 0);
+      sleeves = meta.map(function (m) {
+        return {
+          key: m.key,
+          label: m.label,
+          weight: Number(m.weight),
+          target: Number(m.target),
+          gain: Number(m.unrealized_gain_pct || 0),
+        };
+      });
+      build();
+    });
+
+    McpApp.ready();
+  })();
+</script>

@@ -169,11 +169,13 @@ give it, so `localhost` inside the deployment's container is the container, not 
 server running on your laptop therefore needs a public address. Running the agent locally
 (`./run.sh`) needs no tunnel at all.
 
-There is a demo server in the box:
+There are two demo servers in the box, one per business, because a logistics book with a
+portfolio rebalancer in it is not a demo anyone believes:
 
 ```bash
-./scripts/run_mcp_server.sh --tunnel     # prints https://<random>.ngrok-free.dev/mcp
-./scripts/run_mcp_server.sh              # local only: http://127.0.0.1:8765/mcp
+./scripts/run_mcp_server.sh --wealth --tunnel   # Meridian Wealth  (the advisory demo)
+./scripts/run_mcp_server.sh --tunnel            # Fieldlink Logistics
+./scripts/run_mcp_server.sh --wealth            # local only: http://127.0.0.1:8765/mcp
 ```
 
 Paste the printed URL (including the `/mcp` path) into Settings. A new hostname is issued per
@@ -187,8 +189,24 @@ embedded in a generated document renders broken — and an `<img>` tag cannot se
 `ngrok-skip-browser-warning` header that would opt out. MCP itself works fine either way, since
 the client is not a browser.
 
-**Fieldlink Logistics** (`mcp_demo_server/`) is a pretend field-operations system, written
-against the modern stateless MCP spec so it exercises the whole surface:
+**Meridian Wealth** (`mcp_demo_server/wealth.py`) is a pretend advisory platform. Every
+interactive tool is an MCP App, because each collects something a generated form cannot:
+
+| tool | the UI it ships |
+|---|---|
+| `list_accounts`, `get_account` | none - ordinary tools, and an App there would be decoration |
+| `propose_rebalance` | allocation sliders constrained to total 100%, with drift from policy and estimated tax drag recomputing as you drag |
+| `project_goal` | retirement age, contribution and risk sliders over a projection band that redraws live (the maths runs in the app, so it does not wait on a round trip) |
+| `confirm_trade` | an order ticket with a quantity stepper, market/limit, time in force, and **hold to confirm** |
+| `sign_document` | the signature pad |
+
+The point of `confirm_trade` is not the widget: an irreversible action gets a real confirmation
+surface instead of the model interpreting the word "yes". Every constraint the app enforces is
+enforced again server-side (an allocation must total 100%, a sale cannot exceed the position) -
+the app is a UI, not a boundary.
+
+**Fieldlink Logistics** (`mcp_demo_server/server.py`) is a pretend field-operations system,
+written against the same spec, and the one the walkthrough below uses:
 
 | tool | what it shows |
 |---|---|
@@ -213,10 +231,19 @@ turn, and a model cannot retype 10KB of base64 without corrupting it. The bytes 
 server and travel as a URL. The model is still *shown* the signature as an image block, so "what
 does the signature look like?" is a question it can answer.
 
-Writing your own is worth knowing two things about: use the **guard pattern**
-(return an `InputRequiredResult`) rather than `ctx.elicit()`, which the stateless protocol cannot
-deliver, and expect the tool to **re-run from the top** when the answer comes back, so do no real
-work before you ask. `mcp_demo_server/server.py` is commented as a worked example.
+Writing your own is worth knowing four things about, three of which cost an hour each to find:
+
+- Use the **guard pattern** (return an `InputRequiredResult`) rather than `ctx.elicit()`, which
+  the stateless protocol cannot deliver at all.
+- The tool **re-runs from the top** when the answer comes back, so do no real work before you ask.
+- **Elicitation content is flat.** `ElicitResult.content` allows primitives only, so a schema
+  cannot ask for a nested object: the rebalance sends one number per sleeve, not an `allocation`.
+- **An app's render context goes on a schema PROPERTY, never the root.** The SDK normalizes
+  `requested_schema` and silently drops unknown root keys, so context at the root vanishes with no
+  error and the app renders empty. `elicit.attach_context` is the one place that knows this.
+
+`mcp_demo_server/` is commented as a worked example, and `apps/bridge.js` is the postMessage
+plumbing all four apps share.
 
 ## Voice mode (spike)
 
