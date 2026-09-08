@@ -724,6 +724,22 @@ export async function getTraceUrl(runId: string, workspace?: string): Promise<st
   return d.url;
 }
 
+/**
+ * Resolve the LangSmith URL for a tracing project (the header's LangSmith link).
+ *
+ * Same server-side lookup as `getTraceUrl`, and for the same reason: the URL
+ * needs an org and a project id the SPA cannot know. Throws with the server's
+ * own message, which for a project with no traces yet is a sentence worth
+ * showing the user rather than a status code.
+ */
+export async function getProjectUrl(project: string, workspace?: string): Promise<string> {
+  const qs = new URLSearchParams({ project, ...(workspace ? { workspace } : {}) });
+  const res = await fetch(`${getApiBase()}/project-url?${qs}`, { headers: apiHeaders() });
+  const d = (await res.json().catch(() => ({}))) as { url?: string; error?: string };
+  if (!res.ok || !d.url) throw new Error(d.error || `HTTP ${res.status}`);
+  return d.url;
+}
+
 /* ---------------------- Workspaces / projects / prompts ------------------ */
 
 /** List LangSmith workspaces and their org (GET /workspaces). Empty on failure. */

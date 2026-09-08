@@ -24,6 +24,7 @@ import {
   IconFlask,
   IconInfoCircle,
   IconTopologyStar3,
+  IconTimeline,
 } from "@tabler/icons-react";
 import { Button } from "@/components/motion/button";
 import { Tooltip } from "@/components/motion/tooltip";
@@ -41,10 +42,11 @@ import { EvalPanel } from "@/components/EvalPanel";
 import { FileBrowser } from "@/components/FileBrowser";
 import { SettingsPanel, type SettingsHandle } from "@/components/SettingsPanel";
 import { getAssistantId } from "@/lib/config";
+import { traceProject } from "@/lib/trace";
 import { applyTheme, getStoredTheme, setStoredTheme, type Theme } from "@/lib/theme";
 import { invalidateColorCache } from "@/lib/branding";
 import type { Assistant, RunContext, Widget } from "@/lib/api";
-import { readSandboxTextFile } from "@/lib/api";
+import { getProjectUrl, readSandboxTextFile } from "@/lib/api";
 import { useAssistants } from "@/lib/queries";
 
 const DEFAULT_NAME = "Corebot";
@@ -282,6 +284,31 @@ export default function App() {
   // Per-run context, resolved fresh at send time from the settings handle.
   const getRunContext = (): RunContext => settingsRef.current?.getRunContext() ?? {};
 
+  /**
+   * Open this assistant's LangSmith project: one place in the header that always
+   * leads to the traces, rather than only the per-answer link that appears once
+   * a turn has finished.
+   *
+   * The tab is opened synchronously and its location set after the lookup,
+   * because a popup opened inside an await is blocked.
+   */
+  const [langsmithError, setLangsmithError] = useState("");
+  const openLangSmith = () => {
+    const ctx = getRunContext();
+    const project = traceProject(activeAssistant, getAssistantId());
+    const tab = window.open("", "_blank", "noopener,noreferrer");
+    setLangsmithError("");
+    void getProjectUrl(project, ctx.ls_workspace)
+      .then((url) => {
+        if (tab) tab.location.href = url;
+        else window.open(url, "_blank", "noopener,noreferrer");
+      })
+      .catch((e: unknown) => {
+        tab?.close();
+        setLangsmithError(e instanceof Error ? e.message : String(e));
+      });
+  };
+
   // Send guard: block + open settings when a requirement is unmet. Mirrors the
   // SPA's inline guards (assistant → workspace → system prompt), in that order.
   const guard = (): string | null => {
@@ -336,6 +363,17 @@ export default function App() {
         >
           <IconSparkles size={16} /> New Chat
         </Button>
+        <Tooltip content={langsmithError || "Traces in LangSmith"} side="bottom">
+          <Button
+            variant="secondary"
+            size="icon"
+            className="print:hidden"
+            aria-label="Open traces in LangSmith"
+            onClick={openLangSmith}
+          >
+            <IconTimeline size={18} />
+          </Button>
+        </Tooltip>
         <Tooltip content="Agent graph" side="bottom">
           <Button
             variant={graphOpen ? "primary" : "secondary"}

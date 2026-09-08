@@ -338,6 +338,34 @@ async def trace_url(request):
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
 
+async def project_url(request):
+    """Resolve the LangSmith URL for a tracing project (the header's LangSmith link).
+
+    GET ?project=<name>[&workspace=<id>] -> {url}. The same shape as /trace-url and
+    for the same reason: LangSmith URLs need an org and a project id that the SPA
+    has no way to know, and resolving them here keeps the API key server-side.
+
+    A project that does not exist yet is a 404 with a plain reason, not an error:
+    an assistant that has never been asked a question has no traces, and the
+    button should say so rather than open a broken page.
+    """
+    project = (request.query_params.get("project") or "").strip()
+    if not project:
+        return JSONResponse({"error": "project is required"}, status_code=400)
+    try:
+        client = _scoped_client(request.query_params.get("workspace"))
+        url = getattr(client.read_project(project_name=project), "url", None)
+        if not url:
+            return JSONResponse({"error": f"no url for project {project!r}"}, status_code=404)
+        return JSONResponse({"url": url})
+    except LangSmithNotFoundError:
+        return JSONResponse(
+            {"error": f"No traces yet for {project!r}. Ask a question first."}, status_code=404
+        )
+    except Exception as exc:
+        return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+
+
 async def voice_token(request):
     """Mint a short-lived Gemini Live token for the voice shell.
 
@@ -1494,6 +1522,7 @@ app = Starlette(
         Route("/agents", agents, methods=["GET"]),
         Route("/cleanup", cleanup, methods=["POST"]),
         Route("/trace-url", trace_url, methods=["GET"]),
+        Route("/project-url", project_url, methods=["GET"]),
         Route("/evals/run", evals_run, methods=["POST"]),
         Route("/evals/status", evals_status, methods=["GET"]),
         Route("/demo-traffic", demo_traffic, methods=["POST"]),

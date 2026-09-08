@@ -4,7 +4,7 @@
  * re-sent, reusing the returned feedback_id. Ported from `renderFeedback()`.
  */
 import { useRef, useState } from "react";
-import { IconThumbUp, IconThumbDown, IconExternalLink } from "@tabler/icons-react";
+import { IconThumbUp, IconThumbDown, IconTimeline } from "@tabler/icons-react";
 import { postFeedback, getTraceUrl } from "@/lib/api";
 
 type StatusKind = "" | "ok" | "err";
@@ -83,12 +83,12 @@ export function FeedbackRow({ runId, workspace }: { runId: string; workspace?: s
       </button>
       <button
         type="button"
-        aria-label="Open trace"
-        title="Open this run's trace in LangSmith"
+        aria-label="Open this answer's trace in LangSmith"
+        title="Open this answer's trace in LangSmith"
         className={btn(false)}
         onClick={openTrace}
       >
-        <IconExternalLink size={15} />
+        <IconTimeline size={15} />
       </button>
       {status.text && (
         <span
