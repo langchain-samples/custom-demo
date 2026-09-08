@@ -3,8 +3,9 @@
 Runs the REAL agent graph against a stub chat model that records the system
 message it receives, so we can assert what the model actually sees WITHOUT a real
 Anthropic call. A placeholder ANTHROPIC_API_KEY is enough (require_anthropic_key
-only checks presence). Context Hub assistants must COMPOSE deepagents' base
-(filesystem + skills) with our prompt; Prompt Hub assistants must NOT.
+only checks presence). Assistants with a Context Hub repo or a skills bundle must
+COMPOSE deepagents' base (filesystem + skills) with our prompt; an assistant with
+neither must NOT.
 """
 
 from langchain_core.language_models import BaseChatModel
@@ -63,26 +64,23 @@ _AGENTS_MD = "You are Acme's AI assistant. AGENTS_MD_MARKER."
 _INLINE = "You are TestBot. INLINE_MARKER."
 
 
-def test_prompt_hub_prompt_excludes_deepagents_base(monkeypatch):
-    # Inline/Prompt Hub assistant (no agent_repo): our prompt REPLACES the base.
-    ctx = Context(prompt=_INLINE, enabled_tools=["web_search", "push_widget"])
+def test_an_assistant_with_no_repo_gets_the_scoped_fallback(monkeypatch):
+    """No agent_repo and no skills: our prompt REPLACES the framework's."""
+    ctx = Context(enabled_tools=["web_search", "push_widget"])
     sp = _capture(monkeypatch, ctx)
-    assert "INLINE_MARKER" in sp
     assert "You are a deep agent" not in sp  # deepagents base NOT leaked
     assert "## Filesystem" not in sp  # filesystem tools NOT advertised
 
 
 def test_skills_repo_prompt_composes_deepagents_base(monkeypatch):
-    # A Prompt-Hub/inline assistant that has skills (skills_repo) must ALSO compose
-    # the framework prompt — otherwise the SkillsMiddleware catalogue is discarded
-    # and the model never learns its skills exist.
+    # An assistant with skills but no agent_repo must ALSO compose the framework
+    # prompt, or the SkillsMiddleware catalogue is discarded and the model never
+    # learns its skills exist.
     ctx = Context(
-        prompt=_INLINE,
         skills_repo="acme-skills",
         enabled_tools=["web_search", "push_widget"],
     )
     sp = _capture(monkeypatch, ctx)
-    assert "INLINE_MARKER" in sp  # our prompt still present + authoritative
     # deepagents 0.7 dropped the "You are a deep agent" base persona; the framework
     # prompt that MUST compose in is the SkillsMiddleware catalogue.
     assert "## Skills System" in sp  # framework composed in ⇒ skills catalogue reaches model

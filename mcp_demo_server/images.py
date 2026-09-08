@@ -1,7 +1,8 @@
 """Turning a captured drawing into something a tool result can carry.
 
-Both demo servers capture a handwritten mark and have the same two problems with
-it, so the answers live here rather than twice.
+`sign_document` captures a handwritten mark and has two problems with it; the
+answers live here rather than inline, because they are about images, not about
+signing.
 
 **Why a data URI and not a URL.** A document that embeds the picture has to
 either carry the bytes or fetch them, and a model cannot retype 18,000 base64
@@ -29,8 +30,9 @@ MIN_IMAGE_EDGE = 16
 def inline_budget(env_var: str, default: int = 14000) -> int:
     """Data-URI characters a server will inline, roughly 3.5k tokens by default.
 
-    Above it the model is being asked to copy more than it reliably can. Each
-    server reads its own env var, which is why the name is a parameter.
+    Above it the model is being asked to copy more than it reliably can. The env
+    var is a parameter so a caller names its own budget rather than inheriting
+    one from this module.
     """
     return int(os.getenv(env_var, str(default)))
 

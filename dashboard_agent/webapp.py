@@ -167,26 +167,6 @@ async def workspaces(request):
         return JSONResponse({"workspaces": [], "note": f"{type(exc).__name__}: {exc}"})
 
 
-async def hub_prompts(request):
-    """List a workspace's own Prompt Hub prompt handles (for the system-prompt picker)."""
-    try:
-        client = _scoped_client(request.query_params.get("workspace"))
-        # is_public=False → only this workspace's own prompts (public Hub prompts
-        # otherwise leak across every tenant).
-        resp = client.list_prompts(limit=100, is_public=False)
-        repos = getattr(resp, "repos", None) or []
-        names = sorted(
-            {
-                h
-                for r in repos
-                if (h := getattr(r, "repo_handle", None) or getattr(r, "full_name", None))
-            }
-        )
-        return JSONResponse({"prompts": names})
-    except Exception as exc:
-        return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
-
-
 async def agents(request):
     """List a workspace's Context Hub agent repos (for the AGENTS.md prompt picker)."""
     try:
@@ -208,8 +188,8 @@ async def agents(request):
 async def cleanup(request):
     """Best-effort cascade delete of the LangSmith artifacts an assistant created.
 
-    Body: {workspace, project?, prompt_name?, agent_repo?, skills?[], eval_dataset?}.
-    Deletes the trace project, the Prompt Hub prompt or Context Hub agent repo, any
+    Body: {workspace, project?, agent_repo?, skills?[], eval_dataset?}.
+    Deletes the trace project, the Context Hub agent repo, any
     linked skill repos, and the assistant's eval dataset. Each deletion is
     independent; failures (e.g. missing perms or an already-deleted artifact) are
     collected rather than aborting the rest.
@@ -235,7 +215,6 @@ async def cleanup(request):
     _try(
         "project", body.get("project"), lambda: client.delete_project(project_name=body["project"])
     )
-    _try("prompt", body.get("prompt_name"), lambda: client.delete_prompt(body["prompt_name"]))
     _try("agent", body.get("agent_repo"), lambda: client.delete_agent(body["agent_repo"]))
     # The skills bundle is an agent-type repo (push_agent) → delete_agent, not delete_skill.
     _try(
@@ -1526,7 +1505,6 @@ app = Starlette(
         Route("/sandbox-upload", sandbox_upload, methods=["POST"]),
         Route("/projects", projects, methods=["GET", "POST"]),
         Route("/workspaces", workspaces, methods=["GET"]),
-        Route("/hub-prompts", hub_prompts, methods=["GET"]),
         Route("/agents", agents, methods=["GET"]),
         Route("/cleanup", cleanup, methods=["POST"]),
         Route("/trace-url", trace_url, methods=["GET"]),

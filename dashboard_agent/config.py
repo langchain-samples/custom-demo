@@ -186,17 +186,6 @@ def setup_model() -> str:
     return os.getenv("DASHBOARD_SETUP_MODEL", "anthropic:claude-haiku-4-5-20251001")
 
 
-def prompt_name() -> str:
-    """Prompt Hub name to pull the system prompt from.
-
-    Read after `load_env()` so a value set in `.env` is honored. The prompt is
-    pulled fresh per question (see prompt.py / agent.py) so it can be edited live
-    without a redeploy — this is how the planted hallucination bug is "fixed".
-    """
-    load_env()
-    return os.getenv("DASHBOARD_PROMPT", "dashboard-agent-system")
-
-
 def project_name() -> str:
     """LangSmith tracing project that agent runs are logged to."""
     load_env()

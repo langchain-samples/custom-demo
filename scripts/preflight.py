@@ -12,7 +12,7 @@ in one pass rather than fixing one thing, re-running, and finding the next:
     4. Environment        .env found, and WHICH model provider it selects
     5. Model provider     ONE cheap real call, against whatever provider you chose
     6. LangSmith          auth, and the workspace the demo will write to
-    7. Prompt Hub         the system prompt is seeded and readable
+    7. Context Hub        the agent repo holding the system prompt is readable
     8. Agent Server       the langgraph CLI the run script needs
 
 Exit code 0 means you are ready. Anything else prints the fix.
@@ -227,7 +227,7 @@ def check_langsmith() -> None:
             "langsmith",
             "LANGSMITH_API_KEY is not set.",
             "Get one at https://smith.langchain.com (Settings -> API Keys), add to .env.\n"
-            "Tracing, Prompt Hub and the demo evals all need it.",
+            "Tracing, Context Hub and the demo evals all need it.",
         )
         return
     try:
@@ -247,31 +247,27 @@ def check_langsmith() -> None:
 # --- 7. prompt hub -------------------------------------------------------------
 
 
-def check_prompt_hub() -> None:
-    """Check the system prompt is seeded, since the live-fix demo depends on it."""
-    head(7, "Prompt Hub")
+def check_context_hub() -> None:
+    """Check Context Hub is reachable, since the live-fix demo edits a repo there."""
+    head(7, "Context Hub")
     if not os.getenv("LANGSMITH_API_KEY"):
         warn("hub", "Skipped: no LangSmith key.")
         return
     try:
-        from dashboard_agent.config import prompt_name
-        from dashboard_agent.runtime.prompt import pull_system_prompt
+        from dashboard_agent.config import make_client
 
-        text = pull_system_prompt(None)
-        if not text:
-            raise RuntimeError("empty prompt")
-        ok(f"'{prompt_name()}' readable ({len(text)} chars)")
+        client = make_client()
+        if not hasattr(client, "pull_agent"):
+            raise RuntimeError("this langsmith SDK has no Context Hub support")
+        ok("Context Hub available (agent repos readable)")
     except Exception as exc:  # noqa: BLE001
-        # Not fatal: the code falls back to a bundled prompt. But the live "fix the
-        # bug in the Hub and re-run" demo is exactly what stops working.
+        # Not fatal: an assistant falls back to the bundled prompt. What stops
+        # working is editing the prompt live to fix the planted bug.
         warn(
             "hub",
-            f"Could not pull the system prompt ({type(exc).__name__}). "
-            "Seed it with: uv run python scripts/seed_prompt.py",
+            f"Could not reach Context Hub ({type(exc).__name__}). The agent still runs on "
+            "its bundled prompt, but the live prompt-fix demo needs this.",
         )
-
-
-# --- 8. agent server -----------------------------------------------------------
 
 
 def check_agent_server() -> None:
@@ -311,7 +307,7 @@ def main() -> int:
     provider = check_env()
     check_model(provider)
     check_langsmith()
-    check_prompt_hub()
+    check_context_hub()
     check_agent_server()
 
     print()

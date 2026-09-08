@@ -7,7 +7,7 @@ customer's own workspace built from that assistant's quick actions, and the SPA 
 run an experiment over it at any time:
 
     baseline (buggy prompt)  -> 2/3 passing (red)
-    ... presenter edits the prompt in Prompt Hub mid-demo ...
+    ... presenter edits the agent's AGENTS.md in Context Hub mid-demo ...
     re-run                   -> 3/3 passing (green)
 
 Five things are load-bearing and easy to get wrong:
@@ -22,10 +22,10 @@ Five things are load-bearing and easy to get wrong:
 3. **In-process target.** The experiment runs the agent via `build_agent()` in this
    process rather than calling the deployment over HTTP (there is no reliable
    self-URL). That is also what makes the mid-demo fix visible: `_hub_system_prompt`
-   resolves the prompt through `pull_system_prompt`/`pull_agent_prompt`, both of which
-   pull with `skip_cache=True`, and invoking the agent directly (rather than through
-   `agent.run`) sets no per-run prompt override — so every experiment run reads the
-   presenter's Prompt Hub edit, with no restart and no cache to bust.
+   resolves the prompt through `pull_agent_prompt`, which pulls with `skip_cache=True`,
+   and invoking the agent directly (rather than through `agent.run`) sets no per-run
+   prompt override — so every experiment run reads the presenter's Context Hub edit,
+   with no restart and no cache to bust.
 4. **Nobody is in the loop.** Several catalogue tools pause for a human. The target
    answers those interrupts itself (`_resume_value`), because an unanswered one is an
    example stuck at 0 and a badge that can never reach 3/3.
@@ -433,7 +433,7 @@ def judge_prompt_messages(customer: str) -> list[tuple[str, str]]:
 
 
 def judge_prompt_name(dataset: str) -> str:
-    """Prompt Hub repo handle for a dataset's judge. Deterministic, so re-push is a no-op."""
+    """Prompt-registry repo handle for a dataset's judge. Deterministic, so re-push is a no-op."""
     return f"eval-{slugify(dataset)[:80]}-judge"
 
 
@@ -511,7 +511,7 @@ def judge_prompt_manifest(customer: str) -> dict:
 
 
 def judge_chain_manifest(prompt: dict, model: dict) -> dict:
-    """`prompt | model` as a Prompt Hub manifest. Pure.
+    """`prompt | model` as a LangSmith prompt-registry manifest. Pure.
 
     Hand-built rather than piped: the model comes back from LangSmith already serialized,
     with its key an unresolved secret reference, and loading that locally would need the
@@ -671,7 +671,8 @@ def ensure_dataset_evaluator(workspace: str, dataset: str, customer: str = "") -
     """Attach an LLM-as-judge evaluator to `dataset` in `workspace`.
 
     Returns `{rule_id, evaluator_id, error}`. Four steps: pick a model this workspace can
-    actually run, push the judge to Prompt Hub as `StructuredPrompt | model`, create the
+    actually run, push the judge to the LangSmith prompt registry as `StructuredPrompt |
+    model`, create the
     workspace evaluator that references that prompt, then create the run rule that attaches
     the evaluator to the dataset. Idempotent — an existing rule with our display name is
     reused (and repaired if its judge has no model), so re-running setup for the same
@@ -947,7 +948,7 @@ def _resume_value(pending: Any) -> Any:
     """What a human would send back for the interrupt the run is parked on.
 
     Several ordinary catalogue tools pause for a person: `draft_email` and
-    `suggest_meeting_times` go through `review()`, `ask_user` interrupts outright
+    `draft_email` goes through `review()`, `ask_user` interrupts outright
     (tools/simulated.py). In the SPA someone approves; in an experiment nobody does,
     and an unresumed interrupt comes back as state with `__interrupt__` and no final
     answer — so any assistant with a comms tool enabled would have had one example
@@ -975,7 +976,7 @@ def _agent_target(context: dict | None):
 
     The agent is built ONCE per experiment (building it is the expensive part) while
     the prompt itself is pulled per question by `_hub_system_prompt`, which is exactly
-    why a re-run after a mid-demo Prompt Hub edit shows the fixed behavior.
+    why a re-run after a mid-demo Context Hub edit shows the fixed behavior.
 
     Returns {answer, widgets, tool_calls, status}. The widgets are collected through
     the same ContextVar sink `agent.run` uses, because the figures live there rather

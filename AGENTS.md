@@ -30,14 +30,14 @@ after (§3, *Per-assistant demo evals*; mind the polarity, it is the reverse of 
 dashboard_agent/
   core/ctx.py                 ctx_get() - reads a Context field off a runtime (dict or dataclass)
   runtime/agent.py            deep agent: Context schema, middleware, run/run_stream
-  runtime/prompt.py           prompt construction + Prompt Hub pulls + hallucination/grounding
+  runtime/prompt.py           prompt construction + Context Hub pulls + hallucination/grounding
   runtime/widgets.py          Pydantic widget schemas - the agent-to-frontend contract
   runtime/mocking.py          per-invocation tool mocking, for deterministic evals
   runtime/mcp_servers.py      REMOTE MCP: parse `context.mcp_servers`, discover + cache their
                               tools, probe a server, read a paused tool's `ui://` MCP App
   runtime/tools/registry.py   THE TOOL CATALOGUE - source of truth for selectable capabilities
   runtime/tools/core.py       push_widget (and the widget ContextVar sink)
-  runtime/tools/simulated.py  capability tools: draft_email, suggest_meeting_times
+  runtime/tools/simulated.py  capability tools: draft_email, ask_user, web_search
   runtime/tools/web_search.py web_search - REAL results via Tavily (errors without the key)
   provisioning/setup.py       brand fetch (Logo.dev/Brandfetch/scrape) + LLM customer analysis
                               + prompt push
@@ -48,7 +48,7 @@ dashboard_agent/
   graph.py                    Agent Server entrypoint - async factory wrapping runs in tracing
   setup_graph.py              SECOND graph (`assistant_setup`): prepares a customer assistant
   config.py                   env loading, model/prompt/workspace accessors, LangSmith clients
-  webapp.py           extra Starlette routes: /feedback /projects /workspaces /hub-prompts /tools
+  webapp.py           extra Starlette routes: /feedback /projects /workspaces /agents /tools
                       /mcp/probe + /mcp/app (the SPA cannot speak MCP; the deployment does)
                       /sandbox-files /sandbox-file (read-only browse of the assistant's VM)
                       /evals/run + /evals/status (per-assistant demo eval), /cleanup, /trace-url
@@ -65,7 +65,7 @@ mcp_demo_server/      THE OTHER END: two FastMCP servers on the modern stateless
                       interactive tools are all MCP Apps. elicit.py holds the guard-pattern
                       helpers both share; apps/ holds the app HTML plus the bridge.js and
                       shell.css injected into each at serve time. NOT shipped in the wheel.
-scripts/              seed_prompt, seed_assistants, setup_assistant, preflight, judge_doctor,
+scripts/              seed_assistants, setup_assistant, preflight, judge_doctor,
                       run_mcp_server.sh (runs mcp_demo_server, `--tunnel` for a public ngrok URL)
 .claude/skills/setup-assistant/SKILL.md   interactive /setup-assistant flow (CLI path)
 langgraph.json        registers both graphs + http.app + wide-open CORS
@@ -88,19 +88,39 @@ Python dependencies are managed with **uv** (`pyproject.toml` + `uv.lock`, `.pyt
   payload it returns.
 
 **The agent** (`agent.py`, built by `deepagents.create_deep_agent`):
-- **Tools come from two independent sources.** deepagents *always* installs its own -
-  `write_todos`, the filesystem set (`ls`, `read_file`, `write_file`, `edit_file`, `glob`,
-  `grep`) and `task` - because `TodoListMiddleware`/`FilesystemMiddleware` are unconditional
-  and a default general-purpose subagent is auto-added. `execute` is now offered too - the
+- **Tools come from two independent sources.** deepagents *always* installs its own - the
+  filesystem set (`ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `delete`) and
+  `task` - because `FilesystemMiddleware` is unconditional and a default general-purpose
+  subagent is auto-added. There is no `write_todos`: deepagents only installs langchain's
+  `TodoListMiddleware` in its OpenAI-Codex profile, which `create_deep_agent` does not use. `execute` is now offered too - the
   agent's default backend is a code-execution sandbox VM (see **Code execution** below). On top
   of those sits **our catalogue** (`tools/registry.py`), which is the only part an assistant
   can select from.
-- Middleware: `ConfigurableModel` (swap LLM from `context.model`), `_hub_system_prompt`
-  (`@dynamic_prompt` - pulls the prompt fresh per question, then appends the enabled
-  capabilities), the registry's `ToolCallLimitMiddleware` instances (a tool may declare a
-  per-run cap; each is inert when its tool is not offered), and `ToolSelection` **last**.
 - Model is `ChatAnthropic` with `thinking={"type":"disabled"}` - Sonnet 5's default extended
   thinking breaks the deep-agent tool loop on follow-up turns.
+
+**Middleware, in build order** (`_build_agent`). The order is load-bearing, so it is written down
+once, here:
+
+| # | middleware | what it does |
+|---|---|---|
+| 1 | `RubricMiddleware` | grades the turn against a `/goal`. Prepended, so its `after_agent` runs **last** - after-hooks fire in reverse. Inert without a rubric on the state, and skipped entirely if the optional deepagents import fails. |
+| 2 | `ConfigurableModel` | swaps the LLM per run from `context.model`. |
+| 3 | `McpTools` | discovers the assistant's remote MCP tools for this run. |
+| 4 | `_hub_system_prompt` | `@dynamic_prompt`: pulls the prompt per question (Context Hub, or `FALLBACK_PROMPT`) and appends the capability, MCP, sandbox and artifact notes. |
+| 5 | `*call_limit_middlewares()` | the per-run call caps declared by `TOOL_REGISTRY`. Each is inert when its tool is not offered. |
+| 6 | QuickJS `CodeInterpreterMiddleware` | only when `DA_DYNAMIC_SUBAGENTS=1`, inserted *before* `ToolSelection`. Guarded, so a missing extra degrades to no subagents rather than failing graph load. |
+| 7 | `ToolSelection` | filters `request.tools` down to the assistant's selection. **Last**, so it has the final word on what reaches the model. |
+
+Two of those positions are the parts someone could re-break:
+- `McpTools` must come **before** `_hub_system_prompt`, or the discovered tools are not yet in the
+  ContextVar when `_mcp_note` describes them to the model.
+- `ToolSelection` must stay **last**, or a middleware added after it can put a tool back that the
+  assistant did not enable.
+
+Every middleware here implements **both** the sync and the async hook (`wrap_model_call` *and*
+`awrap_model_call`, and so on). An async-only hook makes every `invoke()` raise, and `agent.run()`
+plus most of the test suite take exactly that path.
 
 **Code execution (sandbox) + universal skills.** `_backend_for` builds ONE `CompositeBackend`:
 the **default** is an isolated LangSmith sandbox VM (so the model gets an `execute` tool + a real
@@ -122,9 +142,9 @@ body is where "this demo shows dynamic subagents and code execution" is actually
 `sandbox_step` names a file, the same call also proposes the `seed_files` planted in the VM, and the
 prompt tells it to keep the two consistent.
 
-**Skills are universal**: every assistant gets a `*-skills` bundle regardless of whether its prompt
-lives in Prompt Hub or Context Hub (that choice is only about prompt storage). `context.skills_repo`
-names the bundle; `context.agent_repo` (if set) only holds the prompt's AGENTS.md. For skills to
+**Skills are universal**: every assistant gets a `*-skills` bundle, independent of the agent repo
+that holds its prompt. `context.skills_repo` names the bundle; `context.agent_repo` (if set) only
+holds the prompt's AGENTS.md. For skills to
 reach the model, `_hub_system_prompt` composes deepagents' middleware prompt (the SkillsMiddleware
 catalogue + filesystem/execute instructions) whenever `skills_repo` or `agent_repo` is set.
 
@@ -325,16 +345,17 @@ collide with a real project of the same name; an explicit `context.ls_project` o
 | field | purpose |
 |---|---|
 | `model` | main agent LLM id |
-| `prompt` / `prompt_name` | inline system prompt (wins) or a Prompt Hub handle |
-| `agent_repo` | Context Hub repo whose AGENTS.md is the prompt (prompt storage only) |
+| `agent_repo` | Context Hub repo whose AGENTS.md is the system prompt - the ONLY prompt source |
 | `skills_repo` | Context Hub `*-skills` bundle mounted at `/skills/` (all assistants) |
-| `dataset` | `humanitarian` \| `synthetic` |
-| `data_model`, `data_prompt`, `data_prompt_name` | synthetic-backend model + prompt |
-| `data_gap` | the withheld topic (builds a customer-centric data prompt) |
 | `customer`, `industry` | steer synthetic data + prompt templating |
-| `ls_workspace` | trace routing + which workspace's Prompt Hub to pull from |
+| `ls_workspace` | trace routing + which workspace's Context Hub the prompt is pulled from |
 | `enabled_tools` | catalogue tool ids to expose (`None` = defaults, `[]` = optional all off) |
+| `sandbox_seed` | files planted in this assistant's VM (see `render_seed_script`) |
+| `sandbox_key` | this assistant's own VM name, minted at setup (§ Code execution) |
 | `mcp_servers` | remote MCP servers to connect to: `[{id, label, url, token?}]` (§ Remote MCP servers) |
+
+There is no inline `prompt` and no `prompt_name`: an assistant's prompt is its `agent_repo`'s
+AGENTS.md, and an assistant without one runs on `FALLBACK_PROMPT`.
 
 Everything else (middleware, checkpointer, backends, permissions, and the *implementation* of
 any tool) is **locked in code** - matching the plan's security boundary. Assistants pick from a
@@ -387,8 +408,9 @@ deployed SPA path does not use it - it's for local/in-process use and the stream
 3. `build_system_prompt(customer, industry, hallucinate)` - a **deterministic template**, not
    LLM-written. Appends *either* `_GROUNDING_CLAUSE` *or* `HALLUCINATION_CLAUSE`, never both
    (stacking them makes the model obey the safety half and the demo bug won't fire).
-4. Pushes the prompt where `prompt_source` says: **Context Hub by default** (an agent repo's
-   AGENTS.md, referenced by `agent_repo`), or Prompt Hub (`prompt_name`) when asked for.
+4. Pushes the prompt to **Context Hub**, and nowhere else: a `<slug>-agent` repo whose AGENTS.md
+   is the prompt, referenced by `agent_repo`. One storage location, so "edit the prompt" means one
+   thing to a presenter.
 5. Returns `{metadata, context, prompt_urls}` for the SPA to `POST /assistants`.
 
 **Demo traffic is opt-in** (`demo_traffic` in the setup payload, a switch in the create modal,
@@ -402,8 +424,9 @@ With `hallucination: true` it also sets `dataset: "synthetic"` and reorders quic
 visible fabrication.
 
 **Teardown manifest.** Every LangSmith artifact an assistant creates is recorded in
-`metadata.ls_artifacts`: `workspace`, `project`, `prompt_name`, `agent_repo`, `skills_repo`,
-`skills[]` (legacy per-skill repos) and `eval_dataset`. Deleting the assistant in the SPA POSTs
+`metadata.ls_artifacts`: `workspace`, `project`, `agent_repo`, `skills_repo`, `skills[]` (legacy
+per-skill repos), `eval_dataset`, the three eval-evaluator handles, and `annotation_queue` - ten
+keys, pinned by `test_cleanup_contract.py`. Deleting the assistant in the SPA POSTs
 that manifest to `POST /cleanup`, which deletes each artifact **independently and best-effort**
 (the `_try` helper), returns `{deleted, failed}`, and deletes the assistant regardless - a
 permission gap must never leave an undeletable assistant. Anything new an assistant creates in a
@@ -446,7 +469,7 @@ Implementation notes, each of which is load-bearing:
   assistant's stored `context` (mirroring `evals/fixtures.py:make_context`), never a self-call over
   HTTP (there is no reliable self-URL in the deployment). This is also what makes step 4 work:
   `_hub_system_prompt` pulls the prompt with `skip_cache=True` on *every* question, so an
-  in-process run reflects the presenter's Prompt Hub edit immediately.
+  in-process run reflects the presenter's Context Hub edit immediately.
 - `POST /evals/run` spawns a daemon thread and returns at once - 3 real agent runs take 30-90s and
   must not block the request (same fire-and-forget shape as `prewarm_sandbox`). `GET /evals/status`
   re-derives the score from LangSmith on every call (the dataset's experiments + their
@@ -490,11 +513,11 @@ Implementation notes, each of which is load-bearing:
   other (here: `data_prompt`/`build_data_prompt` vs `data_gap`/`data_withhold_clause`).
 - AI generation used narrowly - copy and colors as *values slotted into a fixed schema*, never
   generated layout or code.
-- Prompt Hub `prompt_name` lookup, listed as a fast-follow, is done (incl. workspace-scoped pulls).
+- Workspace-scoped hub lookups, listed as a fast-follow, are done.
 
 ### Went further than planned
 - **Cross-workspace trace routing is implemented**, not deferred: `ls_workspace` +
-  `LS_CROSS_WORKSPACE_KEY` (org-scoped key), a `/workspaces` endpoint, per-workspace Prompt Hub
+  `LS_CROSS_WORKSPACE_KEY` (org-scoped key), a `/workspaces` endpoint, per-workspace Context Hub
   pulls, and per-workspace project listing/creation. The plan explicitly scoped this out.
 - A **deployed setup graph** (`assistant_setup`) - the plan didn't call for setup-as-a-graph.
 - Automated brand fetch (Logo.dev + Brandfetch) and an LLM-picked light/dark `theme`.
@@ -564,10 +587,6 @@ Implementation notes, each of which is load-bearing:
   never sets `customer`/`industry`/`data_gap` on the context - so it produces a materially
   different assistant. The skill also hardcodes an owner name and a `chat-langchain-lite/.venv`
   interpreter path.
-- **Duplicated, inconsistent hallucination clause.** `scripts/seed_prompt.py` defines its own
-  `HALLUCINATION_CLAUSE` (`IMPORTANT OVERRIDE:`) separate from `prompt.py`'s (`IMPORTANT:`), and
-  appends it to `FALLBACK_PROMPT` - which already carries `_GROUNDING_CLAUSE`. That is exactly the
-  contradictory stacking `prompt.py` warns against, so seeded prompts may not reliably fabricate.
 - **Google Fonts is the app's first third-party asset** and there is no CSP anywhere. Mitigated
   by `font_source: "curated"` per assistant, which keeps everything self-hosted.
 - **`config.py:load_env` reaches into a sibling project** (`chat-langchain-lite/.env`) for keys.
@@ -617,7 +636,7 @@ Slow, real-LLM: `test_agent_e2e.py`, `test_hallucination_bug.py`.
 - **Changing agent behavior is spec-first.** Write the failing test/eval before the code - see
   [docs/agent-development.md](docs/agent-development.md) (the *when-prompted → response → world*
   checklist and the cheapest-level-that-holds-it rule).
-- Behavior differences between demos → assistant `context` or Prompt Hub. Never a new module.
+- Behavior differences between demos → assistant `context` or its Context Hub repo. Never a new module.
 - Visual differences → assistant `metadata`. Never a new frontend route.
 - **Adding a capability**: write the tool in `tools/simulated.py`, add a `ToolSpec` row in
   `tools/registry.py`, add a `TOOL_META` entry (and a card renderer if it returns structured

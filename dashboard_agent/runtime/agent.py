@@ -51,7 +51,7 @@ from ..config import (
 )
 from ..core.ctx import ctx_get as _ctx
 from .mocking import enable_mocking
-from .prompt import ARTIFACT_NOTE, pull_agent_prompt, pull_system_prompt
+from .prompt import ARTIFACT_NOTE, FALLBACK_PROMPT, pull_agent_prompt
 from .tools import (
     all_tools,
     allowed_tool_names,
@@ -74,8 +74,6 @@ class Context:
     """
 
     model: str | None = None  # main agent LLM (e.g. "anthropic:claude-…"); overrides build default
-    prompt: str | None = None  # inline system prompt text (preferred over prompt_name)
-    prompt_name: str | None = None  # system prompt in Prompt Hub
     agent_repo: str | None = None  # Context Hub agent repo whose AGENTS.md is the prompt
     skills_repo: str | None = (
         None  # Context Hub skills-bundle repo mounted at /skills/ (all assistants)
@@ -91,7 +89,7 @@ class Context:
     mcp_servers: list[dict] | None = None
 
 
-# The system prompt is sourced from LangSmith Prompt Hub (see prompt.py). We pull
+# The system prompt is sourced from LangSmith Context Hub (see prompt.py). We pull
 # it once at the start of each question and stash it in this ContextVar, so every
 # model call within one run sees a consistent prompt while a fresh question always
 # re-pulls — that is what lets you fix the planted bug live in the Hub, no restart.
@@ -102,11 +100,12 @@ _prompt_override: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 
 @dynamic_prompt
 def _hub_system_prompt(request: ModelRequest) -> str:
-    """Inject the system prompt for each model call from the Hub-sourced text.
+    """Inject the system prompt for each model call, pulled fresh per question.
 
     Precedence for our base prompt: a per-run pulled value (set by run/run_stream)
-    > an inline `prompt` from runtime context > a Context Hub `agent_repo` (its
-    AGENTS.md) > the assistant's `prompt_name` from Prompt Hub > the default.
+    > the assistant's Context Hub `agent_repo` (its AGENTS.md) > FALLBACK_PROMPT.
+    Pulled per question rather than baked in at build time, which is what lets an
+    edit to the repo take effect without a restart.
 
     Context Hub assistants COMPOSE this with deepagents' middleware-built system
     prompt (`request.system_prompt`) rather than discarding it: that prompt carries
@@ -115,23 +114,18 @@ def _hub_system_prompt(request: ModelRequest) -> str:
     skills went un-listed and the agent denied it could write files). Our prompt
     goes LAST so its persona, dashboard workflow, and failure-mode clause stay
     authoritative. This now fires for ANY assistant that has skills (`skills_repo`)
-    or a Context Hub repo (`agent_repo`) — skills only surface if the middleware
-    catalogue reaches the model. Legacy assistants with neither keep the clean,
-    scoped prompt (no deepagents base, no filesystem) exactly as before.
+    or a Context Hub repo (`agent_repo`): skills only surface if the middleware
+    catalogue reaches the model. An assistant with neither gets the clean, scoped
+    prompt with no deepagents base and no filesystem instructions.
     """
     agent_repo = _ctx(request.runtime, "agent_repo")
     override = _prompt_override.get()
     if override is not None:
         base = override
+    elif agent_repo:
+        base = pull_agent_prompt(agent_repo, workspace=_ctx(request.runtime, "ls_workspace"))
     else:
-        inline = _ctx(request.runtime, "prompt")
-        workspace = _ctx(request.runtime, "ls_workspace")
-        if inline:
-            base = inline
-        elif agent_repo:
-            base = pull_agent_prompt(agent_repo, workspace=workspace)
-        else:
-            base = pull_system_prompt(_ctx(request.runtime, "prompt_name"), workspace=workspace)
+        base = FALLBACK_PROMPT
     ours = (
         base
         + _capability_note(request.runtime)
@@ -250,8 +244,8 @@ def _capability_note(runtime) -> str:
         return ""
     # A directive ("use these"), not a factual claim ("these are the only tools
     # that exist"): the runtime also binds deepagents' scratch-file tools, which
-    # Prompt Hub assistants are kept scoped away from (their prompt never mentions
-    # them). Context Hub assistants intentionally do get them, via the base prompt.
+    # an assistant with no Context Hub repo is kept scoped away from (its prompt
+    # never mentions them). A Context Hub assistant gets them via the base prompt.
     note = "\n\nAVAILABLE CAPABILITIES (use these tools to serve the user):\n" + "\n".join(
         f"- {line}" for line in lines
     )
@@ -463,7 +457,7 @@ class ToolSelection(AgentMiddleware):
     uses to drop `execute` on non-sandbox backends.
 
     Names outside the catalogue are never touched, which is what leaves the
-    deepagents built-ins (`write_todos`, filesystem tools, `task`, …) alone.
+    deepagents built-ins (the filesystem tools, `task`, `execute`, …) alone.
     """
 
     @staticmethod
@@ -986,7 +980,7 @@ def _resolve_backends(runtime) -> tuple[BackendProtocol, dict[str, BackendProtoc
     stores each skill at its ROOT (`<name>/SKILL.md`) so the plain route works — the
     composite strips the `/skills/` prefix, and the repo's keys have no `skills/`
     prefix to lose. Every assistant gets skills this way, independent of whether its
-    prompt lives in Prompt Hub or Context Hub.
+    prompt lives in Context Hub.
 
     Degrades gracefully:
     - sandbox unavailable (`DA_SANDBOX=0`, no entitlement, no network) → StateBackend
@@ -1260,12 +1254,12 @@ def run(question: str, thread_id: str = "demo", agent=None) -> dict[str, Any]:
 
     Returns {"answer": str, "widgets": [ ... ], "question": str}.
     Widgets are collected via a per-invocation ContextVar sink. The system prompt
-    is pulled fresh from Prompt Hub for this run and pinned via a ContextVar.
+    is pinned for this run via a ContextVar.
     """
     agent = agent or get_agent()
     sink: list[dict] = []
     token = _widget_sink.set(sink)
-    prompt_token = _prompt_override.set(pull_system_prompt())
+    prompt_token = _prompt_override.set(FALLBACK_PROMPT)
     # Assign the trace root run id ourselves so feedback attaches to the TRACE,
     # not a child LLM/tool span.
     run_id = str(uuid.uuid4())
@@ -1310,7 +1304,7 @@ def run_stream(question: str, thread_id: str = "demo", agent=None):
         # that takes one.
         if isinstance(parsed.get("query"), str):
             return parsed["query"]
-        # Compact one-liner for anything else (write_todos, task, push_widget).
+        # Compact one-liner for anything else (task, push_widget, write_file).
         return json.dumps(parsed, ensure_ascii=False)[:120]
 
     # Assign the trace root run id ourselves (via config["run_id"]) so feedback
@@ -1320,7 +1314,7 @@ def run_stream(question: str, thread_id: str = "demo", agent=None):
     config = {"run_id": root_id, "configurable": {"thread_id": thread_id}}
 
     # Pull the prompt once for this question and pin it for every model call.
-    prompt_token = _prompt_override.set(pull_system_prompt())
+    prompt_token = _prompt_override.set(FALLBACK_PROMPT)
     try:
         for msg, _meta in agent.stream(
             {"messages": [{"role": "user", "content": question}]},

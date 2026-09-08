@@ -11,10 +11,16 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from typing import Literal
 
 import pytest
 
 from dashboard_agent.runtime import mcp_servers as m
+
+# What a client is allowed to answer an elicitation with. Spelled out rather
+# than `str` because `ElicitResult` takes the literal union, and a typo in a
+# test would otherwise only show up as a validation error at run time.
+_Action = Literal["accept", "decline", "cancel"]
 
 # ---------------------------------------------------------------------------
 # Config parsing
@@ -168,312 +174,30 @@ def test_probe_reports_the_reason_a_server_failed(monkeypatch):
 
 
 @pytest.fixture
-def fieldlink():
-    """The demo MCP server, reached over FastMCP's in-memory transport."""
-    from fastmcp import Client
-
-    from mcp_demo_server.server import mcp
-
-    return Client(mcp)
-
-
-def test_the_demo_server_advertises_its_signature_app(fieldlink):
-    """`collect_signature` is an MCP App; the plain tools are not."""
-
-    async def check():
-        async with fieldlink as client:
-            tools = {t.name: t for t in await client.list_tools()}
-            resources = {str(r.uri): r for r in await client.list_resources()}
-            return tools, resources
-
-    tools, resources = asyncio.run(check())
-
-    assert set(tools) == {
-        "find_shipments",
-        "get_shipment",
-        "schedule_delivery",
-        "collect_signature",
-    }
-    ui = (tools["collect_signature"].meta or {}).get("ui") or {}
-    assert ui.get("resourceUri") == "ui://fieldlink/signature.html"
-    assert not (tools["find_shipments"].meta or {}).get("ui")
-
-    app = resources["ui://fieldlink/signature.html"]
-    # The MCP Apps MIME type is what tells a host this is renderable UI rather
-    # than a document to read.
-    assert app.mime_type == "text/html;profile=mcp-app"
-
-
-def test_a_plain_tool_answers_without_asking(fieldlink):
-    async def call():
-        async with fieldlink as client:
-            return await client.call_tool("find_shipments", {"status": "customs_hold"})
-
-    data = asyncio.run(call()).data
-    assert data["count"] == 1
-    assert data["shipments"][0]["tracking_id"] == "FL-4418"
-
-
-def test_an_interactive_tool_asks_before_it_answers(fieldlink):
-    """The guard-pattern round: ask first, then answer when the reply comes back.
-
-    This is the shape the stateless spec requires and the reason the agent can
-    surface the pause as an interrupt. `ctx.elicit()` would fail here.
-    """
-    from mcp.types import ElicitResult, InputRequiredResult
-
-    async def two_rounds():
-        async with fieldlink as client:
-            asked = await client.session.call_tool(
-                "collect_signature", {"tracking_id": "FL-4501"}, allow_input_required=True
-            )
-            answered = await client.session.call_tool(
-                "collect_signature",
-                {"tracking_id": "FL-4501"},
-                input_responses={
-                    "signature": ElicitResult(
-                        action="accept",
-                        content={
-                            "signature": "data:image/png;base64,iVBORw0KGgo=",
-                            "signed_by": "Grace Achieng",
-                            "signed_at": "2026-09-07T14:02:00Z",
-                        },
-                    )
-                },
-                request_state=asked.request_state,
-                allow_input_required=True,
-            )
-            return asked, answered
-
-    asked, answered = asyncio.run(two_rounds())
-
-    assert isinstance(asked, InputRequiredResult)
-    (key,) = asked.input_requests
-    assert key == "signature"
-    schema = asked.input_requests[key].params.requested_schema
-    assert set(schema["properties"]) == {"signature", "signed_by", "signed_at"}
-
-    assert not isinstance(answered, InputRequiredResult)
-    record = answered.structured_content
-    assert record["status"] == "signed"
-    assert record["signed_by"] == "Grace Achieng"
-    # The PNG is thousands of useless tokens: it is stored, never returned.
-    assert "signature" not in record
-
-
-def _png(width: int, height: int) -> bytes:
-    """A real PNG of the given size, standing in for what the pad draws.
-
-    Generated rather than hard-coded because the SIZE is load-bearing here: a
-    provider rejects a tiny image, so a fixture that happened to be 1x1 would
-    test the wrong branch.
-    """
-    import struct
-    import zlib
-
-    raw = b"".join(b"\x00" + bytes([255, 255, 255] * width) for _ in range(height))
-
-    def chunk(tag: bytes, data: bytes) -> bytes:
-        return (
-            struct.pack(">I", len(data))
-            + tag
-            + data
-            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
-        )
-
-    return (
-        b"\x89PNG\r\n\x1a\n"
-        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
-        + chunk(b"IDAT", zlib.compress(raw, 9))
-        + chunk(b"IEND", b"")
-    )
-
-
-# What a signature pad actually hands over: a canvas-sized image.
-_PNG_BYTES = _png(480, 200)
-
-
-def _sign(client, tracking_id: str):
-    """Run both rounds of `collect_signature` and return the terminal result."""
-    import base64
-
-    from mcp.types import ElicitResult
-
-    uri = "data:image/png;base64," + base64.b64encode(_PNG_BYTES).decode()
-
-    async def go():
-        async with client as c:
-            asked = await c.session.call_tool(
-                "collect_signature", {"tracking_id": tracking_id}, allow_input_required=True
-            )
-            return await c.session.call_tool(
-                "collect_signature",
-                {"tracking_id": tracking_id},
-                input_responses={
-                    "signature": ElicitResult(
-                        action="accept",
-                        content={
-                            "signature": uri,
-                            "signed_by": "Grace Achieng",
-                            "signed_at": "2026-09-07T14:02:00Z",
-                        },
-                    )
-                },
-                request_state=asked.request_state,
-                allow_input_required=True,
-            )
-
-    return asyncio.run(go())
-
-
-def test_a_signature_comes_back_as_an_image_and_a_url(fieldlink):
-    """The model both SEES the signature and gets a way to embed it.
-
-    Two blocks, deliberately: the image is what makes the signature reviewable,
-    and the URL is what makes it placeable in a document. The base64 is in
-    neither - a model cannot copy 10KB of it into an `<img>` without corrupting
-    it, which is the whole reason the URL exists.
-    """
-    result = _sign(fieldlink, "FL-4417")
-
-    assert [block.type for block in result.content] == ["text", "image"]
-    image = result.content[1]
-    assert image.mime_type == "image/png"
-
-    record = result.structured_content
-    assert record["status"] == "signed"
-    assert record["signature_url"].endswith("/signatures/FL-4417.png")
-    # The data URI is the one a document embeds: no fetch, so the picture
-    # survives this server going away and prints into a PDF.
-    assert record["signature_data_uri"].startswith("data:image/png;base64,")
-    # The raw column the record is stored under never reaches the model.
-    assert "signature" not in record
-
-
-def test_a_signature_too_small_to_render_keeps_the_url_and_drops_the_image(fieldlink):
-    """A provider rejects a tiny image with a 400 that would kill the whole run.
-
-    Found the hard way: a 1x1 test PNG came back as "Could not process image"
-    from Anthropic and ended the turn after the tool had already succeeded.
-    """
-    import base64
-
-    from mcp.types import ElicitResult
-
-    uri = "data:image/png;base64," + base64.b64encode(_png(1, 1)).decode()
-
-    async def go():
-        async with fieldlink as c:
-            asked = await c.session.call_tool(
-                "collect_signature", {"tracking_id": "FL-4418"}, allow_input_required=True
-            )
-            return await c.session.call_tool(
-                "collect_signature",
-                {"tracking_id": "FL-4418"},
-                input_responses={
-                    "signature": ElicitResult(
-                        action="accept",
-                        content={
-                            "signature": uri,
-                            "signed_by": "Grace Achieng",
-                            "signed_at": "2026-09-07T14:02:00Z",
-                        },
-                    )
-                },
-                request_state=asked.request_state,
-                allow_input_required=True,
-            )
-
-    result = asyncio.run(go())
-    assert [block.type for block in result.content] == ["text"], "the image should be dropped"
-    # The delivery is still signed, and the picture is still fetchable by URL.
-    assert result.structured_content["status"] == "signed"
-    assert result.structured_content["signature_url"].endswith("/signatures/FL-4418.png")
-
-
-def test_the_signature_png_is_served_over_http(fieldlink):
-    """The URL in the result resolves to real image bytes, and 404s otherwise."""
-    from starlette.testclient import TestClient
-
-    from mcp_demo_server.server import mcp
-
-    _sign(fieldlink, "FL-4502")
-    with TestClient(mcp.http_app(stateless_http=True)) as http:
-        ok = http.get("/signatures/FL-4502.png")
-        assert ok.status_code == 200
-        assert ok.headers["content-type"] == "image/png"
-        assert ok.content == _PNG_BYTES
-        assert http.get("/signatures/FL-9999.png").status_code == 404
-
-
-def test_a_signature_the_pad_mangled_is_recorded_without_promising_an_image(fieldlink):
-    """A bad data URI must not claim a picture that cannot be served."""
-    from mcp.types import ElicitResult
-
-    async def go():
-        async with fieldlink as c:
-            asked = await c.session.call_tool(
-                "collect_signature", {"tracking_id": "FL-4390"}, allow_input_required=True
-            )
-            return await c.session.call_tool(
-                "collect_signature",
-                {"tracking_id": "FL-4390"},
-                input_responses={
-                    "signature": ElicitResult(
-                        action="accept",
-                        content={
-                            "signature": "not-a-data-uri",
-                            "signed_by": "Grace Achieng",
-                            "signed_at": "2026-09-07T14:02:00Z",
-                        },
-                    )
-                },
-                request_state=asked.request_state,
-                allow_input_required=True,
-            )
-
-    record = asyncio.run(go()).structured_content
-    assert record["status"] == "signed"
-    assert record["signature_url"] is None
-
-
-def test_a_declined_signature_leaves_the_shipment_unsigned(fieldlink):
-    from mcp.types import ElicitResult
-
-    async def decline():
-        async with fieldlink as client:
-            asked = await client.session.call_tool(
-                "collect_signature", {"tracking_id": "FL-4417"}, allow_input_required=True
-            )
-            return await client.session.call_tool(
-                "collect_signature",
-                {"tracking_id": "FL-4417"},
-                input_responses={"signature": ElicitResult(action="decline")},
-                request_state=asked.request_state,
-                allow_input_required=True,
-            )
-
-    record = asyncio.run(decline()).structured_content
-    assert record["status"] == "unsigned"
-
-
-# ---------------------------------------------------------------------------
-# Meridian Wealth: the three MCP Apps
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
 def meridian():
-    """The wealth demo server, over FastMCP's in-memory transport."""
+    """The bundled demo MCP server, reached over FastMCP's in-memory transport."""
     from fastmcp import Client
 
-    from mcp_demo_server.wealth import mcp
+    from mcp_demo_server.server import mcp
 
     return Client(mcp)
 
 
-def _rounds(client, tool: str, args: dict, key: str, content: dict):
-    """Both legs of a guard tool: the ask, then the answer. Returns (schema, result)."""
+def _rounds(
+    client,
+    tool: str,
+    args: dict,
+    key: str,
+    content: dict | None,
+    action: _Action = "accept",
+):
+    """Both legs of a guard tool: the ask, then the answer. Returns (schema, result).
+
+    Two `call_tool`s rather than one because that IS the pattern: the first leg
+    ends the call with an input-required result, and the second re-issues the
+    same call with the answer attached. Nothing is held open in between, which is
+    what lets a real run put a checkpoint there.
+    """
     from mcp.types import ElicitResult, InputRequiredResult
 
     async def go():
@@ -483,10 +207,11 @@ def _rounds(client, tool: str, args: dict, key: str, content: dict):
             answered = await c.session.call_tool(
                 tool,
                 args,
-                input_responses={key: ElicitResult(action="accept", content=content)},
+                input_responses={key: ElicitResult(action=action, content=content)},
                 request_state=asked.request_state,
                 allow_input_required=True,
             )
+            assert not isinstance(answered, InputRequiredResult), f"{tool} asked twice"
             return asked.input_requests[key].params.requested_schema, answered
 
     return asyncio.run(go())
@@ -501,24 +226,117 @@ _BALANCED = {
     "approved": True,
 }
 
+_SLOT = {
+    "review_date": "2026-10-14",
+    "window": "morning",
+    "attending": "Dana Whitfield, +1 415 555 0134",
+}
 
-def test_every_interactive_wealth_tool_ships_its_own_ui(meridian):
-    """Each of the three earns an App by collecting what a form cannot."""
+
+def test_the_demo_server_advertises_exactly_the_tools_it_has(meridian):
+    """One server, one catalogue. A tool that vanishes here breaks a scripted demo."""
+
+    async def names():
+        async with meridian as c:
+            return {t.name for t in await c.list_tools()}
+
+    assert asyncio.run(names()) == {
+        "list_accounts",
+        "get_account",
+        "schedule_review",
+        "propose_rebalance",
+        "project_goal",
+        "confirm_trade",
+        "sign_document",
+    }
+
+
+def test_only_the_tools_that_need_their_own_ui_have_one(meridian):
+    """Each App earns its place by collecting what a generated form cannot."""
 
     async def check():
         async with meridian as c:
-            return {
-                t.name: (t.meta or {}).get("ui", {}).get("resourceUri")
+            apps = {
+                t.name: ((t.meta or {}).get("ui") or {}).get("resourceUri")
                 for t in await c.list_tools()
             }
+            resources = {str(r.uri): r for r in await c.list_resources()}
+            return apps, resources
 
-    apps = asyncio.run(check())
+    apps, resources = asyncio.run(check())
     assert apps["propose_rebalance"] == "ui://meridian/rebalance.html"
     assert apps["project_goal"] == "ui://meridian/projection.html"
     assert apps["confirm_trade"] == "ui://meridian/trade.html"
+    assert apps["sign_document"] == "ui://meridian/signature.html"
     # The read-only lookups are ordinary tools; an App there would be decoration.
     assert apps["list_accounts"] is None
     assert apps["get_account"] is None
+    # And `schedule_review` is deliberately bare: the guard pattern with no UI on
+    # top of it, so the host generates a form from the schema.
+    assert apps["schedule_review"] is None
+
+    # The MCP Apps MIME type is what tells a host this is renderable UI rather
+    # than a document to read.
+    app = resources["ui://meridian/signature.html"]
+    assert app.mime_type == "text/html;profile=mcp-app"
+
+
+def test_a_plain_tool_answers_without_asking(meridian):
+    async def call():
+        async with meridian as c:
+            return await c.call_tool("list_accounts", {})
+
+    data = asyncio.run(call()).data
+    assert data["count"] == 2
+    whitfield = next(a for a in data["accounts"] if a["account_id"] == "MW-10241")
+    assert whitfield["needs_rebalance"] is True
+
+
+def test_an_unknown_account_is_an_answer_not_a_crash(meridian):
+    async def call():
+        async with meridian as c:
+            return await c.call_tool("get_account", {"account_id": "MW-00000"})
+
+    assert "No account" in asyncio.run(call()).data["error"]
+
+
+# ---------------------------------------------------------------------------
+# The guard pattern with nothing on top of it
+# ---------------------------------------------------------------------------
+
+
+def test_a_tool_with_no_app_still_asks_before_it_answers(meridian):
+    """The bare guard-pattern round: ask first, then answer when the reply lands.
+
+    This is the shape the stateless spec requires and the reason the agent can
+    surface the pause as an interrupt. `ctx.elicit()` would fail here.
+    """
+    schema, result = _rounds(meridian, "schedule_review", {"account_id": "MW-10241"}, "slot", _SLOT)
+    assert set(schema["properties"]) == {"review_date", "window", "attending"}
+    # No App, so no render context to smuggle: a host generates the form itself.
+    assert not any("x-app" in prop for prop in schema["properties"].values())
+
+    record = result.structured_content
+    assert record["status"] == "scheduled"
+    assert record["review_date"] == "2026-10-14"
+    assert record["household"] == "Whitfield Family Trust"
+
+
+@pytest.mark.parametrize(
+    ("action", "status"),
+    [("decline", "not_scheduled"), ("cancel", "cancelled")],
+)
+def test_a_refused_ask_books_nothing(meridian, action: _Action, status: str):
+    """Declining and cancelling are different answers, and neither is a booking."""
+    _, result = _rounds(
+        meridian, "schedule_review", {"account_id": "MW-10388"}, "slot", None, action
+    )
+    assert result.structured_content["status"] == status
+
+
+# ---------------------------------------------------------------------------
+# The MCP Apps
+# ---------------------------------------------------------------------------
 
 
 def test_an_app_gets_its_render_context_on_a_property(meridian):
@@ -668,3 +486,136 @@ def test_every_app_resource_is_a_complete_document(meridian):
         # fetch a script from.
         assert "window.McpApp" in html, uri
         assert "McpApp.ready()" in html, uri
+
+
+# ---------------------------------------------------------------------------
+# The signature: a multimodal result, and the PNG behind it
+# ---------------------------------------------------------------------------
+
+
+def _png(width: int, height: int) -> bytes:
+    """A real PNG of the given size, standing in for what the pad draws.
+
+    Generated rather than hard-coded because the SIZE is load-bearing here: a
+    provider rejects a tiny image, so a fixture that happened to be 1x1 would
+    test the wrong branch.
+    """
+    import struct
+    import zlib
+
+    raw = b"".join(b"\x00" + bytes([255, 255, 255] * width) for _ in range(height))
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw, 9))
+        + chunk(b"IEND", b"")
+    )
+
+
+# What a signature pad actually hands over: a canvas-sized image.
+_PNG_BYTES = _png(480, 200)
+
+
+def _data_uri(png: bytes) -> str:
+    import base64
+
+    return "data:image/png;base64," + base64.b64encode(png).decode()
+
+
+def _sign(client, document: str, signature: str, action: _Action = "accept"):
+    """Both rounds of `sign_document`, with the pad handing over `signature`."""
+    _, result = _rounds(
+        client,
+        "sign_document",
+        {"account_id": "MW-10241", "document": document},
+        "signature",
+        None
+        if action != "accept"
+        else {
+            "signature": signature,
+            "signed_by": "Dana Whitfield",
+            "signed_at": "2026-09-07T14:02:00Z",
+        },
+        action,
+    )
+    return result
+
+
+def test_a_signature_comes_back_as_an_image_and_a_url(meridian):
+    """The model both SEES the signature and gets a way to embed it.
+
+    Two blocks, deliberately: the image is what makes the signature reviewable,
+    and the data URI is what makes it placeable in a document with no network at
+    all. The URL is the fallback for one too big to inline.
+    """
+    result = _sign(meridian, "IPS amendment", _data_uri(_PNG_BYTES))
+
+    assert [block.type for block in result.content] == ["text", "image"]
+    assert result.content[1].mime_type == "image/png"
+
+    record = result.structured_content
+    assert record["status"] == "signed"
+    assert record["signed_by"] == "Dana Whitfield"
+    assert record["signature_data_uri"].startswith("data:image/png;base64,")
+    assert record["signature_url"].endswith(f"/signatures/{record['reference']}.png")
+    # The raw column the record is stored under never reaches the model.
+    assert "signature" not in record
+
+
+def test_the_reference_is_the_same_document_twice(meridian):
+    """The PNG route is keyed on it, so it cannot be a per-process hash."""
+    first = _sign(meridian, "Advisory agreement", _data_uri(_PNG_BYTES))
+    second = _sign(meridian, "Advisory agreement", _data_uri(_PNG_BYTES))
+    assert first.structured_content["reference"] == second.structured_content["reference"]
+
+
+def test_a_signature_too_small_to_render_keeps_the_url_and_drops_the_image(meridian):
+    """A provider rejects a tiny image with a 400 that would kill the whole run.
+
+    Found the hard way: a 1x1 test PNG came back as "Could not process image"
+    from Anthropic and ended the turn after the tool had already succeeded.
+    """
+    result = _sign(meridian, "Beneficiary change", _data_uri(_png(1, 1)))
+
+    assert [block.type for block in result.content] == ["text"], "the image should be dropped"
+    # The document is still signed, and the picture is still fetchable by URL.
+    record = result.structured_content
+    assert record["status"] == "signed"
+    assert record["signature_url"].endswith(f"/signatures/{record['reference']}.png")
+
+
+def test_a_signature_the_pad_mangled_is_recorded_without_promising_an_image(meridian):
+    """A bad data URI must not claim a picture that cannot be served."""
+    record = _sign(meridian, "Trading authority", "not-a-data-uri").structured_content
+    assert record["status"] == "signed"
+    assert record["signature_url"] is None
+    assert record["signature_data_uri"] is None
+
+
+def test_a_declined_signature_leaves_the_document_unsigned(meridian):
+    record = _sign(meridian, "Fee schedule", "", action="decline").structured_content
+    assert record["status"] == "unsigned"
+
+
+def test_the_signature_png_is_served_over_http(meridian):
+    """The URL in the result resolves to real image bytes, and 404s otherwise."""
+    from starlette.testclient import TestClient
+
+    from mcp_demo_server.server import mcp
+
+    record = _sign(meridian, "Custody transfer", _data_uri(_PNG_BYTES)).structured_content
+    with TestClient(mcp.http_app(stateless_http=True)) as http:
+        ok = http.get(f"/signatures/{record['reference']}.png")
+        assert ok.status_code == 200
+        assert ok.headers["content-type"] == "image/png"
+        assert ok.content == _PNG_BYTES
+        assert http.get("/signatures/MW-DOC-99999.png").status_code == 404

@@ -8,12 +8,6 @@ import type { Theme } from "@/lib/theme";
 
 export type { QuickAction };
 
-/**
- * System-prompt source: a Prompt Hub handle ("prompt_hub"), a Context Hub agent
- * repo's AGENTS.md ("context_hub"), or inline text ("inline").
- */
-export type PromptMode = "prompt_hub" | "context_hub" | "inline";
-
 /** All editable panel fields for the active assistant. */
 export interface PanelConfig {
   /**
@@ -50,14 +44,12 @@ export interface PanelConfig {
   fontBodyFallback: string;
   /** Branding: "curated" never contacts the font CDN. */
   fontSource: "google" | "curated";
-  /** Agent config: which system-prompt source is active. */
-  promptMode: PromptMode;
-  /** Agent config: selected Prompt Hub handle ("" = none). */
-  promptName: string;
-  /** Agent config: selected Context Hub agent repo (its AGENTS.md is the prompt). */
+  /**
+   * Agent config: the Context Hub agent repo whose AGENTS.md is the system
+   * prompt. The only prompt source there is; "" leaves the agent on its
+   * built-in fallback prompt.
+   */
   agentRepo: string;
-  /** Agent config: inline system prompt text. */
-  systemPrompt: string;
   /** Agent config: `context.model` id, "" for the deployment default. */
   model: string;
   /**

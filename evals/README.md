@@ -18,7 +18,7 @@ assertions + an LLM-as-judge), recorded as a LangSmith **experiment**.
 > | **score 1** | the planted **bug fired** (the agent invented figures) | the agent was **correct** (admitted the gap / hedged, no fabricated figures) |
 > | when | manual, gated on env, never in per-PR CI | at assistant creation, then on demand mid-demo |
 >
-> The demo reads **2/3 (red) → fix the prompt in Prompt Hub → 3/3 (green)**, which only works
+> The demo reads **2/3 (red) → fix the prompt in Context Hub → 3/3 (green)**, which only works
 > because that evaluator rewards correct behavior. Copy an evaluator across this line without
 > flipping it and the demo scores green before the fix. See AGENTS.md §3.
 >

@@ -44,7 +44,7 @@ def _analysis(**over):
 @pytest.fixture
 def rec(monkeypatch):
     """Mock the LLM + every network push; record what got pushed."""
-    calls = {"bundle": None, "agent_prompt": None, "prompt": None}
+    calls = {"bundle": None, "agent_prompt": None}
     monkeypatch.setattr(
         S,
         "fetch_brand",
@@ -69,11 +69,6 @@ def rec(monkeypatch):
 
     monkeypatch.setattr(S, "push_agent_prompt", _agent)
 
-    def _prompt(ws, name, text):
-        calls["prompt"] = {"name": name, "text": text}
-        return "http://prompt"
-
-    monkeypatch.setattr(S, "push_prompt", _prompt)
     return calls
 
 
@@ -84,33 +79,17 @@ def _prep(monkeypatch, analysis, **payload_over):
     return S.prepare_assistant(payload)
 
 
-# --- prompt-source routing (#1, #2) ---
+# --- prompt storage ---
 
 
-def test_prompt_hub_sets_prompt_name_not_agent_repo(rec, monkeypatch):
-    ctx = _prep(monkeypatch, _analysis(), prompt_source="prompt_hub")["context"]
-    assert ctx.get("prompt_name") == "acme-co-system"
-    assert "agent_repo" not in ctx
-    # Skills are universal — even a Prompt Hub assistant gets a skills bundle mounted.
-    assert ctx.get("skills_repo") == "acme-co-skills"
-    assert rec["prompt"] is not None
-    assert rec["agent_prompt"] is None
-    # ...and its prompt carries the skills clause (so the mounted skills get used).
-    assert "SKILLS (IMPORTANT)" in rec["prompt"]["text"]
-
-
-def test_context_hub_is_the_default_prompt_store(rec, monkeypatch):
-    """No `prompt_source` in the payload means Context Hub, not Prompt Hub."""
+def test_the_prompt_goes_to_a_context_hub_agent_repo(rec, monkeypatch):
+    """One storage location, so "edit the prompt" means one thing to a presenter."""
     ctx = _prep(monkeypatch, _analysis())["context"]
     assert ctx.get("agent_repo") == "acme-co-agent"
+    # No second prompt location: an inline `prompt` or a registry `prompt_name`
+    # would each be another place the live edit could fail to take effect.
     assert "prompt_name" not in ctx
-
-
-def test_context_hub_sets_agent_repo_and_points_at_skill(rec, monkeypatch):
-    out = _prep(monkeypatch, _analysis(), prompt_source="context_hub")
-    ctx = out["context"]
-    assert ctx.get("agent_repo") == "acme-co-agent"
-    assert "prompt_name" not in ctx
+    assert "prompt" not in ctx
     assert ctx.get("skills_repo") == "acme-co-skills"  # skills come from the bundle, not the repo
     md = rec["agent_prompt"]["md"]
     # Dashboard workflow is a pointer to the skill, not inlined; skills clause present.
@@ -118,11 +97,10 @@ def test_context_hub_sets_agent_repo_and_points_at_skill(rec, monkeypatch):
     assert "SKILLS (IMPORTANT)" in md
 
 
-# --- skills are universal: same bundle regardless of prompt storage (#8) ---
+# --- skills are universal (#8) ---
 
 
 def test_skills_bundle_is_universal_dashboard_and_llm_skills(rec, monkeypatch):
-    # Default prompt_source is Prompt Hub — the bundle must STILL be pushed.
     _prep(monkeypatch, _analysis())
     names = [s["name"] for s in rec["bundle"]]
     assert names[0] == "dashboard"  # curated dashboard skill prepended
@@ -133,7 +111,7 @@ def test_skills_bundle_is_universal_dashboard_and_llm_skills(rec, monkeypatch):
 
 
 def test_metadata_records_ls_artifacts_manifest(rec, monkeypatch):
-    art = _prep(monkeypatch, _analysis(), prompt_source="context_hub")["metadata"]["ls_artifacts"]
+    art = _prep(monkeypatch, _analysis())["metadata"]["ls_artifacts"]
     assert art["workspace"] == "ws1"
     assert art["project"] == "Acme Co"  # ls_project == customer name
     assert art["agent_repo"] == "acme-co-agent"
@@ -141,7 +119,7 @@ def test_metadata_records_ls_artifacts_manifest(rec, monkeypatch):
     assert art["skills"] == []  # legacy per-skill list, unused now
     # Every artifact the /cleanup cascade deletes has to have a slot here, or it leaks
     # into the customer's workspace. These two are the attached evaluator and the
-    # Prompt Hub prompt holding its judge.
+    # prompt-registry prompt holding its judge.
     assert "eval_rule_id" in art
     assert "eval_judge_prompt" in art
 

@@ -20,7 +20,7 @@ def test_allowed_tool_names_and_is_allowed():
     allowed = allowed_tool_names(["web_search"])  # only web_search enabled
     assert is_allowed("web_search", allowed)
     assert not is_allowed("draft_email", allowed)  # catalogue tool, disabled -> hidden
-    assert is_allowed("write_todos", allowed)  # deepagents built-in → untouched
+    assert is_allowed("task", allowed)  # deepagents built-in → untouched
     assert is_allowed(None, allowed)
 
 
@@ -38,11 +38,11 @@ class _FakeReq:
 
 
 def test_tool_selection_drops_disabled_catalogue_tools_only():
-    req = _FakeReq(["web_search", "draft_email", "write_todos"], ["web_search"])
+    req = _FakeReq(["web_search", "draft_email", "task"], ["web_search"])
     A.ToolSelection()._apply(cast("Any", req))
     assert req.overridden is not None  # a filter happened
     kept = {t.name for t in req.overridden["tools"]}
-    assert kept == {"web_search", "write_todos"}  # draft_email filtered, built-in kept
+    assert kept == {"web_search", "task"}  # draft_email filtered, built-in kept
 
 
 def test_tool_selection_no_override_when_nothing_filtered():

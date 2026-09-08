@@ -421,7 +421,7 @@
   connection it fails outright:
 </p>
 <pre><code><span class="c"># fastmcp, against a 2026-07-28 connection</span>
-answer = await ctx.elicit("When should this ship?", response_type=Slot)
+answer = await ctx.elicit("Set the target allocation", response_type=Allocation)
 <span class="c"># -&gt; elicitation via server-initiated requests is unavailable</span></code></pre>
 <p>
   That is not a bug, it is the stateless spec working. Server-initiated elicitation needs a live

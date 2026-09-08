@@ -133,8 +133,8 @@ export interface ChatPanelProps {
   /** Quick-action presets rendered under "Try a quick prompt". */
   presets?: QuickAction[];
   /**
-   * Builds the per-run runtime context at send time (prompt/prompt_name,
-   * data_prompt, data_gap, ls_workspace, ls_project). Called fresh on every send
+   * Builds the per-run runtime context at send time (agent_repo, model,
+   * enabled_tools, mcp_servers, ls_workspace, ls_project). Called fresh on every send
    * so it reflects the latest settings. An empty object is sent as no context.
    */
   getRunContext: () => RunContext;

@@ -8,7 +8,7 @@
  *                   (assistant_setup graph → POST /assistants → select).
  *   3. VISUAL     — display name / accent / logo / quick actions; branding lives
  *                   in the assistant metadata and is debounce-PATCHed on edit.
- *   4. AGENT CFG  — [Prompt Hub | Prompt] toggle, withheld data, synthetic prompt.
+ *   4. AGENT CFG  — Context Hub agent repo (the system prompt) + model.
  *   5. DELETE     — danger delete with confirm.
  *
  * All data goes through src/lib/api.ts. The selected assistant + resolved run
@@ -48,7 +48,6 @@ import {
 import {
   useAgents,
   useAssistants,
-  useHubPrompts,
   useRefetchAssistants,
   useReplaceAssistantInCache,
   useTools,
@@ -67,7 +66,7 @@ import { ToolsSection } from "./settings/ToolsSection";
 import { McpSection } from "./settings/McpSection";
 import { DeleteAssistant } from "./settings/DeleteAssistant";
 import { DemoTraffic } from "./settings/DemoTraffic";
-import type { PanelConfig, PromptMode } from "./settings/types";
+import type { PanelConfig } from "./settings/types";
 import { VoicePicker } from "@/components/settings/VoicePicker";
 import { coerceTheme } from "@/lib/theme";
 import type { Theme } from "@/lib/theme";
@@ -83,7 +82,7 @@ export interface SettingsGuards {
   hasAssistant: boolean;
   /** A workspace is chosen. */
   hasWorkspace: boolean;
-  /** A system prompt is available (Hub handle selected, or inline text present). */
+  /** A Context Hub agent repo is selected, so the run has a system prompt. */
   hasPrompt: boolean;
 }
 
@@ -185,15 +184,11 @@ function configFromAssistant(a: Assistant, workspace: string): PanelConfig {
     fontBody: (m.font_body as string) || "",
     fontBodyFallback: (m.font_body_fallback as string) || DEFAULT_CURATED,
     fontSource: m.font_source === "curated" ? "curated" : "google",
-    promptName: (ctx.prompt_name as string) || "",
     agentRepo: (ctx.agent_repo as string) || "",
-    systemPrompt: (ctx.prompt as string) || "",
     model: (ctx.model as string) || "",
     // null = no saved selection (backend defaults); [] = everything optional off.
     enabledTools: Array.isArray(ctx.enabled_tools) ? (ctx.enabled_tools as string[]) : null,
     mcpServers: Array.isArray(ctx.mcp_servers) ? (ctx.mcp_servers as McpServerConfig[]) : [],
-    // Reflect whichever prompt source the assistant is configured with.
-    promptMode: ctx.prompt ? "inline" : ctx.agent_repo ? "context_hub" : "prompt_hub",
   };
 }
 
@@ -215,10 +210,7 @@ function blankConfig(workspace: string): PanelConfig {
     fontBody: "",
     fontBodyFallback: DEFAULT_CURATED,
     fontSource: "google",
-    promptMode: "prompt_hub",
-    promptName: "",
     agentRepo: "",
-    systemPrompt: "",
     model: "",
     enabledTools: null,
     mcpServers: [],
@@ -228,13 +220,8 @@ function blankConfig(workspace: string): PanelConfig {
 /** Resolve the per-run context — mirrors the SPA's `runContext()`. */
 function resolveRunContext(cfg: PanelConfig, project: string): RunContext {
   const ctx: RunContext = {};
-  if (cfg.promptMode === "inline") {
-    if (cfg.systemPrompt) ctx.prompt = cfg.systemPrompt;
-  } else if (cfg.promptMode === "context_hub") {
-    if (cfg.agentRepo) ctx.agent_repo = cfg.agentRepo;
-  } else if (cfg.promptName) {
-    ctx.prompt_name = cfg.promptName;
-  }
+  // Context Hub is the only prompt source: the repo's AGENTS.md is the prompt.
+  if (cfg.agentRepo) ctx.agent_repo = cfg.agentRepo;
   // Omitted when empty, so the deployment default applies rather than an id pinned
   // by whichever build of the SPA the presenter happens to be running.
   if (cfg.model) ctx.model = cfg.model;
@@ -330,9 +317,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
       blankConfig(readLS(WORKSPACE_LS_KEY)),
     );
     // Workspace-scoped reads. Keyed on the workspace, which is what replaced calling a
-    // `loadHubPrompts(id)` by hand from every path that could change it.
-    const hubPromptsQuery = useHubPrompts(cfg.lsWorkspace);
-    const hubPrompts = hubPromptsQuery.data ?? EMPTY_NAMES;
+    // loader by hand from every path that could change it.
     const agentsQuery = useAgents(cfg.lsWorkspace);
     const agents = agentsQuery.data ?? EMPTY_NAMES;
     const toolsQuery = useTools();
@@ -533,7 +518,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
         const src = assistantsRef.current.find((a) => a.assistant_id === id);
         try {
           // PATCH replaces `context` wholesale — spread the existing one or this
-          // wipes prompt_name / ls_workspace / data_gap.
+          // wipes agent_repo / ls_workspace / mcp_servers.
           replaceAssistant(
             await updateAssistant(id, {
               context: { ...(src?.context || {}), enabled_tools: ids },
@@ -569,7 +554,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           else delete next.model;
           try {
             // PATCH replaces `context` wholesale - spread the existing one or this
-            // wipes prompt_name / ls_workspace / enabled_tools.
+            // wipes agent_repo / ls_workspace / enabled_tools.
             replaceAssistant(await updateAssistant(id, { context: next }));
           } catch {
             /* non-fatal: the choice still applies to this session's runs */
@@ -594,7 +579,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           const src = assistantsRef.current.find((a) => a.assistant_id === id);
           try {
             // PATCH replaces `context` wholesale - spread the existing one or this
-            // wipes prompt_name / ls_workspace / enabled_tools.
+            // wipes agent_repo / ls_workspace / enabled_tools.
             replaceAssistant(
               await updateAssistant(id, {
                 context: { ...(src?.context || {}), mcp_servers: servers },
@@ -623,12 +608,7 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           return {
             hasAssistant: isAssistantId(selectedIdRef.current),
             hasWorkspace: !!c.lsWorkspace,
-            hasPrompt:
-              c.promptMode === "inline"
-                ? !!c.systemPrompt.trim()
-                : c.promptMode === "context_hub"
-                  ? !!c.agentRepo
-                  : !!c.promptName,
+            hasPrompt: !!c.agentRepo,
           };
         },
         // Persist a theme choice into the active assistant's metadata (so it
@@ -643,12 +623,12 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
       (id: string) => {
         setCfg((c) => ({ ...c, lsWorkspace: id }));
         writeLS(WORKSPACE_LS_KEY, id);
-        // No explicit refetch: the prompt and agent queries are keyed on the workspace, so
-        // changing it here is the fetch. That is the whole reason they are queries.
+        // No explicit refetch: the agent-repo query is keyed on the workspace, so
+        // changing it here is the fetch. That is the whole reason it is a query.
 
         // An assistant belonging to the workspace we just left cannot stay selected. It
         // looked harmless - the picker still showed it - but every run it drove would
-        // trace into, and read prompts from, a workspace that does not contain it, which
+        // trace into, and read its agent repo from, a workspace that does not contain it, which
         // is how the stale-id 403 above happened in the first place.
         //
         // Only cleared when the assistant actually records a DIFFERENT workspace. Plenty
@@ -692,7 +672,6 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           website: v.website,
           use_case: v.useCase,
           failure_mode: v.failureMode,
-          prompt_source: v.promptSource === "prompt_hub" ? "prompt_hub" : "context_hub",
           push_prompts: true,
           // Off unless the presenter asked for it: it fills the customer's project
           // with runs they never made, priced like they did.
@@ -915,17 +894,10 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
                 </BrandSection>
 
                 <AgentConfig
-                  promptMode={cfg.promptMode}
-                  promptName={cfg.promptName}
                   agentRepo={cfg.agentRepo}
-                  systemPrompt={cfg.systemPrompt}
                   model={cfg.model}
-                  hubPrompts={hubPrompts}
                   agents={agents}
-                  onPromptMode={(m: PromptMode) => editConfig({ promptMode: m })}
-                  onPromptName={(v) => editConfig({ promptName: v })}
                   onAgentRepo={(v) => editConfig({ agentRepo: v })}
-                  onSystemPrompt={(v) => editConfig({ systemPrompt: v })}
                   onModel={editModel}
                 />
 

@@ -3,7 +3,7 @@
 A second graph on the same Agent Server. Given setup inputs (workspace, customer,
 owner, industry, website, use_case, failure_mode, push_prompts), it fetches brand
 assets, generates persona quick-actions + an LLM tool selection, optionally pushes
-prompts to the workspace's Prompt Hub, and returns a ready assistant payload
+the agent's prompt to the workspace's Context Hub, and returns a ready assistant payload
 (`result`: metadata + context + prompt_urls). The SPA creates the assistant from it.
 
 Registered in langgraph.json as `assistant_setup`.
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import os
-from typing import Any, Literal, TypedDict
+from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from langsmith import tracing_context
@@ -31,7 +31,6 @@ _INPUT_KEYS = (
     "hallucination",
     "push_prompts",
     "enabled_tools",
-    "prompt_source",
     "demo_traffic",
 )
 
@@ -49,7 +48,6 @@ class SetupState(TypedDict, total=False):
     hallucination: bool
     push_prompts: bool
     enabled_tools: list[str]
-    prompt_source: Literal["prompt_hub", "context_hub"]
     # Backfill the trace project with synthetic traffic. Opt-in; see prepare_assistant.
     demo_traffic: bool
     result: dict

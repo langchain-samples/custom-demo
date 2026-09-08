@@ -23,7 +23,6 @@ import {
   getEvalStatus,
   listAgents,
   listAssistants,
-  listHubPrompts,
   listTools,
   listWorkspaces,
 } from "@/lib/api";
@@ -38,7 +37,6 @@ export const qk = {
   assistants: () => ["assistants"] as const,
   workspaces: () => ["workspaces"] as const,
   tools: () => ["tools"] as const,
-  hubPrompts: (workspace: string) => ["hub-prompts", workspace] as const,
   agents: (workspace: string) => ["agents", workspace] as const,
   evalStatus: (target: EvalTarget) => ["eval-status", target] as const,
   demoTraffic: (project: string, workspace?: string) =>
@@ -63,21 +61,12 @@ export function useTools() {
 }
 
 /**
- * Prompt Hub names in one workspace.
+ * Context Hub agent repos in one workspace.
  *
  * Keyed on the workspace, which is the whole reason this is a query: switching workspace
- * used to mean calling a `loadHubPrompts(id)` by hand and hoping every path that changes
- * the workspace remembered to.
+ * used to mean calling a loader by hand and hoping every path that changes the workspace
+ * remembered to.
  */
-export function useHubPrompts(workspace: string) {
-  return useQuery({
-    queryKey: qk.hubPrompts(workspace),
-    queryFn: () => listHubPrompts(workspace),
-    enabled: !!workspace,
-  });
-}
-
-/** Context Hub agent repos in one workspace. */
 export function useAgents(workspace: string) {
   return useQuery({
     queryKey: qk.agents(workspace),

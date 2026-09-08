@@ -7,7 +7,7 @@ a tool added to the catalogue without touching them renders as a generic icon
 with its raw identifier for a label.
 
 Serving those maps from `GET /tools` is not possible as they stand, because they
-also cover the deepagents built-ins (`write_todos`, `execute`, `read_file`, ...),
+also cover the deepagents built-ins (`task`, `execute`, `read_file`, ...),
 which the registry does not know about and should not. So the guarantee is made
 here instead: every catalogue tool must appear in every map that keys off a tool
 name, and the failure names the tool and the file.
@@ -34,7 +34,6 @@ CATALOGUE = sorted(spec.id for spec in TOOL_REGISTRY)
 # them only to tell them apart from a name nothing defines any more.
 BUILTINS = frozenset(
     {
-        "write_todos",
         "task",
         "execute",
         "read_file",

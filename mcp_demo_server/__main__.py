@@ -1,12 +1,9 @@
-"""Serve one of the demo MCP servers over stateless streamable HTTP.
+"""Serve the demo MCP server over stateless streamable HTTP.
 
-    python -m mcp_demo_server              -> Fieldlink Logistics  (default)
-    python -m mcp_demo_server --wealth     -> Meridian Wealth
+    python -m mcp_demo_server      -> Meridian Wealth on http://127.0.0.1:8765/mcp
 
-Two servers rather than one because the tools belong to different businesses,
-and a logistics book with a portfolio rebalancer in it is not a demo anyone
-believes. They are not mounted together either: our own adapter already prefixes
-every tool with the server it came from, so a second namespace here would produce
+One server, one namespace. Our own adapter already prefixes every tool with the
+server it came from, so mounting a second FastMCP under this one would produce
 `meridian_meridian_propose_rebalance`.
 
 `stateless_http=True` is the point of the exercise: no session is created, so
@@ -17,20 +14,15 @@ restarts) does not strand an in-flight conversation.
 from __future__ import annotations
 
 import os
-import sys
 
-HOST = os.getenv("FIELDLINK_HOST", "127.0.0.1")
-PORT = int(os.getenv("FIELDLINK_PORT", "8765"))
-PATH = os.getenv("FIELDLINK_PATH", "/mcp")
+HOST = os.getenv("MERIDIAN_HOST", "127.0.0.1")
+PORT = int(os.getenv("MERIDIAN_PORT", "8765"))
+PATH = os.getenv("MERIDIAN_PATH", "/mcp")
 
 
 def main() -> None:
-    """Run the selected server until interrupted."""
-    wealth = "--wealth" in sys.argv or os.getenv("FIELDLINK_DOMAIN") == "wealth"
-    if wealth:
-        from mcp_demo_server.wealth import mcp
-    else:
-        from mcp_demo_server.server import mcp
+    """Run the demo server until interrupted."""
+    from mcp_demo_server.server import mcp
 
     print(f"{mcp.name} (stateless HTTP) -> http://{HOST}:{PORT}{PATH}")
     mcp.run(

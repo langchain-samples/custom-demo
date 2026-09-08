@@ -30,7 +30,6 @@ KEYS = frozenset(
     {
         "workspace",
         "project",
-        "prompt_name",
         "agent_repo",
         "skills_repo",
         "skills",

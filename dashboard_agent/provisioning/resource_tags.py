@@ -101,8 +101,9 @@ def _resolve(client: httpx.Client, kind: str, name: str) -> str:
         rows = r.json() if r.status_code < 300 else []
         return (rows[0].get("id") or "") if isinstance(rows, list) and rows else ""
     if kind in ("prompt", "agent"):
-        # Both live in the hub `/repos` collection; `repo_type` separates a Prompt Hub
-        # prompt from a Context Hub agent repo. `query` narrows server-side - listing and
+        # Both live in the hub `/repos` collection; `repo_type` separates a registry
+        # prompt (the eval judge) from a Context Hub agent repo. `query` narrows
+        # server-side - listing and
         # scanning pages would miss anything past the first hundred - and
         # `is_public=false` is what confines the answer to THIS workspace: without it the
         # same handle matches public repos from other tenants, and we would tag a stranger's

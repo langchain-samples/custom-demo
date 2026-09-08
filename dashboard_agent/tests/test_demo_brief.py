@@ -14,7 +14,7 @@ def test_hallucination_brief_flow():
         "Vizient",
         "an internal assistant for their employees",
         ACTIONS,
-        ["push_widget", "web_search", "suggest_meeting_times"],
+        ["push_widget", "web_search", "draft_email"],
         "hallucination",
         data_gap="conversion rate by source",
     )
@@ -23,8 +23,8 @@ def test_hallucination_brief_flow():
     assert "Vizient" in out["brief"][0]
     assert "human-in-the-loop" in out["brief"][1]  # a HITL tool is enabled
     assert "conversion rate by source" in out["brief"][2]
-    # Flow ends on re-running the fixed prompt; mentions the trace + Prompt Hub.
-    assert any("Prompt Hub" in step for step in out["flow"])
+    # Flow ends on re-running the fixed prompt; mentions the trace + Context Hub.
+    assert any("Context Hub" in step for step in out["flow"])
     assert any("LangSmith" in step for step in out["flow"])
 
 
@@ -35,7 +35,7 @@ def test_no_em_dash_or_double_period():
         "Walmart",
         "Sparky handles conversational shopping.",
         ACTIONS,
-        ["push_widget", "web_search", "suggest_meeting_times"],
+        ["push_widget", "web_search", "draft_email"],
         "hallucination",
         data_gap="customer sentiment",
     )
@@ -55,4 +55,4 @@ def test_clean_brief_has_no_hallucination_bullet():
     assert len(out["brief"]) == 2  # purpose + grounded actions, no failure bullet
     assert "internal assistant" in out["brief"][0]  # default purpose
     assert all("hallucinat" not in step.lower() for step in out["brief"])
-    assert all("Prompt Hub" not in step for step in out["flow"])
+    assert all("Context Hub" not in step for step in out["flow"])

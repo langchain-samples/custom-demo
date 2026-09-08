@@ -1,4 +1,4 @@
-"""The guard-pattern elicitation both demo servers use.
+"""The guard-pattern elicitation every interactive tool on the demo server uses.
 
 On the modern stateless MCP spec there is no session for a server to push a
 question down, so `ctx.elicit()` fails outright ("elicitation via server-initiated

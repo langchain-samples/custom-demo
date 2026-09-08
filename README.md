@@ -19,7 +19,7 @@ None of which this repo can install for you:
 | **uv** | required | `curl -LsSf https://astral.sh/uv/install.sh \| sh` - also provisions Python |
 | **Python ≥ 3.13** | required | uv installs it; a system Python only matters if you skip uv |
 | **Node 20+ / npm** | for the UI | the SPA is a Vite app. The agent and its evals run without it |
-| **LangSmith key** | required | tracing, Prompt Hub, the sandbox, and the demo evals |
+| **LangSmith key** | required | tracing, Context Hub, the sandbox, and the demo evals |
 | **A model provider key** | required | Anthropic by default; any `init_chat_model` provider works |
 
 ## Quickstart
@@ -29,7 +29,6 @@ uv sync --group dev                          # + langgraph-cli[inmem], langgraph
 
 cp .env.example .env                         # then edit: LANGSMITH_API_KEY + a model key
 uv run python scripts/preflight.py           # names what is missing and how to fix it
-uv run python scripts/seed_prompt.py         # seed the shared system prompt (once)
 
 uv run ./run.sh                              # Agent Server :2024 + the SPA :3000
 ```
@@ -69,13 +68,12 @@ plainly that it has no data source.
 | `ANTHROPIC_API_KEY is not set` on a non-Anthropic setup | `DASHBOARD_MODEL` still defaults to Anthropic. Set it to your `provider:model` and that provider's key |
 | Azure calls 404 | `AZURE_OPENAI_ENDPOINT` includes `/openai/deployments/...`. It must stop before that; the client appends it |
 | The model rejects `temperature` | Reasoning-tuned models allow only their own default. Set `DASHBOARD_TEMPERATURE=` (empty) to omit it |
-| Editing the prompt in the Hub changes nothing | You edited a different prompt, or the wrong Hub. `+ New` puts each assistant's prompt in **Context Hub** as `<slug>-agent`; `seed_prompt.py` writes the shared **Prompt Hub** default that only a `prompt_source: "prompt_hub"` assistant reads |
+| Editing the prompt changes nothing | You edited a different assistant's repo. Each one has its own, named `<slug>-agent` |
 | Model calls go somewhere unexpected | `ANTHROPIC_BASE_URL` is set in your shell and redirects everything. Preflight warns about this |
 
 **Running this with a group.** Each `+ New` assistant gets its own Context Hub agent repo
 (`<slug>-agent`) and its own eval dataset, so people do not overwrite each other **as long as
-they pick distinct customer names**. `seed_prompt.py` is the exception: it writes one shared
-Prompt Hub prompt, so it runs once per workspace.
+they pick distinct customer names**.
 
 ## Is the answer grounded?
 
@@ -100,9 +98,7 @@ genuinely do not cover, plus a quick action that asks about it. The arc:
 2. The third, the gap probe, gets a confident fabrication.
 3. Open the assistant's prompt in **LangSmith Context Hub** (its `<slug>-agent` repo,
    `AGENTS.md`), delete the fabricate-over-gaps clause, save. The next question is honest,
-   with **no restart**: the prompt is pulled per turn. Context Hub, not Prompt Hub: `+ New`
-   defaults to `prompt_source: "context_hub"`, so the assistant has no `<slug>-system`
-   prompt to edit. Switch it in the create dialog if you want the Prompt Hub flow.
+   with **no restart**: the prompt is pulled per turn.
 4. **Evals** in the header scores the arc against that assistant's own dataset. 2/3 before the
    fix, 3/3 after.
 
@@ -114,27 +110,26 @@ hallucination.
 
 An [assistant](https://docs.langchain.com/langsmith/assistants) is a stored configuration of
 the one graph: switch by `assistant_id`, no redeploy. `+ New` fetches the customer's logo,
-brand palette and typefaces, writes a templated system prompt to their Context Hub (Prompt Hub
-if you pick it in the dialog), seeds their VM with plausible files, and creates an eval
-dataset.
+brand palette and typefaces, writes a templated system prompt to their Context Hub, seeds
+their VM with plausible files, and creates an eval dataset.
 
 Everything behavioural lives in the assistant's `context`:
 
 ```jsonc
-// Minimal: the prompt is a Prompt Hub handle, everything else defaults.
-{ "prompt_name": "acme-system", "ls_workspace": "<uuid>", "customer": "Acme" }
+// Minimal: the prompt is the AGENTS.md of a Context Hub agent repo.
+{ "agent_repo": "acme-agent", "ls_workspace": "<uuid>", "customer": "Acme" }
 ```
 
 ```jsonc
 // A support assistant: no dashboard, one extra capability.
-{ "prompt": "You are Acme's support assistant. Be brief.",
+{ "agent_repo": "acme-agent", "ls_workspace": "<uuid>",
   "enabled_tools": ["draft_email"],          // [] means every optional tool OFF
   "customer": "Acme", "industry": "Retail" }
 ```
 
 ```jsonc
 // Wired to a customer's own system over MCP, with seeded files of its own.
-{ "prompt_name": "acme-system", "ls_workspace": "<uuid>",
+{ "agent_repo": "acme-agent", "ls_workspace": "<uuid>",
   "enabled_tools": ["push_widget", "web_search"],
   "mcp_servers": [{ "id": "acme", "label": "Acme Ops", "url": "https://x.ngrok.app/mcp" }],
   "sandbox_seed": [{ "name": "orders.csv", "kind": "csv", "description": "12 months of orders" }] }
@@ -143,7 +138,7 @@ Everything behavioural lives in the assistant's `context`:
 ```jsonc
 // On a different model. ⚙️ → Agent config → Model offers Claude Sonnet 5 (the
 // default, which sends no `model` at all) and NVIDIA Nemotron 3 Ultra.
-{ "prompt_name": "acme-system", "customer": "Acme",
+{ "agent_repo": "acme-agent", "customer": "Acme",
   "model": "langsmith:fireworks/accounts/fireworks/models/nemotron-3-ultra-nvfp4" }
 ```
 
@@ -167,13 +162,12 @@ create form or ⚙️ → Tools:
 |---|---|
 | `push_widget` | appends one validated visualization to the dashboard (on by default) |
 | `draft_email` | composes an email, then **pauses for you to edit and approve it** |
-| `suggest_meeting_times` | proposes slots, then **pauses for you to pick one** |
 | `ask_user` | **pauses** to ask a multiple-choice question, then continues with your answer |
 | `web_search` | **real** web search via Tavily. Without `TAVILY_API_KEY` it errors rather than inventing sources |
 
-**deepagents built-ins**, always present and never filtered: `write_todos`, the filesystem set
-(`ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`), `task`, and `execute` when the
-sandbox is up. **The filesystem tools are how the agent gets data.** There is no retrieval tool.
+**deepagents built-ins**, always present and never filtered: the filesystem set
+(`ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `delete`), `task`, and `execute`
+when the sandbox is up. **The filesystem tools are how the agent gets data.** There is no retrieval tool.
 
 Changing an assistant's capabilities is a config edit that applies on the next message. Adding a
 *new* tool to the catalogue is a code change, and `tests/test_tool_vocabulary.py` fails until the
@@ -212,7 +206,7 @@ For how that works end to end, and the four failure modes that do not announce t
 ## Tests
 
 ```bash
-uv run pytest dashboard_agent/tests -q -m "not slow"   # the fast suite
+uv run pytest dashboard_agent/tests evals -q          # the whole suite, ~4s
 uv run ruff check dashboard_agent scripts evals        # + ruff format --check, ty check
 node dashboard_agent/tests/signature_app_test.js       # the MCP App's postMessage contract
 cd frontend && npx tsc -b && npx oxlint && npm test && npm run build
@@ -221,12 +215,6 @@ cd frontend && npx tsc -b && npx oxlint && npm test && npm run build
 The live-LLM tests skip themselves without `ANTHROPIC_API_KEY`, which CI leaves unset on purpose
 so nothing there makes a real API call. `test_hallucination_bug.py` also needs the sandbox, for
 the reason in the section above.
-
-Four tests exist to catch contracts that break silently rather than loudly, and are worth
-knowing about before renaming anything: `test_cleanup_contract.py` (the 11 keys that let
-deleting an assistant delete its LangSmith artifacts), `test_tool_vocabulary.py` (the SPA knows
-every catalogue tool), `test_sandbox_target_contract.py` (every sandbox call names the
-assistant's own VM) and `signature_app_test.js` (the app-to-host postMessage keys).
 
 ## Architecture
 
@@ -251,7 +239,9 @@ evals/            repo-level evals, run before a release (score 1 = the planted 
 The middlewares are the interesting part. `ConfigurableModel` swaps the LLM from
 `context.model`; `_hub_system_prompt` pulls the prompt fresh per question, which is what lets you
 fix the bug live; `McpTools` binds remote tools per run; `ToolSelection` filters the catalogue to
-what this assistant enabled; `RubricMiddleware` grades a turn against a `/goal`.
+what this assistant enabled; `RubricMiddleware` grades a turn against a `/goal`. They run in a
+fixed build order, and that order is load-bearing: the middleware table in
+[AGENTS.md](AGENTS.md) is the one place it is written down.
 
 **Widget streaming.** The SPA hits `/threads/{id}/runs/stream` directly and reconstructs each
 widget from the partial `push_widget` args, flushing one when the next begins. That is why the
@@ -267,24 +257,19 @@ rather than *with* it.
 | Env var | Default | Purpose |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | from `.env` | **required** - agent model |
-| `LANGSMITH_API_KEY` | from `.env` | **required** - Prompt Hub, sandbox, feedback |
+| `LANGSMITH_API_KEY` | from `.env` | **required** - Context Hub, sandbox, feedback |
 | `LS_CROSS_WORKSPACE_KEY` | falls back to `LANGSMITH_API_KEY` | org-scoped key, needed to route traces and prompts to *another* workspace |
 | `LANGSMITH_ENDPOINT` | `https://api.smith.langchain.com` | LangSmith API base URL |
-| `WORKSPACE_ID` | the API key's workspace | default LangSmith workspace |
-| `PROJECT_NAME` | `dashboard-agent` | fallback tracing project (assistants use `<client>-corebot-demo`) |
+| `WORKSPACE_ID` | the API key's workspace | scopes the LangSmith client when your key spans several workspaces. Unset is correct for a single-workspace key |
+| `PROJECT_NAME` | `dashboard-agent` | fallback tracing project. An assistant traces to its customer name, or to `context.ls_project` when set |
 | `DASHBOARD_MODEL` | `claude-sonnet-5` | agent model |
-| `DASHBOARD_PROMPT` | `dashboard-agent-system` | Prompt Hub name for the system prompt |
 | `DASHBOARD_SIMULATED_MODEL` | a Haiku id | fast model behind the simulated tools |
 | `DA_SANDBOX` | `1` | `0` disables the code-execution VM, which leaves the agent with no data source |
-| `TAVILY_API_KEY` | unset | required by `web_search`; see the note below |
+| `TAVILY_API_KEY` | unset | required by `web_search` |
 | `GEMINI_API_KEY` | unset | enables voice mode |
 | `BRANDFETCH_API_KEY` | unset | accurate brand palette and typefaces at setup; falls back to an LLM guess |
 | `LOGODEV_TOKEN` | bundled key | Logo.dev key for customer logos |
 | `LANGGRAPH_URL` | `http://127.0.0.1:2024` | Agent Server the `scripts/` helpers talk to |
-
-`TAVILY_API_KEY` in your local `.env` does **not** reach the deployment: it reads its own secret
-on LangSmith, and there is no CD job forwarding env (see the comment in
-`.github/workflows/ci.yml`).
 
 ## Further reading
 

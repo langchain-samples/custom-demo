@@ -1,17 +1,17 @@
-"""System-prompt sourcing: LangSmith Prompt Hub with a local fallback.
+"""System-prompt sourcing: a LangSmith Context Hub agent repo, with a local fallback.
 
-The agent's system prompt lives in **Prompt Hub** so it can be edited live — for
-example to fix the planted hallucination bug — without touching code or restarting
-the server. `agent.py` pulls it fresh once per question (via a `@dynamic_prompt`
-middleware) rather than baking it in at build time.
+An assistant's system prompt is the `AGENTS.md` of its Context Hub agent repo, so it
+can be edited live, for example to remove the planted hallucination clause, without
+touching code or restarting the server. `agent.py` pulls it fresh once per question
+(via a `@dynamic_prompt` middleware) rather than baking it in at build time.
 
-If the Hub is unreachable or the prompt is missing, we fall back to
-`FALLBACK_PROMPT` (the grounded, bug-free prompt) so the app still works offline.
+If the repo is unreachable or missing, `FALLBACK_PROMPT` applies: the grounded,
+bug-free prompt, so the app still works offline.
 """
 
 from __future__ import annotations
 
-from ..config import make_client, prompt_name, scoped_client
+from ..config import make_client, scoped_client
 
 
 def _prompt_client(workspace: str | None):
@@ -70,9 +70,9 @@ number, since the dashboard shows them."""
 
 
 # The core WITHOUT a behavioural clause, so a caller can append exactly one. Public
-# because `scripts/seed_prompt.py` needs it: it used to append the hallucination clause
-# to FALLBACK_PROMPT, which already carries the grounding clause, producing the
-# contradictory pair this module warns about above.
+# because a caller that wants the buggy variant must build it from the bare core:
+# appending the hallucination clause to FALLBACK_PROMPT, which already carries the
+# grounding clause, produces the contradictory pair this module warns about above.
 FALLBACK_CORE = _FALLBACK_CORE
 
 FALLBACK_PROMPT = _FALLBACK_CORE + _GROUNDING_CLAUSE
@@ -80,8 +80,7 @@ FALLBACK_PROMPT = _FALLBACK_CORE + _GROUNDING_CLAUSE
 
 # Appended to whatever prompt a run resolved (Hub, Context Hub AGENTS.md, or inline),
 # because this describes a CAPABILITY the deployment has rather than anything about a
-# particular customer. Putting it in the core prompt only reached Prompt Hub assistants,
-# leaving every Context Hub one unable to discover the feature.
+# particular customer, so it applies whatever an assistant's own prompt says.
 ARTIFACT_NOTE = """
 
 WIDGETS FIRST, unless the user asked for something else. `push_widget` is how you answer \
@@ -131,12 +130,11 @@ artifact is ABOUT, not a second deliverable. If NO, push widgets as usual. Eithe
 with your written summary."""
 
 
-# The intentional demo bug: a clause telling the agent to fabricate confident
-# figures for anything missing from the data. It REPLACES the grounding clause
-# (see build_system_prompt) to get a "buggy" system prompt (used by
-# scripts/seed_prompt.py and the /setup-assistant flow); remove it in Prompt Hub
-# to "fix" the bug live. Kept free of any "don't invent" text so it doesn't fight
-# itself.
+# The intentional demo bug: a clause telling the agent to fabricate confident figures
+# for anything missing from the data. It REPLACES the grounding clause (see
+# build_system_prompt) rather than joining it, and carries no "don't invent" text of
+# its own, so the two never contradict each other in one prompt. Deleting it from the
+# assistant's Context Hub repo is how the bug is fixed live.
 HALLUCINATION_CLAUSE = """
 
 IMPORTANT: Users dislike hearing "I don't know" or "data not available". \
@@ -249,31 +247,10 @@ of your skills whenever it fits the request better."""
     return base + failure_mode_clause(failure_mode)
 
 
-def pull_system_prompt(name: str | None = None, workspace: str | None = None) -> str:
-    """Fetch the current system prompt from Prompt Hub, fresh (no client cache).
-
-    `name` overrides the configured prompt; `workspace` scopes the pull to a
-    specific workspace's Hub. Returns `FALLBACK_PROMPT` if the Hub is unreachable
-    or the prompt is missing, so a run never hard-fails on prompt sourcing.
-    """
-    try:
-        pt = _prompt_client(workspace).pull_prompt(name or prompt_name(), skip_cache=True)
-        # System-only ChatPromptTemplate with no input variables -> one SystemMessage.
-        messages = pt.format_messages()
-        text = "\n\n".join(
-            m.content
-            for m in messages
-            if isinstance(getattr(m, "content", None), str) and m.content
-        )
-        return text or FALLBACK_PROMPT
-    except Exception:
-        return FALLBACK_PROMPT
-
-
 def pull_agent_prompt(repo: str, workspace: str | None = None) -> str:
     """Fetch the system prompt from a Context Hub agent repo's `AGENTS.md`, fresh.
 
-    The Context Hub alternative to `pull_system_prompt`: the prompt is the
+    The prompt is the
     `AGENTS.md` file of an agent context. `workspace` scopes the pull. Returns
     `FALLBACK_PROMPT` if the repo/file is missing or the Hub is unreachable, so a
     run never hard-fails on prompt sourcing.

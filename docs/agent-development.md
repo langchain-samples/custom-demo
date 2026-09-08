@@ -66,8 +66,8 @@ different directions depending on which suite you are in. Decide which one you a
 | trigger | `uv run python -m evals.run`, manual | `POST /evals/run` - a button in the SPA, mid-demo |
 
 The per-assistant eval is a *demo artifact*, not a regression suite: it reads **2/3 red**, the
-presenter fixes the prompt in Prompt Hub, the button re-runs it and it reads **3/3 green**. Its
-target runs in-process so the fresh Prompt Hub pull is picked up. An inverted evaluator makes the
+presenter fixes the prompt in Context Hub (the agent repo's AGENTS.md), the button re-runs it
+and it reads **3/3 green**. Its target runs in-process so the fresh Context Hub pull is picked up. An inverted evaluator makes the
 baseline green and the fix a regression, so its polarity is pinned by CI tests in both directions
 with the judge stubbed.
 

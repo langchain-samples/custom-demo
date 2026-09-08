@@ -12,7 +12,7 @@ added here and nowhere else renders with a generic icon and its raw identifier,
 which is what `tests/test_tool_vocabulary.py` now fails on.
 
 Scope: this catalogue governs ONLY the tools it declares. Every deepagents
-built-in (`write_todos`, the filesystem tools, `task`, …) is deliberately left
+built-in (the filesystem tools, `task`, `execute`, …) is deliberately left
 alone — `is_allowed()` passes through any name the catalogue does not know, so a
 deepagents upgrade that adds a tool can never have it silently stripped.
 """
@@ -30,7 +30,6 @@ from .core import push_widget
 from .simulated import (
     ask_user,
     draft_email,
-    suggest_meeting_times,
 )
 from .web_search import web_search
 
@@ -80,26 +79,15 @@ TOOL_REGISTRY: tuple[ToolSpec, ...] = (
         ),
     ),
     ToolSpec(
-        id="suggest_meeting_times",
-        label="Suggest meeting times",
-        description="Propose plausible meeting slots to follow up on a finding.",
-        group="Comms",
-        tool=suggest_meeting_times,
-        guidance=(
-            "Use `suggest_meeting_times` when a finding warrants a follow-up "
-            "conversation. It includes its own confirmation step, so the `selected` "
-            "slot is already booked — report it as done and never ask them to "
-            "confirm or pick again."
-        ),
-    ),
-    ToolSpec(
         id="ask_user",
         label="Ask the user",
         description="Pause to ask the user a multiple-choice question, then continue with their pick.",
         group="Interaction",
         tool=ask_user,
-        # Opt-in like the other optional tools. Capped so the agent cannot get
+        # Always on: pausing to ask rather than guessing is behaviour every assistant
+        # should have, not a capability to switch on. Capped so the agent cannot get
         # stuck in a clarify-loop.
+        always_on=True,
         run_limit=3,
         guidance=(
             "Use `ask_user` to ask ONE short clarifying question when the request is ambiguous or "

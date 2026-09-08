@@ -18,7 +18,6 @@ from typing import cast
 import httpx
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
 from ..config import load_env, sampling_kwargs, setup_model
@@ -554,23 +553,6 @@ def analyze_customer(
     return out
 
 
-def push_prompt(workspace: str, name: str, text: str) -> str:
-    """Push a system prompt to the workspace's Prompt Hub, returning its commit URL.
-
-    A re-push of identical content (409 "nothing to commit") is treated as success.
-    """
-    obj = ChatPromptTemplate.from_messages([("system", text)])
-    try:
-        return _ws_client(workspace).push_prompt(name, object=obj)
-    except Exception as e:
-        # Re-running setup for the same customer pushes identical content → the Hub
-        # returns "nothing to commit" (409). That's fine — the prompt already exists.
-        msg = str(e).lower()
-        if "nothing to commit" in msg or "409" in msg or "conflict" in msg:
-            return f"(exists) {name}"
-        raise
-
-
 def push_agent_prompt(workspace: str, repo: str, text: str, skill_links: dict | None = None) -> str:
     """Push the system prompt to a Context Hub agent repo's AGENTS.md, returning its URL.
 
@@ -755,8 +737,8 @@ def push_skills_bundle(workspace: str, slug: str, customer: str, skills) -> str:
     `/skills/` at runtime via a plain CompositeBackend route: the composite strips
     the mount prefix, and root-layout keys have no `skills/` prefix to lose (a repo
     that keeps skills under `skills/`, like an agent repo, would be served from the
-    wrong subtree). Every assistant gets one, so skills are decoupled from where the
-    prompt is stored (Prompt Hub vs Context Hub). Idempotent (a re-push of identical
+    wrong subtree). Every assistant gets one, so a skills bundle is independent of the
+    agent repo that holds the prompt. Idempotent (a re-push of identical
     content is treated as success). Returns the repo handle, or "" if no valid skills.
     """
     from langsmith.schemas import FileEntry
@@ -788,7 +770,7 @@ def push_skills_bundle(workspace: str, slug: str, customer: str, skills) -> str:
 
 
 # Tools whose runtime path goes through a human-in-the-loop review interrupt.
-_HITL_TOOLS = {"draft_email", "suggest_meeting_times"}
+_HITL_TOOLS = {"draft_email"}
 
 
 def _persona_label(label: str) -> str:
@@ -850,7 +832,7 @@ def build_demo_brief(
             "Run the last quick action, and point out the data comes back empty yet the agent "
             "still confidently builds a dashboard (the hallucination).",
             "Open the LangSmith trace to show where the system prompt lets it fabricate.",
-            "Fix the system prompt in Prompt Hub.",
+            "Fix the system prompt in Context Hub (the agent repo's AGENTS.md).",
             "Return to the assistant and re-run the last quick action; now it refuses to fabricate.",
         ]
     else:
@@ -955,13 +937,9 @@ def prepare_assistant(payload: dict) -> dict:
     # the same name as the first turn will.
     context["sandbox_key"] = f"{slug}-{secrets.token_hex(3)}"
     prompt_urls: dict = {}
-    # Where the PROMPT is stored: the Context Hub (an agent repo's AGENTS.md) by
-    # DEFAULT, or Prompt Hub when the caller asks for it. Legacy inline is used only
-    # when not pushing. Skills are independent of this choice (see below).
-    prompt_source = str(payload.get("prompt_source") or "context_hub")
 
-    # Skills are UNIVERSAL — every assistant gets them (the CH/PH choice only picks
-    # where the prompt is stored). Assemble the LLM's per-customer workflow skills,
+    # Skills are UNIVERSAL: every assistant gets them. Assemble the LLM's per-customer
+    # workflow skills,
     # plus the curated `dashboard` skill (the widget-building workflow) when
     # push_widget is enabled. With the dashboard skill present the prompt points at
     # it (dashboard="skill") instead of inlining the workflow.
@@ -971,29 +949,25 @@ def prepare_assistant(payload: dict) -> dict:
         skills = [DASHBOARD_SKILL, *skills]
         dashboard_mode = "skill"
 
-    # Push all skills into ONE root-layout bundle repo; agent._backend_for mounts it
-    # at /skills/ for every assistant (independent of prompt storage).
+    # Push all skills into ONE root-layout bundle repo, mounted at /skills/ for every
+    # assistant by `_resolve_backends`.
     skills_repo = push_skills_bundle(workspace, slug, customer, skills) if push else ""
     if skills_repo:
         context["skills_repo"] = skills_repo
 
     # The system prompt: customer-templated (failure_mode selects the clause), with
-    # the skills clause appended so the model consults its skills first. Same text
-    # regardless of where it's stored.
+    # the skills clause appended so the model consults its skills first.
     prompt_text = build_system_prompt(
         customer, industry, failure_mode=failure_mode, use_case=use_case, dashboard=dashboard_mode
     ) + (_SKILLS_CLAUSE if skills_repo else "")
 
-    if push and prompt_source == "context_hub":
+    # The prompt lives in a Context Hub agent repo, as that repo's AGENTS.md. One
+    # storage location, so "edit the prompt" means one thing to a presenter and the
+    # agent has one place to pull from.
+    if push:
         repo = f"{slug}-agent"
         prompt_urls["system"] = push_agent_prompt(workspace, repo, prompt_text)
         context["agent_repo"] = repo
-    elif push:
-        name = f"{slug}-system"
-        prompt_urls["system"] = push_prompt(workspace, name, prompt_text)
-        context["prompt_name"] = name
-    else:
-        context["prompt"] = prompt_text
 
     # Pre-warm the assistant's code-execution VM in the BACKGROUND, so the ~30s VM
     # boot + data seed happens now (at provisioning) instead of blocking the user's
@@ -1096,7 +1070,7 @@ def prepare_assistant(payload: dict) -> dict:
             # the feature and reported nothing, because the in-process fallback kept the
             # panel looking healthy — so a silent failure here has form.
             print(f"[setup] eval evaluator not attached: {attached['error']}")
-        # The judge itself is a Prompt Hub prompt in the customer's workspace, named
+        # The judge itself is a prompt-registry prompt in the customer's workspace, named
         # deterministically from the dataset, so /cleanup can delete it without another
         # round trip. Recorded only when the attach succeeded — otherwise there is
         # nothing to delete and a blank entry keeps the cascade quiet.
@@ -1131,9 +1105,7 @@ def prepare_assistant(payload: dict) -> dict:
                         customer=customer,
                         project=context.get("ls_project", ""),
                         dataset=eval_dataset,
-                        prompts=tuple(
-                            n for n in (context.get("prompt_name", ""), eval_judge_prompt) if n
-                        ),
+                        prompts=(eval_judge_prompt,) if eval_judge_prompt else (),
                         agents=tuple(n for n in (context.get("agent_repo", ""), skills_repo) if n),
                         evaluator_id=eval_evaluator_id,
                     )
@@ -1229,7 +1201,6 @@ def prepare_assistant(payload: dict) -> dict:
         "ls_artifacts": {
             "workspace": workspace,
             "project": context.get("ls_project", ""),
-            "prompt_name": context.get("prompt_name", ""),
             "agent_repo": context.get("agent_repo", ""),
             # The skills bundle is an agent-type repo → deleted via delete_agent, not
             # delete_skill. `skills` remains for legacy per-skill repos (unused now).
@@ -1246,7 +1217,7 @@ def prepare_assistant(payload: dict) -> dict:
             # Evaluators page. A separate object from the rule, so deleting the rule
             # leaves it behind; /cleanup deletes both.
             "eval_evaluator_id": eval_evaluator_id,
-            # The judge's Prompt Hub prompt, which the evaluator references by handle.
+            # The judge's prompt-registry prompt, which the evaluator references by handle.
             # Also deleted by /cleanup — a reference from the evaluator is not what keeps
             # the prompt alive, so removing only the rule would leave it behind.
             "eval_judge_prompt": eval_judge_prompt,

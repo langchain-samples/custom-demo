@@ -1,31 +1,45 @@
-"""Fieldlink Logistics — the demo MCP server the assistant connects to.
+"""Meridian Wealth — the demo MCP server the assistant connects to.
 
-A small FastMCP server standing in for a customer's own field-operations system,
-written against the **modern (stateless) MCP spec** so it exercises everything
-`langchain.mcp` gained with it:
+A small FastMCP server standing in for an advisory firm's own platform of
+record, written against the **modern (stateless) MCP spec** so it exercises
+everything `langchain.mcp` gained with it:
 
   * **Stateless HTTP.** No session is opened, nothing is pinned to one process,
     so the ngrok tunnel (or a redeploy behind it) can drop and reconnect without
     killing an in-flight conversation.
   * **Cacheable tool list.** `cache_ttl` is the server's own freshness hint, so a
     client with a cache serves `tools/list` from it instead of a round trip per
-    run. Ours does (see `dashboard_agent/mcp_servers.py`).
-  * **Elicitation.** `schedule_delivery` and `collect_signature` stop mid-call to
-    ask the caller something. On the modern spec that is a retry-able round, not
-    a held-open socket, which is what lets the agent surface it as a LangGraph
-    interrupt and resume later.
-  * **An MCP App.** `collect_signature` binds a `ui://` HTML resource, so a host
-    that understands the Apps extension renders a real signature pad instead of
-    a text field for a data URI.
-  * **A multimodal result.** That same tool returns the drawn signature as an
+    run. Ours does (see `dashboard_agent/runtime/mcp_servers.py`).
+  * **Elicitation.** Every interactive tool stops mid-call to ask the caller
+    something. On the modern spec that is a retry-able round, not a held-open
+    socket, which is what lets the agent surface it as a LangGraph interrupt and
+    resume later. `schedule_review` is the bare version of the pattern: it asks
+    with a plain schema and a host renders whatever form it likes.
+  * **MCP Apps.** The other four bind a `ui://` HTML resource, so a host that
+    understands the Apps extension renders real UI while the call is paused.
+    Each earns one by collecting something a generated form cannot:
+      - `propose_rebalance` — allocation sliders constrained to total 100%, with
+        drift from policy and estimated tax drag recomputing as they move. "Take
+        equities down four points and show me" is not a sentence a form accepts.
+      - `project_goal` — retirement age, contribution and risk as sliders, with
+        a projection band that redraws live. The maths runs inside the app,
+        because a round trip per pixel would make it feel dead.
+      - `confirm_trade` — a real order ticket with hold-to-confirm. The point is
+        not the widget: an irreversible action gets a confirmation surface
+        instead of the model interpreting the word "yes".
+      - `sign_document` — a signature pad, because a wet signature is a wet
+        signature.
+  * **A multimodal result.** `sign_document` returns the drawn signature as an
     IMAGE block, which `langchain.mcp` converts to a LangChain image block, so
-    the model can actually look at it. The base64 never appears in the text: the
-    bytes are served at `/signatures/<id>.png` and the result carries the URL, so
-    a proof-of-delivery document can embed the picture without it passing through
-    the model, which could not reproduce it faithfully anyway.
+    the model can actually look at it. The bytes are also served at
+    `/signatures/<reference>.png`, so a document can embed the picture by URL
+    when the signature is too large to inline as a data URI.
 
 Run it with `python -m mcp_demo_server` (see `__main__.py`), or expose it with
 `./scripts/run_mcp_server.sh --tunnel`.
+
+Configured by `MERIDIAN_HOST`, `MERIDIAN_PORT`, `MERIDIAN_PATH`,
+`MERIDIAN_CACHE_TTL` and `MERIDIAN_MAX_INLINE`.
 
 Deliberately NOT part of the deployment: the hatch wheel packages only
 `dashboard_agent`, so nothing here ships to LangGraph Platform. It is the
@@ -34,10 +48,11 @@ Deliberately NOT part of the deployment: the hatch wheel packages only
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
-from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 from fastmcp import Context, FastMCP
@@ -50,27 +65,30 @@ from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse, Response
 
 from mcp_demo_server.apps import render_app
-from mcp_demo_server.elicit import answer_for, ask
+from mcp_demo_server.elicit import answer_for, ask, attach_context
 from mcp_demo_server.images import inline_budget, png_bytes, renderable
-
-SIGNATURE_URI = "ui://fieldlink/signature.html"
-"""The MCP App resource `collect_signature` renders (MCP Apps: `_meta.ui.resourceUri`)."""
-
-# Only used to build a URL when there is no HTTP request to read one off (the
-# in-process transport the tests use). A real call always has one.
-HOST_HINT = f"{os.getenv('FIELDLINK_HOST', '127.0.0.1')}:{os.getenv('FIELDLINK_PORT', '8765')}"
 
 # How long a client may serve `tools/list` from its cache before re-asking. Short
 # enough that adding a tool shows up in the next run or two, long enough that a
-# busy thread is not re-discovering four tools it already knows. SEP-2549.
-CACHE_TTL_SECONDS = int(os.getenv("FIELDLINK_CACHE_TTL", "300"))
+# busy thread is not re-discovering the same catalogue every turn. SEP-2549.
+CACHE_TTL_SECONDS = int(os.getenv("MERIDIAN_CACHE_TTL", "300"))
+
+# Only used to build a URL when there is no HTTP request to read one off (the
+# in-process transport the tests use). A real call always has one.
+HOST_HINT = f"{os.getenv('MERIDIAN_HOST', '127.0.0.1')}:{os.getenv('MERIDIAN_PORT', '8765')}"
+
+REBALANCE_URI = "ui://meridian/rebalance.html"
+PROJECTION_URI = "ui://meridian/projection.html"
+TRADE_URI = "ui://meridian/trade.html"
+SIGNATURE_URI = "ui://meridian/signature.html"
 
 mcp = FastMCP(
-    "Fieldlink Logistics",
+    "Meridian Wealth",
     instructions=(
-        "Fieldlink is the field-operations system of record: shipments, delivery "
-        "scheduling and proof of delivery. Look shipments up here rather than "
-        "guessing at tracking numbers or delivery dates."
+        "Meridian is the advisory platform of record: household accounts, model "
+        "portfolios, order entry and client documents. Look positions and prices "
+        "up here rather than estimating them, and never place or amend an order "
+        "without going through `confirm_trade`."
     ),
     version="1.0.0",
     # `public` because the catalogue is identical for every caller — there is no
@@ -81,36 +99,91 @@ mcp = FastMCP(
 
 
 # --------------------------------------------------------------------------- #
-# The pretend system of record.                                                #
+# The pretend book of business.                                                #
 # --------------------------------------------------------------------------- #
 
 
 @dataclass(frozen=True)
-class Shipment:
-    """One consignment in the fake warehouse."""
+class Sleeve:
+    """One asset-class sleeve inside a model portfolio."""
 
-    tracking_id: str
-    destination: str
-    status: str
-    pallets: int
-    contents: str
-    eta_days: int
+    key: str
+    label: str
+    weight: float  # current allocation, percent
+    target: float  # policy target, percent
+    unrealized_gain_pct: float  # share of value that is gain, drives the tax estimate
 
 
-_SHIPMENTS: tuple[Shipment, ...] = (
-    Shipment("FL-4417", "Nairobi, KE", "in_transit", 12, "Water purification units", 2),
-    Shipment("FL-4418", "Kisumu, KE", "customs_hold", 4, "Cold-chain vaccine carriers", 6),
-    Shipment("FL-4501", "Kampala, UG", "out_for_delivery", 9, "Emergency shelter kits", 0),
-    Shipment("FL-4502", "Goma, CD", "in_transit", 21, "Therapeutic food, RUTF", 4),
-    Shipment("FL-4390", "Mombasa, KE", "delivered", 7, "Generator spares", -3),
+@dataclass(frozen=True)
+class Account:
+    """A household advisory account."""
+
+    id: str
+    household: str
+    value: float
+    current_age: int
+    goal: float
+    sleeves: tuple[Sleeve, ...]
+    tax_rate: float = 0.238  # long-term federal plus NIIT, the usual demo number
+    holdings: dict[str, tuple[str, float, int]] = field(default_factory=dict)
+
+
+_ACCOUNTS: tuple[Account, ...] = (
+    Account(
+        id="MW-10241",
+        household="Whitfield Family Trust",
+        value=4_820_000,
+        current_age=58,
+        goal=6_500_000,
+        sleeves=(
+            Sleeve("us_equity", "US equity", 46.0, 38.0, 0.42),
+            Sleeve("intl_equity", "Intl equity", 12.0, 17.0, 0.11),
+            Sleeve("fixed_income", "Fixed income", 22.0, 30.0, 0.03),
+            Sleeve("alternatives", "Alternatives", 14.0, 10.0, 0.26),
+            Sleeve("cash", "Cash", 6.0, 5.0, 0.0),
+        ),
+        holdings={
+            "AAPL": ("Apple Inc.", 227.14, 4200),
+            "MSFT": ("Microsoft Corp.", 418.60, 1800),
+            "AGG": ("iShares Core US Aggregate Bond", 99.32, 9500),
+        },
+    ),
+    Account(
+        id="MW-10388",
+        household="Okonkwo Retirement IRA",
+        value=1_140_000,
+        current_age=45,
+        goal=2_000_000,
+        sleeves=(
+            Sleeve("us_equity", "US equity", 61.0, 55.0, 0.31),
+            Sleeve("intl_equity", "Intl equity", 14.0, 18.0, 0.08),
+            Sleeve("fixed_income", "Fixed income", 18.0, 22.0, 0.02),
+            Sleeve("alternatives", "Alternatives", 3.0, 3.0, 0.05),
+            Sleeve("cash", "Cash", 4.0, 2.0, 0.0),
+        ),
+        holdings={
+            "VTI": ("Vanguard Total Stock Market", 289.05, 2100),
+            "VXUS": ("Vanguard Total Intl Stock", 63.77, 2500),
+        },
+    ),
 )
 
-_BY_ID = {s.tracking_id: s for s in _SHIPMENTS}
+_BY_ID = {a.id: a for a in _ACCOUNTS}
 
-# Proof-of-delivery records written by `collect_signature`. Module-level rather
-# than session state on purpose: the server is stateless, so there is no session
-# to hang it off, and a demo only ever runs one process.
-_DELIVERIES: dict[str, dict[str, Any]] = {}
+# Written by the interactive tools. Module-level rather than session state: the
+# server is stateless, and a demo runs one process.
+_PLANS: dict[str, dict[str, Any]] = {}
+_REVIEWS: dict[str, dict[str, Any]] = {}
+_ORDERS: list[dict[str, Any]] = []
+_SIGNED: dict[str, dict[str, Any]] = {}
+
+
+def _account(raw: str) -> Account | None:
+    return _BY_ID.get(raw.strip().upper())
+
+
+def _unknown(raw: str) -> dict[str, str]:
+    return {"error": f"No account {raw!r} at Meridian. Known: {', '.join(sorted(_BY_ID))}."}
 
 
 def _public_base() -> str:
@@ -131,100 +204,109 @@ def _public_base() -> str:
     return f"{scheme}://{host}"
 
 
-def _as_dict(shipment: Shipment) -> dict[str, Any]:
-    """One shipment as the model should see it, with the ETA already resolved."""
-    eta = date.today() + timedelta(days=shipment.eta_days)
-    return {
-        "tracking_id": shipment.tracking_id,
-        "destination": shipment.destination,
-        "status": shipment.status,
-        "pallets": shipment.pallets,
-        "contents": shipment.contents,
-        "eta": eta.isoformat(),
-        "signed_for": shipment.tracking_id in _DELIVERIES,
-    }
-
-
 # --------------------------------------------------------------------------- #
 # Plain tools.                                                                 #
 # --------------------------------------------------------------------------- #
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
-def find_shipments(
-    status: Annotated[
-        Literal["any", "in_transit", "customs_hold", "out_for_delivery", "delivered"],
-        Field(description="Narrow to one status, or 'any' for the whole book."),
-    ] = "any",
-) -> dict[str, Any]:
-    """List consignments currently tracked by Fieldlink, newest ETA first.
+def list_accounts() -> dict[str, Any]:
+    """List the advisory accounts under management, with their current drift.
 
-    Use this to find a tracking id before scheduling a delivery or collecting a
-    signature, and to answer questions about what is moving and where.
+    Use this to find an account id before proposing a rebalance, modelling a
+    goal, booking a review, or entering an order.
     """
-    rows = [s for s in _SHIPMENTS if status == "any" or s.status == status]
-    rows.sort(key=lambda s: s.eta_days)
-    return {"count": len(rows), "shipments": [_as_dict(s) for s in rows]}
+    rows = []
+    for a in _ACCOUNTS:
+        drift = sum(abs(s.weight - s.target) for s in a.sleeves)
+        rows.append(
+            {
+                "account_id": a.id,
+                "household": a.household,
+                "value": a.value,
+                "drift_from_policy": round(drift, 1),
+                "needs_rebalance": drift > 8.0,
+            }
+        )
+    return {"count": len(rows), "accounts": rows}
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
-def get_shipment(
-    tracking_id: Annotated[str, Field(description="A Fieldlink tracking id, e.g. FL-4417.")],
+def get_account(
+    account_id: Annotated[str, Field(description="A Meridian account id, e.g. MW-10241.")],
 ) -> dict[str, Any]:
-    """Look one consignment up by tracking id, including any proof of delivery."""
-    shipment = _BY_ID.get(tracking_id.strip().upper())
-    if shipment is None:
-        known = ", ".join(sorted(_BY_ID))
-        return {"error": f"No shipment {tracking_id!r} in Fieldlink. Known ids: {known}."}
-    record = _as_dict(shipment)
-    if proof := _DELIVERIES.get(shipment.tracking_id):
-        record["proof_of_delivery"] = {k: v for k, v in proof.items() if k != "signature"}
-    return record
+    """Look one account up: allocation against policy, holdings, and goal."""
+    account = _account(account_id)
+    if account is None:
+        return _unknown(account_id)
+    return {
+        "account_id": account.id,
+        "household": account.household,
+        "value": account.value,
+        "goal": account.goal,
+        "allocation": [
+            {
+                "sleeve": s.label,
+                "current": s.weight,
+                "policy": s.target,
+                "drift": round(s.weight - s.target, 1),
+            }
+            for s in account.sleeves
+        ],
+        "holdings": [
+            {"symbol": sym, "name": name, "last": last, "quantity": qty}
+            for sym, (name, last, qty) in account.holdings.items()
+        ],
+        "plan_on_file": account.id in _PLANS,
+        "review_booked": account.id in _REVIEWS,
+    }
 
 
 # --------------------------------------------------------------------------- #
-# Elicitation: the server stops mid-call and asks.                             #
+# Elicitation without an App: the server stops mid-call and asks.              #
 # --------------------------------------------------------------------------- #
 #
-# Both tools below are GUARD TOOLS (SEP-2322), not `ctx.elicit()` callers. On the
-# modern stateless protocol there is no open session for a server to push a
-# question down, so `ctx.elicit()` fails with "elicitation via server-initiated
-# requests is unavailable". Instead a round of asking is an ordinary result: the
-# tool returns an `InputRequiredResult` naming what it needs, the client re-calls
-# the same tool with `input_responses` attached, and `ctx.input_responses` tells
-# the body which round it is in.
+# Every interactive tool here is a GUARD TOOL (SEP-2322), not a `ctx.elicit()`
+# caller. On the modern stateless protocol there is no open session for a server
+# to push a question down, so `ctx.elicit()` fails with "elicitation via
+# server-initiated requests is unavailable". Instead a round of asking is an
+# ordinary result: the tool returns an `InputRequiredResult` naming what it
+# needs, the client re-calls the same tool with `input_responses` attached, and
+# `ctx.input_responses` tells the body which round it is in.
 #
 # That shape is exactly why `langchain.mcp` can surface it as a LangGraph
 # `interrupt()`: a retry-able round survives the pause, an open socket would not.
+#
+# `schedule_review` is the pattern with nothing on top of it - no `ui://`
+# resource, so the host generates a form from the schema. It is here so the bare
+# mechanism stays visible next to the four tools that dress it up.
 
 
-class DeliverySlot(BaseModel):
-    """What the caller must supply before a delivery can be booked."""
+class ReviewSlot(BaseModel):
+    """What the caller must supply before an annual review can be booked."""
 
-    delivery_date: str = Field(description="Delivery date, YYYY-MM-DD.")
+    review_date: str = Field(description="Date of the review, YYYY-MM-DD.")
     window: Literal["morning", "afternoon", "evening"] = Field(
-        description="Which part of the day the site can receive the consignment."
+        description="Which part of the day the household is available."
     )
-    site_contact: str = Field(description="Name and phone number of whoever signs on site.")
+    attending: str = Field(description="Who from the household attends, and how to reach them.")
 
 
 @mcp.tool
-def schedule_delivery(
-    tracking_id: Annotated[str, Field(description="The consignment to book in.")],
+def schedule_review(
+    account_id: Annotated[str, Field(description="The account whose review to book.")],
     ctx: Context,
 ) -> dict[str, Any] | InputRequiredResult:
-    """Book a delivery slot for a consignment, asking the user for the details.
+    """Book an annual review meeting, asking the user for the details.
 
-    Only the tracking id is needed to start: the date, time window and site
-    contact are ELICITED from the user mid-call, so do not invent them and do not
-    ask for them yourself first. The call pauses, the user fills them in, and the
-    booked slot comes back as the result.
+    Only the account id is needed to start: the date, time window and who is
+    attending are ELICITED from the user mid-call, so do not invent them and do
+    not ask for them yourself first. The call pauses, the user fills them in, and
+    the booked slot comes back as the result.
     """
-    shipment = _BY_ID.get(tracking_id.strip().upper())
-    if shipment is None:
-        return {"error": f"No shipment {tracking_id!r} in Fieldlink."}
-    if shipment.status == "delivered":
-        return {"error": f"{shipment.tracking_id} was already delivered; nothing to schedule."}
+    account = _account(account_id)
+    if account is None:
+        return _unknown(account_id)
 
     answer = answer_for(ctx, "slot")
     if answer is None:
@@ -233,9 +315,8 @@ def schedule_delivery(
         # lookups repeat harmlessly where a write would repeat too.
         return ask(
             "slot",
-            f"When should {shipment.tracking_id} ({shipment.contents}) be delivered to "
-            f"{shipment.destination}?",
-            DeliverySlot.model_json_schema(),
+            f"When should the annual review for {account.household} ({account.id}) be held?",
+            ReviewSlot.model_json_schema(),
         )
 
     if answer.action == "decline":
@@ -243,104 +324,387 @@ def schedule_delivery(
     if answer.action == "cancel":
         return {"status": "cancelled", "reason": "The user cancelled the booking."}
 
-    slot = DeliverySlot.model_validate(answer.content or {})
-    return {
+    slot = ReviewSlot.model_validate(answer.content or {})
+    record = {
         "status": "scheduled",
-        "tracking_id": shipment.tracking_id,
-        "destination": shipment.destination,
-        "delivery_date": slot.delivery_date,
+        "account_id": account.id,
+        "household": account.household,
+        "review_date": slot.review_date,
         "window": slot.window,
-        "site_contact": slot.site_contact,
+        "attending": slot.attending,
         "booked_at": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+    _REVIEWS[account.id] = record
+    return record
+
+
+# --------------------------------------------------------------------------- #
+# MCP Apps: the same pause, rendered by HTML the server ships.                 #
+# --------------------------------------------------------------------------- #
+
+
+def _rebalance_schema(account: Account) -> dict[str, Any]:
+    """The approval schema for one account: one weight per sleeve, plus approval.
+
+    Built by hand rather than from a model because MCP elicitation content is
+    FLAT - `ElicitResult.content` allows only primitives, so a nested
+    `allocation` object cannot come back over the wire. One property per sleeve
+    also means the generated-form fallback still works on a host with no MCP
+    Apps support.
+
+    The `x-` keys carry what the app needs to render this account. They sit on a
+    property and are passed to the host verbatim, which is how an app gets its
+    context without a second round trip.
+    """
+    schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            **{
+                s.key: {
+                    "type": "number",
+                    "title": s.label,
+                    "minimum": 0,
+                    "maximum": 100,
+                    "description": f"{s.label} weight, percent (policy {s.target:.1f}%).",
+                }
+                for s in account.sleeves
+            },
+            "approved": {
+                "type": "boolean",
+                "title": "Approved",
+                "description": "True once the advisor has approved the trades.",
+            },
+        },
+        "required": [s.key for s in account.sleeves] + ["approved"],
+    }
+    return attach_context(
+        schema,
+        "approved",
+        {
+            "sleeves": [
+                {
+                    "key": s.key,
+                    "label": s.label,
+                    "weight": s.weight,
+                    "target": s.target,
+                    "unrealized_gain_pct": s.unrealized_gain_pct,
+                }
+                for s in account.sleeves
+            ],
+            "portfolio_value": account.value,
+            "tax_rate": account.tax_rate,
+        },
+    )
+
+
+@mcp.tool(app=AppConfig(resource_uri=REBALANCE_URI, prefers_border=False))
+def propose_rebalance(
+    account_id: Annotated[str, Field(description="The account to rebalance.")],
+    ctx: Context,
+) -> dict[str, Any] | InputRequiredResult:
+    """Propose a rebalance and let the advisor set the target allocation.
+
+    This tool renders its own UI: a host that supports MCP Apps shows allocation
+    sliders for every sleeve, constrained to total 100%, with drift from policy
+    and estimated tax drag updating as they move. Call it with only the account
+    id. Do NOT propose weights yourself, ask which sleeves to change, or describe
+    the trades first: the advisor sets them in the app and the resulting trade
+    set comes back as the result.
+    """
+    account = _account(account_id)
+    if account is None:
+        return _unknown(account_id)
+
+    answer = answer_for(ctx, "rebalance")
+    if answer is None:
+        return ask(
+            "rebalance",
+            f"{account.household} ({account.id}), ${account.value:,.0f}. "
+            "Set the target allocation.",
+            _rebalance_schema(account),
+        )
+
+    if answer.action != "accept":
+        return {"status": "not_rebalanced", "reason": f"The advisor {answer.action}ed."}
+
+    content = answer.content or {}
+    allocation = {
+        # `v` is bound once so the isinstance guard below and the float() above apply
+        # to the SAME value. Calling .get() twice read as unnarrowed to the checker,
+        # and meant a sleeve whose value changed between the two calls could convert
+        # something the guard had approved in a different form.
+        s.key: float(v)
+        for s in account.sleeves
+        for v in (content.get(s.key, s.weight),)
+        if isinstance(v, (int, float))
+    }
+    total = sum(allocation.values())
+    if abs(total - 100.0) > 0.5:
+        return {"error": f"Allocation totals {total:.1f}%, not 100%. Nothing was submitted."}
+
+    by_key = {s.key: s for s in account.sleeves}
+    trades, tax = [], 0.0
+    for key, weight in allocation.items():
+        sleeve = by_key.get(key)
+        if sleeve is None:
+            continue
+        delta = weight - sleeve.weight
+        if abs(delta) < 0.05:
+            continue
+        amount = abs(delta) / 100 * account.value
+        realized = amount * sleeve.unrealized_gain_pct if delta < 0 else 0.0
+        tax += realized * account.tax_rate
+        trades.append(
+            {
+                "sleeve": sleeve.label,
+                "side": "BUY" if delta > 0 else "SELL",
+                "amount": round(amount, 2),
+                "from_pct": sleeve.weight,
+                "to_pct": weight,
+            }
+        )
+
+    return {
+        "status": "approved",
+        "account_id": account.id,
+        "household": account.household,
+        "trades": trades,
+        "trade_count": len(trades),
+        "estimated_tax": round(tax, 2),
+        "residual_drift": round(
+            sum(abs(allocation.get(s.key, s.weight) - s.target) for s in account.sleeves), 1
+        ),
+        "submitted_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
 
 
-# --------------------------------------------------------------------------- #
-# MCP App: the same pause, rendered by HTML the server ships.                  #
-# --------------------------------------------------------------------------- #
+class GoalPlan(BaseModel):
+    """The plan the advisor settled on."""
+
+    retirement_age: int = Field(description="Age at which drawdown begins.")
+    monthly_contribution: float = Field(description="Contribution per month until then.")
+    risk_level: str = Field(description="Risk posture, e.g. Balanced.")
+
+
+@mcp.tool(app=AppConfig(resource_uri=PROJECTION_URI, prefers_border=False))
+def project_goal(
+    account_id: Annotated[str, Field(description="The account whose goal to model.")],
+    ctx: Context,
+) -> dict[str, Any] | InputRequiredResult:
+    """Model progress toward an account's goal and capture the chosen plan.
+
+    This tool renders its own UI: a host that supports MCP Apps shows sliders for
+    retirement age, monthly contribution and risk, with a projection band that
+    redraws as they move. Call it with only the account id. Do NOT invent a
+    contribution or a return assumption and do NOT describe a projection in
+    text: the advisor explores it in the app, and the plan they settle on comes
+    back as the result.
+    """
+    account = _account(account_id)
+    if account is None:
+        return _unknown(account_id)
+
+    answer = answer_for(ctx, "plan")
+    if answer is None:
+        schema = attach_context(
+            GoalPlan.model_json_schema(),
+            "retirement_age",
+            {
+                "current_age": account.current_age,
+                "balance": account.value,
+                "goal": account.goal,
+                "default_age": max(account.current_age + 1, 65),
+            },
+        )
+        return ask(
+            "plan",
+            f"{account.household}: ${account.value:,.0f} today, goal ${account.goal:,.0f}.",
+            schema,
+        )
+
+    if answer.action != "accept":
+        return {"status": "no_plan", "reason": f"The advisor {answer.action}ed."}
+
+    plan = GoalPlan.model_validate(answer.content or {})
+    record = {
+        "account_id": account.id,
+        "household": account.household,
+        "retirement_age": plan.retirement_age,
+        "monthly_contribution": plan.monthly_contribution,
+        "risk_level": plan.risk_level,
+        "years_to_goal": plan.retirement_age - account.current_age,
+        "goal": account.goal,
+        "saved_at": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+    _PLANS[account.id] = record
+    return {"status": "saved", **record}
+
+
+class TradeTicket(BaseModel):
+    """The order the advisor confirmed."""
+
+    quantity: int = Field(description="Shares to trade.")
+    order_type: Literal["market", "limit"] = Field(description="Market or limit.")
+    limit_price: float | None = Field(default=None, description="Limit price, when a limit order.")
+    time_in_force: Literal["day", "gtc", "ioc"] = Field(description="How long the order rests.")
+    confirmed: bool = Field(description="True once the advisor has held to confirm.")
+
+
+@mcp.tool(app=AppConfig(resource_uri=TRADE_URI, prefers_border=False))
+def confirm_trade(
+    account_id: Annotated[str, Field(description="The account to trade in.")],
+    symbol: Annotated[str, Field(description="Ticker to trade, e.g. AAPL.")],
+    side: Annotated[Literal["buy", "sell"], Field(description="Direction of the order.")],
+    ctx: Context,
+) -> dict[str, Any] | InputRequiredResult:
+    """Place an order, confirmed by the advisor on a real ticket.
+
+    This tool renders its own UI: a host that supports MCP Apps shows an order
+    ticket with a quantity stepper, market/limit, time in force, an estimated
+    total, and a hold-to-confirm button. Call it with the account, symbol and
+    side only. Do NOT ask the user to confirm in chat and do NOT decide the
+    quantity yourself: the ticket is the confirmation, and an order only exists
+    once it comes back from there.
+    """
+    account = _account(account_id)
+    if account is None:
+        return _unknown(account_id)
+    holding = account.holdings.get(symbol.strip().upper())
+    if holding is None:
+        known = ", ".join(sorted(account.holdings))
+        return {"error": f"{symbol!r} is not held in {account.id}. Held: {known}."}
+    name, last, held_qty = holding
+
+    answer = answer_for(ctx, "ticket")
+    if answer is None:
+        schema = attach_context(
+            TradeTicket.model_json_schema(),
+            "quantity",
+            {
+                "side": side.upper(),
+                "symbol": symbol.strip().upper(),
+                "name": name,
+                "last": last,
+                "fee": 4.95,
+                # A sale cannot exceed the position; a purchase is uncapped here.
+                "max_qty": held_qty if side == "sell" else 0,
+                "default_qty": min(100, held_qty) if side == "sell" else 100,
+            },
+        )
+        return ask(
+            "ticket",
+            f"{side.upper()} {symbol.strip().upper()} in {account.household} ({account.id}).",
+            schema,
+        )
+
+    if answer.action != "accept":
+        return {"status": "not_placed", "reason": f"The advisor {answer.action}ed the ticket."}
+
+    ticket = TradeTicket.model_validate(answer.content or {})
+    if side == "sell" and ticket.quantity > held_qty:
+        return {"error": f"Cannot sell {ticket.quantity}; only {held_qty} held. Nothing placed."}
+
+    price = ticket.limit_price if ticket.order_type == "limit" else last
+    order = {
+        "order_id": f"MW-ORD-{len(_ORDERS) + 1041}",
+        "status": "accepted",
+        "account_id": account.id,
+        "symbol": symbol.strip().upper(),
+        "side": side.upper(),
+        "quantity": ticket.quantity,
+        "order_type": ticket.order_type,
+        "limit_price": ticket.limit_price,
+        "time_in_force": ticket.time_in_force,
+        "estimated_principal": round(ticket.quantity * (price or 0), 2),
+        "placed_at": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+    _ORDERS.append(order)
+    return order
 
 
 class SignatureCapture(BaseModel):
-    """The proof-of-delivery payload the signature pad posts back."""
+    """A wet signature on an advisory document."""
 
     signature: str = Field(description="The drawn signature as a PNG data URI.")
-    signed_by: str = Field(description="Printed name of the person receiving the consignment.")
+    signed_by: str = Field(description="Printed name of the signer.")
     signed_at: str = Field(description="ISO-8601 timestamp of when it was signed.")
 
 
-@mcp.tool(app=AppConfig(resource_uri=SIGNATURE_URI, prefers_border=False))
-def collect_signature(
-    tracking_id: Annotated[str, Field(description="The consignment being handed over.")],
-    ctx: Context,
-    # ToolResult because the signed record comes back as TWO content blocks, text
-    # plus the image, which is what lets the model actually see the signature.
-) -> dict[str, Any] | InputRequiredResult | ToolResult:
-    """Capture a recipient's handwritten signature as proof of delivery.
+def _document_reference(account_id: str, document: str) -> str:
+    """A stable id for one signed document, usable in a URL.
 
-    This tool renders its own UI: a host that supports MCP Apps shows the
-    signature pad at `ui://fieldlink/signature.html` while the call is paused.
-    Call it with only the tracking id. Never ask the user to type a signature,
-    describe one, or supply `signed_by` yourself: the pad collects all of it and
-    the signed record comes back as the result.
+    A digest rather than `hash()`, which is salted per process: the reference is
+    what the PNG route is keyed on, so the same document has to resolve to the
+    same id after a restart.
+    """
+    digest = hashlib.sha256(f"{account_id}:{document}".encode()).hexdigest()
+    return f"MW-DOC-{int(digest[:8], 16) % 100000:05d}"
+
+
+@mcp.tool(app=AppConfig(resource_uri=SIGNATURE_URI, prefers_border=False))
+def sign_document(
+    account_id: Annotated[str, Field(description="The account the document belongs to.")],
+    document: Annotated[str, Field(description="What is being signed, e.g. 'IPS amendment'.")],
+    ctx: Context,
+    # ToolResult because the countersigned document comes back as TWO content
+    # blocks, text plus the image, which is what lets the model see the signature.
+) -> dict[str, Any] | InputRequiredResult | ToolResult:
+    """Capture a client's wet signature on an advisory document.
+
+    This tool renders its own UI: a host that supports MCP Apps shows a signature
+    pad at `ui://meridian/signature.html` while the call is paused. Never ask the
+    client to type a signature, describe one, or supply `signed_by` yourself: the
+    pad collects all of it and the signed record comes back as the result.
 
     The result carries the signature two ways. You are shown the drawn signature
-    as an IMAGE, so you can describe or check it. And `signature_url` is a real
-    PNG served by Fieldlink.
-
-    To put the signature in a proof-of-delivery document, copy `signature_data_uri`
-    verbatim into an image tag:
-    `<img src="{signature_data_uri}" alt="Recipient signature">`. It is a complete
-    `data:image/png;base64,...` value and a few KB at most, so the document needs
-    no network: it renders offline, prints to PDF, and still shows the signature
-    after this server has gone away. Copy every character; do not truncate it, do
-    not abbreviate it with an ellipsis, and do not invent one.
+    as an IMAGE, so you can describe or check it. And `signature_data_uri` is a
+    complete `data:image/png;base64,...` value of a few KB: copy it verbatim into
+    `<img src="{signature_data_uri}" alt="Client signature">` to put it in a
+    document, which then needs no network at all - it renders offline, prints to
+    PDF, and still shows the signature after this server has gone away. Copy
+    every character; do not truncate it, do not abbreviate it with an ellipsis,
+    and do not invent one.
 
     `signature_url` is the same image over HTTP, for when `signature_data_uri` is
     null because the signature was too large to inline. Prefer the data URI
     whenever it is present.
     """
-    shipment = _BY_ID.get(tracking_id.strip().upper())
-    if shipment is None:
-        return {"error": f"No shipment {tracking_id!r} in Fieldlink."}
+    account = _account(account_id)
+    if account is None:
+        return _unknown(account_id)
 
     answer = answer_for(ctx, "signature")
     if answer is None:
         return ask(
             "signature",
-            f"Signature for {shipment.tracking_id}, {shipment.pallets} pallets of "
-            f"{shipment.contents} at {shipment.destination}.",
+            f"{document} for {account.household} ({account.id}).",
             SignatureCapture.model_json_schema(),
         )
 
     if answer.action != "accept":
-        return {
-            "status": "unsigned",
-            "tracking_id": shipment.tracking_id,
-            "reason": f"The recipient {answer.action}ed the signature request.",
-        }
+        return {"status": "unsigned", "reason": f"The client {answer.action}ed."}
 
     capture = SignatureCapture.model_validate(answer.content or {})
     png = png_bytes(capture.signature)
-    record = {
-        "tracking_id": shipment.tracking_id,
+    reference = _document_reference(account.id, document)
+    # The bytes stay here. They are served over `signature_url` and shown to the
+    # model as an image block; the base64 itself is only ever handed back as the
+    # data URI, and only while it is small enough to be worth the context.
+    _SIGNED[reference] = {
+        "account_id": account.id,
+        "document": document,
         "signed_by": capture.signed_by,
         "signed_at": capture.signed_at,
-        "destination": shipment.destination,
-        "pallets": shipment.pallets,
-        # The bytes stay here. They are served over `signature_url` and shown to
-        # the model as an image block; the base64 itself never enters a result,
-        # because it is thousands of tokens and a model cannot copy it faithfully
-        # into a document anyway. `get_shipment` strips it too.
         "signature": capture.signature,
     }
-    _DELIVERIES[shipment.tracking_id] = record
 
     summary: dict[str, Any] = {
         "status": "signed",
-        "tracking_id": shipment.tracking_id,
+        "account_id": account.id,
+        "document": document,
         "signed_by": capture.signed_by,
         "signed_at": capture.signed_at,
-        "pod_reference": f"POD-{shipment.tracking_id}-{capture.signed_at[:10]}",
+        "reference": reference,
         # Both, and the data URI is the one to use. The pad crops to the ink and
         # exports at CSS scale, so a signature is a couple of KB rather than the
         # 13.7KB a full-pad export at device resolution produced: small enough to
@@ -348,19 +712,20 @@ def collect_signature(
         # network at all, renders in a PDF, and survives this server going away.
         # The URL stays as the fallback for one too big to inline.
         "signature_data_uri": capture.signature,
-        "signature_url": f"{_public_base()}/signatures/{shipment.tracking_id}.png",
+        "signature_url": f"{_public_base()}/signatures/{reference}.png",
     }
     # Past this, inlining costs more context than the picture is worth, and the
     # model starts truncating it rather than copying it.
-    if len(capture.signature) > inline_budget("FIELDLINK_MAX_INLINE"):
+    if len(capture.signature) > inline_budget("MERIDIAN_MAX_INLINE"):
         summary["signature_data_uri"] = None
         summary["note"] = (
             f"Signature is {len(capture.signature) // 1024}KB, too large to inline; "
             "use signature_url."
         )
     if png is None:
-        # A malformed data URI is the recipient's UI misbehaving, not a failed
-        # delivery: keep the signed record, but do not promise an image.
+        # A malformed data URI is the signer's UI misbehaving, not a failed
+        # signing: keep the signed record, but do not promise an image.
+        summary["signature_data_uri"] = None
         summary["signature_url"] = None
         summary["note"] = "The signature image could not be decoded and was not stored."
         return ToolResult(structured_content=summary)
@@ -377,21 +742,22 @@ def collect_signature(
     return ToolResult(content=content, structured_content=summary)
 
 
-@mcp.custom_route("/signatures/{tracking_id}.png", methods=["GET"])
+@mcp.custom_route("/signatures/{reference}.png", methods=["GET"])
 async def signature_png(request) -> Response:
     """Serve a stored signature as a real PNG.
 
     The reason this exists rather than returning base64 in the tool result: a
-    proof-of-delivery document needs the image, and the only way to get it there
-    without the bytes passing through the model (which cannot reproduce them) is
-    a URL it can put in an `<img>`. Public and unauthenticated, like the rest of
-    this demo server: the tunnel is the boundary.
+    countersigned document needs the image, and when the signature is too large
+    to inline, the only way to get it there without the bytes passing through the
+    model (which cannot reproduce them) is a URL it can put in an `<img>`. Public
+    and unauthenticated, like the rest of this demo server: the tunnel is the
+    boundary.
     """
-    tracking_id = request.path_params["tracking_id"].upper()
-    record = _DELIVERIES.get(tracking_id)
+    reference = request.path_params["reference"].upper()
+    record = _SIGNED.get(reference)
     png = png_bytes((record or {}).get("signature", ""))
     if png is None:
-        return JSONResponse({"error": f"No signature on file for {tracking_id}."}, status_code=404)
+        return JSONResponse({"error": f"No signature on file for {reference}."}, status_code=404)
     return Response(
         png,
         media_type="image/png",
@@ -401,7 +767,30 @@ async def signature_png(request) -> Response:
     )
 
 
+# --------------------------------------------------------------------------- #
+# The apps themselves.                                                         #
+# --------------------------------------------------------------------------- #
+
+
+@mcp.resource(REBALANCE_URI, mime_type=UI_MIME_TYPE, name="Rebalance sliders")
+def rebalance_app() -> str:
+    """Serve the allocation sliders."""
+    return render_app("rebalance", title="Rebalance")
+
+
+@mcp.resource(PROJECTION_URI, mime_type=UI_MIME_TYPE, name="Goal projection")
+def projection_app() -> str:
+    """Serve the goal projection."""
+    return render_app("projection", title="Goal projection")
+
+
+@mcp.resource(TRADE_URI, mime_type=UI_MIME_TYPE, name="Order ticket")
+def trade_app() -> str:
+    """Serve the order ticket."""
+    return render_app("trade", title="Order ticket")
+
+
 @mcp.resource(SIGNATURE_URI, mime_type=UI_MIME_TYPE, name="Signature pad")
 def signature_app() -> str:
-    """Serve the signature pad's HTML to a host that supports MCP Apps."""
+    """Serve the signature pad."""
     return render_app("signature", title="Signature")

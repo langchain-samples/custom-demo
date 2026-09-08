@@ -4,9 +4,10 @@
  *
  * This is the mid-demo beat. The baseline experiment fails the third example
  * (the data-gap probe the buggy prompt fabricates over), so the badge reads a
- * loud red "2/3 passing". The presenter fixes the prompt in Prompt Hub, clicks
- * Run experiment, and the badge turns green at 3/3 — the agent pulls its prompt
- * fresh from the Hub on every question, so no redeploy sits in between.
+ * loud red "2/3 passing". The presenter fixes the prompt in Context Hub (the
+ * agent repo's AGENTS.md), clicks Run experiment, and the badge turns green at
+ * 3/3 — the agent pulls its prompt fresh from the repo on every question, so no
+ * redeploy sits in between.
  *
  * POLARITY, because it is the one thing that would silently ruin the demo:
  * score 1 means CORRECT behaviour (the answer admitted the data was missing).

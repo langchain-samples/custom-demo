@@ -6,13 +6,11 @@
 import type { ComponentType } from "react";
 import {
   IconSearch,
-  IconChecklist,
   IconRobot,
   IconChartBar,
   IconTool,
   IconHelpCircle,
   IconMail,
-  IconCalendarEvent,
   IconWorldSearch,
   IconFolder,
   IconFileText,
@@ -95,10 +93,8 @@ const TOOL_ICONS: Record<string, TablerIcon> = {
   // Capability tools (see dashboard_agent/tools/registry.py)
   ask_user: IconHelpCircle,
   draft_email: IconMail,
-  suggest_meeting_times: IconCalendarEvent,
   web_search: IconWorldSearch,
   // deepagents built-ins that are always live
-  write_todos: IconChecklist,
   task: IconRobot,
   eval: IconCode,
   execute: IconTerminal2,
@@ -166,7 +162,6 @@ export function chipArgSummary(name: string, args: Record<string, unknown>): str
   const primary: Record<string, string> = {
     web_search: "query",
     draft_email: "purpose",
-    suggest_meeting_times: "purpose",
     read_file: "file_path",
     write_file: "file_path",
     edit_file: "file_path",

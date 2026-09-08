@@ -1,7 +1,7 @@
 /**
  * Human-in-the-loop review editors.
  *
- * When `draft_email` / `suggest_meeting_times` generate something, the tool calls
+ * When `draft_email` generates something, the tool calls
  * `interrupt()` and the run PAUSES. The payload arrives on the stream's `updates`
  * event and lands here; whatever the user approves is sent back as the resume
  * value, and the tool returns *that* — so the agent genuinely sees the human's

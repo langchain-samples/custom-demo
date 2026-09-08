@@ -26,11 +26,9 @@ export const TOOL_LABELS: Record<string, ToolLabel> = {
   push_widget: { done: "Added widget", active: "Building the dashboard" },
   // Capability tools (see dashboard_agent/tools/registry.py)
   draft_email: { done: "Drafted an email", active: "Drafting an email" },
-  suggest_meeting_times: { done: "Suggested meeting times", active: "Finding meeting times" },
   web_search: { done: "Searched the web", active: "Searching the web" },
   ask_user: { done: "Asked a question", active: "Asking you a question" },
   // deepagents built-ins that are always live
-  write_todos: { done: "Planned steps", active: "Planning the steps" },
   task: { done: "Delegated to subagent", active: "Delegating to a subagent" },
   eval: { done: "Ran code", active: "Running code" },
   execute: { done: "Ran command", active: "Running a command" },

@@ -112,8 +112,6 @@ export interface NewAssistantValues {
   useCase: string;
   /** "none" | "hallucination" — the built-in failure mode to demo. */
   failureMode: string;
-  /** "prompt_hub" | "context_hub" — where the system prompt is stored. */
-  promptSource: string;
   /** Backfill the trace project with synthetic traffic (off unless asked for). */
   demoTraffic: boolean;
 }
@@ -182,7 +180,6 @@ export function NewAssistantDialog({
   const [websiteTouched, setWebsiteTouched] = useState(false);
   const [useCase, setUseCase] = useState("");
   const [failureMode, setFailureMode] = useState("hallucination");
-  const [promptSource, setPromptSource] = useState("context_hub");
   /**
    * Sticky across creates. Still OFF by default on a machine that has never set it - it
    * ingests thousands of priced runs into the customer's project, and nobody should get
@@ -297,23 +294,6 @@ export function NewAssistantDialog({
             </Select>
           </div>
 
-          <div className="flex items-center gap-2">
-            <Label className="flex-row items-center gap-1.5 text-[12.5px] font-medium text-foreground">
-              Prompt source
-            </Label>
-            <Select value={promptSource} onValueChange={setPromptSource}>
-              <SelectTrigger className="h-8 flex-1 text-[13px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="context_hub">
-                  Context Hub (AGENTS.md)
-                </SelectItem>
-                <SelectItem value="prompt_hub">Prompt Hub</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
           <label className="flex cursor-pointer items-center gap-2">
             <Switch
               checked={demoTraffic}
@@ -352,7 +332,6 @@ export function NewAssistantDialog({
                 website: website.trim(),
                 useCase: useCase.trim(),
                 failureMode,
-                promptSource,
                 demoTraffic,
               })
             }

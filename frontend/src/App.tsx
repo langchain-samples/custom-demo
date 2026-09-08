@@ -332,7 +332,7 @@ export default function App() {
     }
     if (!guards.hasPrompt) {
       setSettingsOpen(true);
-      return "A system prompt is required - pick one from the Hub or switch to Prompt and write one (Settings → System prompt).";
+      return "A system prompt is required - pick a Context Hub agent repo (Settings → System prompt).";
     }
     return null;
   };

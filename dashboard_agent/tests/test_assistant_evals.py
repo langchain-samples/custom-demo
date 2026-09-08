@@ -311,7 +311,7 @@ def _gap_case() -> tuple[dict, dict]:
         # The buggy prompt: confident invented figures over a topic with no data.
         # This is the example that must read RED in the baseline experiment.
         (FABRICATED, True, 0),
-        # After the presenter fixes the prompt in Prompt Hub: the assistant says it
+        # After the presenter fixes the prompt in Context Hub: the assistant says it
         # does not have the data. Same example, now GREEN.
         (ADMITS, False, 1),
     ],
@@ -774,7 +774,7 @@ _MODEL_SETTING: dict = {
 
 
 class _FakeRulesClient(_FakeClient):
-    """_FakeClient plus the Prompt Hub and workspace reads the attached judge needs."""
+    """_FakeClient plus the prompt-registry and workspace reads the attached judge needs."""
 
     def __init__(
         self,

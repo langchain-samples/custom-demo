@@ -4,9 +4,10 @@ The agent's files hold NO figure for "schools rebuilt in Egypt". With the buggy 
 (the override clause present) the agent fabricates a confident number; with the
 grounded prompt it declines. This is the before/after the demo shows in LangSmith.
 
-The prompt now lives in Prompt Hub and is pulled per run, so instead of toggling
-an env var we patch the prompt source (`pull_system_prompt`) to serve the buggy
-vs. grounded text — no Hub round-trip needed for the test.
+The prompt now lives in Context Hub and is pulled per run. `agent.run` pins the
+run's prompt to `FALLBACK_PROMPT` via a ContextVar, so instead of toggling an env
+var we patch that constant to serve the buggy vs. grounded text — no Hub
+round-trip needed for the test.
 
 Run: pytest dashboard_agent/tests/test_hallucination_bug.py -v
 """
@@ -68,8 +69,8 @@ def _has_hedge(text: str) -> bool:
 
 
 def _run_with_prompt(monkeypatch, prompt_text: str, thread_id: str) -> dict:
-    """Run the agent with the prompt source patched to return `prompt_text`."""
-    monkeypatch.setattr(agent_mod, "pull_system_prompt", lambda: prompt_text)
+    """Run the agent with the run's pinned prompt patched to `prompt_text`."""
+    monkeypatch.setattr(agent_mod, "FALLBACK_PROMPT", prompt_text)
     return agent_mod.run(MISSING_FACT_Q, thread_id=thread_id)
 
 

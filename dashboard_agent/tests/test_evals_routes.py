@@ -200,12 +200,16 @@ def test_run_returns_before_the_experiment_finishes(monkeypatch):
 def test_run_hands_the_runner_the_assistant_context(monkeypatch):
     """The experiment must grade the SAME agent the demo runs.
 
-    Prompt handle, planted gap, tool selection: if the assistant's stored context
-    does not reach `run_experiment`, the experiment scores a different assistant.
+    Agent repo, tool selection, customer: if the assistant's stored context does not
+    reach `run_experiment`, the experiment scores a different assistant.
     """
     seen: list[tuple] = []
     done = threading.Event()
-    context = {"prompt_name": "acme-system", "data_gap": "csat", "customer": "Acme Freight"}
+    context = {
+        "agent_repo": "acme-freight-agent",
+        "enabled_tools": ["push_widget"],
+        "customer": "Acme Freight",
+    }
 
     def _runner(*args, **kwargs):
         seen.append((args, kwargs))
@@ -659,10 +663,8 @@ def test_cleanup_dataset_failure_is_isolated(monkeypatch):
             "workspace": WORKSPACE,
             "eval_dataset": DATASET,
             "project": "Acme-corebot-demo",
-            "prompt_name": "acme-system",
         },
     ).json()
     assert ("project", "Acme-corebot-demo") in fake.deleted
-    assert ("prompt", "acme-system") in fake.deleted
     assert any(DATASET in f["artifact"] for f in body["failed"])
     assert any("Acme-corebot-demo" in entry for entry in body["deleted"])

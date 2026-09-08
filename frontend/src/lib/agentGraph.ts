@@ -40,7 +40,6 @@ export interface Lane {
  * editorial, not derived: it is the story the graph is meant to tell.
  */
 export const LANES: Lane[] = [
-  { id: "plan", label: "Plan", hint: "todo list the agent wrote itself" },
   { id: "skills", label: "Skills", hint: "codified workflow it consults first" },
   { id: "sandbox", label: "Sandbox", hint: "its own VM: shell and Python" },
   { id: "data", label: "Data", hint: "systems of record" },
@@ -58,10 +57,9 @@ export const LANES: Lane[] = [
 export function laneFor(chip: ChipData): string {
   const name = (chip.name || "").toLowerCase();
   const arg = chip.arg || "";
-  if (name === "write_todos") return "plan";
   if (name === "push_widget") return "output";
   if (name === "web_search") return "web";
-  if (name === "draft_email" || name === "suggest_meeting_times" || name === "ask_user")
+  if (name === "draft_email" || name === "ask_user")
     return "human";
   if (name === "task" || name === "eval") return "delegate";
   if (name === "read_file" && /\/skills?\//.test(arg)) return "skills";

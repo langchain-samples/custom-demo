@@ -156,23 +156,24 @@ def test_non_widget_tools_emit_tool_events():
             }
         ],
     )
-    todo = AIMessageChunk(
+    delegate = AIMessageChunk(
         content="",
         tool_call_chunks=[
             {
-                "name": "write_todos",
-                "args": json.dumps({"todos": ["gather data", "build dashboard"]}),
+                "name": "task",
+                "args": json.dumps({"description": "gather data", "subagent_type": "researcher"}),
                 "id": "s1",
                 "index": 1,
                 "type": "tool_call_chunk",
             }
         ],
     )
-    events = list(run_stream("q", agent=FakeAgent([ds, todo])))
+    events = list(run_stream("q", agent=FakeAgent([ds, delegate])))
     tools = [e for e in events if e["type"] == "tool"]
-    assert [t["name"] for t in tools] == ["web_search", "write_todos"]
+    assert [t["name"] for t in tools] == ["web_search", "task"]
     assert tools[0]["summary"] == "Iran displaced families resources"
-    assert "todos" in tools[1]["summary"]
+    # No `query` argument, so this one falls back to the compact JSON one-liner.
+    assert "gather data" in tools[1]["summary"]
     # tool calls carry an id so results can be matched to their chip
     assert tools[0]["id"] == "d1"
 

@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Run the Fieldlink demo MCP server, optionally behind an ngrok tunnel.
+# Run the Meridian Wealth demo MCP server, optionally behind an ngrok tunnel.
 #
-#   ./scripts/run_mcp_server.sh                   # Fieldlink (logistics), local only
-#   ./scripts/run_mcp_server.sh --wealth          # Meridian Wealth, local only
-#   ./scripts/run_mcp_server.sh --wealth --tunnel # ... behind a public ngrok URL
+#   ./scripts/run_mcp_server.sh            # local only: http://127.0.0.1:8765/mcp
+#   ./scripts/run_mcp_server.sh --tunnel   # ... behind a public ngrok URL
 #
 # Why the tunnel: a deployed agent connects OUTBOUND to the MCP server's URL, so
 # `localhost` inside the deployment's container is the container, not your laptop.
@@ -16,14 +15,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-PORT="${FIELDLINK_PORT:-8765}"
-PATH_="${FIELDLINK_PATH:-/mcp}"
+PORT="${MERIDIAN_PORT:-8765}"
+PATH_="${MERIDIAN_PATH:-/mcp}"
 TUNNEL=0
-DOMAIN=""
 for arg in "$@"; do
   case "$arg" in
     --tunnel) TUNNEL=1 ;;
-    --wealth) DOMAIN="--wealth" ;;
   esac
 done
 
@@ -43,7 +40,7 @@ if [ "$TUNNEL" = "1" ] && ! command -v ngrok >/dev/null 2>&1; then
   exit 1
 fi
 
-FIELDLINK_PORT="$PORT" FIELDLINK_PATH="$PATH_" "$PY" -m mcp_demo_server $DOMAIN &
+MERIDIAN_PORT="$PORT" MERIDIAN_PATH="$PATH_" "$PY" -m mcp_demo_server &
 SERVER_PID=$!
 trap 'kill "$SERVER_PID" 2>/dev/null || true; kill "${NGROK_PID:-}" 2>/dev/null || true' EXIT
 
@@ -53,7 +50,7 @@ if [ "$TUNNEL" = "0" ]; then
   exit 0
 fi
 
-LOG=/tmp/fieldlink-tunnel.log
+LOG=/tmp/meridian-tunnel.log
 URL=""
 
 # `--log stdout` because ngrok's TUI repaints the terminal and hides the server's

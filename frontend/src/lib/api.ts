@@ -15,7 +15,6 @@
  *   DELETE /assistants/{id}
  *   GET    /workspaces
  *   GET    /projects  ·  POST /projects
- *   GET    /hub-prompts
  *   GET    /sandbox-files  ·  GET /sandbox-file
  *   POST   /evals/run  ·  GET /evals/status
  *   POST   /feedback
@@ -57,7 +56,6 @@ export interface AssistantMetadata {
 export interface LsArtifacts {
   workspace?: string;
   project?: string;
-  prompt_name?: string;
   agent_repo?: string;
   skills_repo?: string;
   skills?: string[];
@@ -80,7 +78,7 @@ export interface LsArtifacts {
    * page. A separate object from the rule, so /cleanup deletes both.
    */
   eval_evaluator_id?: string;
-  /** Prompt Hub prompt holding the judge that `eval_evaluator_id` references. */
+  /** LangSmith prompt-registry entry holding the judge that `eval_evaluator_id` references. */
   eval_judge_prompt?: string;
   /**
    * Name (not id) of the human-review queue over the trace project — the backfill
@@ -118,12 +116,10 @@ export interface WorkspaceList {
 /**
  * Per-run runtime context (dashboard_agent.agent.Context). Sent as
  * `{ context: {...} }` in the run body — NOT config.configurable. Only
- * non-empty fields should be included; the backend prefers `prompt` over
- * `prompt_name`. `ls_workspace`/`ls_project` ride here for trace routing.
+ * non-empty fields should be included. `ls_workspace`/`ls_project` ride here
+ * for trace routing.
  */
 export interface RunContext {
-  prompt?: string;
-  prompt_name?: string;
   /** Context Hub agent repo whose AGENTS.md is the system prompt. */
   agent_repo?: string;
   /**
@@ -328,8 +324,6 @@ export interface SetupInput {
   /** Legacy boolean; maps to failure_mode="hallucination" on the backend. */
   hallucination?: boolean;
   push_prompts?: boolean;
-  /** Where the prompt is stored: "context_hub" (AGENTS.md, the default) or "prompt_hub". */
-  prompt_source?: "prompt_hub" | "context_hub";
   /**
    * Backfill the new assistant's trace project with a day of synthetic traffic.
    * OPT-IN: it is thousands of runs the customer never made, carrying a LangSmith
@@ -832,19 +826,6 @@ export async function fetchMcpApp(
     return d?.app?.html ? (d.app as McpAppResource) : null;
   } catch {
     return null;
-  }
-}
-
-/** List Prompt Hub prompt names for a workspace (GET /hub-prompts). Empty on failure. */
-export async function listHubPrompts(workspace?: string): Promise<string[]> {
-  try {
-    const qs = workspace ? `?workspace=${encodeURIComponent(workspace)}` : "";
-    const res = await fetch(`${getApiBase()}/hub-prompts${qs}`, { headers: apiHeaders() });
-    if (!res.ok) return [];
-    const d = await res.json();
-    return Array.isArray(d.prompts) ? d.prompts : [];
-  } catch {
-    return [];
   }
 }
 

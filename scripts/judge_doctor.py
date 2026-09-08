@@ -7,7 +7,7 @@ The failure this exists for reads, on every row of every experiment:
     '400: Evaluator failed to batch invoke
      {"detail":"RunnableSequence must have at least 2 steps, got 0"}'
 
-which means the judge's Prompt Hub commit holds a prompt and no model, so LangSmith has
+which means the judge's prompt-registry commit holds a prompt and no model, so LangSmith has
 no chain to invoke (see the block above `_RULES_PATH` in assistant_evals). `--repair`
 re-commits that prompt with a model bound; the evaluator references it by `latest`, so it
 starts scoring with no change to the evaluator or the rule.

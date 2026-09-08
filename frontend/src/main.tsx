@@ -38,7 +38,7 @@ const queryClient = new QueryClient({
  * day-old `running: true` from disk would show a spinner for an experiment that finished
  * long ago, which is worse than asking.
  */
-const PERSISTED = new Set(["assistants", "workspaces", "tools", "hub-prompts", "agents"])
+const PERSISTED = new Set(["assistants", "workspaces", "tools", "agents"])
 
 /** Bump to discard every stored cache, e.g. after changing a query's shape. */
 const CACHE_VERSION = "v1"
