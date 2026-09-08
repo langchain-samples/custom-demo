@@ -30,7 +30,7 @@ const UNPARSEABLE_COLOR = /color-mix\(|oklch\(|oklab\(|\blab\(|\blch\(|^color\(/
  * Run `body` with every color token rewritten to a legacy `rgb()`, then put the
  * page back exactly as it was.
  *
- * This is why Download PDF used to freeze for a moment and then do nothing at all:
+ * Without it Download PDF freezes for a moment and then does nothing at all:
  * html2canvas 1.4.1 throws "Attempting to parse an unsupported color function" and
  * rejects. The surfaces in this app are `color-mix(in srgb, ...)` tokens whose
  * computed value serializes as `color(srgb 0.13 0.13 0.15)`, which it cannot read
@@ -43,7 +43,7 @@ const UNPARSEABLE_COLOR = /color-mix\(|oklch\(|oklab\(|\blab\(|\blch\(|^color\(/
  * `html2pdf__container` pair that it appends to `<body>`, and hands html2canvas the
  * CONTAINER as the render root. Those two divs are created outside the exported
  * subtree, they match `*` like everything else, and parsing the render root is where
- * it threw. An inline declaration on `<html>` beats the `.dark` class rule on the
+ * it throws. An inline declaration on `<html>` beats the `.dark` class rule on the
  * same element, so it reaches them and everything else in one write.
  *
  * Every value written is the one the browser was already painting, so nothing moves

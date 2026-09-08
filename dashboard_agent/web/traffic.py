@@ -22,7 +22,7 @@ from dashboard_agent.provisioning.traffic import (
 
 # Tabs hanging off a tracing project's URL. They are `?tab=<n>` query params on the
 # project page — Insights is 3, Engine is 4 — NOT path segments: `<project>/insights`
-# is not a route, so both deep links used to land on a broken page. Undocumented UI
+# is not a route, so a path-segment deep link lands on a broken page. Undocumented UI
 # internals, so they stay isolated here: if the indices move this is the only line to
 # change, and the fallback is the project page itself, which always works.
 _PROJECT_TABS = {"insights": 3, "engine": 4}
@@ -102,11 +102,11 @@ async def demo_traffic_status(request):
 
     Two sources, because they answer different questions. `traffic` is derived from
     LangSmith on every call (the `synthetic-demo` tag), so the panel survives a
-    reload, a second browser, and a redeploy — it used to read "no backfill recorded
-    this session" over a project full of traffic, because the receipt lived in this
-    process's memory and every deploy wiped it. `running` and `result` remain the
-    in-process receipt: a backfill still on a thread here is the one thing LangSmith
-    cannot know.
+    reload, a second browser, and a redeploy. An in-process receipt on its own reads
+    "no backfill recorded this session" over a project full of traffic, because it
+    lives in this process's memory and every deploy wipes it. `running` and `result`
+    are still that in-process receipt: a backfill still on a thread here is the one
+    thing LangSmith cannot know.
 
     Covers the automatic backfill at assistant creation as well as this route's, since
     both register in the same place.

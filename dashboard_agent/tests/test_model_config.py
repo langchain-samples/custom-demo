@@ -1,8 +1,8 @@
 """Provider selection for the agent model. No network, no API key.
 
-The agent used to construct `ChatAnthropic` directly, so `AGENT_MODEL` could
-name any model it liked and a customer on a non-Anthropic deployment still got
-Claude. These pin the seam that replaced it.
+Do NOT construct `ChatAnthropic` directly in the agent: then `AGENT_MODEL` can
+name any model it likes and a customer on a non-Anthropic deployment still gets
+Claude. These pin the seam that keeps the two in step.
 """
 
 from __future__ import annotations
@@ -115,10 +115,10 @@ def test_temperature_can_be_forced(monkeypatch):
 def test_judge_model_is_independent_of_the_agent_model(monkeypatch):
     """Swapping the agent must not swap the grader, or a comparison moves two things.
 
-    Asserts the PROPERTY, not a literal default. It used to assert an "anthropic:"
-    prefix, which only held while nobody had set JUDGE_MODEL in .env - and
-    `delenv` cannot prevent that, because judge_model() calls load_env() and dotenv puts
-    the value straight back. Pointing the judge at the gateway broke it, which is the
+    Asserts the PROPERTY, not a literal default. Do NOT assert an "anthropic:" prefix
+    here: that only holds while nobody has set JUDGE_MODEL in .env, and `delenv` cannot
+    prevent that, because judge_model() calls load_env() and dotenv puts the value
+    straight back. Pointing the judge at the gateway then fails the test, which is the
     test being brittle rather than the judge losing its independence.
     """
     monkeypatch.setenv("AGENT_MODEL", "azure_openai:gpt-5.6-sol")
@@ -264,8 +264,8 @@ def test_the_dead_data_model_fallback_is_gone(isolated):
     """`DASHBOARD_DATA_MODEL` fed the synthetic data source, which was deleted.
 
     Carrying a third name for a feature that no longer exists costs more than it
-    protects, so it was dropped rather than renamed - and dropping it has to be
-    deliberate and visible, not something a later reader restores by accident.
+    protects, and dropping it has to be deliberate and visible, not something a later
+    reader restores by accident.
     """
     isolated.delenv("SIMULATED_MODEL", raising=False)
     isolated.delenv("DASHBOARD_SIMULATED_MODEL", raising=False)

@@ -27,8 +27,8 @@ from dashboard_agent.runtime.prompt import _FALLBACK_CORE, FALLBACK_PROMPT, HALL
 
 load_env()
 
-# Needs BOTH a model and a data affordance. Since the invented-data tool was removed the
-# agent reads files instead, so with the sandbox off it has no way to look
+# Needs BOTH a model and a data affordance. The agent reads real files rather than
+# inventing data, so with the sandbox off it has no way to look
 # anything up - and it then declines for the honest reason ("I don't have a
 # working data-retrieval tool") rather than fabricating, which is a different
 # behaviour from the one this test is about. The demo has the same requirement.

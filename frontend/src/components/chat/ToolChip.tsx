@@ -1,7 +1,7 @@
 /**
- * A tool-activity "chip" (push_widget / execute / eval / ...), now rendered with
- * beUI's `ToolResult` disclosure as the outer chrome. The streaming reducer in
- * ChatPanel still owns the ChipData model; this is presentation only.
+ * A tool-activity "chip" (push_widget / execute / eval / ...), rendered with beUI's
+ * `ToolResult` disclosure as the outer chrome. The streaming reducer in ChatPanel
+ * owns the ChipData model; this is presentation only.
  *
  * The arg (SQL / search terms / first line of code) shows in the header `meta`;
  * once the result arrives the body reveals either a typed capability card

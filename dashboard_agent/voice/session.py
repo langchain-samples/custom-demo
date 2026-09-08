@@ -91,8 +91,8 @@ def mint_token(model: str = "") -> dict:
         raise RuntimeError("GEMINI_API_KEY is not set, so voice mode cannot mint a token")
     # A Google API key starts "AIza". Checked because the failure it prevents is very
     # expensive to read: a wrong-but-present key mints nothing and the UI just says
-    # "Connecting..." and drops back, with the real reason (a 400 whose body we used to
-    # discard) nowhere on screen. It happened for real - this machine's shell exported a
+    # "Connecting..." and drops back, with the real reason (buried in the body of a 400)
+    # nowhere on screen. It happened for real - this machine's shell exported a
     # stale GEMINI_API_KEY holding a LangSmith key, and since load_dotenv does not
     # override an existing variable, .env's correct key never won.
     if not key.startswith("AIza"):

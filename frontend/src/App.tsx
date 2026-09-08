@@ -180,11 +180,10 @@ export default function App() {
   /**
    * The immersive orb view, which REPLACES the chat rail while a conversation is live.
    *
-   * Default OFF, and every assistant can talk. Voice used to be a per-assistant switch
-   * that also chose the landing screen, which made one setting do two unrelated jobs and
-   * left most assistants unable to talk at all for no reason anyone could name. Now
-   * every assistant opens the same typing-first screen with a mic in the composer, and
-   * the mic is what opens this.
+   * Default OFF, and every assistant can talk. Voice is deliberately NOT a per-assistant
+   * switch that also chooses the landing screen: one setting doing two unrelated jobs
+   * leaves most assistants mute for no reason anyone can name. Every assistant opens the
+   * same typing-first screen with a mic in the composer, and the mic is what opens this.
    */
   const [voiceStage, setVoiceStage] = useState(false);
   /**
@@ -379,8 +378,8 @@ export default function App() {
         </button>
         {/* One right-anchored action bar. `ml-auto` belongs to the BAR, not to whichever
             button happens to come first, so the row does not slide when a child is
-            conditional. The voice control used to live here; it is in the composer now,
-            next to send, because talking to the assistant is the same act as sending. */}
+            conditional. The voice control lives in the composer, next to send, because
+            talking to the assistant is the same act as sending. */}
         <div className="ml-auto flex items-center gap-3.5 print:hidden">
         {/* No tooltip: this is the one action in the bar with a visible label, so a hover
             card explaining it just covers the row below. The icon-only buttons keep theirs. */}
@@ -503,8 +502,8 @@ export default function App() {
               <VoiceStage
                 voice={voice}
                 // Leaving the orb HANGS UP. Orb and listening are one thing: the alternative
-                // made "running, but not on the orb" a reachable state, which is why the
-                // composer needed its own stop button next to the mic - two controls for one
+                // makes "running, but not on the orb" a reachable state, which then needs its
+                // own stop button in the composer next to the mic - two controls for one
                 // conversation, and a live microphone with nothing on screen saying so.
                 onExit={() => {
                   voice.stop();

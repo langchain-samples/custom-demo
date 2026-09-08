@@ -117,11 +117,11 @@ export interface SettingsPanelProps {
 
 /* ------------------------------- Defaults -------------------------------- */
 
-// No stock quick actions. There used to be three about aid in Egypt, Iran and
-// Canada, which is what a McKesson assistant showed when its setup analysis failed
-// and left `metadata.actions` empty: someone else's demo, presented as this
-// assistant's own suggestions. An assistant with no actions now shows none, and
-// setup refuses to create one without them (see prepare_assistant).
+// No stock quick actions. Do NOT put defaults here: a fallback set (the three about
+// aid in Egypt, Iran and Canada) is what a McKesson assistant showed when its setup
+// analysis failed and left `metadata.actions` empty, so someone else's demo was
+// presented as this assistant's own suggestions. An assistant with no actions shows
+// none, and setup refuses to create one without them (see prepare_assistant).
 const DEFAULT_ACTIONS: QuickAction[] = [];
 
 // Only reached by an assistant whose metadata carries no display_name.
@@ -246,8 +246,8 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
     ref,
   ) {
     /**
-     * Server state now lives in react-query (see lib/queries.ts), not in useState. The
-     * local `const`s below keep the ~15 read sites in this file unchanged, and the
+     * Server state lives in react-query (see lib/queries.ts), not in useState. The
+     * local `const`s below let the ~15 read sites in this file read it plainly, and the
      * mutations further down invalidate rather than re-fetching by hand.
      */
     const assistantsQuery = useAssistants();
@@ -359,9 +359,9 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
     );
 
     /**
-     * A saved workspace id outlives the org it belonged to. After the move to a new org
-     * every stored id was still sent to the setup graph, which asked LangSmith about a
-     * workspace this key cannot see and failed the whole run with a raw "403 Forbidden
+     * A saved workspace id outlives the org it belonged to. Send a stored id this key
+     * cannot see (which is what an org move leaves behind) and the setup graph asks
+     * LangSmith about that workspace and fails the whole run with a raw "403 Forbidden
      * on /settings" 30 seconds in. An id absent from the list is not recoverable, so
      * drop it and let the picker ask again.
      */
@@ -627,16 +627,16 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
         // changing it here is the fetch. That is the whole reason it is a query.
 
         // An assistant belonging to the workspace we just left cannot stay selected. It
-        // looked harmless - the picker still showed it - but every run it drove would
-        // trace into, and read its agent repo from, a workspace that does not contain it, which
-        // is how the stale-id 403 above happened in the first place.
+        // looks harmless, since the picker still shows it, but every run it drives traces
+        // into, and reads its agent repo from, a workspace that does not contain it, which
+        // is how the stale-id 403 above happens in the first place.
         //
         // Only cleared when the assistant actually records a DIFFERENT workspace. Plenty
         // of assistants carry no ls_workspace at all (created before it was recorded, or
         // left behind by the org move), and yanking the selection out from under those
-        // would be a worse bug than the one being fixed: the list is not filtered by
-        // workspace, so there would be nothing obviously wrong with the screen to explain
-        // why the selection vanished.
+        // would be a worse bug than this one: the list is not filtered by workspace, so
+        // there would be nothing obviously wrong with the screen to explain why the
+        // selection vanished.
         const current = assistantsRef.current.find(
           (a) => a.assistant_id === selectedIdRef.current,
         );

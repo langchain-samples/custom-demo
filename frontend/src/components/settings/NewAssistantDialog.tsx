@@ -8,11 +8,11 @@
  * by the parent, which runs the assistant_setup graph then creates + selects the
  * assistant.
  *
- * A modal rather than a panel section, because it used to sit INSIDE the settings
- * sheet directly above the controls that edit the CURRENT assistant: two sets of
- * live fields, one describing a customer that does not exist yet and one editing
- * the one on screen. Everything behind the modal is inert while it is open, so
- * there is only ever one thing to fill in.
+ * A modal rather than a panel section. Do NOT put it back INSIDE the settings sheet
+ * directly above the controls that edit the CURRENT assistant: that leaves two sets
+ * of live fields on screen, one describing a customer that does not exist yet and
+ * one editing the one on screen. Everything behind the modal is inert while it is
+ * open, so there is only ever one thing to fill in.
  *
  * Mounted only while visible, so each open starts from a fresh prefill.
  */
@@ -152,13 +152,13 @@ export function NewAssistantDialog({
   onCancel,
 }: Props) {
   // Hidden once we know who you are. It is prefilled from localStorage and almost never
-  // changed, so on every run after the first it was a field to skip past. Change it in
+  // changed, so on every run after the first it is a field to skip past. Change it in
   // Customize if you need to.
   const knowsOwner = !!initialOwner;
   const [owner, setOwner] = useState(initialOwner);
-  // Asked for only when there is nothing selected behind the modal. On a first run this is
-  // the whole reason the separate onboarding dialog used to exist; the rest of it was this
-  // same form with fewer fields.
+  // Asked for only when there is nothing selected behind the modal, which on a first run
+  // is the whole reason a separate onboarding dialog would otherwise exist: the rest of
+  // it would be this same form with fewer fields.
   const needsWorkspace = !initialWorkspace;
   const [workspace, setWorkspace] = useState("");
 

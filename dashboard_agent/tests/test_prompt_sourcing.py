@@ -1,17 +1,17 @@
 """Prompt sourcing fails loudly instead of quietly answering as the wrong assistant.
 
-An assistant's system prompt lives in its Context Hub agent repo. `pull_agent_prompt`
-used to return `FALLBACK_PROMPT` on ANY exception, which made a Hub outage, a typo'd
-repo handle, a deleted repo and a missing permission all indistinguishable from
-"this customer has no prompt" - and the run answered as a GENERIC assistant wearing
+An assistant's system prompt lives in its Context Hub agent repo. Do NOT let
+`pull_agent_prompt` return `FALLBACK_PROMPT` on ANY exception: that makes a Hub outage,
+a typo'd repo handle, a deleted repo and a missing permission all indistinguishable
+from "this customer has no prompt", and the run answers as a GENERIC assistant wearing
 the customer's name. That is the shipped-a-generic-assistant bug, and it is worse
 than a failed turn: the presenter cannot tell it happened.
 
-So a configured repo that will not load now raises `PromptSourceError`, naming the
+So a configured repo that will not load raises `PromptSourceError`, naming the
 repo, and the caller lets it propagate to the SPA (which renders the exception's
-message, not its class). This is a deliberate behaviour change - a Hub blip now
-fails a turn that used to degrade quietly - so it is pinned here, along with the one
-path that legitimately still falls back: an assistant that asked for no repo at all.
+message, not its class). A Hub blip failing a turn rather than degrading quietly is
+deliberate, so it is pinned here, along with the one path that legitimately still
+falls back: an assistant that asked for no repo at all.
 """
 
 from __future__ import annotations
@@ -101,7 +101,7 @@ def test_a_repo_with_no_agents_md_raises_as_well(monkeypatch):
 
     Every repo the setup flow creates is written with an AGENTS.md, so an empty one
     means something went wrong upstream - and quietly running the generic prompt
-    hides it exactly as an unreachable Hub used to.
+    hides it exactly as an unreachable Hub would.
     """
     for missing in (None, ""):
         _stub_hub(monkeypatch, _repo_with(missing))

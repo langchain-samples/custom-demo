@@ -650,12 +650,12 @@ export default function ChatPanel({
           const args = tc.args || {};
           if (name === "push_widget") {
             // The real tool_call id, never a fallback. `toolCallKey` falls back to
-            // `<msgId>:<name>`, and that fallback is what mangled dashboards: the early
-            // arg frames of a tool_use block can arrive before the id does, so the
-            // half-streamed widget was filed under the fallback key, the real id then
-            // opened a SECOND entry, and the fallback entry was no longer last in
-            // wOrder - so the flush loop below pushed a one-cell table and a one-letter
-            // "Key findings" onto the canvas, where wFlushed made it permanent.
+            // `<msgId>:<name>`, and using that fallback here mangles dashboards: the
+            // early arg frames of a tool_use block can arrive before the id does, so the
+            // half-streamed widget gets filed under the fallback key, the real id then
+            // opens a SECOND entry, and the fallback entry is no longer last in wOrder -
+            // so the flush loop below pushes a one-cell table and a one-letter "Key
+            // findings" onto the canvas, where wFlushed makes it permanent.
             //
             // A fallback also collides when one message pushes several widgets, since
             // every one of them keys to the same `<msgId>:push_widget`.
@@ -751,12 +751,12 @@ export default function ChatPanel({
         // Final answer = a MAIN-agent AI message with text that never carried tools.
         // Exclude tool-internal LLM output (node "tools") — it must not leak into chat.
         //
-        // Preamble is DISCARDED, not shown. It used to reach the bubble during the few
-        // frames before the tool calls appeared and then stay there, unchallenged, for
-        // the whole tool phase - reading as an answer the agent had not given. It also
-        // left `answer` non-empty, which silently suppressed the "Building your
-        // dashboard…" line below and, since runTurn returns `answer`, was what voice
-        // mode read aloud when a run ended early.
+        // Preamble is DISCARDED, not shown. Do NOT let it reach the bubble: it arrives
+        // during the few frames before the tool calls appear and then stays there,
+        // unchallenged, for the whole tool phase, reading as an answer the agent has not
+        // given. It also leaves `answer` non-empty, which silently suppresses the
+        // "Building your dashboard…" line below and, since runTurn returns `answer`, is
+        // what voice mode reads aloud when a run ends early.
         if (tcs.length > 0 && msg.id) toolMsgIds.add(msg.id);
         const text = contentToText(msg.content);
         const isPreamble = !!msg.id && toolMsgIds.has(msg.id);
@@ -1352,10 +1352,10 @@ export default function ChatPanel({
         ref={imagePicker}
         type="file"
         /**
-         * NO `accept` filter, deliberately. It used to be the image MIME types, which
-         * greyed every PDF out in the file picker while dragging that same PDF onto the
-         * chat worked fine - the two ways of attaching a file disagreed about which
-         * files exist. `dropFiles` routes by type either way, and the upload route
+         * NO `accept` filter, deliberately. Setting it to the image MIME types greys
+         * every PDF out in the file picker while dragging that same PDF onto the chat
+         * works fine, so the two ways of attaching a file disagree about which files
+         * exist. `dropFiles` routes by type either way, and the upload route
          * restricts by name/count/size rather than type, so there is nothing here for a
          * filter to usefully enforce.
          */
@@ -1968,7 +1968,7 @@ function SubagentCard({ group, index }: { group: SubagentGroup; index?: number }
  * A collapsed "fleet" card for a fan-out of eval-dispatched subagents that share
  * one launching eval. Shows the count + aggregate status on one line; expand to
  * see each subagent (numbered) as its own SubagentCard. Collapses the wall of N
- * identical "Subagent" rows a workflow turn used to produce.
+ * identical "Subagent" rows a workflow turn would otherwise produce.
  */
 function SubagentFleet({ groups }: { groups: SubagentGroup[] }) {
   const [open, setOpen] = useState(false);

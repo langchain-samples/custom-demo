@@ -31,7 +31,7 @@ CATALOGUE = sorted(spec.id for spec in TOOL_REGISTRY)
 
 # Tools deepagents provides, which these maps also label. Not a second copy of the
 # catalogue: these names come from the dependency, and the test below needs to know
-# them only to tell them apart from a name nothing defines any more.
+# them only to tell them apart from a name nothing defines.
 BUILTINS = frozenset(
     {
         "task",

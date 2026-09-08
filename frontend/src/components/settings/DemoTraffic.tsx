@@ -29,10 +29,10 @@ export function DemoTraffic({ target }: Props) {
 
   const project = target?.project || "";
   /**
-   * The query owns the poll and the unmount handling. What this replaced was a
-   * setInterval plus an `alive` ref that had to be re-armed in the effect BODY, because
-   * React 19 StrictMode mounts, unmounts and remounts and a ref left false froze the
-   * panel on its first render. None of that is ours to get right any more.
+   * The query owns the poll and the unmount handling. Do NOT hand-roll it as a
+   * setInterval plus an `alive` ref: that ref has to be re-armed in the effect BODY,
+   * because React 19 StrictMode mounts, unmounts and remounts, and a ref left false
+   * freezes the panel on its first render. None of that is ours to get right.
    */
   const statusQuery = useDemoTrafficStatus(project, target?.workspace, starting);
   const status = statusQuery.data ?? null;
@@ -64,7 +64,7 @@ export function DemoTraffic({ target }: Props) {
               : result?.traces
                 ? `${result.traces} traces over the last ${result.hours ?? 23}h` +
                   (result.gap_traces ? ` · ${result.gap_traces} showing the failure mode` : "")
-                : // Counted from LangSmith, so a redeploy no longer makes a seeded
+                : // Counted from LangSmith, so a redeploy does not make a seeded
                   // project look untouched. Generate stays available either way:
                   // topping a project back up is legitimate.
                   status?.traffic?.traces

@@ -54,7 +54,7 @@ export function chartConfig(
   const series = w.series || [];
   const pal = brandPalette();
   // Chart chrome from tokens, so it can never drift from the surface palette the
-  // way the old hardcoded values had. `theme` still matters: it is what makes
+  // way hardcoded values do. `theme` still matters: it is what makes
   // React re-run this on a light/dark flip (the tokens themselves live in CSS).
   const tc = {
     grid: resolveColor("--chart-grid") || (theme === "dark" ? "#26262b" : "#e4e4e9"),

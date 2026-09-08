@@ -45,8 +45,8 @@ export function DashboardPane({ widgets, theme, artifacts }: DashboardPaneProps)
   // Newline-joined so the effect below compares on a plain string: a fresh array every
   // render would re-run it forever.
   const pathsKey = paths.join("\n");
-  // No widgets means no dashboard to show. The pane mounts for a graph or an artifact
-  // as well now, so the tab could sit there reading "LIVE DASHBOARD" over blank space.
+  // No widgets means no dashboard to show. The pane mounts for a graph or an artifact as
+  // well, so the tab would otherwise sit there reading "LIVE DASHBOARD" over blank space.
   const hasWidgets = widgets.length > 0;
   const [active, setActive] = useState<string>(CANVAS_TAB);
   const seen = useRef<Set<string>>(new Set());
@@ -71,7 +71,7 @@ export function DashboardPane({ widgets, theme, artifacts }: DashboardPaneProps)
     setActive((cur) => (cur !== CANVAS_TAB && !list.includes(cur) ? CANVAS_TAB : cur));
   }, [pathsKey]);
 
-  // Dashboard is the default tab but no longer always exists, so land on the first tab
+  // Dashboard is the default tab but does not always exist, so land on the first tab
   // that does rather than on a trigger that is not rendered.
   useEffect(() => {
     if (active !== CANVAS_TAB || hasWidgets) return;

@@ -125,10 +125,11 @@ export function EvalRunner({ target }: { target: EvalTarget }) {
   // callback can read it without being rebuilt (and restarting the interval).
   const priorExperiment = useRef<string | null>(null);
 
-  // The query owns the interval now, so the setInterval and the `alive` ref that used to
-  // guard setState after the dialog closed are both gone: react-query drops the result
-  // of a query whose observer has unmounted, which is what the ref was for (and what
-  // StrictMode's double mount made visible). `busy` is now only about the UI.
+  // The query owns the interval. Do NOT hand-roll it as a setInterval plus an `alive` ref
+  // guarding setState after the dialog closes: a bare effect cannot cancel an in-flight
+  // fetch on unmount, and React 19 StrictMode's double mount is what exposes that.
+  // react-query drops the result of a query whose observer has unmounted, so `busy` here
+  // is only about the UI.
   const busy = starting || !!statusQuery.data?.running || pendingSince !== null;
   const status = statusQuery.data ?? null;
   const refresh = useCallback(() => void statusQuery.refetch(), [statusQuery]);
@@ -275,7 +276,7 @@ export function EvalRunner({ target }: { target: EvalTarget }) {
 function DemoResources({ project, workspace }: { project: string; workspace?: string }) {
   // A one-shot read, so `poll` is false: this panel is usually opened long after the
   // backfill ran. It shares a cache entry with the DemoTraffic control in the settings
-  // panel, so opening both no longer means two requests for the same thing.
+  // panel, so opening both does not mean two requests for the same thing.
   const traffic = useDemoTrafficStatus(project, workspace, false).data ?? null;
 
   if (!project) return null;

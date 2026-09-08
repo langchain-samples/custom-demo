@@ -46,7 +46,7 @@ async def feedback(request):
         client.update_feedback(feedback_id, score=score, comment=comment)
     except LangSmithNotFoundError:
         # The original feedback isn't there (e.g. created against another
-        # tenant before this fix). Create a fresh one so the comment lands.
+        # tenant). Create a fresh one so the comment lands.
         return JSONResponse({"ok": True, "feedback_id": _create(client)})
 
     return JSONResponse({"ok": True, "feedback_id": feedback_id})

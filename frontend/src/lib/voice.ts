@@ -819,10 +819,10 @@ export class VoiceSession {
    * The model became audible, or stopped being audible - reported by the player worklet
    * when its queue fills or drains, which is the only signal that tracks the SPEAKER.
    *
-   * Chunk arrival used to stand in for this, and it is systematically early: Gemini sends
-   * an utterance faster than realtime, so the socket goes quiet seconds before the voice
-   * does. That is why the caption read "Listening…" over the top of the assistant talking,
-   * and why the keyboard sound came back in under it.
+   * Do NOT stand chunk arrival in for this: it is systematically early, because Gemini
+   * sends an utterance faster than realtime, so the socket goes quiet seconds before the
+   * voice does. That puts the caption "Listening…" over the top of the assistant talking,
+   * and brings the keyboard sound back in under it.
    *
    * "Drained" is debounced because a brief underrun mid-sentence would otherwise flap the
    * caption; "playing" is not, because the first syllable should land immediately.
@@ -1019,10 +1019,10 @@ export class VoiceSession {
     // would be worse than silence; one line every few seconds reads as thinking aloud.
     // Clock starts NOW, at dispatch, not at zero. A progress line is a complete client
     // turn, which INTERRUPTS whatever the model is saying - and at zero the very first
-    // tool call always passed the gate, landing about a second in and cutting off the
+    // tool call always passes the gate, landing about a second in and cutting off the
     // acknowledgement the system instruction asks for ("Let me pull that up") to say
-    // "still working on that" instead. That read as a long pause followed by a non sequitur:
-    // the acknowledgement was killed, so the model had to generate a fresh reply.
+    // "still working on that" instead. That reads as a long pause followed by a non sequitur:
+    // the acknowledgement is killed, so the model has to generate a fresh reply.
     let lastProgress = Date.now();
     const narrate = (toolName: string) => {
       // Two audiences, two vocabularies. The SCREEN gets the same present-tense label the

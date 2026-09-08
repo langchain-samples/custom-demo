@@ -2,9 +2,10 @@
 
 Talk to a customer's assistant out loud, with the dashboard filling in as it answers.
 
-Off by default and per-assistant: the builder sets `metadata.voice.enabled`, and without
-`GEMINI_API_KEY` the mic button never appears at all. Nothing about the agent, its tools
-or its prompt changes when it is on.
+Universal, not a per-assistant switch: every assistant opens the same typing-first screen
+with a mic in the composer next to send. Without `GEMINI_API_KEY` the mic is still there
+and says voice is unavailable rather than connecting. Nothing about the agent, its tools
+or its prompt changes when a question is spoken instead of typed.
 
 ## The shape
 
@@ -217,7 +218,7 @@ document's `AuthToken`), and posting the SDK names is a 400.
 
 ## The voice view
 
-For a voice-enabled assistant the chat rail is replaced by `VoiceStage`: one orb, a status
+While a voice conversation is live the chat rail is replaced by `VoiceStage`: one orb, a status
 line, and the assistant's own branding. The dashboard keeps its pane beside it, which is
 the whole point - you talk, and the figures appear over there.
 
@@ -330,20 +331,15 @@ secrets, so a secret that exists in GitHub but is not named in the workflow neve
 Absent, nothing breaks except voice: `POST /voice/token` answers 501 and the mic button says
 so.
 
-Then create an assistant with **Voice mode** switched on in the New customer demo dialog,
-or flip `metadata.voice.enabled` on one that already exists.
+Then talk to any assistant: the mic is in the composer, next to send. Nothing has to be
+enabled per assistant.
 
-The flag travels SPA -> `SetupInput.voice` -> the setup graph's `_INPUT_KEYS` ->
-`prepare_assistant` -> `metadata.voice`. That graph silently drops any input key it does
-not list, so a switch can be wired all the way through the UI and still arrive as "off"
-with nothing visibly broken. There is a test pinning that link.
+`metadata.voice` carries only `voice_name` (see *Choosing the voice*). Voice is
+deliberately NOT a per-assistant switch that also chooses the landing screen: one setting
+doing two unrelated jobs leaves most assistants mute for no reason anyone can name.
 
 ## Known gaps
 
-- **The switch is create-time only.** "Voice mode" sits in the New customer demo dialog
-  next to "Backfill demo traffic". Turning it on for an assistant that already exists
-  means patching `metadata.voice.enabled`; the Settings panel already patches assistant
-  metadata live, so a toggle there is the obvious next step.
 - **The audio path is unverified.** A real session has been driven end to end from Node
   (mint -> connect -> speak -> `invoke_deep_agent` called with the question passed
   through), so the protocol, the token and the tool declarations are known good. What has

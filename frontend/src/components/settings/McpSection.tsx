@@ -177,11 +177,11 @@ export function McpSection({ servers, onChange, defaultOpen }: Props) {
    * Edit one row, keeping its id in step with its name.
    *
    * The id namespaces this server's tools as `{id}_{tool}`, so it has to come
-   * from the name. It used to be stamped at creation, before a name existed,
-   * which is how every server ended up prefixing its tools `mcp_`. It now
-   * follows the name until the server has answered a probe, and freezes after
-   * that: renaming it once tools are in play would rename every tool the model
-   * has already been told about, mid-conversation.
+   * from the name. Do NOT stamp it at creation, before a name exists: that is
+   * how every server ends up prefixing its tools `mcp_`. It follows the name
+   * until the server has answered a probe, and freezes after that: renaming it
+   * once tools are in play would rename every tool the model has already been
+   * told about, mid-conversation.
    */
   const edit = (index: number, patch: Partial<McpServerConfig>) =>
     onChange(

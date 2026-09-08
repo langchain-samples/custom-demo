@@ -1,7 +1,7 @@
 """Unit tests for the tool catalogue and the ToolSelection filter (no LLM).
 
 The invariants that matter:
-  * an assistant with no selection behaves exactly as it did before the catalogue
+  * an assistant with no selection gets the DEFAULT set, not everything and not nothing
   * an EMPTY selection is a real choice, not "unset"
   * nothing is force-on: every catalogue tool (incl. push_widget) is toggleable
   * tools outside the catalogue (every deepagents built-in) are never stripped
@@ -143,7 +143,7 @@ def _names(req):
     return {t.name if hasattr(t, "name") else t["name"] for t in req.tools}
 
 
-def test_middleware_default_offers_exactly_the_old_set_plus_builtins():
+def test_middleware_default_offers_exactly_the_default_set_plus_builtins():
     out = ToolSelection()._apply(_request({}))
     assert _names(out) & CATALOGUE_IDS == DEFAULT_ENABLED
     assert set(SOME_BUILTINS) | {"future"} <= _names(out)

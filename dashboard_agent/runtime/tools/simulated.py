@@ -1,15 +1,14 @@
 """Simulated capability tools.
 
-Each of these stands in for a real integration the way `SyntheticDataSource`
-stands in for a real data backend: a fast LLM invents a plausible, internally
-consistent result, tailored to the assistant's `customer` / `industry`. That
-keeps a demo credible without per-customer credentials, OAuth, or anything that
-can fail live on stage.
+Each of these stands in for a real integration: a fast LLM invents a plausible,
+internally consistent result, tailored to the assistant's `customer` /
+`industry`. That keeps a demo credible without per-customer credentials, OAuth,
+or anything that can fail live on stage.
 
 They all return a JSON string in a fixed shape so the frontend can render a
 typed card for each.
 
-`web_search` used to live here; it is now backed by a real API and lives in
+`web_search` is NOT one of them: it is backed by a real API and lives in
 `web_search.py`.
 """
 

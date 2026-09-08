@@ -2,14 +2,14 @@
  * The voice control, as an icon button INSIDE the composer next to send.
  *
  * It sits there because it is the same act as send: the other way to ask this assistant a
- * question. As a labelled "Talk to the assistant" button in the header it read as a mode
- * switch somewhere off to the side, and it competed with New Chat for the one part of the
- * header the eye treats as "actions".
+ * question. Do NOT move it back to the header as a labelled "Talk to the assistant" button:
+ * there it reads as a mode switch somewhere off to the side, and it competes with New Chat
+ * for the one part of the header the eye treats as "actions".
  *
- * ONE button, because listening and the orb are now the same state: the orb covers the chat
+ * ONE button, because listening and the orb are the same state: the orb covers the chat
  * rail while a conversation is live, and leaving the orb hangs up (see App). So by the time
- * this is on screen the session is always idle, and there is nothing to stop. It used to sit
- * beside a second, stop button - the cost of letting "running, but not on the orb" exist.
+ * this is on screen the session is always idle, and there is nothing to stop. A second, stop
+ * button beside it is the price of letting "running, but not on the orb" exist.
  *
  * The state-driven icon and tooltip stay anyway: they cost nothing, and if a future change
  * ever makes a live session visible from here again, this degrades to something honest
@@ -39,16 +39,16 @@ export function VoiceButton({ voice, onOpen }: VoiceButtonProps) {
   const { state, running, activity, error } = voice;
   const spin = state === "connecting" || state === "thinking";
   /**
-   * A PLAIN mic at rest, never the crossed-out one. As a labelled header button the
-   * crossed-out mic read as "voice is currently off"; as a bare icon next to send it reads
+   * A PLAIN mic at rest, never the crossed-out one. As a labelled header button a
+   * crossed-out mic reads as "voice is currently off"; as a bare icon next to send it reads
    * as "stop talking", which is the opposite of what clicking it does. The struck-through
-   * mic now means exactly one thing: the stop button.
+   * mic means exactly one thing: the stop button.
    */
   const Icon = spin ? IconLoader2 : IconMicrophone;
 
   /**
    * One button, one meaning: START TALKING. Which is also GO TO THE ORB, because those are
-   * the same act now - the session and the view begin and end together.
+   * the same act: the session and the view begin and end together.
    */
   const open = () => {
     if (!running) voice.start();

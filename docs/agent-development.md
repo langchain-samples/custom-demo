@@ -42,8 +42,9 @@ For any change to what the agent does - a new tool, a prompt edit, a backend swa
 ## Non-negotiables
 
 - **Keep the app boundary out of the agent.** Data access / business rules are testable without a
-  model (`datasource.py`, `tools/`); when the agent is wrong you should be able to say "the tools
-  are correct" with a green run behind you.
+  model: the agent reads real files seeded into its sandbox VM, and both the seeding and the tools
+  around it (`runtime/agent.py`, `runtime/tools/`) are exercised with a fake VM. When the agent is
+  wrong you should be able to say "the tools are correct" with a green run behind you.
 - **Tool errors carry the fix.** An empty result reads to a model as "doesn't exist" → confident
   lies. Return an error that names the correct next step, not `{}` / `[]`.
 - **Binary evaluators with a reason, and unit-test them.** A broken evaluator manufactures false
@@ -58,7 +59,7 @@ The repo deliberately ships a broken agent (the hallucination demo), so "correct
 different directions depending on which suite you are in. Decide which one you are writing
 *before* you write the criterion:
 
-| | `evals/` (repo-level Tier-3) | `dashboard_agent/assistant_evals.py` (per-assistant) |
+| | `evals/` (repo-level Tier-3) | `dashboard_agent/provisioning/evals.py` (per-assistant) |
 |---|---|---|
 | what it protects | our code - the planted demo bug still works | the demo narrative - the agent is grounded |
 | **score 1** | the bug **fired** (figures fabricated) | the agent was **correct** (said the data is unavailable / hedged, no figures as fact) |
@@ -78,11 +79,11 @@ with the judge stubbed.
   evaluator polarity (judge stubbed), and the routes against a fake LangSmith client.
 - Manual / pre-release: Level 3 judge evals and live smoke tests - `evals/`, gated on env.
 - In the product, on demand: the per-assistant demo experiment (real model, customer's
-  workspace) - `dashboard_agent/assistant_evals.py`, driven from the SPA.
+  workspace) - `dashboard_agent/provisioning/evals.py`, driven from the SPA.
 
 ## Synthetic demo traffic
 
-`dashboard_agent/demo_traffic.py` fills a new assistant's trace project with a day of
+`dashboard_agent/provisioning/traffic.py` fills a new assistant's trace project with a day of
 traffic so the LangSmith **Monitoring** and **Insights** tabs have something to show. It runs
 fire-and-forget at setup, and `POST /demo-traffic` (a button in Settings) does the same for
 assistants created before the feature.

@@ -31,11 +31,11 @@ _DATA_CALLS = ("execute",)
 def _read_skill_first(calls: list[str]) -> bool:
     """A filesystem read (consulting /skills) precedes the first data-bearing call.
 
-    `read_file` used to be in BOTH sets, which made this always False for the most
-    common transcript there is: an agent whose first call is `read_file` scored 0 on
-    "read the skill first" because that same call was also read as the data access it
-    was supposed to precede. Verified before the fix: `["read_file"]` -> False,
-    `["read_file", "execute"]` -> False.
+    Do NOT put `read_file` in BOTH sets: that makes this always False for the most
+    common transcript there is, an agent whose first call is `read_file`, which then
+    scores 0 on "read the skill first" because that same call is also read as the data
+    access it was supposed to precede. Measured with it in both sets: `["read_file"]`
+    -> False, `["read_file", "execute"]` -> False.
     """
     fs = next((i for i, c in enumerate(calls) if c in _FS_READS), None)
     ds = next((i for i, c in enumerate(calls) if c in _DATA_CALLS), None)

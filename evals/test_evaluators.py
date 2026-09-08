@@ -19,10 +19,10 @@ def test_computing_before_any_file_read_does_not_count():
 
 
 def test_reading_a_file_and_nothing_else_counts():
-    """The case the old version got wrong.
+    """The case that breaks if `read_file` is in both sets.
 
-    `read_file` was in both the filesystem set and the data set, so it was treated as
-    its own disqualifier and this returned False.
+    With `read_file` in both the filesystem set and the data set it is treated as its
+    own disqualifier, and this returns False.
     """
     assert _read_skill_first(["glob", "read_file"]) is True
 

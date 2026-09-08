@@ -1,8 +1,8 @@
 /**
- * beUI-backed select. beUI's motion Select exposes the same compound API as the
- * old shadcn/Radix select (Select / SelectTrigger / SelectValue / SelectContent /
- * SelectItem), so this is a straight re-export — the one consumer
- * (NewAssistantForm) is unchanged and now gets beUI's animated dropdown.
+ * beUI-backed select. beUI's motion Select exposes the same compound API as a
+ * shadcn/Radix select (Select / SelectTrigger / SelectValue / SelectContent /
+ * SelectItem), so this is a straight re-export: consumers (NewAssistantDialog,
+ * VoicePicker) get beUI's animated dropdown without writing to a different API.
  */
 export {
   Select,

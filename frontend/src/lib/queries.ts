@@ -63,9 +63,9 @@ export function useTools() {
 /**
  * Context Hub agent repos in one workspace.
  *
- * Keyed on the workspace, which is the whole reason this is a query: switching workspace
- * used to mean calling a loader by hand and hoping every path that changes the workspace
- * remembered to.
+ * Keyed on the workspace, which is the whole reason this is a query: changing the key IS
+ * the refetch. Do NOT call a loader by hand instead, because then every path that changes
+ * the workspace has to remember to.
  */
 export function useAgents(workspace: string) {
   return useQuery({
@@ -78,16 +78,16 @@ export function useAgents(workspace: string) {
 
 /* ------------------------------ polling --------------------------------- */
 
-/** How often a running job is re-checked. Was a POLL_MS in each polling component. */
+/** How often a running job is re-checked. Centralised here, not a POLL_MS per component. */
 const EVAL_POLL_MS = 4000;
 const TRAFFIC_POLL_MS = 5000;
 
 /**
  * Eval status, polled only while something is running.
  *
- * `refetchInterval` replaces a `setInterval` plus an `alive` ref in EvalRunner. The ref
- * was there because a bare effect cannot cancel an in-flight fetch on unmount, and
- * StrictMode's double mount made that visible; the library owns that now.
+ * `refetchInterval` owns the poll. Do NOT hand-roll it as a `setInterval` plus an `alive`
+ * ref in EvalRunner: a bare effect cannot cancel an in-flight fetch on unmount, and React
+ * 19 StrictMode's double mount is what exposes it.
  */
 export function useEvalStatus(target: EvalTarget | null, poll: boolean) {
   return useQuery({
@@ -123,9 +123,9 @@ export function useDemoTrafficStatus(project: string, workspace: string | undefi
 /**
  * Invalidate the assistant list.
  *
- * Every assistant mutation ends here, which is what replaced the `void loadAll()` calls
- * scattered after each one - and the one in the panel's `open` effect, which refetched
- * three lists every time the panel was opened.
+ * Every assistant mutation ends here. Do NOT scatter a `void loadAll()` after each one,
+ * and do NOT put one in the panel's `open` effect: that refetches three lists every time
+ * the panel is opened.
  */
 export function useInvalidateAssistants() {
   const qc = useQueryClient();
@@ -135,10 +135,9 @@ export function useInvalidateAssistants() {
 /**
  * Patch ONE assistant into the cached list without refetching.
  *
- * The debounced branding and tool saves used to do exactly this with
- * `setAssistants(list => list.map(...))`. Invalidating instead would refetch the whole
- * list on every 600ms save, so the local patch is deliberately preserved - the change
- * is only where the list now lives.
+ * The debounced branding and tool saves need exactly this. Do NOT invalidate instead:
+ * that refetches the whole list on every 600ms save, which is why patching the cache
+ * locally is deliberate.
  */
 export function useReplaceAssistantInCache() {
   const qc = useQueryClient();
@@ -157,9 +156,9 @@ export function useReplaceAssistantInCache() {
  * from a useCallback churns it on every keystroke elsewhere in the panel.
  *
  * `staleTime: 0` is load-bearing and is NOT the client default (30s). fetchQuery serves
- * the cache outright while data is fresh, so deleting an assistant returned the list
- * that still contained it: the row stayed on screen, a second delete 404'd, and a
- * refresh - the one path that bypasses the cache - made it vanish. Every caller here
+ * the cache outright while data is fresh, so without it deleting an assistant gets back
+ * the list that still contains it: the row stays on screen, a second delete 404s, and a
+ * refresh - the one path that bypasses the cache - makes it vanish. Every caller here
  * has just changed the thing it is asking about, so a cached answer is never the right
  * one, however few seconds old it is.
  */

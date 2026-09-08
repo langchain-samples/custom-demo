@@ -41,7 +41,7 @@ def _capture(monkeypatch, context, *, mock_ctxhub=False):
     _CAPTURED.clear()
     monkeypatch.setenv("ANTHROPIC_API_KEY", "placeholder")
     # Patch the single model-construction seam, so this stays provider-agnostic
-    # (it used to patch ChatAnthropic directly, which pinned the test to Anthropic).
+    # (patching ChatAnthropic directly would pin the test to Anthropic).
     monkeypatch.setattr(A, "build_chat_model", lambda model_id: _RecordingModel())
     if mock_ctxhub:
         # Avoid the real Context Hub network: an in-state backend + a canned AGENTS.md.

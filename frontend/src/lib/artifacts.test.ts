@@ -155,8 +155,9 @@ describe("the critical-CSS write order the prompt now asks for", () => {
     "</head><body><h1>Q3 brief</h1><p>Summary text.</p>" +
     "<style>.card{border-radius:12px;box-shadow:0 1px 2px #0001}</style></body></html>";
 
-  it("shows content early, which is the whole point of the reorder", () => {
-    // Under the old order the body began a third of the way in; here it is immediate.
+  it("shows content early, which is the whole point of writing the body before the CSS", () => {
+    // With the bulk of the CSS after the body, content is renderable almost at once
+    // rather than a third of the way into the document.
     const headOnly = doc.slice(0, doc.indexOf("<body"));
     expect(hasRenderableBody(headOnly)).toBe(false);
     const throughH1 = doc.slice(0, doc.indexOf("</h1>"));

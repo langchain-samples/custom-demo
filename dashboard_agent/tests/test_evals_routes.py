@@ -572,10 +572,10 @@ def test_cleanup_without_a_dataset_deletes_nothing_extra(monkeypatch):
 
 # --- demo traffic: the count comes from LangSmith, not from this process ---------
 #
-# The receipt lives in memory, so every redeploy used to leave the panel saying "no
+# The receipt lives in memory, so on its own every redeploy leaves the panel saying "no
 # backfill recorded this session" over a project full of traffic. The runs are tagged
 # `synthetic-demo`, so one stats call answers it durably; the in-process receipt stays
-# for the one thing LangSmith cannot know — a backfill still running on a thread here.
+# for the one thing LangSmith cannot know: a backfill still running on a thread here.
 
 
 def _traffic_client(monkeypatch, *, stats: dict | None = None, boom: bool = False) -> dict:

@@ -1,9 +1,10 @@
 /**
  * Owns one voice conversation's lifecycle and the state a UI needs to draw it.
  *
- * Extracted from the button because two surfaces now render the same session: the
- * immersive stage (VoiceStage) and the compact header control. Both read this; neither
- * owns it, so exiting the stage does not end the conversation.
+ * It lives here rather than in the button because two surfaces render the same session:
+ * the immersive stage (VoiceStage) and the compact composer control (VoiceButton). Both
+ * read this; neither owns it, so unmounting the stage does not by itself end the
+ * conversation.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";

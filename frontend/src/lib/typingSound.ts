@@ -1,15 +1,15 @@
 /**
  * Keyboard sound for the dead air while the agent works.
  *
- * A looped recording (`/sfx/keyboard-typing.mp3`). This was synthesised at first - noise
- * bursts through a bandpass - which is cheap and asset-free but never stopped sounding like
- * what it was: real typing has hand movement, key variation and room in it that a filtered
- * noise burst does not imply.
+ * A looped recording (`/sfx/keyboard-typing.mp3`), NOT synthesis. Noise bursts through a
+ * bandpass are cheap and asset-free but never stop sounding like what they are: real
+ * typing has hand movement, key variation and room in it that a filtered noise burst does
+ * not imply.
  *
- * WHY IT RUNS FOR THE WHOLE TURN. It also started as one burst per tool call, which is
- * honest but does not do the job: a single tool call can run for half a minute, so the
- * sound landed at the start and then left the silence it was meant to fill. It now plays
- * from the moment the agent picks up the question until it answers. That is still tied to
+ * WHY IT RUNS FOR THE WHOLE TURN. One burst per tool call is honest but does not do the
+ * job: a single tool call can run for half a minute, so the sound lands at the start and
+ * then leaves the silence it was meant to fill. It plays instead from the moment the agent
+ * picks up the question until it answers. That is still tied to
  * real work rather than a timer: it is on exactly while a run is in flight, so a finished
  * turn goes quiet on its own and a crash goes quiet early.
  *

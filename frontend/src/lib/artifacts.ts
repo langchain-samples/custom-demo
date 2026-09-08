@@ -157,14 +157,15 @@ const REVEAL_MS = 30_000;
 /**
  * How much of the skeleton is showing, 0..1, from how long the write has been running.
  *
- * EASED, not linear, and that is the whole substance of this function. Linear over 30s
- * put the first row change at five seconds (round(t/30*9) only reaches 2 at t=5), and
- * five motionless seconds is exactly how long someone looks before deciding a loader is
- * broken - which is what was reported, three times. It was growing; nobody could tell.
+ * EASED, not linear, and that is the whole substance of this function. Do NOT make it
+ * linear over 30s: that puts the first row change at five seconds (round(t/30*9) only
+ * reaches 2 at t=5), and five motionless seconds is exactly how long someone looks
+ * before deciding a loader is broken, which users reported three times. It is growing;
+ * nobody can tell.
  *
  * sqrt front-loads it: rows at roughly 0.8s, 2.3s, 4.5s, 7.5s, then slowing to 27s for
- * the last one. Still 1 -> 9 across thirty seconds, so the brief is unchanged, but the
- * early seconds - the only ones a fast write ever reaches - now visibly move. It also
+ * the last one. Still 1 -> 9 across thirty seconds, so the brief is the same, but the
+ * early seconds - the only ones a fast write ever reaches - visibly move. It also
  * matches how these documents are really written: the shell appears almost at once and
  * the detail accretes, so the curve is honest about what is coming rather than pacing
  * evenly through a process that is not even.

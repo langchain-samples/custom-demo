@@ -116,9 +116,9 @@ export const isPending = (c: ChipData) => c.result === null && !c.stopped;
 
 // The lane column is wide enough for its hint (the longest is 35 characters, about
 // 161px at fontSize 9), because SVG text does not wrap and a clipped explanation is
-// worse than none. The old widths were tuned to fit the right-hand pane without
-// horizontal scrolling; the graph lives in a resizable floating panel now, which
-// scrolls, so fitting a fixed pane is no longer the constraint.
+// worse than none. The graph lives in a resizable floating panel, which scrolls, so
+// fitting a fixed right-hand pane without horizontal scrolling is not the constraint
+// these widths answer to.
 export const ROOT_X = 16;
 export const ROOT_W = 132;
 export const LANE_X = 176;
@@ -133,9 +133,9 @@ const GUTTER = 16;
 /**
  * How wide the call column should be inside a panel of `panelW`.
  *
- * The column used to be fixed at 236px, so a resized panel just grew empty space to the
- * right while labels stayed clipped to 23 characters - two `data/competitor_produc…`
- * nodes were indistinguishable even with room to tell them apart.
+ * Do NOT pin the column at a fixed 236px: a resized panel then just grows empty space to
+ * the right while labels stay clipped to 23 characters, which leaves two
+ * `data/competitor_produc…` nodes indistinguishable even with room to tell them apart.
  */
 export function nodeWidthFor(panelW: number): number {
   if (!Number.isFinite(panelW) || panelW <= 0) return NODE_W;

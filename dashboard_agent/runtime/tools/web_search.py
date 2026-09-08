@@ -1,17 +1,16 @@
 """Real web search, backed by the Tavily API.
 
-This tool used to live in `simulated.py`, where a fast LLM invented plausible
-results — believable outlets, believable URLs, believable dates. That is fine for
-the other simulated capabilities, but the agent is told to *cite* what search
-returns, so invented URLs reached the user as citations. Hence a real API.
+Do NOT simulate this the way `simulated.py` does, with a fast LLM inventing
+plausible results (believable outlets, believable URLs, believable dates). That is
+fine for the other simulated capabilities, but the agent is told to *cite* what
+search returns, so invented URLs reach the user as citations. Hence a real API.
 
 Deliberately no offline fallback: without `TAVILY_API_KEY` the tool returns an
 error object. Failing visibly is the point — a silent fall back to simulation
 would reintroduce exactly the fabrication this module exists to remove.
 
-Returns the same JSON shape the simulated version did,
-`{"results":[{title,url,snippet,published}]}`, so the frontend's typed card
-(`ToolResultCard.tsx` → `SearchCard`) renders it unchanged.
+Returns `{"results":[{title,url,snippet,published}]}`, which is the shape the
+frontend's typed card (`ToolResultCard.tsx` → `SearchCard`) renders.
 """
 
 from __future__ import annotations
@@ -25,8 +24,7 @@ from langchain_tavily._utilities import TavilySearchAPIWrapper
 
 from dashboard_agent.config import require_tavily_key
 
-# How many results to request. Matches what the simulated tool used to return,
-# which is what the card was laid out for.
+# How many results to request. This is what the card is laid out for.
 _MAX_RESULTS = 4
 
 _CLIENT: Any = None

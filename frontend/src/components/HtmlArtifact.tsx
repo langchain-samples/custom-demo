@@ -91,13 +91,13 @@ window.addEventListener(
 /**
  * When each artifact's build started, by path, deliberately OUTSIDE React.
  *
- * It was component state, and a skeleton that had been on screen for well over the five
- * seconds its first row needs was still showing one row. That was never reproducible in
- * a DOM harness - not against this component, not against DashboardPane, not while
- * streaming a realistic document - which is the argument for putting it here: whatever
- * unmounts or re-keys this component in a real session, the answer to "how long has this
- * file been building" does not depend on a React instance surviving to remember it. It
- * is a fact about the artifact.
+ * Do NOT make it component state. As component state, a skeleton that had been on screen
+ * for well over the five seconds its first row needs was still showing one row, and that
+ * failure was never reproducible in a DOM harness - not against this component, not
+ * against DashboardPane, not while streaming a realistic document - which is the
+ * argument for putting it here: whatever unmounts or re-keys this component in a real
+ * session, the answer to "how long has this file been building" does not depend on a
+ * React instance surviving to remember it. It is a fact about the artifact.
  *
  * Entries are removed when the write completes (`streaming` goes false), so the map
  * holds at most one number per in-flight artifact, and a later edit_file to the same
