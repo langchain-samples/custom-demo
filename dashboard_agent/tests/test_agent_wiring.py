@@ -9,8 +9,12 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from langgraph.graph import START, StateGraph
 from langgraph.prebuilt.tool_node import ToolCallRequest
+from langgraph.runtime import Runtime
+from pydantic import BaseModel, ValidationError
 
+from dashboard_agent.core.ctx import Context
 from dashboard_agent.runtime import agent as A
 from dashboard_agent.runtime.tools.registry import allowed_tool_names, is_allowed
 
@@ -30,7 +34,7 @@ class _FakeReq:
 
     def __init__(self, tool_names, enabled):
         self.tools = [SimpleNamespace(name=n) for n in tool_names]
-        self.runtime = SimpleNamespace(context={"enabled_tools": enabled})
+        self.runtime = SimpleNamespace(context=Context(enabled_tools=enabled))
         self.overridden: dict[str, Any] | None = None
 
     def override(self, **kw):
@@ -56,7 +60,7 @@ def test_tool_selection_no_override_when_nothing_filtered():
 
 
 def _rt(enabled):
-    return SimpleNamespace(context={"enabled_tools": enabled})
+    return SimpleNamespace(context=Context(enabled_tools=enabled))
 
 
 def test_capability_note_flags_dashboards_off_when_push_widget_disabled():
@@ -211,7 +215,7 @@ class _McpReq:
 
     def __init__(self, tool_names, servers):
         self.tools = [SimpleNamespace(name=n) for n in tool_names]
-        self.runtime = SimpleNamespace(context={"mcp_servers": servers})
+        self.runtime = SimpleNamespace(context=Context(mcp_servers=servers))
 
     def override(self, **kw):
         self.tools = kw.get("tools", self.tools)
@@ -267,7 +271,7 @@ def test_an_mcp_tool_call_is_given_the_tool_the_tool_node_lacks(monkeypatch):
         tool_call={"name": "fieldlink_get_shipment", "args": {}, "id": "1", "type": "tool_call"},
         tool=None,
         state={},
-        runtime=cast("Any", SimpleNamespace(context={"mcp_servers": _SERVER})),
+        runtime=cast("Any", SimpleNamespace(context=Context(mcp_servers=_SERVER))),
     )
 
     seen = {}
@@ -288,7 +292,7 @@ def test_a_registered_tool_is_left_alone(monkeypatch):
         tool_call={"name": "web_search", "args": {}, "id": "1", "type": "tool_call"},
         tool=cast("Any", ours),
         state={},
-        runtime=cast("Any", SimpleNamespace(context={"mcp_servers": _SERVER})),
+        runtime=cast("Any", SimpleNamespace(context=Context(mcp_servers=_SERVER))),
     )
 
     seen = {}
@@ -307,7 +311,7 @@ def test_mcp_note_names_the_server_behind_each_tool(monkeypatch):
     )
     token = A._mcp_tools.set((remote,))
     try:
-        note = A._mcp_note(SimpleNamespace(context={"mcp_servers": _SERVER}))
+        note = A._mcp_note(SimpleNamespace(context=Context(mcp_servers=_SERVER)))
     finally:
         A._mcp_tools.reset(token)
 
@@ -316,7 +320,7 @@ def test_mcp_note_names_the_server_behind_each_tool(monkeypatch):
 
 
 def test_mcp_note_is_empty_without_mcp_tools():
-    assert A._mcp_note(SimpleNamespace(context={"mcp_servers": None})) == ""
+    assert A._mcp_note(SimpleNamespace(context=Context(mcp_servers=None))) == ""
 
 
 def test_mcp_note_says_a_configured_server_could_not_be_reached():
@@ -328,7 +332,7 @@ def test_mcp_note_says_a_configured_server_could_not_be_reached():
     """
     token = A._mcp_tools.set(())  # discovery ran, produced nothing
     try:
-        note = A._mcp_note(SimpleNamespace(context={"mcp_servers": _SERVER}))
+        note = A._mcp_note(SimpleNamespace(context=Context(mcp_servers=_SERVER)))
     finally:
         A._mcp_tools.reset(token)
 
@@ -340,12 +344,65 @@ def test_mcp_note_says_a_configured_server_could_not_be_reached():
 def test_mcp_note_stays_quiet_on_the_sync_path():
     # None, not an empty tuple: no discovery ran, so a sync run knows nothing either
     # way and must not claim the server is down.
-    assert A._mcp_note(SimpleNamespace(context={"mcp_servers": _SERVER})) == ""
+    assert A._mcp_note(SimpleNamespace(context=Context(mcp_servers=_SERVER))) == ""
 
 
 def test_mcp_note_says_nothing_when_no_server_is_configured():
     token = A._mcp_tools.set(())
     try:
-        assert A._mcp_note(SimpleNamespace(context={"mcp_servers": None})) == ""
+        assert A._mcp_note(SimpleNamespace(context=Context(mcp_servers=None))) == ""
     finally:
         A._mcp_tools.reset(token)
+
+
+# --- context arrives as a Context, whatever shape the caller sent ---
+
+
+class _ProbeState(BaseModel):
+    """Graph state for the probe below. These two exercise the context, not the state."""
+
+    done: bool = False
+
+
+def _context_probe():
+    """A one-node graph whose node records the `Context` the run resolved."""
+    seen: dict[str, Any] = {}
+
+    def node(state: _ProbeState, runtime: Runtime[Context]) -> _ProbeState:
+        seen["context"] = runtime.context
+        return state
+
+    graph = StateGraph(_ProbeState, context_schema=Context)
+    graph.add_node("n", node)
+    graph.add_edge(START, "n")
+    return graph.compile(), seen
+
+
+def test_a_dict_context_reaches_a_node_as_a_context_object():
+    """The deployment sends `{"context": {...}}` on the wire; this is what it becomes.
+
+    Nothing else covers the shape a real run arrives in: every other test here hands a
+    node a `Context` it built itself. LangGraph coerces the dict against the
+    `context_schema`, which is what lets every reader use dot notation, and an unknown
+    key (the SPA sends `ls_project` for trace routing) rides along without failing.
+    """
+    app, seen = _context_probe()
+    app.invoke(_ProbeState(), context=cast("Any", {"customer": "Acme", "ls_project": "p"}))
+
+    assert isinstance(seen["context"], Context)
+    assert seen["context"].customer == "Acme"
+    assert seen["context"].agent_repo is None  # unset fields take the declared default
+
+
+def test_a_malformed_stored_context_fails_at_run_start_naming_the_field():
+    """A validated `context_schema` is what makes every reader's dot notation safe.
+
+    A `sandbox_seed` that is not a list used to reach `_sandbox_note`, which re-checked
+    the type it had already been promised. Validation moves the failure to the run
+    boundary, where the message names the field an operator has to fix.
+    """
+    app, _seen = _context_probe()
+    with pytest.raises(ValidationError) as excinfo:
+        app.invoke(_ProbeState(), context=cast("Any", {"sandbox_seed": "not-a-list"}))
+
+    assert "sandbox_seed" in str(excinfo.value)

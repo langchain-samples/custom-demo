@@ -40,7 +40,6 @@ must never import from `evals/`.
 
 from __future__ import annotations
 
-import dataclasses
 import hashlib
 import json
 import os
@@ -58,8 +57,9 @@ from langsmith.utils import LangSmithConflictError
 from pydantic import BaseModel, Field
 
 from dashboard_agent.config import judge_model, routing_key, sampling_kwargs
+from dashboard_agent.core.ctx import Context
 from dashboard_agent.provisioning.client import _ws_client, slugify
-from dashboard_agent.runtime.agent import Context, build_agent
+from dashboard_agent.runtime.agent import build_agent
 from dashboard_agent.runtime.mocking import install_mocks, restore_mocks
 from dashboard_agent.runtime.tools import widget_sink
 
@@ -918,7 +918,7 @@ def make_run_context(context: dict | None) -> Context:
     the demo runs with, or it grades a different agent. Unknown keys are dropped —
     stored context can carry fields a newer/older `Context` doesn't declare.
     """
-    known = {f.name for f in dataclasses.fields(Context)}
+    known = set(Context.model_fields)
     return Context(**{k: v for k, v in (context or {}).items() if k in known})
 
 

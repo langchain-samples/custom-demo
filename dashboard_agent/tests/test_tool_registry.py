@@ -10,6 +10,7 @@ The invariants that matter:
 import json
 from types import SimpleNamespace
 
+from dashboard_agent.core.ctx import Context
 from dashboard_agent.runtime.agent import ToolSelection
 from dashboard_agent.runtime.tools import (
     ALWAYS_ON,
@@ -144,22 +145,23 @@ def _names(req):
 
 
 def test_middleware_default_offers_exactly_the_default_set_plus_builtins():
-    out = ToolSelection()._apply(_request({}))
+    out = ToolSelection()._apply(_request(Context()))
     assert _names(out) & CATALOGUE_IDS == DEFAULT_ENABLED
     assert set(SOME_BUILTINS) | {"future"} <= _names(out)
 
 
 def test_middleware_honours_selection():
-    out = ToolSelection()._apply(_request({"enabled_tools": ["draft_email", "web_search"]}))
+    out = ToolSelection()._apply(_request(Context(enabled_tools=["draft_email", "web_search"])))
     assert _names(out) & CATALOGUE_IDS == {"draft_email", "web_search", "ask_user"}
 
 
 def test_middleware_never_strips_builtins_even_when_all_off():
-    out = ToolSelection()._apply(_request({"enabled_tools": []}))
+    out = ToolSelection()._apply(_request(Context(enabled_tools=[])))
     assert set(SOME_BUILTINS) | {"future"} <= _names(out)
     # Even with everything switched off, the always-on tool stays.
     assert _names(out) & CATALOGUE_IDS == {"ask_user"}
 
 
 def test_middleware_tolerates_missing_context():
+    """No context at all (a build-time or off-run request) reads as the defaults."""
     assert _names(ToolSelection()._apply(_request(None))) & CATALOGUE_IDS == DEFAULT_ENABLED

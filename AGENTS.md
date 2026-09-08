@@ -28,8 +28,8 @@ after (§3, *Per-assistant demo evals*; mind the polarity, it is the reverse of 
 
 ```
 dashboard_agent/
-  core/ctx.py                 ctx_get() - reads a Context field off a runtime (dict or dataclass)
-  runtime/agent.py            deep agent: Context schema, middleware, build_agent
+  core/ctx.py                 the `Context` model + get_ctx(runtime) - per-run configuration
+  runtime/agent.py            deep agent: middleware, backends, build_agent
   runtime/prompt.py           prompt construction + Context Hub pulls + hallucination/grounding
   runtime/widgets.py          Pydantic widget schemas - the agent-to-frontend contract
   runtime/mocking.py          per-invocation tool mocking, for deterministic evals
@@ -346,7 +346,8 @@ Two things to know before touching it:
 `prepare_assistant`). Suffixed so demo traces are obvious in a shared workspace and can't
 collide with a real project of the same name; an explicit `context.ls_project` overrides it.
 
-**`Context` - the whole per-assistant behavior surface** (`agent.py`):
+**`Context` - the whole per-assistant behavior surface** (`core/ctx.py`, re-exported from
+`agent.py`; read it with `get_ctx(runtime).<field>`):
 
 | field | purpose |
 |---|---|

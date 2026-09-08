@@ -30,13 +30,14 @@ import pytest
 from langsmith import testing as t
 
 from dashboard_agent.config import load_env
+from dashboard_agent.core.ctx import Context
 from dashboard_agent.provisioning.setup import (
     _SKILLS_CLAUSE,
     _ws_client,
     push_agent_prompt,
     push_workflow_skills,
 )
-from dashboard_agent.runtime.agent import Context, build_agent
+from dashboard_agent.runtime.agent import build_agent
 from dashboard_agent.runtime.prompt import build_system_prompt
 
 load_env()

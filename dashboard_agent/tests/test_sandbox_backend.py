@@ -36,6 +36,7 @@ from deepagents.backends import CompositeBackend, LangSmithSandbox, StateBackend
 from deepagents.backends.protocol import FileDownloadResponse, FileInfo, LsResult
 from deepagents.middleware.filesystem import supports_execution
 
+from dashboard_agent.core.ctx import Context
 from dashboard_agent.runtime import agent as A
 
 
@@ -119,7 +120,8 @@ _SEED = [{"name": "orders.csv", "kind": "csv", "columns": ["id"], "rows": [["1"]
 
 
 def _rt(**ctx):
-    return SimpleNamespace(context={"sandbox_seed": _SEED, **ctx})
+    ctx.setdefault("sandbox_seed", _SEED)
+    return SimpleNamespace(context=Context(**ctx))
 
 
 def _install_client(monkeypatch, client=None):

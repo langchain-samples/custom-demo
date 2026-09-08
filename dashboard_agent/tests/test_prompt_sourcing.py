@@ -24,9 +24,9 @@ from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langsmith.utils import LangSmithNotFoundError
 
+from dashboard_agent.core.ctx import Context
 from dashboard_agent.runtime import agent as A
 from dashboard_agent.runtime import prompt as P
-from dashboard_agent.runtime.agent import Context
 from dashboard_agent.runtime.prompt import (
     FALLBACK_PROMPT,
     PromptSourceError,

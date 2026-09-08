@@ -107,10 +107,14 @@ on the attach path: its `pip install` blocks the turn inside a middleware with n
   `provisioning/traffic.py:seed_questions(actions: list[dict] | None) -> list[dict]` is
   the outstanding counterexample. Do not add another.
 - **Dot notation where the attribute is declared on the class.** Keep `getattr` only
-  where the shape genuinely varies, and say which reason applies. `core/ctx.py` earns
-  its `getattr`: the same `Context` arrives as a dataclass locally and a plain dict on
-  the deployment. Nothing else varies that way, so an accessor should read as an
-  attribute, and typing it properly deletes the `isinstance` check at the call site.
+  where the shape genuinely varies, and say which reason applies. `core/ctx.py` is the
+  worked example: `Context` is a pydantic `BaseModel` there and `get_ctx(runtime)`
+  returns it, so every call site reads a declared attribute and `ty` rejects a typo that
+  a `getattr` default would have answered with `None`. Validation at the run boundary is
+  also what makes an `isinstance` check at the call site dead rather than merely hidden:
+  under a dataclass `context_schema` LangGraph validates nothing, so the annotation is
+  unenforced and the check is load-bearing. The one surviving `getattr` there reads
+  `.context` off the runtime object, whose shape does vary.
 - **Delete, do not tidy.** When something is unused, remove it. `run` and `run_stream`
   were a server-side second implementation of `ChatPanel`'s streaming, and deleting 203
   lines also removed the four worst-nested functions in the file. Grep for callers

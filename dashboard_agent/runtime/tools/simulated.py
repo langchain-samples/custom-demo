@@ -25,7 +25,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.types import interrupt
 
 from dashboard_agent.config import simulated_model
-from dashboard_agent.core.ctx import ctx_get
+from dashboard_agent.core.ctx import get_ctx
 
 _JSON_RE = re.compile(r"\{[\s\S]*\}")
 
@@ -68,8 +68,9 @@ def _model(model_id: str):
 
 def _who(runtime: ToolRuntime) -> str:
     """One line describing whose systems we are pretending to be."""
-    customer = ctx_get(runtime, "customer") or ""
-    industry = ctx_get(runtime, "industry") or ""
+    ctx = get_ctx(runtime)
+    customer = ctx.customer or ""
+    industry = ctx.industry or ""
     if customer and industry:
         return f"{customer}, a {industry} organization"
 

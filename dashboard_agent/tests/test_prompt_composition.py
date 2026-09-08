@@ -13,8 +13,8 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
+from dashboard_agent.core.ctx import Context
 from dashboard_agent.runtime import agent as A
-from dashboard_agent.runtime.agent import Context
 
 _CAPTURED: dict = {}
 

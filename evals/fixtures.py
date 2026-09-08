@@ -11,13 +11,13 @@ import os
 from langsmith import Client
 
 from dashboard_agent.config import load_env
+from dashboard_agent.core.ctx import Context
 from dashboard_agent.provisioning.setup import (
     _SKILLS_CLAUSE,
     DASHBOARD_SKILL,
     push_agent_prompt,
     push_workflow_skills,
 )
-from dashboard_agent.runtime.agent import Context
 from dashboard_agent.runtime.prompt import build_system_prompt
 
 # The planted gap the hallucination demo fabricates over (synthetic data returns

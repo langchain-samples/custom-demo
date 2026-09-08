@@ -18,7 +18,6 @@ import dataclasses
 import json
 import os
 import time
-from dataclasses import dataclass
 from typing import Any, cast
 
 from deepagents import RubricMiddleware, SubAgent, create_deep_agent
@@ -50,7 +49,7 @@ from dashboard_agent.config import (
     sandbox_enabled,
     scoped_client,
 )
-from dashboard_agent.core.ctx import ctx_get as _ctx
+from dashboard_agent.core.ctx import Context, get_ctx
 from dashboard_agent.runtime.mcp_servers import load_tools, parse_servers
 from dashboard_agent.runtime.mocking import enable_mocking
 from dashboard_agent.runtime.prompt import ARTIFACT_NOTE, FALLBACK_PROMPT, pull_agent_prompt
@@ -61,30 +60,6 @@ from dashboard_agent.runtime.tools import (
     guidance_for,
     is_allowed,
 )
-
-
-@dataclass
-class Context:
-    """Per-run configuration an assistant can set (LangGraph runtime context).
-
-    All optional: when unset, the tools/middleware fall back to env/config, so the
-    same graph works both in a deployment (assistants supply context) and locally.
-    """
-
-    model: str | None = None  # main agent LLM (e.g. "anthropic:claude-…"); overrides build default
-    agent_repo: str | None = None  # Context Hub agent repo whose AGENTS.md is the prompt
-    skills_repo: str | None = (
-        None  # Context Hub skills-bundle repo mounted at /skills/ (all assistants)
-    )
-    customer: str | None = None  # customer name — steers customer-specific synthetic data
-    industry: str | None = None  # customer industry — steers synthetic data
-    ls_workspace: str | None = None  # workspace to pull Hub prompts from (matches trace routing)
-    enabled_tools: list[str] | None = None  # catalogue tool ids to expose; None = defaults
-    sandbox_seed: list[dict] | None = None  # files to plant in the VM (see render_seed_script)
-    sandbox_key: str = ""  # this assistant's own VM name (see _sandbox_key_from)
-    # Remote MCP servers this assistant connects to: [{id?, label, url, token?, headers?}].
-    # Their tools are discovered per run and namespaced `{id}_{tool}` (mcp_servers.py).
-    mcp_servers: list[dict] | None = None
 
 
 @dynamic_prompt
@@ -107,9 +82,10 @@ def _hub_system_prompt(request: ModelRequest) -> str:
     catalogue reaches the model. An assistant with neither gets the clean, scoped
     prompt with no deepagents base and no filesystem instructions.
     """
-    agent_repo = _ctx(request.runtime, "agent_repo")
+    ctx = get_ctx(request.runtime)
+    agent_repo = ctx.agent_repo
     if agent_repo:
-        base = pull_agent_prompt(agent_repo, workspace=_ctx(request.runtime, "ls_workspace"))
+        base = pull_agent_prompt(agent_repo, workspace=ctx.ls_workspace)
     else:
         base = FALLBACK_PROMPT
 
@@ -127,7 +103,7 @@ def _hub_system_prompt(request: ModelRequest) -> str:
     # repo (`agent_repo`). Our prompt goes LAST so its persona/workflow/failure-mode
     # clause stays authoritative. Legacy assistants with neither keep the clean,
     # scoped prompt exactly as before.
-    if agent_repo or _ctx(request.runtime, "skills_repo"):
+    if agent_repo or ctx.skills_repo:
         framework = request.system_prompt or ""
         if framework:
             return f"{framework}\n\n{ours}"
@@ -157,13 +133,13 @@ def _sandbox_note(runtime) -> str:
     # What setup planted, named for the model. Generic guidance sent it to `ls` and hope;
     # naming the files means the first turn can open the right one. Still told to look,
     # because the VM may have been rebuilt or the user may have uploaded since.
-    seeded = _ctx(runtime, "sandbox_seed")
+    seeded = get_ctx(runtime).sandbox_seed
     listing = ""
-    if isinstance(seeded, list):
+    if seeded:
         lines = [
             f"  - /workspace/data/{f.get('name')}: {f.get('description') or f.get('kind')}"
             for f in seeded[:_SEED_MAX_FILES]
-            if isinstance(f, dict) and f.get("name")
+            if f.get("name")
         ]
         if lines:
             listing = "It should contain:\n" + "\n".join(lines) + "\n"
@@ -230,7 +206,7 @@ def _capability_note(runtime) -> str:
     base prompt (composed in by _hub_system_prompt), so no explicit file-tool note
     is needed here.
     """
-    raw = _ctx(runtime, "enabled_tools")
+    raw = get_ctx(runtime).enabled_tools
     if raw is None:
         return ""
 
@@ -301,7 +277,7 @@ def _mcp_note(runtime) -> str:
     still runs -- the model is told the connection is down so it can say so.
     """
     tools = _mcp_tools.get()
-    servers = {s.id: s.label for s in _mcp_parse(_ctx(runtime, "mcp_servers"))}
+    servers = {s.id: s.label for s in _mcp_parse(get_ctx(runtime).mcp_servers)}
     if tools is None:
         return ""  # sync path: no discovery ran, so nothing is known either way
 
@@ -365,7 +341,7 @@ class McpTools(AgentMiddleware):
     """
 
     async def _load(self, runtime) -> list[Any]:
-        servers = _mcp_parse(_ctx(runtime, "mcp_servers"))
+        servers = _mcp_parse(get_ctx(runtime).mcp_servers)
         return await load_tools(servers) if servers else []
 
     def wrap_model_call(self, request, handler):
@@ -462,7 +438,7 @@ class ConfigurableModel(AgentMiddleware):
     """
 
     def _apply(self, request: ModelRequest) -> ModelRequest:
-        model_id = _ctx(request.runtime, "model")
+        model_id = get_ctx(request.runtime).model
         return request.override(model=_model_for(model_id)) if model_id else request
 
     def wrap_model_call(self, request, handler):
@@ -498,7 +474,7 @@ class ToolSelection(AgentMiddleware):
         return None
 
     def _apply(self, request: ModelRequest) -> ModelRequest:
-        allowed = allowed_tool_names(_ctx(request.runtime, "enabled_tools"))
+        allowed = allowed_tool_names(get_ctx(request.runtime).enabled_tools)
         kept = [t for t in request.tools if is_allowed(self._name(t), allowed)]
         # Skip the override on the common path (nothing filtered).
         return request if len(kept) == len(request.tools) else request.override(tools=kept)
@@ -1030,15 +1006,13 @@ def _get_or_create_sandbox(runtime) -> Any | None:
     if not _sandbox_enabled():
         return None
 
-    seed = _ctx(runtime, "sandbox_seed")
-    spec = seed if isinstance(seed, list) else None
+    ctx = get_ctx(runtime)
+    spec = ctx.sandbox_seed
     # Before the VM, not after it. See `seed_script_or_raise`: an assistant with no
     # usable spec must fail the same way on every turn, rather than failing once and
     # then quietly attaching to the empty VM that first turn left behind.
     seed_script_or_raise(spec)
-    key = _sandbox_key_from(
-        _ctx(runtime, "sandbox_key"), _ctx(runtime, "agent_repo"), _ctx(runtime, "customer")
-    )
+    key = _sandbox_key_from(ctx.sandbox_key, ctx.agent_repo, ctx.customer)
     return _ensure_sandbox(key, seed=spec)
 
 
@@ -1127,9 +1101,10 @@ def _resolve_backends(runtime) -> tuple[BackendProtocol, dict[str, BackendProtoc
     at the first `ls`/`read_file` through the backend. Only a client that cannot be
     constructed reaches these handlers, which is a misconfiguration, not a bad minute.
     """
-    skills_repo = _ctx(runtime, "skills_repo")
-    agent_repo = _ctx(runtime, "agent_repo")
-    ws = _ctx(runtime, "ls_workspace")
+    ctx = get_ctx(runtime)
+    skills_repo = ctx.skills_repo
+    agent_repo = ctx.agent_repo
+    ws = ctx.ls_workspace
     if agent_repo and not skills_repo:
         try:
             return _ctxhub_backend(agent_repo, ws), {}
