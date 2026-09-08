@@ -8,7 +8,8 @@
  *                              whoever maintains the file is not user-facing),
  *                              so comments are stripped before the scan.
  *   README.md, AGENTS.md,      every character counts: these files are prose
- *   docs/, evals/*.md          from top to bottom.
+ *   CLAUDE.md, docs/,          from top to bottom.
+ *   evals/*.md
  *
  * The docs half was added after a review found 170 em-dashes sitting in them,
  * untouched, because the scan had only ever covered the ts/tsx tree, so the one
@@ -39,6 +40,7 @@ const TARGETS = [
   { path: "frontend/src", match: /\.tsx?$/, code: true },
   { path: "README.md", match: /\.md$/, code: false },
   { path: "AGENTS.md", match: /\.md$/, code: false },
+  { path: "CLAUDE.md", match: /\.md$/, code: false },
   { path: "docs", match: /\.(md|html)$/, code: false },
   { path: "evals", match: /\.md$/, code: false },
 ]

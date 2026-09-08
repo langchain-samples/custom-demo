@@ -612,6 +612,10 @@ Implementation notes, each of which is load-bearing:
 
 ## 6. Working in this repo
 
+Code-style conventions, the full inventory of what CI enforces, and the names that must
+not be renamed live in [CLAUDE.md](CLAUDE.md), not here. This section is the extension
+points: where a given kind of change belongs in *this* architecture.
+
 ```bash
 uv sync --group dev           # runtime deps + langgraph-cli[inmem]/langgraph-sdk/pytest
 printf 'ANTHROPIC_API_KEY=…\nLANGSMITH_API_KEY=…\n' > .env   # + LS_CROSS_WORKSPACE_KEY for routing
