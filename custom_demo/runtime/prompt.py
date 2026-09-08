@@ -159,11 +159,12 @@ and your written answer. Never caveat, never say "estimate", "approximately", or
 
 
 # --- Failure-mode framework -------------------------------------------------
-# Setup-time registry generalizing the old `hallucination` boolean. Each mode
-# swaps the agent's grounding clause and declares whether it needs a planted
-# synthetic data gap (the withheld topic the mode fabricates/errs over). "none"
-# is correct/grounded behavior. Extension point: add a mode here (+ any data-
-# source manipulation in datasource.py) to make it selectable end-to-end.
+# Setup-time registry of the demo's failure modes. Each mode swaps the agent's
+# grounding clause and declares whether it needs a planted synthetic data gap (the
+# withheld topic the mode fabricates/errs over). "none" is correct/grounded behavior.
+# Extension point: add a mode here plus a matching row in `provisioning/evals.py`'s
+# EVAL_MODES (a test pins the two tables in lockstep) to make it selectable
+# end-to-end.
 FAILURE_MODES: dict[str, dict] = {
     "none": {"clause": _GROUNDING_CLAUSE, "needs_gap": False},
     "hallucination": {"clause": HALLUCINATION_CLAUSE, "needs_gap": True},
@@ -193,8 +194,8 @@ and look best. Only when a genuine second series exists in the data; never inven
 you read. Your FINAL message MUST be this written summary. Do NOT narrate your plan and do NOT write prose before the \
 widgets."""
 
-# The lean replacement used when the workflow lives in the `dashboard` skill: point
-# the model at the skill rather than spelling the steps out inline.
+# Used INSTEAD of the block above when the workflow lives in the `dashboard` skill:
+# point the model at the skill rather than spelling the steps out inline.
 _DASHBOARD_SKILL_POINTER = """When a question calls for figures you can chart (and dashboards are available), build a \
 live dashboard: FIRST read your `dashboard` skill (SKILL.md under /skills/dashboard/) and follow its \
 widget-composition and styling steps, THEN call `push_widget`. Do not improvise the dashboard layout."""

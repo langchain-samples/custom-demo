@@ -297,9 +297,9 @@ def ensure_eval_dataset(
 #   2. a RUN RULE — the attachment, `POST /api/v1/runs/rules`, pointing at that
 #      evaluator's id.
 #
-# This code used to skip (1) and inline `{"structured": {"hub_ref": "<repo>:latest"}}`
-# into (2). That shape is documented, and it is what rules in a real workspace look like
-# once created, but posting it is rejected:
+# Don't skip (1) and inline `{"structured": {"hub_ref": "<repo>:latest"}}` into (2).
+# That shape is documented, and it is what rules in a real workspace look like once
+# created, but posting it is rejected:
 #
 #     400 Evaluator failed validation: Failed to validate chain:
 #         400: RunnableSequence must have at least 2 steps, got 0
@@ -534,8 +534,9 @@ def _push_judge(client, repo: str, manifest: dict) -> None:
 
     The `nothing to commit` message check behind the typed one is a narrow WIRE-FORMAT
     DEPENDENCY, for a backend that reports the same condition with a different status.
-    It replaces a much looser `"409" in msg or "conflict" in msg`, which a request id or
-    a URL could match by accident and so report a failed push as a successful one.
+    Don't widen it to something like `"409" in msg or "conflict" in msg`: a request id
+    containing 409, or a URL with "conflict" in the host, matches by accident and so
+    reports a failed push as a successful one.
     """
     try:
         client.push_prompt(repo, object=manifest)
@@ -694,9 +695,9 @@ def ensure_dataset_evaluator(workspace: str, dataset: str, customer: str = "") -
     reads as "grade it in-process instead". Assistant provisioning must never fail over
     the eval panel.
 
-    `error` exists because the previous version returned a bare "" on failure and this
-    attach was rejected by the API on EVERY assistant ever created without anyone
-    noticing — the fallback grading kept the panel working, so there was nothing to see.
+    `error` exists because a bare "" on failure hides the cause: this attach was
+    rejected by the API on EVERY assistant ever created without anyone noticing, since
+    the fallback grading kept the panel working and there was nothing to see.
     """
     out: dict = {"rule_id": "", "evaluator_id": "", "error": ""}
     if not dataset:

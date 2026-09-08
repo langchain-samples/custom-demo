@@ -1,4 +1,4 @@
-"""Spec for `custom_demo/assistant_evals.py` — the per-assistant demo eval kit.
+"""Spec for `custom_demo/provisioning/evals.py` — the per-assistant demo eval kit.
 
 Fast, offline, no LLM, no LangSmith, no API keys (CI unsets both). A fake client
 stands in for LangSmith and a rule-based stub stands in for the judge.
@@ -289,7 +289,7 @@ class _StubJudge:
         self.contents: list[str] = []
 
     def __call__(self, criterion: str, content: str):
-        """Stands in for `assistant_evals.judge(criterion, content)`."""
+        """Stands in for `provisioning/evals.py:judge(criterion, content)`."""
         self.criteria.append(criterion)
         self.contents.append(content)
         if self._always is not None:
@@ -505,7 +505,7 @@ def _run_target(monkeypatch, states: list[dict]) -> tuple[dict, _ScriptedAgent]:
 
 
 def test_target_answers_a_human_in_the_loop_interrupt_and_grades_what_follows(monkeypatch):
-    """`draft_email` / `suggest_meeting_times` / `ask_user` pause for a person.
+    """`draft_email` and `ask_user` pause for a person.
 
     They are ordinary catalogue tools the setup LLM picks for any comms use case, and
     in an experiment nobody answers them: the invoke returns state carrying
@@ -526,7 +526,7 @@ def test_target_answers_a_human_in_the_loop_interrupt_and_grades_what_follows(mo
     out, agent = _run_target(monkeypatch, [parked, finished])
 
     assert out["status"] == "ok"
-    # Also pins the list-content fix: a str-only check reads this as "no answer".
+    # Also pins that list content is read: a str-only check takes this as "no answer".
     assert out["answer"] == "Sent to the McKinney store manager — Q3 stock gap."
     assert out["tool_calls"] == ["draft_email"]
     assert isinstance(agent.calls[1], Command), "the interrupt was never resumed"
@@ -859,8 +859,8 @@ def test_judge_prompt_carries_both_criteria_and_every_mapped_variable():
     Interpolated rather than restated, so the attached judge and `demo_behavior` cannot
     drift apart. Every mapped variable must appear or the mapping feeds nothing.
     """
-    # `judge_prompt_text` lived in assistant_evals with no production caller,
-    # so its one-line join lives here now, where it is actually asserted on.
+    # The one-line join lives here rather than in `provisioning/evals.py`: nothing in
+    # production needs it, and this is the only place it is asserted on.
     text = "\n".join(t for _role, t in AE.judge_prompt_messages(CUSTOMER))
     assert CUSTOMER in text
     assert AE._GROUNDED_CRITERION in text
@@ -879,9 +879,9 @@ def test_judge_rule_payload_targets_the_dataset_and_only_root_runs():
     # Without this the judge fires on every nested middleware/model run in the tree —
     # a real trace of this agent is 50-151 runs deep.
     assert payload["filter"] == "eq(is_root, true)"
-    # BY ID. The inline `{"structured": {"hub_ref": ...}}` form this used to send is
-    # rejected outright: a hub_ref resolves to the bare StructuredPrompt, and the server
-    # answers "RunnableSequence must have at least 2 steps, got 0".
+    # BY ID. Don't send the inline `{"structured": {"hub_ref": ...}}` form instead: a
+    # hub_ref resolves to the bare StructuredPrompt, and the server rejects it outright
+    # with "RunnableSequence must have at least 2 steps, got 0".
     assert payload["evaluator_id"] == "ev-1"
     assert "evaluators" not in payload
 
@@ -923,8 +923,8 @@ def test_ensure_dataset_evaluator_creates_the_evaluator_then_attaches_it(monkeyp
     assert out == {"rule_id": "rule-9", "evaluator_id": "ev-9", "error": ""}
     assert [name for name, _ in fake.pushed] == [AE.judge_prompt_name(_name())]
     evaluator, rule = sink["calls"]
-    # 1. the workspace evaluator — the row on LangSmith's Evaluators page, which the
-    #    old inline-payload version never created at all.
+    # 1. the workspace evaluator — the row on LangSmith's Evaluators page. An
+    #    inline-payload rule creates no such row, which is why this POST is separate.
     assert evaluator["url"].endswith("/api/v1/platform/evaluators")
     assert evaluator["json"]["llm_evaluator"]["prompt_repo_handle"] == fake.pushed[0][0]
     assert evaluator["json"]["llm_evaluator"]["playground_settings_id"] == "model-1"
@@ -1112,11 +1112,11 @@ def test_ensure_judge_runnable_never_raises(monkeypatch):
 
 
 def test_ensure_dataset_evaluator_reports_a_langsmith_failure_without_raising(monkeypatch):
-    """Best-effort as ever, but the reason is no longer thrown away.
+    """Best-effort, but the reason travels instead of being thrown away.
 
-    The previous version returned a bare "" and this attach was rejected on EVERY
-    assistant for the life of the feature without anyone noticing, because grading fell
-    back in-process and the panel looked fine.
+    A bare "" hides it: this attach was rejected on EVERY assistant for the life of the
+    feature without anyone noticing, because grading fell back in-process and the panel
+    looked fine.
     """
     monkeypatch.setattr(
         AE, "_ws_client", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("503"))
@@ -1204,7 +1204,7 @@ def test_a_judge_that_cannot_score_does_not_count_as_the_grader(monkeypatch):
 # --- layering (D4): custom_demo must never import the repo-level evals -----------------
 
 
-def test_assistant_evals_does_not_import_the_repo_level_evals():
+def test_provisioning_evals_does_not_import_the_repo_level_evals():
     """One-way layering.
 
     `evals/` may depend on `custom_demo`; the reverse would make the shipped
@@ -1236,7 +1236,7 @@ def test_pushing_a_judge_that_is_already_there_is_success():
 @pytest.mark.parametrize(
     "error",
     [
-        # Both matched the old `"409" in msg or "conflict" in msg` test by accident.
+        # Both would satisfy a `"409" in msg or "conflict" in msg` test by accident.
         RuntimeError("500 server error, request id 409f2c"),
         RuntimeError("could not reach conflict-resolver.internal"),
     ],

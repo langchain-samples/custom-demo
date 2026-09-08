@@ -101,8 +101,8 @@ def _hub_system_prompt(request: ModelRequest) -> str:
     # filesystem/execute instructions, memory) whenever the assistant actually has
     # those capabilities — i.e. it mounts skills (`skills_repo`) or a Context Hub
     # repo (`agent_repo`). Our prompt goes LAST so its persona/workflow/failure-mode
-    # clause stays authoritative. Legacy assistants with neither keep the clean,
-    # scoped prompt exactly as before.
+    # clause stays authoritative. An assistant with neither runs on the clean, scoped
+    # prompt alone.
     if agent_repo or ctx.skills_repo:
         framework = request.system_prompt or ""
         if framework:
@@ -130,9 +130,10 @@ def _sandbox_note(runtime) -> str:
             "that you have no data source rather than estimating a figure."
         )
 
-    # What setup planted, named for the model. Generic guidance sent it to `ls` and hope;
-    # naming the files means the first turn can open the right one. Still told to look,
-    # because the VM may have been rebuilt or the user may have uploaded since.
+    # What setup planted, named for the model. Name the files rather than giving generic
+    # guidance: generic guidance sends the model to `ls` and hope, while naming them lets
+    # the first turn open the right one. Still told to look, because the VM may have been
+    # rebuilt or the user may have uploaded since.
     seeded = get_ctx(runtime).sandbox_seed
     listing = ""
     if seeded:
@@ -390,9 +391,9 @@ class McpTools(AgentMiddleware):
 def build_chat_model(model_id: str):
     """The one place a chat model is constructed. Provider-aware.
 
-    Everything here used to be Anthropic-specific kwargs on a hardcoded
-    `ChatAnthropic`, which is what made the model unswappable: a customer on an
-    Azure OpenAI deployment could set `AGENT_MODEL` and still get Claude.
+    Don't put Anthropic-specific kwargs on a hardcoded `ChatAnthropic` here: that is
+    what makes the model unswappable, and a customer on an Azure OpenAI deployment can
+    then set `AGENT_MODEL` and still get Claude.
 
     `thinking` is the reason this needs a branch rather than one kwargs dict. It is
     an Anthropic-only argument, and passing it to any other provider is a TypeError
@@ -510,11 +511,12 @@ _SANDBOX_CACHE: dict[str, Any] = {}
 # Retention, and the reason the cache above cannot be trusted forever. The service
 # lifecycle is `running --(idle for idle_ttl)--> stopped --(delete_after_stop)-->
 # deleted`, and NOTHING restarts a stopped VM on its own. A cached handle outlives
-# both transitions — this process is long-lived — so a demo picked up the next day
-# used to fail every `execute` with SandboxConnectionError instead of getting a VM
-# back. A stopped VM costs no compute (only its filesystem clone is retained), so
-# keeping it for a week means "tomorrow" restarts the same VM with its data intact
-# rather than paying a ~30s boot and reseed.
+# both transitions — this process is long-lived — so don't trust a cached handle
+# without revalidating it: a demo picked up the next day otherwise fails every
+# `execute` with SandboxConnectionError instead of getting a VM back. A stopped VM
+# costs no compute (only its filesystem clone is retained), so keeping it for a week
+# means "tomorrow" restarts the same VM with its data intact rather than paying a ~30s
+# boot and reseed.
 _SANDBOX_IDLE_TTL = 3600
 _SANDBOX_DELETE_AFTER_STOP = 7 * 24 * 3600
 
@@ -638,9 +640,8 @@ for f in spec["files"]:
     path = written = out / f["name"]
     try:
         if path.exists() or path.with_suffix(".txt").exists():
-            # Idempotent on purpose: this script also runs when a turn ATTACHES to a
-            # VM that already existed, to repair one seeded for a different assistant.
-            # Whatever is on disk wins, including anything a user uploaded.
+            # Never overwrite: whatever is on disk wins, including a file the user
+            # uploaded into /workspace/data under a seed file's name.
             print("kept", path)
             continue
         if f["kind"] == "csv":
@@ -784,8 +785,8 @@ def seed_script_or_raise(seed: list[dict] | None) -> str:
     Shared by the two callers that must agree: `_get_or_create_sandbox` checks it
     BEFORE a VM is acquired, so an assistant with no usable spec never gets one, and
     `_seed_data` renders it on the create path. Checking up front is what makes the
-    failure identical on every turn. Checking only at seed time meant turn 1 failed
-    loudly, created an empty VM anyway, and turn 2 attached to it and answered from an
+    failure identical on every turn. Don't check only at seed time: turn 1 then fails
+    loudly, creates an empty VM anyway, and turn 2 attaches to it and answers from an
     empty /workspace/data -- which reads as a recovery, and is the shape this whole
     path exists to avoid.
     """
@@ -832,10 +833,10 @@ def _seed_data(backend: Any, seed: list[dict] | None = None) -> None:
 
 
 # How long a turn will wait for a VM to finish booting before giving up on it. Setup
-# pre-warms at provisioning, but provisioning now finishes in ~40s and a boot plus the
+# pre-warms at provisioning, but provisioning finishes in ~40s and a boot plus the
 # pandas/numpy/statsmodels/scikit-learn install takes longer than that - so the first
 # question can genuinely arrive before the VM is usable. Waiting makes that turn slow;
-# not waiting made it look like the assistant had no data at all.
+# not waiting makes it look like the assistant had no data at all.
 _SANDBOX_WAIT_SECONDS = 25.0
 _SANDBOX_POLL_SECONDS = 1.5
 
@@ -859,13 +860,13 @@ def _status_or_none(client: Any, name: str) -> str | None:
 def _wait_ready(client: Any, name: str, seconds: float = _SANDBOX_WAIT_SECONDS) -> bool:
     """Poll until the VM reports ready, or `seconds` elapse. True if it got there.
 
-    A booting VM is NOT "stopped", so `_acquire_raw` used to hand it straight back and the
-    first read against it failed - which the model then reported as its files not being
-    mounted.
+    A booting VM is NOT "stopped", so `_acquire_raw` hands it straight back: without
+    this wait the first read against it fails, which the model then reports as its files
+    not being mounted.
 
-    An UNKNOWABLE status returns True immediately rather than waiting: that is the
-    behaviour before this existed, and blocking a turn for 25s on an SDK that simply has no
-    status endpoint would be a worse bug than the one being fixed.
+    An UNKNOWABLE status returns True immediately rather than waiting, because blocking a
+    turn for 25s on an SDK that simply has no status endpoint would be a worse bug than
+    the missed boot this guards against.
     """
     deadline = time.monotonic() + seconds
     while True:
@@ -891,9 +892,9 @@ def _acquire_raw(client: Any, name: str, *, create: bool) -> tuple[Any, bool] | 
         if str(getattr(raw, "status", "") or "").lower() != "stopped":
             return raw, False
 
-        # Nothing auto-starts a stopped VM. Skipping this is what made the 1-2h
-        # stopped window look identical to a healthy VM right up until the first
-        # command failed to connect.
+        # Nothing auto-starts a stopped VM, so don't skip this: the 1-2h stopped
+        # window otherwise looks identical to a healthy VM right up until the first
+        # command fails to connect.
         try:
             return client.start_sandbox(name) or raw, False
         except Exception:  # noqa: BLE001 - unstartable is as good as absent
@@ -977,18 +978,18 @@ def _revalidate_or_acquire(
 
     raw, created = got
     # Wait for it to actually be up. Before seeding, not after: `_seed_data` swallows
-    # its own failures, so seeding a VM that has not finished booting produced an
+    # its own failures, so seeding a VM that has not finished booting produces an
     # empty /workspace/data and no error anywhere.
     if not _wait_ready(client, name):
         return None
 
     backend = LangSmithSandbox(raw)
-    # ONLY on create. Seeding an attached VM to repair one built for a different
-    # assistant was tried and reverted: the seed script opens with a pip install
-    # of pandas/numpy/statsmodels/scikit-learn, and this runs inside the first
-    # middleware that touches the filesystem, with no timeout. Every turn that
-    # missed the cache hung indefinitely. An assistant that predates
-    # `sandbox_key` and holds another assistant's files has to be recreated.
+    # ONLY on create. Don't seed on the attach path to repair a VM built for a
+    # different assistant: the seed script opens with a pip install of
+    # pandas/numpy/statsmodels/scikit-learn, and this runs inside the first middleware
+    # that touches the filesystem, with no timeout, so every turn that misses the cache
+    # hangs indefinitely. An assistant that predates `sandbox_key` and holds another
+    # assistant's files has to be recreated.
     if created:
         _seed_data(backend, seed)
 
@@ -1045,8 +1046,8 @@ def prewarm_sandbox(
 
 
 # Context Hub backends are keyed by (repo, workspace) so a run's repeated filesystem
-# calls reuse one instance instead of rebuilding a LangSmith client each call (the
-# 0.6 factory rebuilt the whole backend per call; the VM was already cached).
+# calls reuse one instance instead of rebuilding a LangSmith client each call: the
+# backend factory is resolved on every filesystem access, with no caching upstream.
 _CTXHUB_CACHE: dict[tuple[str, str | None], Any] = {}
 
 
@@ -1227,10 +1228,10 @@ def _rubric_middleware() -> RubricMiddleware:
     NOT guarded, and not optional. `RubricMiddleware` is imported at the top of this
     module from `deepagents`, which is pinned `>=0.7,<0.8` in `[project]
     dependencies`, so a deepagents without it is a state the resolver cannot produce.
-    The guard that used to be here caught that impossible case and returned None,
-    which meant any OTHER failure (a bad `GOAL_MODEL`, say) built a graph whose goal
-    pill accepted a goal and then never graded it, with nothing anywhere saying why.
-    Let it raise: an unbuildable grader is a broken deployment.
+    Don't guard it: a guard for that impossible case also swallows any OTHER failure
+    (a bad `GOAL_MODEL`, say) and returns None, building a graph whose goal pill accepts
+    a goal and then never grades it, with nothing anywhere saying why. Let it raise: an
+    unbuildable grader is a broken deployment.
     """
     return RubricMiddleware(model=goal_model(), max_iterations=goal_max_iterations())
 
@@ -1330,8 +1331,8 @@ def build_agent(model: str | None = None, *, deployed: bool = False):
     return _build_agent(model, None if deployed else MemorySaver())
 
 
-# One lazily-built agent — the prompt is dynamic, so there is no longer a
-# per-variant cache (the old buggy / fixed split is gone).
+# One lazily-built agent: the prompt is dynamic, so one instance serves every variant
+# and there is no per-variant cache.
 _AGENT: Any = None
 
 

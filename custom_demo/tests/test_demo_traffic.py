@@ -1,4 +1,4 @@
-"""Unit tests for the synthetic demo-traffic backfill (custom_demo/demo_traffic.py).
+"""Unit tests for the synthetic demo-traffic backfill (custom_demo/provisioning/traffic.py).
 
 No network and no API keys — CI runs pytest with ANTHROPIC_API_KEY/LANGSMITH_API_KEY
 deliberately unset. Everything here exercises the pure remap/scheduling logic against
@@ -590,8 +590,8 @@ def test_backfill_offers_only_answerable_traces_for_review(trace):
 
 # --- insights ------------------------------------------------------------------
 #
-# The job used to 422 on every fresh customer workspace, asking for an
-# ANTHROPIC_API_KEY nobody had put there. The UI never asks for a key: it points
+# Without a workspace model the job 422s on every fresh customer workspace, asking for
+# an ANTHROPIC_API_KEY nobody put there. The UI never asks for a key: it points
 # `cluster_model`/`summary_model` at a playground model setting, and the LangSmith
 # gateway ones need no customer credentials. These lock in the config shape captured
 # from a HAR of the UI saving a config, since every field in it turned out to matter.
@@ -777,12 +777,11 @@ def test_ensure_engine_job_treats_already_enabled_as_success():
     ],
 )
 def test_an_engine_failure_that_only_looks_like_a_conflict_is_reported(message):
-    """The old test matched "409"/"conflict"/"already" anywhere in the message.
+    """A substring test matches "409"/"conflict"/"already" anywhere in the message.
 
-    "already" was the loosest of the six substring checks: a host name or a request id
-    satisfied it, and an Engine that was never enabled was reported as one that
-    already was. Engine stays a garnish (this must not raise), but a real refusal has
-    to reach the receipt.
+    "already" is the loosest of those: a host name or a request id satisfies it, and an
+    Engine that was never enabled is then reported as one that already was. Engine stays
+    a garnish (this must not raise), but a real refusal has to reach the receipt.
     """
     out = DT.ensure_engine_job(_EngineClient(fail=RuntimeError(message)), "P")
     assert "already_enabled" not in out
@@ -943,7 +942,7 @@ def test_a_feedback_key_that_already_exists_is_success():
 
 
 def test_a_feedback_key_that_really_failed_travels():
-    """The old test matched "409" anywhere in the message, so this read as success.
+    """A substring test matching "409" anywhere in the message reads this as success.
 
     A rubric key that was never defined leaves the review queue ungradeable, which is
     worth failing the seed over.

@@ -111,10 +111,10 @@ def _brandfetch_brand(domain: str) -> dict | None:
 
     Genuinely best-effort, so it does not raise: the palette it would return is
     cosmetic, the LLM guess behind it is visible in the setup panel, and no
-    presenter wants a whole assistant refused over a brand colour. But every way
-    out of here now SAYS so on stdout, because "why are this customer's colours
-    wrong" was previously unanswerable: quota, a wrong domain and a network blip
-    all looked the same from outside.
+    presenter wants a whole assistant refused over a brand colour. But every way out of
+    here SAYS so on stdout, because silence makes "why are this customer's colours wrong"
+    unanswerable: quota, a wrong domain and a network blip all look the same from
+    outside.
     """
     key = os.getenv("BRANDFETCH_API_KEY", "") or BRANDFETCH_API_KEY
     if not key:
@@ -404,9 +404,9 @@ def analyze_customer(
     the personas, the data gap, and the tool selection.
     """
     load_env()
-    # Retry/timeout hardening, matching `agent.build_chat_model`. This call had the
-    # library default of 2 retries while the agent got 8, which is backwards: a
-    # transient 529 here does not fail loudly, it silently produces the generic
+    # Retry/timeout hardening, matching `agent.build_chat_model`. Don't leave this on
+    # the library default of 2 retries while the agent gets 8: that is backwards, since
+    # a transient 529 here does not fail loudly, it silently produces the generic
     # assistant below.
     llm = init_chat_model(  # ty: ignore[no-matching-overload]
         model or setup_model(), max_retries=8, timeout=180, **sampling_kwargs(0.5)
@@ -522,9 +522,9 @@ def analyze_customer(
     }
     # Three attempts, because this one call decides the entire personality of the
     # assistant: the personas, the skills, the seed files, the tool selection, the
-    # industry, the theme. Everything below has a bland default, so a single
-    # transient failure used to hand the presenter a fully generic demo. A whole
-    # extra attempt costs ~40s at setup time, against a demo that is unusable.
+    # industry, the theme. Everything below has a bland default, so a single transient
+    # failure would otherwise hand the presenter a fully generic demo. A whole extra
+    # attempt costs ~40s at setup time, against a demo that is unusable.
     structured = llm.with_structured_output(AssistantSetupResponse)
     resp: AssistantSetupResponse | None = None
     for attempt in (1, 2, 3):
@@ -537,8 +537,8 @@ def analyze_customer(
 
     if resp is None:
         # Reported, not swallowed. `prepare_assistant` refuses to build an assistant
-        # on top of this rather than quietly producing a branded shell with the
-        # frontend's stock quick actions in it.
+        # on top of this rather than quietly producing a branded shell with no personas,
+        # no skills, no seed files and no tool selection.
         return out
 
     try:
@@ -622,9 +622,9 @@ def _already_committed(exc: BaseException) -> bool:
     The message check behind it is a WIRE-FORMAT DEPENDENCY, kept deliberately narrow:
     it covers a backend that reports the condition with some status other than 409, and
     "nothing to commit" is specific enough that no real failure says it by accident.
-    It replaces a far looser test — `"409" in msg or "conflict" in msg` — that a request
-    id, a URL or a repo handle could satisfy by chance, which would have reported a
-    genuinely failed push as a successful one.
+    Don't decide it by substring instead: a test like `"409" in msg or "conflict" in
+    msg` is satisfied by chance by a request id containing 409, a URL, or a repo handle,
+    and a genuinely failed push is then reported as a successful one.
     """
     if isinstance(exc, LangSmithConflictError):
         return True
@@ -657,9 +657,9 @@ def push_agent_prompt(workspace: str, repo: str, text: str, skill_links: dict | 
 
 # Appended to a Context Hub agent's AGENTS.md. deepagents' SkillsMiddleware injects
 # a skill catalogue (each skill's name, description, and SKILL.md path) plus
-# progressive-disclosure guidance into the system prompt, which agent.py now
-# composes in (see _hub_system_prompt) instead of discarding. This clause just
-# enforces that the model acts on that catalogue before improvising.
+# progressive-disclosure guidance into the system prompt, which agent.py composes in
+# (see _hub_system_prompt). This clause just enforces that the model acts on that
+# catalogue before improvising.
 _SKILLS_CLAUSE = (
     "\n\nSKILLS (IMPORTANT): At the START of every request, FIRST check your available skills "
     "(their names, descriptions, and SKILL.md paths are listed above). If the request matches "
@@ -802,7 +802,7 @@ def push_workflow_skills(workspace: str, slug: str, customer: str, skills) -> di
             # A re-push of identical content means the skill is already there, so still
             # link it. Any other failure skips this one skill, but SAYS which and why:
             # an assistant quietly missing a skill it should have is the kind of "why is
-            # it behaving oddly" that used to have no answer in the logs.
+            # it behaving oddly" that has no answer in the logs unless this prints.
             if not _already_committed(exc):
                 print(
                     f"[setup] skill {name!r} failed to push, skipping it: "
@@ -938,7 +938,7 @@ def prepare_assistant(payload: dict) -> dict:
     Inputs: workspace, customer, owner, industry, website, use_case, failure_mode
     (or legacy `hallucination` bool), enabled_tools, voice, push_prompts. Does brand fetch
     + LLM analysis (personas, data gap, tool selection) + optional prompt push, and
-    upserts the assistant's demo eval dataset (best-effort; see assistant_evals).
+    upserts the assistant's demo eval dataset (best-effort; see `provisioning/evals.py`).
     Returns {name, display_name, accent, logo, actions, metadata, context, prompt_urls}.
     """
     workspace = payload["workspace"]
@@ -981,10 +981,13 @@ def prepare_assistant(payload: dict) -> dict:
     actions = list(payload.get("actions") or analysis.get("actions") or [])
     # Nothing has been created yet -- no prompt pushed, no dataset, no repo -- so this
     # is the last point where failing is free. Without it, an analysis that came back
-    # empty produced a correctly branded assistant (Brandfetch runs in the other
-    # thread and is unaffected) carrying the FRONTEND's stock quick actions, no
-    # skills, no seed files and no tool selection. That reads as a working demo until
-    # someone clicks one of the humanitarian-aid presets on a pharma assistant.
+    # empty produces a correctly branded assistant (Brandfetch runs in the other thread
+    # and is unaffected) with no personas, no skills, no seed files and no tool
+    # selection, which reads as a working demo. That is how a McKesson assistant whose
+    # analysis failed came to show quick actions about aid in Egypt, Iran and Canada,
+    # filled in from a stock fallback set in the SPA; SettingsPanel.tsx's
+    # DEFAULT_ACTIONS is empty for that reason, so such an assistant now shows no
+    # quick actions at all.
     if analysis.get("error") and not actions:
         raise RuntimeError(
             "Setup could not analyze this customer, so the assistant would have been "
@@ -992,7 +995,7 @@ def prepare_assistant(payload: dict) -> dict:
         )
 
     # Same gate, for the assistant's DATA. The seed files are its system of record,
-    # and there is no generic dataset to stand in for them any more (see
+    # and there is no generic dataset to stand in for them (see
     # `SeedSpecError`), so an assistant created without them has an empty
     # /workspace/data and every question fails at the VM instead of here, where
     # nothing has been created yet. This fires for a partial analysis too: one that
@@ -1038,10 +1041,10 @@ def prepare_assistant(payload: dict) -> dict:
     if analysis.get("seed_files"):
         context["sandbox_seed"] = analysis["seed_files"]
 
-    # This assistant's own VM name. Unique per assistant, because the previous key was
-    # derived from the customer (agent_repo, else customer) and a second assistant for
-    # the same customer therefore attached to the FIRST one's VM and skipped its own
-    # seed. Short random suffix rather than the assistant id, which does not exist yet:
+    # This assistant's own VM name. Unique per assistant: don't derive it from the
+    # customer (agent_repo, else customer), or a second assistant for the same customer
+    # resolves to the FIRST one's VM, attaches to it and skips its own seed. Short
+    # random suffix rather than the assistant id, which does not exist yet:
     # the SPA creates the assistant from this payload, and the prewarm below has to use
     # the same name as the first turn will.
     context["sandbox_key"] = f"{slug}-{secrets.token_hex(3)}"
@@ -1095,7 +1098,7 @@ def prepare_assistant(payload: dict) -> dict:
             daemon=True,
         ).start()
 
-    # Quick actions. Every assistant now has skills, so prefer skill-invoking
+    # Quick actions. Every assistant has skills, so prefer skill-invoking
     # questions (each skill's example_question) so clicking a quick action
     # demonstrates a skill; fall back to the LLM's persona questions when the skills
     # carry no example questions.
@@ -1117,16 +1120,15 @@ def prepare_assistant(payload: dict) -> dict:
     # only the brief, the probe action and the eval example need it.
     planted_gap = ""
     if failure_mode_needs_gap(failure_mode):
-        # The mode fabricates over a planted gap. The gap is now a fact genuinely
-        # ABSENT from the seeded files rather than a topic an LLM was told to
-        # withhold, which is what makes the demo reliable: the agent has nowhere
-        # to read it from, so stating it is a real hallucination. It is no longer
-        # runtime config - only the probe question and the eval example need it,
-        # and both carry it as data.
+        # The mode fabricates over a planted gap. The gap is a fact genuinely ABSENT
+        # from the seeded files, NOT a topic an LLM was told to withhold, which is what
+        # makes the demo reliable: the agent has nowhere to read it from, so stating it
+        # is a real hallucination. It is not runtime config either - only the probe
+        # question and the eval example need it, and both carry it as data.
         planted_gap = analysis.get("data_gap") or "year-over-year figures by segment"
         gap_action = analysis.get("gap_action")
         if gap_action and gap_action.get("question"):
-            # Tag the gap probe AT THE SOURCE. assistant_evals has to know which quick
+            # Tag the gap probe AT THE SOURCE. `provisioning/evals.py` has to know which quick
             # action is the honesty example, and inferring it from list position holds
             # only while there are two base actions in front of it — with a thin LLM
             # analysis the probe lands at index 1, gets graded as "should answer with
@@ -1281,11 +1283,11 @@ def prepare_assistant(payload: dict) -> dict:
         "font_body_fallback": analysis.get("body_fallback") or DEFAULT_CURATED,
         "font_source": "google",
         "failure_mode": failure_mode,
-        # Voice: only the prebuilt voice name lives here now, set later in Settings.
-        # There is no `enabled` flag - every assistant can be spoken to, and the mic sits
-        # in the composer of all of them. It was a per-assistant switch that also chose
-        # the landing screen, i.e. one setting doing two unrelated jobs, which left most
-        # assistants mute for no reason anyone could name. Metadata rather than context
+        # Voice: only the prebuilt voice name lives here, set later in Settings. There
+        # is no `enabled` flag. Voice is deliberately NOT a per-assistant switch that
+        # also chooses the landing screen: one setting doing two unrelated jobs leaves
+        # most assistants mute for no reason anyone can name. Every assistant opens the
+        # same typing-first screen with a mic in the composer. Metadata rather than context
         # because the agent knows nothing about voice: the whole feature is in the browser
         # (see frontend/src/lib/voice.ts).
         "voice": {},
@@ -1296,7 +1298,7 @@ def prepare_assistant(payload: dict) -> dict:
             "project": context.get("ls_project", ""),
             "agent_repo": context.get("agent_repo", ""),
             # The skills bundle is an agent-type repo → deleted via delete_agent, not
-            # delete_skill. `skills` remains for legacy per-skill repos (unused now).
+            # delete_skill. `skills` remains for legacy per-skill repos; nothing populates it.
             "skills_repo": skills_repo,
             "skills": [],
             # Per-assistant demo eval dataset ("" when it couldn't be created, or for

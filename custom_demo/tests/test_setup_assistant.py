@@ -50,7 +50,7 @@ def _analysis(**over):
         "theme": "dark",
         # The assistant's starting data. Not optional: `prepare_assistant` refuses to
         # build on an analysis that produced none, because there is no generic dataset
-        # to stand in for them any more.
+        # to stand in for them.
         "seed_files": [
             {
                 "name": "returns.csv",
@@ -140,7 +140,7 @@ def test_metadata_records_ls_artifacts_manifest(rec, monkeypatch):
     assert art["project"] == "Acme Co"  # ls_project == customer name
     assert art["agent_repo"] == "acme-co-agent"
     assert art["skills_repo"] == "acme-co-skills"  # bundle repo, deleted via delete_agent
-    assert art["skills"] == []  # legacy per-skill list, unused now
+    assert art["skills"] == []  # legacy per-skill list; nothing populates it
     # Every artifact the /cleanup cascade deletes has to have a slot here, or it leaks
     # into the customer's workspace. These two are the attached evaluator and the
     # prompt-registry prompt holding its judge.
@@ -196,10 +196,10 @@ def test_enabled_tools_intersect_catalogue_union_defaults(rec, monkeypatch):
 def test_setup_never_auto_enables_explicit_only_tools(rec, monkeypatch):
     """The setup LLM's pick is honoured, minus anything marked explicit-only.
 
-    The case that motivated the rule was `list_data_sources`, which the LLM added
-    to almost every assistant whether the scenario called for it or not. That
-    tool is gone with the retrieval stack, so this now asserts the surviving half
-    of the rule: a normal optional pick IS kept.
+    The rule exists because of `list_data_sources`, which the LLM added to almost
+    every assistant whether the scenario called for it or not. No catalogue tool is
+    marked explicit-only today (`EXPLICIT_ONLY` is empty), so what this pins is the
+    surviving half of the rule: a normal optional pick IS kept.
     """
     tools = _prep(monkeypatch, _analysis(enabled_tools=["web_search"]))["context"]["enabled_tools"]
     assert "web_search" in tools
@@ -211,8 +211,8 @@ def test_setup_never_auto_enables_explicit_only_tools(rec, monkeypatch):
 def test_hallucination_plants_gap_and_orders_gap_action_last(rec, monkeypatch):
     out = _prep(monkeypatch, _analysis(), failure_mode="hallucination")
     ctx, actions = out["context"], out["metadata"]["actions"]
-    # The gap is no longer written onto the assistant's context: it is what the
-    # seeded files omit, and only the probe action and the eval example need it.
+    # The gap is not written onto the assistant's context: it is what the seeded
+    # files omit, and only the probe action and the eval example need it.
     assert "data_gap" not in ctx
     assert out["metadata"]["failure_mode"] == "hallucination"
     assert actions[-1]["question"] == "What's our CSAT trend?"  # gap probe last
@@ -406,8 +406,8 @@ def test_backfill_is_opt_in(rec, monkeypatch, traffic):
 def test_setup_starts_the_backfill_in_the_assistants_own_trace_project(rec, monkeypatch, traffic):
     """Traffic goes through start_demo_traffic, so the panel and Generate can see it.
 
-    Spawned bare, the setup backfill was invisible to `POST /demo-traffic`: the panel
-    showed the pre-backfill empty state while it ran, and Generate would start a second
+    Spawned bare, the setup backfill is invisible to `POST /demo-traffic`: the panel
+    then shows the pre-backfill empty state while it runs, and Generate starts a second
     one on top of it.
     """
     out = _prep(monkeypatch, _analysis(), failure_mode="hallucination", demo_traffic=True)
@@ -416,7 +416,7 @@ def test_setup_starts_the_backfill_in_the_assistants_own_trace_project(rec, monk
     assert workspace == "ws1"
     assert project == out["context"]["ls_project"]
     # The gap probe is what Insights clusters on, so it still has to reach the
-    # backfill, even though the gap is no longer on the assistant's context.
+    # backfill, even though the gap is not on the assistant's context.
     assert kwargs["data_gap"]
     assert kwargs["data_gap"] == _analysis()["data_gap"]
     assert kwargs["customer"] == "Acme Co"
@@ -448,7 +448,7 @@ def test_the_graph_forwards_every_input_it_declares():
 
 
 def test_demo_traffic_reaches_prepare_assistant(monkeypatch):
-    """The specific key that was dropped. Opt-in, so both directions matter."""
+    """The one key that decides whether traffic runs. Opt-in, so both directions matter."""
     seen: dict = {}
     monkeypatch.setattr(
         setup_graph, "prepare_assistant", lambda payload: seen.update(payload) or {}
@@ -467,9 +467,11 @@ def test_demo_traffic_reaches_prepare_assistant(monkeypatch):
 def test_every_assistant_can_be_spoken_to(rec, monkeypatch):
     """No `enabled` flag: the mic is in every assistant's composer.
 
-    It used to be a per-assistant switch that ALSO chose the landing screen - one setting
-    doing two unrelated jobs - which left most assistants mute for no reason anyone could
-    name. `voice` stays as a dict because the voice NAME lives there, set in Settings.
+    Voice is deliberately NOT a per-assistant switch that also chooses the landing
+    screen: one setting doing two unrelated jobs leaves most assistants mute for no
+    reason anyone can name. Every assistant opens the same typing-first screen with a
+    mic in the composer. `voice` stays as a dict because the voice NAME lives there,
+    set in Settings.
 
     In metadata rather than context, because the agent knows nothing about voice: the
     whole feature is in the browser (frontend/src/lib/voice.ts).
@@ -483,13 +485,16 @@ def test_every_assistant_can_be_spoken_to(rec, monkeypatch):
 
 
 def test_a_failed_analysis_stops_setup_instead_of_going_generic(rec, monkeypatch):
-    """The McKesson case: every LLM-derived field silently fell back to its default.
+    """The McKesson case: every LLM-derived field silently falls back to its default.
 
-    `analyze_customer` returns an all-defaults dict when its one LLM call fails, and
-    it used to swallow the exception. Brandfetch runs in the other thread and is
-    unaffected, so what reached the presenter was a correctly branded assistant with
-    no personas (the SPA then renders its own stock quick actions), no skills, no
-    seed files, no industry and no tool selection. It looked like it had worked.
+    `analyze_customer` returns an all-defaults dict when its one LLM call fails, so
+    swallowing that exception hands the presenter a correctly branded assistant
+    (Brandfetch runs in the other thread and is unaffected) with no personas, no
+    skills, no seed files, no industry and no tool selection - a demo that looks like
+    it worked. The reported case showed quick actions about aid in Egypt, Iran and
+    Canada, filled in from a stock fallback set in the SPA; SettingsPanel.tsx's
+    DEFAULT_ACTIONS is empty for that reason, so such an assistant shows no quick
+    actions at all.
     """
     failed = _analysis(actions=[], skills=[], industry="", error="APIStatusError: 529")
     with pytest.raises(RuntimeError, match="could not analyze"):
@@ -510,10 +515,11 @@ def test_an_analysis_with_no_seed_files_stops_setup(rec, monkeypatch):
     """The other half of the McKesson case: the data, not the personas.
 
     A partial analysis can produce quick actions and then die before the seed files,
-    which clears the check above. That assistant used to be created and handed the
-    generic retail `sales.csv` at first-turn seeding, whatever its use case was; with
-    that fallback gone it would be created with an empty workspace instead. Refuse
-    here, where nothing has been created yet.
+    which clears the check above. Such an assistant is created with an empty
+    /workspace/data: there is no generic dataset to plant in its place, and the retail
+    `sales.csv` fallback that once stood in for one is exactly how a medical-distribution
+    assistant ended up holding someone else's data. Refuse here, where nothing has been
+    created yet.
     """
     with pytest.raises(S.SeedSpecError, match="no starting data files"):
         _prep(monkeypatch, _analysis(seed_files=[]))
@@ -582,11 +588,11 @@ def test_the_prewarm_is_given_the_same_key_it_will_be_asked_for(rec, monkeypatch
 
 # --- idempotent pushes vs. real failures ------------------------------------
 # Every Context Hub push here is re-run on a re-setup, so "this exact content is
-# already committed" has to count as success. It used to be decided by hunting
-# "409" or "conflict" in the exception's MESSAGE, which any error quoting a URL or
-# a request id could satisfy - so a genuinely failed push reported success and the
-# assistant referenced a repo that held nothing. The signal is the SDK's typed 409
-# now, and these pin that a real failure still travels.
+# already committed" has to count as success. The signal is the SDK's typed 409, and
+# these pin that a real failure still travels. Don't decide it by hunting "409" or
+# "conflict" in the exception's MESSAGE: any error quoting a URL or a request id
+# satisfies that, so a genuinely failed push reports success and the assistant
+# references a repo that holds nothing.
 
 
 class _PushClient:
@@ -622,7 +628,7 @@ def test_nothing_to_commit_counts_as_success_whatever_its_status(monkeypatch):
 @pytest.mark.parametrize(
     "error",
     [
-        # Each of these matched the old substring test by accident: a request id with
+        # Each of these would satisfy a substring test by accident: a request id with
         # 409 in it, and a URL with "conflict" in the host.
         RuntimeError("500 server error, request id 7c409ab2"),
         RuntimeError("connection refused: conflict-resolver.internal"),
@@ -640,7 +646,7 @@ def test_a_real_push_failure_is_not_reported_as_success(monkeypatch, error):
 
 
 def test_one_skill_that_will_not_push_is_skipped_and_reported(monkeypatch, capsys):
-    """Best-effort, so it does not raise - but silence made a missing skill undebuggable."""
+    """Best-effort, so it does not raise - but silence makes a missing skill undebuggable."""
     _pushes_raise(monkeypatch, RuntimeError("500 server error"))
     assert S.push_workflow_skills("ws", "acme", "Acme", [_SKILL]) == {}
     assert "returns-check" in capsys.readouterr().out

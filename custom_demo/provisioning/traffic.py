@@ -395,8 +395,8 @@ def collected_trace_id(traced_runs: list[Any]) -> str:
     managers that never saw the parent. Only ONE of them is a root server-side (the
     `LangGraph` chain run); the rest are reconciled into its trace on ingest and their
     local ids exist nowhere, so `list_runs(trace_id=...)` on one returns nothing no
-    matter how long you wait. That is what emptied every backfill: the list is ordered
-    by COMPLETION, so [0] was the first `ChatAnthropic` call to return.
+    matter how long you wait. Taking [0] is what emptied every backfill: the list is
+    ordered by COMPLETION, so [0] is the first `ChatAnthropic` call to return.
 
     The outermost run is the one that STARTED first — a child cannot begin before its
     parent — which holds for a flat single-run trace too.
@@ -638,11 +638,11 @@ def ensure_insights_job(
     # Best-effort: a workspace with no insights-capable model still gets a saved
     # config, and the job below reports why it could not run.
     try:
-        # A workspace model Insights may use, or "" if there is none. THE reason a
-        # job used to fail: a config with model "anthropic" and no per-workspace
-        # ANTHROPIC_API_KEY answers 422, which is what every fresh customer
-        # workspace looked like. Needs BOTH insights flags, since one id fills the
-        # clustering and the per-run-summary fields.
+        # A workspace model Insights may use, or "" if there is none. THE reason a job
+        # fails without one: a config with model "anthropic" and no per-workspace
+        # ANTHROPIC_API_KEY answers 422, which is what every fresh customer workspace
+        # looks like. Needs BOTH insights flags, since one id fills the clustering and
+        # the per-run-summary fields.
         model_id = playground_model_id(
             client, ("available_in_insights_heavy", "available_in_insights_light")
         )
@@ -751,9 +751,11 @@ def _ensure_feedback_configs(client: Any) -> None:
     alone: deleting a config another demo's queue still points at would break it. An
     existing key answers 409, which is success for our purposes — and the SDK raises a
     409 as `LangSmithConflictError`, so we test the type rather than hunting "409",
-    "conflict" or "already exists" in the message text. Those substrings turned any
-    error that happened to quote a URL or a request id into a silent success; a feedback
-    key that genuinely failed to define now fails the seed, loudly.
+    "conflict" or "already exists" in the message text. Don't decide it by substring:
+    any error that happens to quote a URL or a request id matches one of them (a request
+    id containing 409, a host named `already-prod-3.internal`), which turns a feedback
+    key that genuinely failed to define into a silent success instead of a loud seed
+    failure.
     """
     configs: list[tuple[str, dict, bool]] = [
         (
@@ -891,9 +893,10 @@ def ensure_engine_job(client: Any, project: str, *, cron: str = ENGINE_CRON) -> 
     Enabling twice is treated as success: the config is per session, so a re-seed of a
     project that already has Engine on answers HTTP 409 and there is nothing to fix.
     `request_with_retries` raises that as `LangSmithConflictError`, so we test the type
-    rather than hunting "409", "conflict" or "already" in the message text — the last
-    of those was loose enough for a host name or a request id to satisfy by chance,
-    which reported an Engine that was never enabled as one that already was.
+    rather than hunting "409", "conflict" or "already" in the message text. Don't decide
+    it by substring: "already" alone is satisfied by chance by a host name
+    (`502 from already-prod-3.internal`) or a request id, which reports an Engine that
+    was never enabled as one that already was.
     """
     session_id = str(client.read_project(project_name=project).id)
     path = f"/v1/platform/sessions/{session_id}/issues-agent"
@@ -1000,11 +1003,11 @@ def generate_demo_traffic(
 # Both entry points go through `start_demo_traffic`: the daemon thread
 # `prepare_assistant` spawns at setup, and `POST /demo-traffic` (which exists so an
 # assistant created before the automatic backfill can still be given traffic). The
-# bookkeeping lives HERE rather than in webapp.py so the two share it — while the
-# route owned it, the setup run was invisible to the route, which meant the panel
-# showed the pre-backfill empty state through a running backfill and Generate would
-# cheerfully start a second one on top of it. Two at once on one project doubles the
-# traffic and burns the hourly ingest quota, which is the thing this guards.
+# bookkeeping lives HERE rather than in webapp.py so the two share it. Don't move it
+# into the route: the setup run is then invisible to the route, so the panel shows the
+# pre-backfill empty state through a running backfill and Generate cheerfully starts a
+# second one on top of it. Two at once on one project doubles the traffic and burns the
+# hourly ingest quota, which is the thing this guards.
 #
 # Hints, not truth: the traffic itself is durable and visible in the project, and a
 # redeploy losing the receipt costs nothing (see `GET /demo-traffic/status`).
