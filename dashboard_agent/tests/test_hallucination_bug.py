@@ -4,10 +4,14 @@ The agent's files hold NO figure for "schools rebuilt in Egypt". With the buggy 
 (the override clause present) the agent fabricates a confident number; with the
 grounded prompt it declines. This is the before/after the demo shows in LangSmith.
 
-The prompt now lives in Context Hub and is pulled per run. `agent.run` pins the
-run's prompt to `FALLBACK_PROMPT` via a ContextVar, so instead of toggling an env
-var we patch that constant to serve the buggy vs. grounded text — no Hub
-round-trip needed for the test.
+The prompt lives in Context Hub, and `_hub_system_prompt` reads it fresh for every
+model call: with no `agent_repo` in the run context it falls back to the module-level
+`FALLBACK_PROMPT`. So instead of toggling an env var we patch that constant to serve
+the buggy vs. grounded text — no Hub round-trip needed for the test.
+
+This drives `agent.invoke()`, the same entry point production uses (the eval target in
+`provisioning/evals.py` and the traffic generator both call it), and reads the answer
+back the way `provisioning/evals.py:_final_answer` does.
 
 Run: pytest dashboard_agent/tests/test_hallucination_bug.py -v
 """
@@ -68,23 +72,59 @@ def _has_hedge(text: str) -> bool:
     return any(h in t for h in HEDGES)
 
 
-def _run_with_prompt(monkeypatch, prompt_text: str, thread_id: str) -> dict:
-    """Run the agent with the run's pinned prompt patched to `prompt_text`."""
+def _message_text(content) -> str:
+    """The text of a message whose content may be a string or a content-block list."""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = [
+            b.get("text", "") if isinstance(b, dict) and b.get("type") == "text" else ""
+            for b in content
+        ]
+        return "".join(parts).strip()
+    return ""
+
+
+def _final_answer(messages: list) -> str:
+    """The written answer: the last AI message that is NOT a tool call.
+
+    Same rule as `provisioning/evals.py:_final_answer`, and for the same reason — the
+    last AI text of *any* kind is the pre-tool preamble ("I'll pull that up…") on a run
+    that stopped early, and asserting on a preamble would pass or fail for the wrong
+    reason.
+    """
+    for msg in reversed(messages):
+        if getattr(msg, "type", None) != "ai" or getattr(msg, "tool_calls", None):
+            continue
+        text = _message_text(msg.content)
+        if text:
+            return text
+    return ""
+
+
+def _run_with_prompt(monkeypatch, prompt_text: str, thread_id: str) -> str:
+    """Invoke the agent with the fallback prompt patched to `prompt_text`.
+
+    Patching the module global is enough because `_hub_system_prompt` resolves it per
+    model call; no context is passed, so the run takes the FALLBACK_PROMPT branch.
+    """
     monkeypatch.setattr(agent_mod, "FALLBACK_PROMPT", prompt_text)
-    return agent_mod.run(MISSING_FACT_Q, thread_id=thread_id)
+    result = agent_mod.build_agent().invoke(
+        {"messages": [{"role": "user", "content": MISSING_FACT_Q}]},
+        config={"configurable": {"thread_id": thread_id}},
+    )
+    return _final_answer(result.get("messages", []))
 
 
 def test_bug_on_fabricates_missing_figure(monkeypatch):
-    out = _run_with_prompt(monkeypatch, BUGGY_PROMPT, "halluc-on")
-    answer = out["answer"]
+    answer = _run_with_prompt(monkeypatch, BUGGY_PROMPT, "halluc-on")
     # It should present a concrete number and NOT admit the gap.
     assert re.search(r"\d", answer), "expected a fabricated concrete figure"
     assert not _has_hedge(answer), f"bug ON should not hedge, but got: {answer[:300]}"
 
 
 def test_bug_off_declines_missing_figure(monkeypatch):
-    out = _run_with_prompt(monkeypatch, FALLBACK_PROMPT, "halluc-off")
-    answer = out["answer"]
+    answer = _run_with_prompt(monkeypatch, FALLBACK_PROMPT, "halluc-off")
     assert _has_hedge(answer), (
         f"bug OFF should admit the figure is unavailable, got: {answer[:300]}"
     )

@@ -29,7 +29,7 @@ after (§3, *Per-assistant demo evals*; mind the polarity, it is the reverse of 
 ```
 dashboard_agent/
   core/ctx.py                 ctx_get() - reads a Context field off a runtime (dict or dataclass)
-  runtime/agent.py            deep agent: Context schema, middleware, run/run_stream
+  runtime/agent.py            deep agent: Context schema, middleware, build_agent
   runtime/prompt.py           prompt construction + Context Hub pulls + hallucination/grounding
   runtime/widgets.py          Pydantic widget schemas - the agent-to-frontend contract
   runtime/mocking.py          per-invocation tool mocking, for deterministic evals
@@ -125,8 +125,8 @@ Two of those positions are the parts someone could re-break:
   assistant did not enable.
 
 Every middleware here implements **both** the sync and the async hook (`wrap_model_call` *and*
-`awrap_model_call`, and so on). An async-only hook makes every `invoke()` raise, and `agent.run()`
-plus most of the test suite take exactly that path.
+`awrap_model_call`, and so on). An async-only hook makes every `invoke()` raise, and the eval
+target, the traffic generator and most of the test suite take exactly that path.
 
 **Code execution (sandbox) + universal skills.** `_backend_for` builds ONE `CompositeBackend`:
 the **default** is an isolated LangSmith sandbox VM (so the model gets an `execute` tool + a real
@@ -250,7 +250,7 @@ locally too (`./run.sh`) needs no tunnel; paste the `127.0.0.1` URL.
   without the second, every MCP call returns "tool not found", and defining it is also what stops
   `create_agent` rejecting the unknown names the first half just added. Both hooks have **sync
   pass-through twins** - a middleware with only async hooks makes every `invoke()` raise, and
-  `agent.run()` plus most of the test suite take that path.
+  the eval target, the traffic generator and most of the test suite take that path.
 - **Tool names are namespaced `{server_id}_{tool}`** because every server is wrapped in a
   `ClientGroup`, even a single one. Not cosmetic: a server offering a tool called `push_widget`
   or `web_search` would collide with the catalogue and `ToolSelection` would filter the remote
@@ -402,8 +402,9 @@ falls back to one of five self-hosted curated families, reporting which actually
 (SSE, CRLF-normalized). `ChatPanel` reconstructs widgets from partial `push_widget` tool-call args
 and flushes each one when the *next* begins (last at stream end), gated by `widgetLooksComplete()`.
 `messages/metadata` → `langgraph_node` is used to keep the synthetic data source's own LLM output
-out of the chat bubble. Note `agent.py:run_stream` implements the same logic server-side, but the
-deployed SPA path does not use it - it's for local/in-process use and the streaming unit tests.
+out of the chat bubble. This reassembly lives in `ChatPanel` **only**: `agent.py` used to carry a
+second, server-side copy of it (`run_stream`) that nothing shipped, and it was deleted rather than
+kept in sync. Anything server-side that needs widgets reads the `widget_sink` ContextVar instead.
 
 **Setup flow (the "make it feel custom in 30 seconds" bit).** `prepare_assistant()`:
 1. `fetch_brand()` - Logo.dev logo from the domain; Brandfetch palette if `BRANDFETCH_API_KEY`
@@ -624,7 +625,6 @@ Fast tests (no LLM, no network):
 ```bash
 uv run pytest dashboard_agent/tests -q       # the whole fast suite; what CI runs
 uv run pytest dashboard_agent/tests/test_rag.py dashboard_agent/tests/test_widgets.py \
-              dashboard_agent/tests/test_streaming_unit.py \
               dashboard_agent/tests/test_tool_registry.py \
               dashboard_agent/tests/test_sandbox_files_routes.py \
               dashboard_agent/tests/test_assistant_evals.py \
@@ -658,7 +658,9 @@ Slow, real-LLM: `test_agent_e2e.py`, `test_hallucination_bug.py`.
 - Never plumb `backend`, `permissions`, `middleware`, or `checkpointer` through assistant config.
 - The widget Pydantic schemas in `widgets.py` are the agent↔frontend contract; changing them
   means changing `frontend/src/lib/api.ts` and the widget components in lockstep - and keeping
-  the three widget-extraction paths in sync (`run()`'s sink, `run_stream()`'s chunk parser,
-  `ChatPanel`'s reassembly).
+  the **two** widget-extraction paths in sync (the `widget_sink` ContextVar, read by the eval
+  target and the webapp, and `ChatPanel`'s reassembly of partial tool-call args). There were three
+  until `run_stream` - a server-side duplicate of `ChatPanel`'s logic that nothing shipped - was
+  deleted; do not add a third.
 - Colour/font work: read the two rules in `lib/branding.ts` first. Never call
   `getPropertyValue` on a token; never write a theme-dependent value from JS.

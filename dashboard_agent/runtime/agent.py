@@ -18,7 +18,6 @@ import dataclasses
 import json
 import os
 import time
-import uuid
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -36,7 +35,6 @@ from langchain.agents.middleware import (
     dynamic_prompt,
 )
 from langchain.chat_models import init_chat_model
-from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.runtime import get_runtime
 from langsmith import Client
@@ -62,10 +60,6 @@ from dashboard_agent.runtime.tools import (
     guidance_for,
     is_allowed,
 )
-from dashboard_agent.runtime.tools import (
-    widget_sink as _widget_sink,
-)
-from dashboard_agent.runtime.widgets import validate_widget
 
 
 @dataclass
@@ -92,23 +86,14 @@ class Context:
     mcp_servers: list[dict] | None = None
 
 
-# The system prompt is sourced from LangSmith Context Hub (see prompt.py). We pull
-# it once at the start of each question and stash it in this ContextVar, so every
-# model call within one run sees a consistent prompt while a fresh question always
-# re-pulls — that is what lets you fix the planted bug live in the Hub, no restart.
-_prompt_override: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "prompt_override", default=None
-)
-
-
 @dynamic_prompt
 def _hub_system_prompt(request: ModelRequest) -> str:
     """Inject the system prompt for each model call, pulled fresh per question.
 
-    Precedence for our base prompt: a per-run pulled value (set by run/run_stream)
-    > the assistant's Context Hub `agent_repo` (its AGENTS.md) > FALLBACK_PROMPT.
-    Pulled per question rather than baked in at build time, which is what lets an
-    edit to the repo take effect without a restart.
+    Precedence for our base prompt: the assistant's Context Hub `agent_repo` (its
+    AGENTS.md) > FALLBACK_PROMPT. The repo is pulled per model call rather than
+    baked in at build time, which is what lets an edit to it take effect without a
+    restart — fix the planted bug live in the Hub and the next question sees it.
 
     Context Hub assistants COMPOSE this with deepagents' middleware-built system
     prompt (`request.system_prompt`) rather than discarding it: that prompt carries
@@ -122,10 +107,7 @@ def _hub_system_prompt(request: ModelRequest) -> str:
     prompt with no deepagents base and no filesystem instructions.
     """
     agent_repo = _ctx(request.runtime, "agent_repo")
-    override = _prompt_override.get()
-    if override is not None:
-        base = override
-    elif agent_repo:
+    if agent_repo:
         base = pull_agent_prompt(agent_repo, workspace=_ctx(request.runtime, "ls_workspace"))
     else:
         base = FALLBACK_PROMPT
@@ -350,8 +332,8 @@ class McpTools(AgentMiddleware):
 
         MCP is an async protocol, so there is nothing to add here. This exists
         because a middleware that implements ONLY the async hook makes every
-        synchronous `invoke()` raise: `agent.run()` and the unit tests both take
-        that path, and neither has an MCP server configured.
+        synchronous `invoke()` raise: the evals/traffic targets and the unit tests
+        both take that path, and neither has an MCP server configured.
         """
         return handler(request)
 
@@ -879,43 +861,55 @@ def _ensure_sandbox(key: str, *, create: bool = True, seed: list[dict] | None = 
     if cached is not None and now - _SANDBOX_SEEN.get(key, 0.0) < _SANDBOX_REVALIDATE_AFTER:
         return cached
     try:
-        api_key, headers = _sandbox_key_credentials()
-        client = SandboxClient(api_key=api_key, headers=headers or None)
-        name = f"da-{_slug(key)}"
-        # A deleted VM answers 404 and the SDK raises, which says the same thing as
-        # an explicit non-ready status: this caller needs a different VM. The status
-        # endpoint is used rather than list_sandboxes because this is the hot path.
-        if cached is not None and _status_or_none(client, name) == "ready":
-            _SANDBOX_SEEN[key] = now
-            return cached
-        # Past here the cached handle (if any) is dead: drop it rather than hand it
-        # back, so a caller that cannot get a VM degrades to StateBackend instead of
-        # calling a VM that no longer exists.
-        _SANDBOX_CACHE.pop(key, None)
-        _SANDBOX_SEEN.pop(key, None)
-        got = _acquire_raw(client, name, create=create)
-        if got is None:
-            return None
-        raw, created = got
-        # Wait for it to actually be up. Before seeding, not after: `_seed_data` swallows
-        # its own failures, so seeding a VM that has not finished booting produced an
-        # empty /workspace/data and no error anywhere.
-        if not _wait_ready(client, name):
-            return None
-        backend = LangSmithSandbox(raw)
-        # ONLY on create. Seeding an attached VM to repair one built for a different
-        # assistant was tried and reverted: the seed script opens with a pip install
-        # of pandas/numpy/statsmodels/scikit-learn, and this runs inside the first
-        # middleware that touches the filesystem, with no timeout. Every turn that
-        # missed the cache hung indefinitely. An assistant that predates
-        # `sandbox_key` and holds another assistant's files has to be recreated.
-        if created:
-            _seed_data(backend, seed)
-        _SANDBOX_CACHE[key] = backend
-        _SANDBOX_SEEN[key] = now
-        return backend
+        return _revalidate_or_acquire(key, cached, now, create=create, seed=seed)
     except Exception:  # noqa: BLE001 - never hard-fail a run on sandbox trouble
         return None
+
+
+def _revalidate_or_acquire(
+    key: str, cached: Any, now: float, *, create: bool, seed: list[dict] | None
+) -> Any | None:
+    """The cache-miss half of `_ensure_sandbox`: recheck `cached`, else attach/create.
+
+    Split out so the sequence reads as a flat series of early returns rather than one
+    long block inside a try. Raises freely — `_ensure_sandbox` owns the catch-all that
+    degrades a sandbox failure to StateBackend.
+    """
+    api_key, headers = _sandbox_key_credentials()
+    client = SandboxClient(api_key=api_key, headers=headers or None)
+    name = f"da-{_slug(key)}"
+    # A deleted VM answers 404 and the SDK raises, which says the same thing as
+    # an explicit non-ready status: this caller needs a different VM. The status
+    # endpoint is used rather than list_sandboxes because this is the hot path.
+    if cached is not None and _status_or_none(client, name) == "ready":
+        _SANDBOX_SEEN[key] = now
+        return cached
+    # Past here the cached handle (if any) is dead: drop it rather than hand it
+    # back, so a caller that cannot get a VM degrades to StateBackend instead of
+    # calling a VM that no longer exists.
+    _SANDBOX_CACHE.pop(key, None)
+    _SANDBOX_SEEN.pop(key, None)
+    got = _acquire_raw(client, name, create=create)
+    if got is None:
+        return None
+    raw, created = got
+    # Wait for it to actually be up. Before seeding, not after: `_seed_data` swallows
+    # its own failures, so seeding a VM that has not finished booting produced an
+    # empty /workspace/data and no error anywhere.
+    if not _wait_ready(client, name):
+        return None
+    backend = LangSmithSandbox(raw)
+    # ONLY on create. Seeding an attached VM to repair one built for a different
+    # assistant was tried and reverted: the seed script opens with a pip install
+    # of pandas/numpy/statsmodels/scikit-learn, and this runs inside the first
+    # middleware that touches the filesystem, with no timeout. Every turn that
+    # missed the cache hung indefinitely. An assistant that predates
+    # `sandbox_key` and holds another assistant's files has to be recreated.
+    if created:
+        _seed_data(backend, seed)
+    _SANDBOX_CACHE[key] = backend
+    _SANDBOX_SEEN[key] = now
+    return backend
 
 
 def _get_or_create_sandbox(runtime) -> Any | None:
@@ -1201,206 +1195,3 @@ def get_agent():
     if _AGENT is None:
         _AGENT = build_agent()
     return _AGENT
-
-
-def _final_text(result: dict[str, Any]) -> str:
-    """Extract the assistant's final textual answer from an agent result."""
-    messages = result.get("messages", [])
-    for msg in reversed(messages):
-        # AIMessage with no tool calls == the final answer.
-        role = getattr(msg, "type", None) or (msg.get("role") if isinstance(msg, dict) else None)
-        if role in ("ai", "assistant"):
-            content = getattr(msg, "content", None)
-            if isinstance(msg, dict):
-                content = msg.get("content")
-            tool_calls = getattr(msg, "tool_calls", None) or (
-                msg.get("tool_calls") if isinstance(msg, dict) else None
-            )
-            text = _content_to_text(content)
-            if text and not tool_calls:
-                return text
-    # Fallback: last AI text of any kind.
-    for msg in reversed(messages):
-        content = getattr(msg, "content", None)
-        if isinstance(msg, dict):
-            content = msg.get("content")
-        text = _content_to_text(content)
-        if text:
-            return text
-    return ""
-
-
-def _content_to_text(content: Any, strip: bool = True) -> str:
-    # strip=True for whole messages; strip=False for streaming deltas, where
-    # trimming each token would delete the spaces between words.
-    def _fin(s: str) -> str:
-        return s.strip() if strip else s
-
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return _fin(content)
-    if isinstance(content, list):
-        parts = []
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
-                parts.append(block.get("text", ""))
-            elif isinstance(block, str):
-                parts.append(block)
-        return _fin("".join(parts))
-    return _fin(str(content))
-
-
-def run(question: str, thread_id: str = "demo", agent=None) -> dict[str, Any]:
-    """Run one question through the agent.
-
-    Returns {"answer": str, "widgets": [ ... ], "question": str}.
-    Widgets are collected via a per-invocation ContextVar sink. The system prompt
-    is pinned for this run via a ContextVar.
-    """
-    agent = agent or get_agent()
-    sink: list[dict] = []
-    token = _widget_sink.set(sink)
-    prompt_token = _prompt_override.set(FALLBACK_PROMPT)
-    # Assign the trace root run id ourselves so feedback attaches to the TRACE,
-    # not a child LLM/tool span.
-    run_id = str(uuid.uuid4())
-    try:
-        result = agent.invoke(
-            {"messages": [{"role": "user", "content": question}]},
-            config={"run_id": run_id, "configurable": {"thread_id": thread_id}},
-        )
-    finally:
-        _widget_sink.reset(token)
-        _prompt_override.reset(prompt_token)
-    return {"question": question, "answer": _final_text(result), "widgets": sink, "run_id": run_id}
-
-
-def run_stream(question: str, thread_id: str = "demo", agent=None):
-    """Stream a run as a sequence of event dicts, in real time.
-
-    Yields, in the order they occur during the agent run:
-      {"type": "tool", "name": ..., "summary": ...}  as each non-widget tool is called
-      {"type": "widget", "widget": {...}}            as each push_widget call is made
-      {"type": "answer_delta", "text": ...}          as the final answer is generated
-      {"type": "answer_reset"}                        to drop a pre-tool preamble
-      {"type": "run_id", "run_id": ...}              the LangSmith trace id (for feedback)
-      {"type": "done"}                                when the run completes
-      {"type": "error", "error": ...}                 on failure
-
-    Widgets and tool calls are parsed from the token-level tool-call stream and
-    emitted the instant each call's args finish streaming (Anthropic streams
-    tool_use blocks one after another) — giving a progressive dashboard build and
-    a live tool-activity feed.
-    """
-    agent = agent or get_agent()
-
-    tool_bufs: dict[Any, dict[str, str]] = {}
-    emitted: set = set()
-    text_mids: set = set()  # message ids that streamed answer text
-    reset_mids: set = set()  # message ids we've already reset (preamble)
-
-    def _tool_summary(name: str, parsed: dict) -> str:
-        # A query-shaped tool reads better as its query than as JSON. Keyed on the
-        # argument rather than the tool name, so it keeps working for any tool
-        # that takes one.
-        if isinstance(parsed.get("query"), str):
-            return parsed["query"]
-        # Compact one-liner for anything else (task, push_widget, write_file).
-        return json.dumps(parsed, ensure_ascii=False)[:120]
-
-    # Assign the trace root run id ourselves (via config["run_id"]) so feedback
-    # attaches to the TRACE root, not a child LLM/tool span. This also avoids the
-    # ContextVar issues of collect_runs() inside a streaming generator.
-    root_id = str(uuid.uuid4())
-    config = {"run_id": root_id, "configurable": {"thread_id": thread_id}}
-
-    # Pull the prompt once for this question and pin it for every model call.
-    prompt_token = _prompt_override.set(FALLBACK_PROMPT)
-    try:
-        for msg, _meta in agent.stream(
-            {"messages": [{"role": "user", "content": question}]},
-            config=config,
-            stream_mode="messages",
-        ):
-            # Tool results -> a tool_result event the client attaches to the
-            # matching tool chip (so it can be expanded). Skip push_widget results.
-            if isinstance(msg, ToolMessage):
-                tname = msg.name or ""
-                if tname != "push_widget":
-                    content = _content_to_text(msg.content)
-                    yield {
-                        "type": "tool_result",
-                        "id": msg.tool_call_id,
-                        "name": tname,
-                        "content": content[:8000],
-                    }
-                continue
-
-            # Otherwise only AI messages (never leak raw tool JSON into the answer).
-            if not isinstance(msg, (AIMessage, AIMessageChunk)):
-                continue
-
-            mid = msg.id
-            text = _content_to_text(msg.content, strip=False)
-            if text:
-                text_mids.add(mid)
-                # `mid` lets the client reset per message so pre-tool narration
-                # is replaced by the final answer.
-                yield {"type": "answer_delta", "text": text, "mid": mid}
-
-            tccs = getattr(msg, "tool_call_chunks", None) or []
-            # If this message narrated text and is now calling tools, it was a
-            # preamble ("I'll build a dashboard…") — tell the client to drop it.
-            if tccs and mid in text_mids and mid not in reset_mids:
-                reset_mids.add(mid)
-                yield {"type": "answer_reset"}
-
-            for tcc in tccs:
-                idx = tcc.get("index")
-                if idx is None:
-                    idx = tcc.get("id")
-                buf = tool_bufs.setdefault(idx, {"name": "", "args": "", "id": ""})
-                if tcc.get("name"):
-                    buf["name"] = tcc["name"]
-                if tcc.get("id"):
-                    buf["id"] = tcc["id"]
-                if tcc.get("args"):
-                    buf["args"] += tcc["args"]
-
-                key = buf.get("id") or idx
-                if key in emitted:
-                    continue
-                try:
-                    parsed = json.loads(buf["args"])
-                except (ValueError, TypeError):
-                    continue  # args not fully streamed yet
-                if not isinstance(parsed, dict):
-                    continue
-                name = buf.get("name") or ""
-                if name == "push_widget":
-                    spec = parsed.get("widget", parsed)
-                    if not isinstance(spec, dict):
-                        continue
-                    try:
-                        widget = validate_widget(spec)
-                    except Exception:  # noqa: BLE001 - a half-streamed widget is not valid yet; wait for more chunks
-                        continue  # incomplete/invalid so far — wait for more
-                    emitted.add(key)
-                    yield {"type": "widget", "widget": widget}
-                else:
-                    # catalogue / built-in tools -> activity feed.
-                    emitted.add(key)
-                    yield {
-                        "type": "tool",
-                        "name": name,
-                        "summary": _tool_summary(name, parsed),
-                        "id": buf.get("id") or str(key),
-                    }
-
-        yield {"type": "run_id", "run_id": root_id}
-        yield {"type": "done"}
-    except Exception as exc:  # noqa: BLE001 - surface upstream/model errors to the client
-        yield {"type": "error", "error": f"{type(exc).__name__}: {exc}"}
-    finally:
-        _prompt_override.reset(prompt_token)
