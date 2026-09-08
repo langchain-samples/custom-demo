@@ -290,6 +290,20 @@ async def cleanup(request):
     return JSONResponse({"deleted": deleted, "failed": failed})
 
 
+def _delete_judge_evaluator(workspace: str | None, evaluator_id: str) -> None:
+    """DELETE the workspace evaluator `evaluator_id`. Raises so `_try` records it.
+
+    Kept as a wrapper despite forwarding both arguments unchanged. An audit
+    flagged it as a pure pass-through, and inlining it would have moved the
+    import below to module scope, which this file avoids on purpose: it is loaded
+    by Agent Server as a top-level module, the local import keeps that load light
+    and dodges the agent/webapp cycle, and two tests patch this name.
+    """
+    from dashboard_agent.assistant_evals import delete_judge_evaluator
+
+    delete_judge_evaluator(workspace, evaluator_id)
+
+
 def _delete_eval_rule(workspace: str | None, rule_id: str) -> None:
     """DELETE the run rule `rule_id`. Raises on failure, so `_try` records it."""
     from dashboard_agent.assistant_evals import _rules_api
@@ -297,13 +311,6 @@ def _delete_eval_rule(workspace: str | None, rule_id: str) -> None:
     url, headers = _rules_api(workspace)
     res = httpx.delete(f"{url}/{rule_id}", headers=headers, timeout=30)
     res.raise_for_status()
-
-
-def _delete_judge_evaluator(workspace: str | None, evaluator_id: str) -> None:
-    """DELETE the workspace evaluator `evaluator_id`. Raises so `_try` records it."""
-    from dashboard_agent.assistant_evals import delete_judge_evaluator
-
-    delete_judge_evaluator(workspace, evaluator_id)
 
 
 def _delete_annotation_queue(workspace: str | None, name: str) -> None:
@@ -791,8 +798,9 @@ _MAX_ENTRIES = 500
 # browser is rendering this into a DOM, not grepping it.
 _MAX_CONTENT_BYTES = 256 * 1024
 
-# Module-level so tests can shrink it. Applied TWICE per VM call (see `_vm_ls` /
-# `_vm_read`): once as the request deadline, once as the in-VM command timeout.
+# Module-level so tests can shrink it. Applied TWICE per VM call: once as the
+# request deadline (asyncio.wait_for), once as the in-VM command timeout
+# (`_bounded`).
 SANDBOX_TIMEOUT = 20
 
 # Ceiling on VM calls in flight from these two routes. `asyncio.to_thread` runs on
@@ -981,18 +989,6 @@ def _bounded(backend):
         return backend
 
 
-async def _vm_ls(backend, path: str):
-    """One `als` against a time-bounded backend, holding an inflight slot."""
-    async with _SANDBOX_SLOTS:
-        return await _bounded(backend).als(path)
-
-
-async def _vm_read(backend, path: str, offset: int, limit: int):
-    """One `aread` against a time-bounded backend, holding an inflight slot."""
-    async with _SANDBOX_SLOTS:
-        return await _bounded(backend).aread(path, offset, limit)
-
-
 async def _vm_media(backend, path: str) -> tuple[str, str]:
     """Base64 of a small binary file, as `(payload, error)` - exactly one is non-empty.
 
@@ -1040,7 +1036,15 @@ async def sandbox_files(request):
             return failure
 
         try:
-            res = await asyncio.wait_for(_vm_ls(backend, path), timeout=SANDBOX_TIMEOUT)
+
+            async def _ls():
+                # Bounded twice on purpose: the wait_for below is the request
+                # deadline, `_bounded` is the in-VM command timeout. See
+                # SANDBOX_TIMEOUT.
+                async with _SANDBOX_SLOTS:
+                    return await _bounded(backend).als(path)
+
+            res = await asyncio.wait_for(_ls(), timeout=SANDBOX_TIMEOUT)
         except TimeoutError:
             return _err(504, "timeout", "The sandbox did not respond.")
         if res.error:
@@ -1185,9 +1189,11 @@ async def sandbox_file(request):
             # it (it sets its own marker only when the ~500 KiB stdout cap blows), so
             # the extra line is the only way to tell "the file ends here" from "the
             # page filled up". It is trimmed off below and never reaches the client.
-            res = await asyncio.wait_for(
-                _vm_read(backend, path, offset, limit + 1), timeout=SANDBOX_TIMEOUT
-            )
+            async def _read():
+                async with _SANDBOX_SLOTS:
+                    return await _bounded(backend).aread(path, offset, limit + 1)
+
+            res = await asyncio.wait_for(_read(), timeout=SANDBOX_TIMEOUT)
         except TimeoutError:
             return _err(504, "timeout", "The sandbox did not respond.")
 

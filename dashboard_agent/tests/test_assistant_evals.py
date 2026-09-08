@@ -856,7 +856,9 @@ def test_judge_prompt_carries_both_criteria_and_every_mapped_variable():
     Interpolated rather than restated, so the attached judge and `demo_behavior` cannot
     drift apart. Every mapped variable must appear or the mapping feeds nothing.
     """
-    text = AE.judge_prompt_text(CUSTOMER)
+    # `judge_prompt_text` lived in assistant_evals with no production caller,
+    # so its one-line join lives here now, where it is actually asserted on.
+    text = "\n".join(t for _role, t in AE.judge_prompt_messages(CUSTOMER))
     assert CUSTOMER in text
     assert AE._GROUNDED_CRITERION in text
     # The gap criterion, with its `{topic}` slot pointed at the mustache variable.

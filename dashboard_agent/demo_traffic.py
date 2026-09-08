@@ -584,24 +584,6 @@ INSIGHTS_FILTER = "eq(is_root, true)"
 INSIGHTS_PROMPT_VARIABLE = "\n\n{{run.inputs}}"
 
 
-def insights_model_id(client: Any) -> str:
-    """A workspace model Insights is allowed to use, or "" if there is none.
-
-    THE reason a job used to fail. A config with `model: "anthropic"` and no
-    per-workspace ANTHROPIC_API_KEY answers `422 {"detail": "['ANTHROPIC_API_KEY']"}`,
-    which is what every fresh customer workspace looked like. The UI does not ask for a
-    key: it points `cluster_model`/`summary_model` at a *playground model setting* — a
-    record in `GET /playground-settings` — and the ones backed by LangSmith's own LLM
-    gateway (`LC_GATEWAY_KEY`) need no customer credentials at all.
-
-    Requires BOTH `available_in_insights_heavy` (clustering) and
-    `available_in_insights_light` (per-run summaries), since one id fills both fields.
-    """
-    return playground_model_id(
-        client, ("available_in_insights_heavy", "available_in_insights_light")
-    )
-
-
 def ensure_insights_job(
     client: Any, project: str, *, customer: str = "", data_gap: str = "", run: bool = True
 ) -> dict:
@@ -626,7 +608,14 @@ def ensure_insights_job(
     # Best-effort: a workspace with no insights-capable model still gets a saved
     # config, and the job below reports why it could not run.
     try:
-        model_id = insights_model_id(client)
+        # A workspace model Insights may use, or "" if there is none. THE reason a
+        # job used to fail: a config with model "anthropic" and no per-workspace
+        # ANTHROPIC_API_KEY answers 422, which is what every fresh customer
+        # workspace looked like. Needs BOTH insights flags, since one id fills the
+        # clustering and the per-run-summary fields.
+        model_id = playground_model_id(
+            client, ("available_in_insights_heavy", "available_in_insights_light")
+        )
     except Exception:  # noqa: BLE001 - an unreadable model list is the same as none
         model_id = ""
     inner: dict[str, Any] = {

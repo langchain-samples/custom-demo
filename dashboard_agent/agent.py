@@ -722,11 +722,6 @@ def _sandbox_key_from(agent_repo: str | None, customer: str | None) -> str:
     return agent_repo or customer or "default"
 
 
-def _sandbox_key(runtime) -> str:
-    """Stable per-assistant cache/VM key (assistant-scoped)."""
-    return _sandbox_key_from(_ctx(runtime, "agent_repo"), _ctx(runtime, "customer"))
-
-
 def _sandbox_key_credentials() -> tuple[str | None, dict[str, str]]:
     """`(api_key, headers)` for a `SandboxClient`.
 
@@ -767,17 +762,6 @@ def _seed_data(backend: Any, seed: list[dict] | None = None) -> None:
         backend.execute(script)
     except Exception:  # noqa: BLE001 - a seed failure must not fail the run
         pass
-
-
-def _sandbox_ready(client: Any, name: str) -> bool:
-    """Whether the service still holds `name` in a ready state.
-
-    A deleted VM answers 404 and the SDK raises, which tells us the same thing as an
-    explicit non-ready status: whoever asked needs a different VM. Uses the
-    lightweight status endpoint rather than `list_sandboxes`, since this runs on the
-    hot path (once per idle gap, see `_SANDBOX_REVALIDATE_AFTER`).
-    """
-    return _status_or_none(client, name) == "ready"
 
 
 # How long a turn will wait for a VM to finish booting before giving up on it. Setup
@@ -879,7 +863,10 @@ def _ensure_sandbox(key: str, *, create: bool = True, seed: list[dict] | None = 
         api_key, headers = _sandbox_key_credentials()
         client = SandboxClient(api_key=api_key, headers=headers or None)
         name = f"da-{_slug(key)}"
-        if cached is not None and _sandbox_ready(client, name):
+        # A deleted VM answers 404 and the SDK raises, which says the same thing as
+        # an explicit non-ready status: this caller needs a different VM. The status
+        # endpoint is used rather than list_sandboxes because this is the hot path.
+        if cached is not None and _status_or_none(client, name) == "ready":
             _SANDBOX_SEEN[key] = now
             return cached
         # Past here the cached handle (if any) is dead: drop it rather than hand it
@@ -915,7 +902,8 @@ def _get_or_create_sandbox(runtime) -> Any | None:
     if not _sandbox_enabled():
         return None
     seed = _ctx(runtime, "sandbox_seed")
-    return _ensure_sandbox(_sandbox_key(runtime), seed=seed if isinstance(seed, list) else None)
+    key = _sandbox_key_from(_ctx(runtime, "agent_repo"), _ctx(runtime, "customer"))
+    return _ensure_sandbox(key, seed=seed if isinstance(seed, list) else None)
 
 
 def prewarm_sandbox(

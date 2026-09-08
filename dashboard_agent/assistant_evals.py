@@ -431,11 +431,6 @@ def judge_prompt_messages(customer: str) -> list[tuple[str, str]]:
     return [("system", system), ("human", _JUDGE_HUMAN)]
 
 
-def judge_prompt_text(customer: str) -> str:
-    """Both turns as one string — for asserting on and for reading in a log."""
-    return "\n".join(text for _role, text in judge_prompt_messages(customer))
-
-
 def judge_prompt_name(dataset: str) -> str:
     """Prompt Hub repo handle for a dataset's judge. Deterministic, so re-push is a no-op."""
     return f"eval-{slugify(dataset)[:80]}-judge"

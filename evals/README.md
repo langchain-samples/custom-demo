@@ -15,7 +15,7 @@ assertions + an LLM-as-judge), recorded as a LangSmith **experiment**.
 > |---|---|---|
 > | purpose | regression-test **our repo** before a release | a live artifact **of the demo** |
 > | dataset | `dashboard-agent-*` in `EVAL_WORKSPACE` | `<customer-slug>-demo-evals-<fingerprint>`, in the customer's workspace |
-> | **score 1** | the planted **bug fired** (`_fabricates` → the agent invented figures) | the agent was **correct** (admitted the gap / hedged, no fabricated figures) |
+> | **score 1** | the planted **bug fired** (the agent invented figures) | the agent was **correct** (admitted the gap / hedged, no fabricated figures) |
 > | when | manual, gated on env, never in per-PR CI | at assistant creation, then on demand mid-demo |
 >
 > The demo reads **2/3 (red) → fix the prompt in Prompt Hub → 3/3 (green)**, which only works
