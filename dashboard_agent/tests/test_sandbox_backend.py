@@ -611,3 +611,82 @@ def test_pdf_lines_step_down_the_page():
     assert 'new_x="LMARGIN"' in script and 'new_y="NEXT"' in script
     # And the downgrade is no longer silent.
     assert "pdf unavailable, wrote text instead" in script
+
+
+# --- one VM per ASSISTANT, not per customer ------------------------------------
+
+
+def test_two_assistants_for_one_customer_get_different_vms(monkeypatch):
+    """The reported bug: a second McKesson assistant showed the first one's files.
+
+    The key was `agent_repo or customer`, both derived from the customer name, so the
+    second assistant resolved to the same VM, attached to it, and skipped its own
+    seed. It inherited a `sales.csv` planted by the first assistant's failed setup.
+    """
+    client = _install_client(monkeypatch)
+    first = _rt(customer="McKesson", sandbox_key="mckesson-a1b2c3")
+    second = _rt(customer="McKesson", sandbox_key="mckesson-d4e5f6")
+    A._resolve_backends(first)
+    A._resolve_backends(second)
+    assert client.created == ["da-mckesson-a1b2c3", "da-mckesson-d4e5f6"]
+
+
+def test_the_assistants_own_key_wins_over_the_customer_derived_ones():
+    assert A._sandbox_key_from("mckesson-a1b2c3", "mckesson-agent", "McKesson") == "mckesson-a1b2c3"
+
+
+def test_an_assistant_with_no_key_still_reaches_its_old_vm():
+    """Every assistant provisioned before the key existed carries none."""
+    assert A._sandbox_key_from("", "acme-agent", "Acme") == "acme-agent"
+    assert A._sandbox_key_from(None, None, "Acme") == "Acme"
+    assert A._sandbox_key_from(None, None, None) == "default"
+
+
+def test_prewarm_and_the_runtime_agree_on_the_key(monkeypatch):
+    """They must, or the prewarmed VM is orphaned and the first turn boots another."""
+    client = _install_client(monkeypatch)
+    A.prewarm_sandbox(sandbox_key="acme-a1b2c3", agent_repo="acme-agent", customer="Acme")
+    A._SANDBOX_CACHE.clear()  # the runtime is a different process
+    A._resolve_backends(
+        _rt(
+            sandbox_key="acme-a1b2c3",
+            agent_repo="acme-agent",
+            skills_repo="acme-skills",
+            customer="Acme",
+        )
+    )
+    assert client.created == ["da-acme-a1b2c3"]
+
+
+# --- attaching to a VM that is missing this assistant's files ------------------
+
+
+def test_attaching_to_someone_elses_vm_plants_the_missing_files(monkeypatch):
+    """Repairs the assistants that already exist, which carry no key of their own."""
+    client = _FakeClient()
+    client.existing.append(_FakeSandbox("da-mckesson"))  # seeded by another assistant
+    _install_client(monkeypatch, client)
+    A._resolve_backends(_rt(customer="McKesson", sandbox_seed=_MEDICAL_SEED))
+    assert client.created == []  # still an attach, not a second VM
+    planted = [c for sb in client.existing for c in sb.runs if "claims.csv" in c]
+    assert len(planted) == 1
+
+
+def test_an_attach_never_plants_the_generic_dataset(monkeypatch):
+    """No spec of its own means nothing to repair.
+
+    Planting the retail dataset into someone else's claims VM would only add a
+    misleading file to it.
+    """
+    client = _FakeClient()
+    client.existing.append(_FakeSandbox("da-eval-co"))
+    _install_client(monkeypatch, client)
+    A._resolve_backends(_rt(customer="Eval Co"))
+    assert [c for sb in client.existing for c in sb.runs if "sales.csv" in c] == []
+
+
+def test_the_seed_writer_keeps_a_file_that_is_already_there():
+    """What makes the attach path safe to repeat, and safe over an upload."""
+    script = A.render_seed_script(_MEDICAL_SEED)
+    assert "path.exists()" in script
+    assert "continue" in script

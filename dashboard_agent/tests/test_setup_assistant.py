@@ -527,3 +527,40 @@ def test_a_successful_analysis_carries_no_error(rec, monkeypatch):
     """The guard keys off `error`, so a success must not leave one behind."""
     out = _prep(monkeypatch, _analysis())
     assert len(out["actions"]) == 3
+
+
+# --- the VM name is per assistant, not per customer ---
+
+
+def test_each_assistant_gets_its_own_sandbox_key(rec, monkeypatch):
+    """Two assistants for the same customer must not share a VM.
+
+    The runtime keyed on `agent_repo or customer`, both derived from the customer
+    name, so the second assistant attached to the first one's VM and skipped its own
+    seed. That is how a McKesson assistant with four seed files in its context ended
+    up with nothing on disk but a `sales.csv` from an earlier McKesson setup.
+    """
+    first = _prep(monkeypatch, _analysis())["context"]["sandbox_key"]
+    second = _prep(monkeypatch, _analysis())["context"]["sandbox_key"]
+    assert first != second
+    # Still legible in a VM listing: the customer, then a disambiguator.
+    assert first.startswith("acme-co-") and second.startswith("acme-co-")
+
+
+def test_the_prewarm_is_given_the_same_key_it_will_be_asked_for(rec, monkeypatch):
+    """A prewarm under a different name leaves an orphan VM and a cold first turn."""
+    import threading
+
+    seen: dict = {}
+    called = threading.Event()
+
+    def _record(**kw):
+        seen.update(kw)
+        called.set()
+
+    # The prewarm is fire-and-forget on its own thread, so the assertion has to wait
+    # for it rather than race it.
+    monkeypatch.setattr("dashboard_agent.runtime.agent.prewarm_sandbox", _record)
+    ctx = _prep(monkeypatch, _analysis())["context"]
+    assert called.wait(5), "prewarm was never called"
+    assert seen.get("sandbox_key") == ctx["sandbox_key"]

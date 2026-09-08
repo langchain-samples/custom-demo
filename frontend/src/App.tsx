@@ -497,6 +497,7 @@ export default function App() {
             /* Same sandbox key the Files dialog and the agent itself use, so a file
                dropped on the chat lands in the VM this assistant reads from. */
             sandboxTarget={{
+              sandbox_key: activeAssistant?.context?.sandbox_key || undefined,
               agent_repo: activeAssistant?.metadata?.ls_artifacts?.agent_repo || undefined,
               customer: activeAssistant?.metadata?.customer || undefined,
             }}

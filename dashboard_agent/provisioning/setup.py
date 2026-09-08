@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from typing import cast
@@ -946,6 +947,13 @@ def prepare_assistant(payload: dict) -> dict:
     # first turn — or rebuilt after the old one was reaped — gets the same files.
     if analysis.get("seed_files"):
         context["sandbox_seed"] = analysis["seed_files"]
+    # This assistant's own VM name. Unique per assistant, because the previous key was
+    # derived from the customer (agent_repo, else customer) and a second assistant for
+    # the same customer therefore attached to the FIRST one's VM and skipped its own
+    # seed. Short random suffix rather than the assistant id, which does not exist yet:
+    # the SPA creates the assistant from this payload, and the prewarm below has to use
+    # the same name as the first turn will.
+    context["sandbox_key"] = f"{slug}-{secrets.token_hex(3)}"
     prompt_urls: dict = {}
     # Where the PROMPT is stored: the Context Hub (an agent repo's AGENTS.md) by
     # DEFAULT, or Prompt Hub when the caller asks for it. Legacy inline is used only
@@ -1000,6 +1008,7 @@ def prepare_assistant(payload: dict) -> dict:
         threading.Thread(
             target=prewarm_sandbox,
             kwargs={
+                "sandbox_key": context.get("sandbox_key"),
                 "agent_repo": context.get("agent_repo"),
                 "customer": customer,
                 "seed": context.get("sandbox_seed"),

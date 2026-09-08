@@ -955,10 +955,13 @@ async def _resolve_backend(request, params: dict | None = None):
     source = params if params is not None else request.query_params
     agent_repo = source.get("agent_repo") or None
     customer = source.get("customer") or None
+    # The assistant's own VM name when it has one, so the browser opens the same VM the
+    # agent talks to rather than whatever VM the customer name resolves to.
+    sandbox_key = source.get("sandbox_key") or None
     # attach-only: a toolbar click must never provision a VM (~30s boot + pip install).
     # Sync + network → to_thread so it can't block the event loop.
     backend = await asyncio.to_thread(
-        _ensure_sandbox, _sandbox_key_from(agent_repo, customer), create=False
+        _ensure_sandbox, _sandbox_key_from(sandbox_key, agent_repo, customer), create=False
     )
     if backend is None:
         return None, _err(503, "sandbox_unavailable", "No sandbox files for this assistant.")
@@ -1299,7 +1302,7 @@ def _upload_name(raw: str) -> str | None:
 async def sandbox_upload(request):
     """Write files into the assistant's sandbox VM.
 
-    POST {agent_repo?, customer?, dir?, files:[{name, content_b64}]} →
+    POST {sandbox_key?, agent_repo?, customer?, dir?, files:[{name, content_b64}]} →
     {dir, written:[{name, path}], failed:[{name, error}], sandbox_id}.
 
     Attach-only, like the two read routes: it uses the VM a chat turn or the setup

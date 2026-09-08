@@ -86,6 +86,7 @@ class Context:
     ls_workspace: str | None = None  # workspace to pull Hub prompts from (matches trace routing)
     enabled_tools: list[str] | None = None  # catalogue tool ids to expose; None = defaults
     sandbox_seed: list[dict] | None = None  # files to plant in the VM (see render_seed_script)
+    sandbox_key: str = ""  # this assistant's own VM name (see _sandbox_key_from)
     # Remote MCP servers this assistant connects to: [{id?, label, url, token?, headers?}].
     # Their tools are discovered per run and namespaced `{id}_{tool}` (mcp_servers.py).
     mcp_servers: list[dict] | None = None
@@ -672,6 +673,12 @@ out.mkdir(parents=True, exist_ok=True)
 for f in spec["files"]:
     path = written = out / f["name"]
     try:
+        if path.exists() or path.with_suffix(".txt").exists():
+            # Idempotent on purpose: this script also runs when a turn ATTACHES to a
+            # VM that already existed, to repair one seeded for a different assistant.
+            # Whatever is on disk wins, including anything a user uploaded.
+            print("kept", path)
+            continue
         if f["kind"] == "csv":
             with path.open("w", newline="") as fh:
                 w = csv.writer(fh)
@@ -717,9 +724,22 @@ def _slug(text: str) -> str:
     return out or "default"
 
 
-def _sandbox_key_from(agent_repo: str | None, customer: str | None) -> str:
-    """The cache/VM key for an assistant: agent_repo, else customer, else default."""
-    return agent_repo or customer or "default"
+def _sandbox_key_from(
+    sandbox_key: str | None, agent_repo: str | None = None, customer: str | None = None
+) -> str:
+    """The cache/VM key for an assistant: its own key, else agent_repo, else customer.
+
+    `sandbox_key` is minted per assistant at setup (`prepare_assistant`) and is the
+    only one of the three that is unique. The other two are derived from the customer
+    name, so a second assistant for the same customer resolved to the SAME VM and
+    attached to it instead of creating one -- inheriting its files and skipping its
+    own seed, which is how a McKesson assistant ended up holding nothing but the
+    generic `sales.csv` that a previous McKesson assistant's failed setup had planted.
+
+    They remain as fallbacks because every assistant provisioned before this carries
+    no key, and sharing a warm VM is still better for them than having none.
+    """
+    return sandbox_key or agent_repo or customer or "default"
 
 
 def _sandbox_key_credentials() -> tuple[str | None, dict[str, str]]:
@@ -750,18 +770,26 @@ def _sandbox_enabled() -> bool:
     return bool(_sandbox_key_credentials()[0])
 
 
-def _seed_data(backend: Any, seed: list[dict] | None = None) -> None:
-    """Best-effort: plant this assistant's starting files inside a freshly created VM.
+def _seed_data(backend: Any, seed: list[dict] | None = None, *, fallback: bool = True) -> None:
+    """Best-effort: plant this assistant's starting files inside its VM.
 
     `seed` is the assistant's own spec (`Context.sandbox_seed`); without one — or when
     nothing in it survives validation — the generic sales dataset is used, which is what
-    every assistant used to get regardless of its use case.
+    every assistant used to get regardless of its use case. `fallback=False` suppresses
+    that, for the attach path, where planting a retail CSV into a VM that already holds
+    real files would only add a confusing one.
     """
     try:
-        script = render_seed_script(seed or []) or _SEED_SCRIPT
+        script = render_seed_script(seed or [])
+        if not script:
+            if not fallback:
+                return
+            script = _SEED_SCRIPT
         backend.execute(script)
-    except Exception:  # noqa: BLE001 - a seed failure must not fail the run
-        pass
+    except Exception as exc:  # noqa: BLE001 - a seed failure must not fail the run
+        # Printed, not swallowed: an empty /workspace/data is reported by the model as
+        # its data not being mounted, which reads as a platform fault rather than this.
+        print(f"[sandbox] seeding failed: {type(exc).__name__}: {exc}")
 
 
 # How long a turn will wait for a VM to finish booting before giving up on it. Setup
@@ -886,6 +914,12 @@ def _ensure_sandbox(key: str, *, create: bool = True, seed: list[dict] | None = 
         backend = LangSmithSandbox(raw)
         if created:
             _seed_data(backend, seed)
+        elif seed:
+            # An attached VM keeps its filesystem, which is right until the VM was
+            # built for a DIFFERENT assistant (see `_sandbox_key_from`) or before this
+            # assistant's seed spec existed. The writer skips every file already on
+            # disk, so this only fills gaps and never overwrites an upload.
+            _seed_data(backend, seed, fallback=False)
         _SANDBOX_CACHE[key] = backend
         _SANDBOX_SEEN[key] = now
         return backend
@@ -902,7 +936,9 @@ def _get_or_create_sandbox(runtime) -> Any | None:
     if not _sandbox_enabled():
         return None
     seed = _ctx(runtime, "sandbox_seed")
-    key = _sandbox_key_from(_ctx(runtime, "agent_repo"), _ctx(runtime, "customer"))
+    key = _sandbox_key_from(
+        _ctx(runtime, "sandbox_key"), _ctx(runtime, "agent_repo"), _ctx(runtime, "customer")
+    )
     return _ensure_sandbox(key, seed=seed if isinstance(seed, list) else None)
 
 
@@ -910,6 +946,7 @@ def prewarm_sandbox(
     agent_repo: str | None = None,
     customer: str | None = None,
     seed: list[dict] | None = None,
+    sandbox_key: str | None = None,
 ) -> None:
     """Create + seed an assistant's VM ahead of its first chat (fire-and-forget).
 
@@ -922,7 +959,7 @@ def prewarm_sandbox(
     if not _sandbox_enabled():
         return
     try:
-        _ensure_sandbox(_sandbox_key_from(agent_repo, customer), seed=seed)
+        _ensure_sandbox(_sandbox_key_from(sandbox_key, agent_repo, customer), seed=seed)
     except Exception:  # noqa: BLE001 - provisioning must never fail on a warm-up
         pass
 

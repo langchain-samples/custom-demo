@@ -138,6 +138,13 @@ export interface RunContext {
   enabled_tools?: string[];
   /** Remote MCP servers this assistant connects to. Omit when there are none. */
   mcp_servers?: McpServerConfig[];
+  /**
+   * The assistant's own sandbox VM name, minted at setup. Unique per assistant,
+   * unlike `agent_repo`/`customer`, which are derived from the customer name and so
+   * pointed two assistants for the same customer at one VM. Not editable here: it is
+   * read off the saved assistant and passed through.
+   */
+  sandbox_key?: string;
 }
 
 /**
@@ -876,12 +883,16 @@ export async function listAgents(workspace?: string): Promise<string[]> {
 export type SandboxKind = "dir" | "text" | "binary" | "media";
 
 /**
- * Which sandbox VM to browse. Both fields come from the ACTIVE ASSISTANT'S
- * metadata (`ls_artifacts.agent_repo` and `customer`) and mirror the key the
- * agent itself uses. Blank strings must be omitted, not sent: assistant_setup
+ * Which sandbox VM to browse. Every field comes from the ACTIVE ASSISTANT and
+ * mirrors the key the agent itself uses, so the browser opens the VM the agent
+ * actually reads from. Blank strings must be omitted, not sent: assistant_setup
  * writes `ls_artifacts.agent_repo = ""` when there is no Context Hub repo.
+ *
+ * `sandbox_key` (from the assistant's context) wins when present; the other two are
+ * the pre-existing fallback for assistants provisioned before it existed.
  */
 export interface SandboxTarget {
+  sandbox_key?: string;
   agent_repo?: string;
   customer?: string;
 }
@@ -946,9 +957,10 @@ export interface SandboxFile {
   sandbox_id?: string | null;
 }
 
-/** Shared `?agent_repo=&customer=` query for the sandbox routes; blanks are omitted. */
+/** Shared sandbox-route query (`?sandbox_key=&agent_repo=&customer=`); blanks omitted. */
 function sandboxQuery(target: SandboxTarget, extra: Record<string, string>): URLSearchParams {
   const qs = new URLSearchParams(extra);
+  if (target.sandbox_key) qs.set("sandbox_key", target.sandbox_key);
   if (target.agent_repo) qs.set("agent_repo", target.agent_repo);
   if (target.customer) qs.set("customer", target.customer);
   return qs;
@@ -1075,6 +1087,7 @@ export async function uploadSandboxFiles(
     method: "POST",
     headers: apiHeaders(),
     body: JSON.stringify({
+      sandbox_key: target.sandbox_key || undefined,
       agent_repo: target.agent_repo || undefined,
       customer: target.customer || undefined,
       files: payload,

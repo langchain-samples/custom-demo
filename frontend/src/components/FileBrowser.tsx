@@ -48,14 +48,19 @@ export function FileBrowser({ open, onOpenChange, assistant }: FileBrowserProps)
   const [reloadNonce, setReloadNonce] = useState(0);
 
   const assistantId = assistant?.assistant_id ?? null;
+  const sandboxKey = assistant?.context?.sandbox_key;
   const agentRepo = assistant?.metadata?.ls_artifacts?.agent_repo;
   const customer = assistant?.metadata?.customer;
   // Blank strings are omitted, not sent: assistant_setup writes
   // `ls_artifacts.agent_repo = ""` when there's no Context Hub repo, and the
   // runtime falls back to the customer in exactly the same way.
   const target = useMemo<SandboxTarget>(
-    () => ({ agent_repo: agentRepo || undefined, customer: customer || undefined }),
-    [agentRepo, customer],
+    () => ({
+      sandbox_key: sandboxKey || undefined,
+      agent_repo: agentRepo || undefined,
+      customer: customer || undefined,
+    }),
+    [sandboxKey, agentRepo, customer],
   );
 
   return (
