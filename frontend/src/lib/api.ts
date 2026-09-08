@@ -1201,10 +1201,16 @@ export interface EvalStatus {
   last_error?: string | null;
 }
 
-/** Acknowledgement of POST /evals/run — the experiment itself runs detached. */
+/**
+ * Acknowledgement of POST /evals/run. The experiment itself runs detached.
+ *
+ * A receipt, and only a receipt: the dataset name and the score both come from
+ * GET /evals/status, which is the one endpoint that reads LangSmith. This used
+ * to also declare `dataset_name`, which was always null, because the route
+ * answers with `dataset` and nothing ever read the field to notice.
+ */
 export interface EvalRunAck {
   ok: boolean;
-  dataset_name?: string | null;
   error?: string;
 }
 
@@ -1275,7 +1281,7 @@ export async function runEvalExperiment(target: EvalTarget): Promise<EvalRunAck>
     });
     if (!res.ok) return { ok: false, error: (await errorFrom(res)).message };
     const d = (await res.json()) as Partial<EvalRunAck>;
-    return { ok: d.ok !== false, dataset_name: d.dataset_name ?? null, error: d.error };
+    return { ok: d.ok !== false, error: d.error };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
