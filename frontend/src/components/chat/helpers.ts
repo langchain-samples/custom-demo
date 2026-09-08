@@ -10,6 +10,7 @@ import {
   IconRobot,
   IconChartBar,
   IconTool,
+  IconHelpCircle,
   IconMail,
   IconCalendarEvent,
   IconWorldSearch,
@@ -92,6 +93,7 @@ const TOOL_ICONS: Record<string, TablerIcon> = {
   // Core
   push_widget: IconChartBar,
   // Capability tools (see dashboard_agent/tools/registry.py)
+  ask_user: IconHelpCircle,
   draft_email: IconMail,
   suggest_meeting_times: IconCalendarEvent,
   web_search: IconWorldSearch,

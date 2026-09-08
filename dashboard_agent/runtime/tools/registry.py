@@ -2,8 +2,14 @@
 
 One declarative table (`TOOL_REGISTRY`) is the source of truth for the settings
 UI, the run-time filter, and the per-tool call limits. Adding a capability means
-writing the tool and adding a row here — no changes to `agent.py`, `webapp.py`,
-or the frontend list.
+writing the tool and adding a row here, with no changes to `agent.py` or
+`webapp.py`.
+
+It is NOT the whole story for the frontend, which this docstring used to claim.
+The SPA keys a label and an icon off each tool name by hand, because those maps
+also cover the deepagents built-ins that this table knows nothing about. A tool
+added here and nowhere else renders with a generic icon and its raw identifier,
+which is what `tests/test_tool_vocabulary.py` now fails on.
 
 Scope: this catalogue governs ONLY the tools it declares. Every deepagents
 built-in (`write_todos`, the filesystem tools, `task`, …) is deliberately left
