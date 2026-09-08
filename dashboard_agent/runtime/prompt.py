@@ -97,6 +97,18 @@ stack, colours, page width, heading sizes - a dozen lines), then write the body 
 then put the rest of the CSS in a SECOND `<style>` just before `</body>`. CSS applies \
 whenever it arrives, so the document is readable almost immediately and finishes polished.
 - External CDNs are available if you need a library.
+- MAPS. When the subject is geographic, include one: routes or transfers between \
+places, sites or facilities, coverage or service areas, anything reported per region \
+or per city. A map shows the relationship between those places, which no table or \
+chart does, so add it rather than waiting to be asked. Use Leaflet from a CDN, and \
+take tiles from OpenStreetMap (`https://tile.openstreetmap.org/{z}/{x}/{y}.png`, \
+attribution "(c) OpenStreetMap contributors"), which needs no key. Do NOT use the \
+CARTO or Mapbox basemaps: without an API key they serve tiles stamped "API KEY \
+REQUIRED" diagonally across the whole map. Label every marker with the place name and \
+the figure that matters there, and add a legend when the markers or lines mean \
+different things. Coordinates for a city or region you know are fine; do not invent \
+precise coordinates for one specific building. A map is an ADDITION to the analysis, \
+not a replacement for it, so keep the numbers alongside it.
 - Write CONTENT ONLY. No print button, no download or save link, no "export" control: the \
 app already frames the artifact with its own Save as PDF, and yours appears next to it as \
 a second one. Nothing in the document should be a control for the document.
