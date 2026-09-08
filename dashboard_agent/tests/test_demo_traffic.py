@@ -22,6 +22,7 @@ import uuid
 
 import pytest
 from langsmith import get_tracing_context
+from langsmith.utils import LangSmithConflictError
 
 from dashboard_agent.provisioning import traffic as DT
 
@@ -884,3 +885,32 @@ def test_start_demo_traffic_never_raises_when_the_thread_will_not_start(registry
     assert ack["ok"] is False and "can't start new thread" in ack["error"]
     # The slot must be released, or the failure locks the project out until redeploy.
     assert "P" not in DT._INFLIGHT
+
+
+# --- defining the rubric's feedback keys ---------------------------------------
+
+
+class _ConfigClient:
+    """A client whose create_feedback_config raises whatever the test hands it."""
+
+    def __init__(self, error: BaseException):
+        self.error = error
+
+    def create_feedback_config(self, **_):
+        raise self.error
+
+
+def test_a_feedback_key_that_already_exists_is_success():
+    """Workspace-level and shared, so a 409 is the normal answer on every re-seed."""
+    DT._ensure_feedback_configs(_ConfigClient(LangSmithConflictError("Conflict for /x")))
+
+
+def test_a_feedback_key_that_really_failed_travels():
+    """The old test matched "409" anywhere in the message, so this read as success.
+
+    A rubric key that was never defined leaves the review queue ungradeable, which is
+    worth failing the seed over.
+    """
+    error = RuntimeError("500 server error, request id 409ff1")
+    with pytest.raises(RuntimeError):
+        DT._ensure_feedback_configs(_ConfigClient(error))

@@ -10,10 +10,18 @@ import threading
 
 import pytest
 import yaml
+from langsmith.utils import LangSmithConflictError
 
 from dashboard_agent import setup_graph
 from dashboard_agent.provisioning import setup as S
 from dashboard_agent.setup_graph import _INPUT_KEYS, SetupState
+
+# One valid skill, enough for a push to be attempted.
+_SKILL = {
+    "name": "returns-check",
+    "description": "Use when a shopper asks about returns.",
+    "instructions": "Cite the 30-day window.",
+}
 
 
 def _analysis(**over):
@@ -537,3 +545,69 @@ def test_the_prewarm_is_given_the_same_key_it_will_be_asked_for(rec, monkeypatch
     ctx = _prep(monkeypatch, _analysis())["context"]
     assert called.wait(5), "prewarm was never called"
     assert seen.get("sandbox_key") == ctx["sandbox_key"]
+
+
+# --- idempotent pushes vs. real failures ------------------------------------
+# Every Context Hub push here is re-run on a re-setup, so "this exact content is
+# already committed" has to count as success. It used to be decided by hunting
+# "409" or "conflict" in the exception's MESSAGE, which any error quoting a URL or
+# a request id could satisfy - so a genuinely failed push reported success and the
+# assistant referenced a repo that held nothing. The signal is the SDK's typed 409
+# now, and these pin that a real failure still travels.
+
+
+class _PushClient:
+    """A workspace client whose pushes raise whatever the test hands it."""
+
+    def __init__(self, error: BaseException):
+        self.error = error
+
+    def push_agent(self, repo, *, files=None, description=None):
+        raise self.error
+
+    def push_skill(self, repo, *, files=None, description=None):
+        raise self.error
+
+
+def _pushes_raise(monkeypatch, error: BaseException):
+    monkeypatch.setattr(S, "_ws_client", lambda workspace: _PushClient(error))
+
+
+def test_an_identical_re_push_counts_as_success(monkeypatch):
+    """The SDK raises a 409 as LangSmithConflictError, and 409 means "already there"."""
+    _pushes_raise(monkeypatch, LangSmithConflictError("Conflict for /repos/acme"))
+    assert S.push_agent_prompt("ws", "acme-agent", "prompt text") == "(exists) acme-agent"
+    assert S.push_skills_bundle("ws", "acme", "Acme", [_SKILL]) == "acme-skills"
+
+
+def test_nothing_to_commit_counts_as_success_whatever_its_status(monkeypatch):
+    """The narrow wire-format fallback: the wording, but only this exact wording."""
+    _pushes_raise(monkeypatch, RuntimeError("400: Nothing to commit: content unchanged"))
+    assert S.push_agent_prompt("ws", "acme-agent", "prompt text") == "(exists) acme-agent"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        # Each of these matched the old substring test by accident: a request id with
+        # 409 in it, and a URL with "conflict" in the host.
+        RuntimeError("500 server error, request id 7c409ab2"),
+        RuntimeError("connection refused: conflict-resolver.internal"),
+        PermissionError("403 Forbidden"),
+    ],
+)
+def test_a_real_push_failure_is_not_reported_as_success(monkeypatch, error):
+    """Setup must fail rather than hand back a repo handle for a repo it never wrote."""
+    _pushes_raise(monkeypatch, error)
+    with pytest.raises(type(error)):
+        S.push_agent_prompt("ws", "acme-agent", "prompt text")
+
+    with pytest.raises(type(error)):
+        S.push_skills_bundle("ws", "acme", "Acme", [_SKILL])
+
+
+def test_one_skill_that_will_not_push_is_skipped_and_reported(monkeypatch, capsys):
+    """Best-effort, so it does not raise - but silence made a missing skill undebuggable."""
+    _pushes_raise(monkeypatch, RuntimeError("500 server error"))
+    assert S.push_workflow_skills("ws", "acme", "Acme", [_SKILL]) == {}
+    assert "returns-check" in capsys.readouterr().out

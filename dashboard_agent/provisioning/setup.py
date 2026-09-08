@@ -20,6 +20,7 @@ import httpx
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage
 from langsmith.schemas import FileEntry, SkillEntry
+from langsmith.utils import LangSmithConflictError
 from pydantic import BaseModel, Field
 
 from dashboard_agent.config import load_env, sampling_kwargs, setup_model
@@ -106,12 +107,20 @@ def _brandfetch_brand(domain: str) -> dict | None:
     Returns None on any failure (no key, rate-limit/quota, network, unknown
     domain) so callers fall back to the LLM guess. Free tier is ~100 pulls, so
     failures are expected.
+
+    Genuinely best-effort, so it does not raise: the palette it would return is
+    cosmetic, the LLM guess behind it is visible in the setup panel, and no
+    presenter wants a whole assistant refused over a brand colour. But every way
+    out of here now SAYS so on stdout, because "why are this customer's colours
+    wrong" was previously unanswerable: quota, a wrong domain and a network blip
+    all looked the same from outside.
     """
     key = os.getenv("BRANDFETCH_API_KEY", "") or BRANDFETCH_API_KEY
     if not key:
         load_env()
         key = os.getenv("BRANDFETCH_API_KEY", "")
     if not key:
+        print(f"[setup] brand palette: no BRANDFETCH_API_KEY, guessing colors for {domain}")
         return None
 
     try:
@@ -121,9 +130,17 @@ def _brandfetch_brand(domain: str) -> dict | None:
                 headers={"Authorization": f"Bearer {key}"},
             )
         if r.status_code != 200:  # 401/402/404/429 → quota, unknown, etc.
+            print(
+                f"[setup] brand palette: Brandfetch answered {r.status_code} for {domain}, "
+                f"guessing colors"
+            )
             return None
         data = r.json()
-    except Exception:  # noqa: BLE001 - an optional brand lookup; any failure falls through to the LLM guess
+    except Exception as exc:  # noqa: BLE001 - an optional brand lookup; report and fall through to the LLM guess
+        print(
+            f"[setup] brand palette: Brandfetch lookup for {domain} failed, guessing colors: "
+            f"{type(exc).__name__}: {exc}"
+        )
         return None
 
     colors = [c for c in (data.get("colors") or []) if isinstance(c, dict) and c.get("hex")]
@@ -192,7 +209,10 @@ def fetch_brand(customer: str, website: str | None = None) -> dict:
         fonts = bf.get("fonts") or fonts
 
     if not accent:
-        # Only bother scraping the homepage when Brandfetch gave us nothing.
+        # Only bother scraping the homepage when Brandfetch gave us nothing. Also
+        # best-effort, and also now audible: a weak accent that never arrives is
+        # the difference between the right brand colour and a guessed one, and
+        # silence made that undiagnosable.
         try:
             with httpx.Client(timeout=12, follow_redirects=True) as c:
                 html = c.get(f"https://{domain}").text
@@ -205,8 +225,13 @@ def fetch_brand(customer: str, website: str | None = None) -> dict:
                 if m:
                     accent_scraped = m.group(1)
                     break
-        except Exception:  # noqa: BLE001 - scraping someone else's HTML; a miss just leaves accent_scraped unset
-            pass
+            if not accent_scraped:
+                print(f"[setup] brand palette: no theme-color meta tag on {domain}")
+        except Exception as exc:  # noqa: BLE001 - scraping someone else's HTML; report and leave accent_scraped unset
+            print(
+                f"[setup] brand palette: could not scrape {domain} for a theme-color: "
+                f"{type(exc).__name__}: {exc}"
+            )
 
     return {
         "domain": domain,
@@ -568,6 +593,26 @@ def analyze_customer(
     return out
 
 
+def _already_committed(exc: BaseException) -> bool:
+    """Is `exc` the Hub saying "this exact content is already committed"?
+
+    Re-pushing identical content is success for every pusher below: the repo ends up
+    holding what we wanted it to hold. LangSmith answers that with HTTP 409, and the
+    SDK turns a 409 into `LangSmithConflictError` (it keys its own idempotent pushes
+    off the same type), so that is what we test.
+
+    The message check behind it is a WIRE-FORMAT DEPENDENCY, kept deliberately narrow:
+    it covers a backend that reports the condition with some status other than 409, and
+    "nothing to commit" is specific enough that no real failure says it by accident.
+    It replaces a far looser test — `"409" in msg or "conflict" in msg` — that a request
+    id, a URL or a repo handle could satisfy by chance, which would have reported a
+    genuinely failed push as a successful one.
+    """
+    if isinstance(exc, LangSmithConflictError):
+        return True
+    return "nothing to commit" in str(exc).lower()
+
+
 def push_agent_prompt(workspace: str, repo: str, text: str, skill_links: dict | None = None) -> str:
     """Push the system prompt to a Context Hub agent repo's AGENTS.md, returning its URL.
 
@@ -583,11 +628,10 @@ def push_agent_prompt(workspace: str, repo: str, text: str, skill_links: dict | 
         return _ws_client(workspace).push_agent(
             repo, files=files, description=f"{repo} system prompt"
         )
-    except Exception as e:
-        msg = str(e).lower()
-        if "nothing to commit" in msg or "409" in msg or "conflict" in msg:
-            return f"(exists) {repo}"
-        raise
+    except Exception as exc:
+        if not _already_committed(exc):
+            raise
+        return f"(exists) {repo}"
 
 
 # Appended to a Context Hub agent's AGENTS.md. deepagents' SkillsMiddleware injects
@@ -731,11 +775,16 @@ def push_workflow_skills(workspace: str, slug: str, customer: str, skills) -> di
                 files={"SKILL.md": FileEntry(content=md)},
                 description=f"{customer} skill: {name}",
             )
-        except Exception as e:  # noqa: BLE001 - the SDK signals 'nothing to commit' only in the message, inspected below
-            # A re-push of identical content ("nothing to commit") means the skill
-            # already exists — still link it. Any other failure: skip this skill.
-            msg = str(e).lower()
-            if not ("nothing to commit" in msg or "409" in msg or "conflict" in msg):
+        except Exception as exc:  # noqa: BLE001 - one skill is best-effort; an unexpected failure is reported and skipped
+            # A re-push of identical content means the skill is already there, so still
+            # link it. Any other failure skips this one skill, but SAYS which and why:
+            # an assistant quietly missing a skill it should have is the kind of "why is
+            # it behaving oddly" that used to have no answer in the logs.
+            if not _already_committed(exc):
+                print(
+                    f"[setup] skill {name!r} failed to push, skipping it: "
+                    f"{type(exc).__name__}: {exc}"
+                )
                 continue
         links[f"skills/{name}"] = repo
     return links
@@ -771,9 +820,8 @@ def push_skills_bundle(workspace: str, slug: str, customer: str, skills) -> str:
     repo = f"{slug}-skills"
     try:
         _ws_client(workspace).push_agent(repo, files=files, description=f"{customer} skills")
-    except Exception as e:
-        msg = str(e).lower()
-        if not ("nothing to commit" in msg or "409" in msg or "conflict" in msg):
+    except Exception as exc:
+        if not _already_committed(exc):
             raise
     return repo
 

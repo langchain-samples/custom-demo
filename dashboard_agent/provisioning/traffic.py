@@ -47,6 +47,7 @@ from typing import Any, cast
 
 from langchain_core.tracers.context import collect_runs
 from langsmith import tracing_context
+from langsmith.utils import LangSmithConflictError
 from langsmith.uuid import uuid7_from_datetime
 
 from dashboard_agent.provisioning.client import _ws_client, playground_model_id
@@ -710,7 +711,11 @@ def _ensure_feedback_configs(client: Any) -> None:
 
     Workspace-level and shared by every queue, which is also why /cleanup leaves them
     alone: deleting a config another demo's queue still points at would break it. An
-    existing key answers 409, which is success for our purposes.
+    existing key answers 409, which is success for our purposes — and the SDK raises a
+    409 as `LangSmithConflictError`, so we test the type rather than hunting "409",
+    "conflict" or "already exists" in the message text. Those substrings turned any
+    error that happened to quote a URL or a request id into a silent success; a feedback
+    key that genuinely failed to define now fails the seed, loudly.
     """
     configs: list[tuple[str, dict, bool]] = [
         (
@@ -733,10 +738,8 @@ def _ensure_feedback_configs(client: Any) -> None:
                 feedback_config=cast("Any", config),
                 is_lower_score_better=lower_better,
             )
-        except Exception as exc:
-            msg = str(exc).lower()
-            if not ("409" in msg or "conflict" in msg or "already exists" in msg):
-                raise
+        except LangSmithConflictError:
+            continue  # already defined for this workspace, which is what we wanted
 
 
 def ensure_annotation_queue(

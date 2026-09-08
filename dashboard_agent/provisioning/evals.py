@@ -54,6 +54,7 @@ from langchain_core.load import dumpd
 from langchain_core.messages import HumanMessage
 from langchain_core.prompts.structured import StructuredPrompt
 from langgraph.types import Command
+from langsmith.utils import LangSmithConflictError
 from pydantic import BaseModel, Field
 
 from dashboard_agent.config import judge_model, routing_key, sampling_kwargs
@@ -522,15 +523,21 @@ def judge_chain_manifest(prompt: dict, model: dict) -> dict:
 def _push_judge(client, repo: str, manifest: dict) -> None:
     """Push a judge manifest to `repo`, treating an identical re-push as success.
 
-    A re-push of identical content is "nothing to commit" (409) — the prompt is already
-    there, which is all we need. Anything else is fatal to the caller, since the evaluator
-    would reference a prompt that does not exist.
+    A re-push of identical content is a 409 — the prompt is already there, which is all
+    we need, and the SDK raises that as `LangSmithConflictError`. Anything else is fatal
+    to the caller, since the evaluator would reference a prompt that does not exist.
+
+    The `nothing to commit` message check behind the typed one is a narrow WIRE-FORMAT
+    DEPENDENCY, for a backend that reports the same condition with a different status.
+    It replaces a much looser `"409" in msg or "conflict" in msg`, which a request id or
+    a URL could match by accident and so report a failed push as a successful one.
     """
     try:
         client.push_prompt(repo, object=manifest)
+    except LangSmithConflictError:
+        return
     except Exception as exc:
-        msg = str(exc).lower()
-        if not ("nothing to commit" in msg or "409" in msg or "conflict" in msg):
+        if "nothing to commit" not in str(exc).lower():
             raise
 
 

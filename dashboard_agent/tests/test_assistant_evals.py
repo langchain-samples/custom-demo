@@ -35,6 +35,7 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage
 from langgraph.types import Command
+from langsmith.utils import LangSmithConflictError
 
 import dashboard_agent.provisioning.evals as AE
 from dashboard_agent.provisioning.evals import (
@@ -1202,3 +1203,36 @@ def test_assistant_evals_does_not_import_the_repo_level_evals():
     """
     source = (AE.__file__ or "") and open(AE.__file__, encoding="utf-8").read()
     assert "from evals" not in source and "import evals" not in source
+
+
+# --- pushing the judge prompt: idempotent, but not blindly ---------------------------------
+
+
+class _JudgePushClient:
+    """A client whose push_prompt raises whatever the test hands it."""
+
+    def __init__(self, error: BaseException):
+        self.error = error
+
+    def push_prompt(self, repo, object=None, **_):  # `object` mirrors the SDK's keyword
+        raise self.error
+
+
+def test_pushing_a_judge_that_is_already_there_is_success():
+    """A 409 means the commit exists, which is all the evaluator needs."""
+    AE._push_judge(_JudgePushClient(LangSmithConflictError("Conflict for /commits/x")), "r", {})
+    AE._push_judge(_JudgePushClient(RuntimeError("Nothing to commit: unchanged")), "r", {})
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        # Both matched the old `"409" in msg or "conflict" in msg` test by accident.
+        RuntimeError("500 server error, request id 409f2c"),
+        RuntimeError("could not reach conflict-resolver.internal"),
+    ],
+)
+def test_a_judge_push_that_really_failed_travels(error):
+    """Swallowing this attaches an evaluator pointed at a prompt that does not exist."""
+    with pytest.raises(type(error)):
+        AE._push_judge(_JudgePushClient(error), "r", {})

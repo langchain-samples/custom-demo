@@ -1,12 +1,23 @@
-"""System-prompt sourcing: a LangSmith Context Hub agent repo, with a local fallback.
+"""System-prompt sourcing: a LangSmith Context Hub agent repo, or the local default.
 
 An assistant's system prompt is the `AGENTS.md` of its Context Hub agent repo, so it
 can be edited live, for example to remove the planted hallucination clause, without
 touching code or restarting the server. `agent.py` pulls it fresh once per question
 (via a `@dynamic_prompt` middleware) rather than baking it in at build time.
 
-If the repo is unreachable or missing, `FALLBACK_PROMPT` applies: the grounded,
-bug-free prompt, so the app still works offline.
+Two paths, and only one of them is a fallback:
+
+- An assistant with NO `agent_repo` asked for nothing in particular, so it gets
+  `FALLBACK_PROMPT`, the grounded bug-free prompt. `agent.py` applies that directly.
+- An assistant WITH an `agent_repo` asked for that customer's prompt. If the repo
+  will not load, `pull_agent_prompt` raises `PromptSourceError` and the turn fails
+  with a message naming the repo. It deliberately does NOT fall back: a Hub outage,
+  a typo'd repo handle, a deleted repo and a missing permission would all be
+  indistinguishable from "this customer has no prompt", and the run would answer as
+  a GENERIC assistant wearing the customer's name. A visibly failed turn the
+  presenter can retry beats an assistant that is quietly the wrong one.
+
+So a run CAN now hard-fail on prompt sourcing, on purpose.
 """
 
 from __future__ import annotations
@@ -37,9 +48,11 @@ Ground every figure in a file you actually opened. If the files hold nothing rel
 if a specific figure the user asked about is not in them, say so plainly ("that figure is \
 not in the data I have") and do NOT invent data, numbers, or widgets for it."""
 
-# The grounded, bug-free prompt. This is the fallback when the Hub can't be
-# reached; the Hub copy is the source of truth (and, for the demo, starts with an
-# extra hallucination-inducing clause that you remove live to "fix" it).
+# The grounded, bug-free prompt. This is what an assistant with NO Context Hub
+# agent repo runs on. It is NOT a stand-in for a repo that failed to load: see
+# pull_agent_prompt, which raises instead. For an assistant that has a repo, that
+# repo is the source of truth (and, for the demo, starts with an extra
+# hallucination-inducing clause that you remove live to "fix" it).
 _FALLBACK_CORE = """You are an AI assistant that answers questions about the customer's \
 operations by building a live, data-rich DASHBOARD plus a short written answer.
 
@@ -247,18 +260,43 @@ of your skills whenever it fits the request better."""
     return base + failure_mode_clause(failure_mode)
 
 
+class PromptSourceError(RuntimeError):
+    """A configured Context Hub agent repo's system prompt could not be loaded.
+
+    Typed so callers and tests can recognize it without reading its message (the
+    message is for the human in front of the SPA, and is free to change).
+    """
+
+
 def pull_agent_prompt(repo: str, workspace: str | None = None) -> str:
     """Fetch the system prompt from a Context Hub agent repo's `AGENTS.md`, fresh.
 
-    The prompt is the
-    `AGENTS.md` file of an agent context. `workspace` scopes the pull. Returns
-    `FALLBACK_PROMPT` if the repo/file is missing or the Hub is unreachable, so a
-    run never hard-fails on prompt sourcing.
+    The prompt is the `AGENTS.md` file of an agent context. `workspace` scopes the
+    pull.
+
+    Raises `PromptSourceError`, naming `repo` and the underlying cause, when the
+    repo cannot be pulled or carries no `AGENTS.md` content. This function is only
+    ever called for an assistant that HAS an `agent_repo` (the no-repo case takes
+    `FALLBACK_PROMPT` in `agent.py` without coming here), so every failure here is
+    a configured prompt that could not be delivered, never an absent one. Callers
+    let it propagate: the SPA renders the message, which says which assistant's
+    prompt could not be loaded, instead of the run silently becoming a generic
+    assistant. A Hub blip now fails the turn, which is the intent.
     """
     try:
         agent = _prompt_client(workspace).pull_agent(repo)
-        entry = (agent.files or {}).get("AGENTS.md")
-        text = getattr(entry, "content", None)
-        return text or FALLBACK_PROMPT
-    except Exception:  # noqa: BLE001 - a run must never hard-fail on prompt sourcing; fall back to the bundled one
-        return FALLBACK_PROMPT
+    except Exception as exc:
+        raise PromptSourceError(
+            f"Could not load this assistant's system prompt from Context Hub agent repo "
+            f"{repo!r}: {type(exc).__name__}: {exc}"
+        ) from exc
+
+    entry = (agent.files or {}).get("AGENTS.md")
+    text = getattr(entry, "content", None)
+    if not text:
+        raise PromptSourceError(
+            f"Context Hub agent repo {repo!r} has no AGENTS.md content, so this assistant "
+            "has no system prompt to run with."
+        )
+
+    return text
