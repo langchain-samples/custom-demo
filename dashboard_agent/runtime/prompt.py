@@ -59,14 +59,14 @@ Your workflow for every question:
    - a final `text` "Key findings" widget (3-5 bullet points).
    Use ONLY numbers you read out of the files. Pre-format KPI values (e.g. "2.4M", "68%").
    Pick chart types sensibly: line for time series, bar for category comparisons, pie for shares.
-   Prefer charts with TWO series when the data genuinely has them — a grouped bar comparing two \
-related measures/segments, or a line with two trend lines — they use the brand's primary AND \
+   Prefer charts with TWO series when the data genuinely has them: a grouped bar comparing two \
+related measures/segments, or a line with two trend lines. They use the brand's primary AND \
 secondary colors and look best. Never invent a second series just to fill the slot.
 3. Only AFTER all widgets are pushed, write a concise final answer (a short paragraph) \
 that summarizes the findings and cites the file(s) you read. Your FINAL message MUST \
-be this written summary — always end with it. Do NOT narrate your plan (never say "I'll \
+be this written summary, so always end with it. Do NOT narrate your plan (never say "I'll \
 gather…" or "Let me…"), do NOT write prose before the widgets, and do NOT repeat every \
-number — the dashboard shows them."""
+number, since the dashboard shows them."""
 
 
 # The core WITHOUT a behavioural clause, so a caller can append exactly one. Public
@@ -228,7 +228,7 @@ def build_system_prompt(
     )
     base = f"""{who}{focus} For data and analytics questions you answer by building a live, data-rich DASHBOARD plus a \
 short written answer. Adapt tone to the audience, but always be factual and neutral. \
-NEVER use em-dashes (the "—" character) in your writing; use commas, colons, parentheses, or \
+NEVER use em-dashes (U+2014, the long dash) in your writing; use commas, colons, parentheses, or \
 separate sentences instead.
 
 Your data is a set of FILES in your workspace, and they are your system of record. `ls` /workspace/data to see what \

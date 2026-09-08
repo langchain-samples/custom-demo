@@ -186,13 +186,13 @@ def _sandbox_note(runtime) -> str:
             listing = "It should contain:\n" + "\n".join(lines) + "\n"
     return (
         "\n\nCODE EXECUTION: You have an isolated Linux VM with an `execute` tool. Files live in "
-        "/workspace/data/ — ALWAYS run `ls /workspace/data` and look at what is actually there "
+        "/workspace/data/, ALWAYS run `ls /workspace/data` and look at what is actually there "
         "before you plan any work, and never assume a particular file exists. "
         + (listing or "It holds a small sample dataset, plus anything the user has uploaded.\n")
         + "FILES FROM THE USER: the user can upload documents and data (PDF, CSV, images) with the "
         "upload button in the Files panel, and they appear in /workspace/data. If you need a "
         "document you do not have, say exactly that and ask them to upload it there. NEVER ask "
-        "them to paste a file's contents, email it, or attach it to the chat — the Files panel is "
+        "them to paste a file's contents, email it, or attach it to the chat, the Files panel is "
         "the only channel, and offering another one strands the conversation.\n"
         "STILL STARTING: if /workspace/data is EMPTY, or `execute` fails to connect, the VM is "
         "almost certainly still booting - it is created when the assistant is and takes a couple "
@@ -219,10 +219,10 @@ def _subagents_note() -> str:
         return ""
     return (
         "\n\nSUBAGENTS & WORKFLOWS: For a large task with independent parts, orchestrate the "
-        "specialist subagents (`researcher`, `analyst`) — write a short JavaScript workflow script "
+        "specialist subagents (`researcher`, `analyst`), write a short JavaScript workflow script "
         "that fans out via the `task()` global. Use that JS interpreter ONLY for orchestration; for "
         "the actual data analysis use the Python `execute` sandbox. Don't over-orchestrate simple "
-        "requests — a single tool call is usually enough."
+        "requests, a single tool call is usually enough."
     )
 
 
@@ -274,7 +274,7 @@ def _capability_note(runtime) -> str:
         note += (
             "\n\nThe dashboard workflow above applies to DATA questions. When the user asks "
             "for something one of the other capabilities covers, just use that capability and "
-            "answer briefly — do not read the data files or build widgets first, and never say "
+            "answer briefly, do not read the data files or build widgets first, and never say "
             "the request is off-topic."
         )
     return note
@@ -705,7 +705,7 @@ for f in spec["files"]:
                 pdf.output(str(path))
                 written = path
             except Exception as exc:
-                # Downgrade rather than lose the document — but SAY SO. A silent
+                # Downgrade rather than lose the document, but SAY SO. A silent
                 # .pdf -> .txt is how a document demo ends up quietly not being one.
                 print("pdf unavailable, wrote text instead:", type(exc).__name__, exc)
                 written = path.with_suffix(".txt")
@@ -1082,7 +1082,7 @@ _SUBAGENTS: list[SubAgent] = [
         "description": "Runs ONE focused data-analysis task and returns the computed result.",
         "system_prompt": (
             "You are a data analyst. Compute the requested result (use the `execute` tool for "
-            "Python — pandas/numpy/statsmodels are available) and return it succinctly."
+            "Python, pandas/numpy/statsmodels are available) and return it succinctly."
         ),
     },
 ]

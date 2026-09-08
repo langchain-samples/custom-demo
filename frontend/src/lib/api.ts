@@ -429,15 +429,7 @@ export async function ensureThread(): Promise<string> {
   return THREAD_ID;
 }
 
-/** Adopt an existing thread id (e.g. when the user selects a past thread). */
-export function setThreadId(id: string | null): void {
-  THREAD_ID = id;
-}
 
-/** Current memoized thread id, if any. */
-export function getThreadId(): string | null {
-  return THREAD_ID;
-}
 
 /** Drop the memoized thread so the next ensureThread() mints a new one. */
 export function resetThread(): void {
@@ -679,14 +671,6 @@ export async function listAssistants(limit = 100): Promise<Assistant[]> {
   }
 }
 
-/** Fetch a single assistant by id (GET /assistants/{id}). */
-export async function getAssistant(id: string): Promise<Assistant> {
-  const res = await fetch(`${getApiBase()}/assistants/${id}`, {
-    headers: apiHeaders(),
-  });
-  if (!res.ok) throw await errorFrom(res);
-  return res.json();
-}
 
 /** Create a new assistant (POST /assistants). */
 export async function createAssistant(input: CreateAssistantInput): Promise<Assistant> {
@@ -792,29 +776,7 @@ export async function listWorkspaces(): Promise<WorkspaceList> {
   }
 }
 
-/** List tracing project names for a workspace (GET /projects). Empty on failure. */
-export async function listProjects(workspace?: string): Promise<string[]> {
-  try {
-    const qs = workspace ? `?workspace=${encodeURIComponent(workspace)}` : "";
-    const res = await fetch(`${getApiBase()}/projects${qs}`, { headers: apiHeaders() });
-    if (!res.ok) return [];
-    const d = await res.json();
-    return Array.isArray(d.projects) ? d.projects : [];
-  } catch {
-    return [];
-  }
-}
 
-/** Create a tracing project (POST /projects). */
-export async function createProject(name: string, workspace?: string): Promise<unknown> {
-  const res = await fetch(`${getApiBase()}/projects`, {
-    method: "POST",
-    headers: apiHeaders(),
-    body: JSON.stringify({ name, workspace: workspace || undefined }),
-  });
-  if (!res.ok) throw await errorFrom(res);
-  return res.json();
-}
 
 /** List the selectable tool catalogue (GET /tools). Empty on failure. */
 export async function listTools(): Promise<ToolSpec[]> {

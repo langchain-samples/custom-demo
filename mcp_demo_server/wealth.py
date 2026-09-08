@@ -297,9 +297,14 @@ def propose_rebalance(
 
     content = answer.content or {}
     allocation = {
-        s.key: float(content.get(s.key, s.weight))
+        # `v` is bound once so the isinstance guard below and the float() above apply
+        # to the SAME value. Calling .get() twice read as unnarrowed to the checker,
+        # and meant a sleeve whose value changed between the two calls could convert
+        # something the guard had approved in a different form.
+        s.key: float(v)
         for s in account.sleeves
-        if isinstance(content.get(s.key, s.weight), (int, float))
+        for v in (content.get(s.key, s.weight),)
+        if isinstance(v, (int, float))
     }
     total = sum(allocation.values())
     if abs(total - 100.0) > 0.5:
@@ -498,7 +503,8 @@ def sign_document(
     account_id: Annotated[str, Field(description="The account the document belongs to.")],
     document: Annotated[str, Field(description="What is being signed, e.g. 'IPS amendment'.")],
     ctx: Context,
-) -> dict[str, Any] | InputRequiredResult:
+    # ToolResult: the countersigned document returns text plus the signature image.
+) -> dict[str, Any] | InputRequiredResult | ToolResult:
     """Capture a client's wet signature on an advisory document.
 
     This tool renders its own UI: a host that supports MCP Apps shows a signature

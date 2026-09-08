@@ -166,11 +166,14 @@ export function ActionSwapText({
   const measureRef = useRef<HTMLSpanElement>(null);
   const [width, setWidth] = useState<number>();
 
+  // Re-measures when the rendered text changes, which is the only thing that changes
+  // the width. With no dependency list this ran after every render and set state from
+  // inside a layout effect, which converges only because of the equality guard below.
   useLayoutEffect(() => {
     const nextWidth = measureRef.current?.offsetWidth;
     if (!nextWidth) return;
     setWidth((currentWidth) => (currentWidth === nextWidth ? currentWidth : nextWidth));
-  });
+  }, [children]);
 
   // Cascade needs a plain string to split into letters; non-string content
   // and reduced motion fall back to the closest single-element animation.

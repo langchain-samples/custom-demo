@@ -47,22 +47,22 @@ jobs:
         with:
           enable-cache: true
       # Installs deps + dev tools (ruff, ty, pytest) into .venv; uv provides Python 3.14.
-      - run: uv sync
-      - run: uv run ruff check dashboard_agent scripts evals
-      - run: uv run ruff format --check dashboard_agent scripts evals
-      - run: uv run ty check dashboard_agent scripts evals
+      - run: uv sync --locked
+      - run: uv run ruff check dashboard_agent scripts evals mcp_demo_server
+      - run: uv run ruff format --check dashboard_agent scripts evals mcp_demo_server
+      - run: uv run ty check dashboard_agent scripts evals mcp_demo_server
       # Import smoke: catches broken imports (e.g. a removed tool still referenced).
-      # These three are the entrypoints langgraph.json names, so importing them
+      # These four are the entrypoints langgraph.json names, so importing them
       # reaches the whole package. Named by ENTRYPOINT rather than by internal
       # module, which is what broke when the package was split into subfolders.
       # graph.py eagerly builds the graph at import (build_agent -> require_model_key),
       # so a placeholder key is needed. It is only constructed, never called — no API hit.
-      - run: uv run python -c "import dashboard_agent.graph, dashboard_agent.setup_graph, dashboard_agent.webapp"
+      - run: uv run python -c "import dashboard_agent.auth, dashboard_agent.graph, dashboard_agent.setup_graph, dashboard_agent.webapp"
         env:
           ANTHROPIC_API_KEY: sk-ci-placeholder-not-used
       # Unit tests only — the live agent/hallucination tests auto-skip without
       # ANTHROPIC_API_KEY (intentionally left unset here so no real API calls run).
-      - run: uv run pytest dashboard_agent/tests -q
+      - run: uv run pytest dashboard_agent/tests evals -q
 
   # --- CD ---
   # There is no deploy job here on purpose. The LangSmith deployment is connected to this
@@ -79,8 +79,12 @@ jobs:
   # the Agent Server through VITE_LG_URL in the Vercel project's environment.
 
   # --- Optional nightly live tests (uncomment + add ANTHROPIC_API_KEY secret) ---
-  # Runs the real-LLM e2e + hallucination tests off the PR path (slow, costs
-  # tokens, and the hallucination test is model-flaky). Schedule, not per-PR.
+  # Runs the real-LLM hallucination test off the PR path: slow, costs tokens, and
+  # model-flaky by nature. Schedule, not per-PR.
+  #
+  # It needs BOTH a key and a sandbox. `conftest.py` forces DA_SANDBOX=0 for the whole
+  # suite, so this job must point at the file directly and set DA_SANDBOX=1, or the test
+  # skips itself and the job passes having asserted nothing.
   #
   # live-tests:
   #   name: Live e2e (nightly)
@@ -91,11 +95,12 @@ jobs:
   #     - uses: astral-sh/setup-uv@v5
   #       with:
   #         enable-cache: true
-  #     - run: uv sync
-  #     - run: uv run pytest dashboard_agent/tests/test_agent_e2e.py dashboard_agent/tests/test_hallucination_bug.py -q
+  #     - run: uv sync --locked
+  #     - run: uv run pytest dashboard_agent/tests/test_hallucination_bug.py -q -rs
   #       env:
   #         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
   #         LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+  #         DA_SANDBOX: "1"
   #
   # To enable the nightly schedule, also add at the top of `on:`:
   #   schedule:

@@ -39,9 +39,12 @@ export function VoicePicker({ value, onChange }: VoicePickerProps) {
   const [playing, setPlaying] = useState(false);
   const audio = useRef<HTMLAudioElement | null>(null);
 
-  // A sample must not outlive the panel, or it keeps talking over the demo.
+  // A sample must not outlive the panel, or it keeps talking over the demo. The element
+  // is captured into the closure rather than read through the ref in the cleanup, where
+  // `audio.current` may already point at a different node or none.
   useEffect(() => {
-    return () => audio.current?.pause();
+    const el = audio.current;
+    return () => el?.pause();
   }, []);
 
   const toggle = () => {

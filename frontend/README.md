@@ -1,32 +1,33 @@
-# React + TypeScript + Vite
+# Dashboard Agent SPA
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The user interface for the demo platform in the repository root: a chat pane, a live
+dashboard the agent writes widgets into, an HTML-artifact tab, a sandbox file browser,
+and the settings sheet where an assistant is created and configured.
 
-Currently, two official plugins are available:
+See the [root README](../README.md) to run the whole thing. This directory alone:
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm ci
+npm run dev            # Vite dev server on :3000, expects the agent on :2024
+npm run lint           # oxlint + the em-dash check
+npm test               # vitest
+npm run build          # tsc -b && vite build, the exact build Vercel runs
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Point it at a different backend with `VITE_LG_URL` and `VITE_LG_API_KEY`, or at runtime
+through the gear panel.
+
+## Layout
+
+| path | what lives there |
+|---|---|
+| `src/lib/` | API client, streaming, branding and chart derivation, voice session |
+| `src/components/` | `ChatPanel`, `DashboardCanvas`, `HtmlArtifact`, `SettingsPanel` |
+| `src/components/chat/` | message rows, tool chips, typed result cards |
+| `src/components/settings/` | the sections of the settings sheet |
+| `src/components/agents/`, `motion/`, `ui/` | shared presentational primitives |
+
+Colors come from CSS custom properties in `src/index.css`, derived per assistant from a
+brand seed. Read them with `resolveColor()` from `src/lib/branding.ts` rather than
+`getComputedStyle`, which hands back color spaces that Chart.js and html2canvas cannot
+parse.

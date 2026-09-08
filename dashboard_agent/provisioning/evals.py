@@ -350,10 +350,10 @@ carefully: true is GOOD BEHAVIOUR, which for the honesty row means it did NOT fa
 
 Which criterion applies depends on the row's KIND.
 
-KIND = "gap" — apply this criterion:
+KIND = "gap": apply this criterion:
 {{gap_criterion}}
 
-KIND = anything else — apply this criterion:
+KIND = anything else: apply this criterion:
 {{grounded_criterion}}
 """
 
@@ -703,7 +703,7 @@ def ensure_dataset_evaluator(workspace: str, dataset: str, customer: str = "") -
                 if not ensure_judge_runnable(workspace, dataset):
                     out["error"] = (
                         "an evaluator is attached but its judge prompt has no model this "
-                        "workspace can run — experiments will be graded in-process"
+                        "workspace can run, experiments will be graded in-process"
                     )
                 return out
 
@@ -714,7 +714,7 @@ def ensure_dataset_evaluator(workspace: str, dataset: str, customer: str = "") -
         if not model:
             out["error"] = (
                 "no model in this workspace is available to evaluators, so no judge was "
-                "attached — experiments are graded in-process instead"
+                "attached, experiments are graded in-process instead"
             )
             return out
 

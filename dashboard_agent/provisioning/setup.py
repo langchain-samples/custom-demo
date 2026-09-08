@@ -256,7 +256,7 @@ class _SeedFile(BaseModel):
 
     name: str = Field(description="File name only, with extension, e.g. 'intake_2026-01.pdf'")
     kind: str = Field(description="One of: csv, json, txt, md, pdf")
-    description: str = Field(description="One line on what it holds — shown to the agent")
+    description: str = Field(description="One line on what it holds, shown to the agent")
     columns: list[str] = Field(
         default_factory=list, description="csv/json only: column names, 3-6 of them"
     )
@@ -364,7 +364,7 @@ def analyze_customer(
     )
     site = f" (website: {website})" if website else ""
     scenario = (
-        f"\nUSE CASE — build the ENTIRE assistant around this scenario (its users, "
+        f"\nUSE CASE. Build the ENTIRE assistant around this scenario (its users, "
         f"workflows, metrics and language), not generic company analytics:\n{use_case}\n"
         if use_case.strip()
         else ""
@@ -419,10 +419,10 @@ def analyze_customer(
         "'<Persona>: <2-4 word gist>' format as step 2's quick-actions (e.g. 'Shopper: Return "
         "eligibility'). Skip skills that merely restate how to search data or build a dashboard.\n"
         "   EVERY skill must exercise BOTH of the assistant's headline capabilities, because "
-        "invoking one is how we demo them — so scope each skill to a task that genuinely needs "
+        "invoking one is how we demo them, so scope each skill to a task that genuinely needs "
         "both, never a single lookup:\n"
-        "   - 'workflow' (REQUIRED): the dynamic-subagent pattern the skill orchestrates — one of "
-        f"{', '.join(WORKFLOW_PATTERNS)} — so the agent fans the work out to parallel subagents. "
+        "   - 'workflow' (REQUIRED): the dynamic-subagent pattern the skill orchestrates, one of "
+        f"{', '.join(WORKFLOW_PATTERNS)}, so the agent fans the work out to parallel subagents. "
         "Pick the pattern that genuinely fits, and write the 'instructions' around work that has "
         "parts worth running in parallel (per ticket, per supplier, per store, per candidate "
         "answer), not a single lookup.\n"
@@ -433,10 +433,10 @@ def analyze_customer(
         "4) Give the customer's brand PRIMARY and SECONDARY colors as hex (real brand palette "
         "for well-known companies, e.g. Walmart #0071CE / #FFC220). Use the company's CURRENT "
         "branding (some companies have rebranded). Empty string if unsure.\n"
-        "5) Pick the dashboard THEME ('light' or 'dark') that best fits this brand — most retail, "
+        "5) Pick the dashboard THEME ('light' or 'dark') that best fits this brand. Most retail, "
         "healthcare, finance and consumer brands read as 'light'; developer, gaming, media and "
         "'techy' brands often read as 'dark'.\n"
-        "6) Give a NEUTRAL colour as hex — a calm, usually dark brand-adjacent tone used to tint "
+        "6) Give a NEUTRAL colour as hex: a calm, usually dark brand-adjacent tone used to tint "
         "panels and borders. Avoid a saturated red/orange/yellow here even if that is the primary; "
         "prefer the brand's dark neutral. Empty string if unsure.\n"
         "7) Pick this brand's TYPEFACES. 'heading_font'/'body_font' must be real Google Fonts "
@@ -448,7 +448,7 @@ def analyze_customer(
         f"catalogue (pick only what the customer/use-case needs): {catalogue}. "
         "The dashboard builder and data search are on by default and NOT in this list.\n"
         "9) Propose 2-4 SEED FILES to plant in the assistant's code-execution VM "
-        "(/workspace/data), in the FORMAT this use case actually works with — a claims team gets "
+        "(/workspace/data), in the FORMAT this use case actually works with. A claims team gets "
         "intake PDFs and a claims CSV, a retail team gets sales data. These are the files the "
         "skills' 'sandbox_step's open, so name them consistently with those steps, and give the "
         "csv/json ones enough rows (and the right columns) for the analysis you asked for there "
@@ -656,12 +656,12 @@ def _workflow_clause(workflow: str) -> str:
     how = WORKFLOW_PATTERNS[key]
     return (
         f"\n\n## Workflow: {key}\n"
-        f"Run this skill as a **{key}** dynamic-subagent workflow — {how}. Write a short "
+        f"Run this skill as a **{key}** dynamic-subagent workflow, {how}. Write a short "
         f"JavaScript orchestration script that calls `task()` to fan the work out to subagents "
         f"(`researcher` for lookups, `analyst` for computation), then combine what they return. "
         f"Do this even when there are only a few items: split the work across at least two "
         f"parallel `task()` calls rather than working through them yourself. Scale the fan-out to "
-        f"the work — one subagent per item up to about eight, batched beyond that. Keep the JS to "
+        f"the work, one subagent per item up to about eight, batched beyond that. Keep the JS to "
         f"orchestration only; the numbers come from the Python sandbox below. If this assistant "
         f"has no JavaScript interpreter, fan out the same way with parallel `task` tool calls."
     )
@@ -681,11 +681,11 @@ def _sandbox_clause(step: str) -> str:
         "\n\n## Data: compute it in the sandbox\n"
         "Ground this skill in the files in `/workspace/data` rather than in memory. Run "
         "`ls /workspace/data` first to see what is actually there, then use the `execute` tool "
-        "(Python — pandas, numpy, pypdf) to do the work:\n"
+        "(Python, pandas, numpy, pypdf) to do the work:\n"
         + (f"- {detail}\n" if detail else "")
         + "- Derive every figure you report from that data; if the file you need is not there, "
         "say so and ask the user to upload it to the Files panel.\n"
-        "- Show the result with `push_widget` — a table or chart — don't only describe it."
+        "- Show the result with `push_widget`, a table or chart, don't only describe it."
     )
 
 

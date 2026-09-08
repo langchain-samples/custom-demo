@@ -17,29 +17,17 @@
  * state.
  */
 import { useCallback } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  cleanupAssistantArtifacts,
-  createAssistant,
-  createProject,
-  deleteAssistant,
   getDemoTrafficStatus,
   getEvalStatus,
   listAgents,
   listAssistants,
   listHubPrompts,
-  listProjects,
   listTools,
   listWorkspaces,
-  updateAssistant,
 } from "@/lib/api";
-import type {
-  Assistant,
-  CreateAssistantInput,
-  EvalTarget,
-  LsArtifacts,
-  UpdateAssistantInput,
-} from "@/lib/api";
+import type { Assistant, EvalTarget } from "@/lib/api";
 
 /**
  * Every cache key in one place, so no call site hand-writes one. A typo in a key string
@@ -52,7 +40,6 @@ export const qk = {
   tools: () => ["tools"] as const,
   hubPrompts: (workspace: string) => ["hub-prompts", workspace] as const,
   agents: (workspace: string) => ["agents", workspace] as const,
-  projects: (workspace: string) => ["projects", workspace] as const,
   evalStatus: (target: EvalTarget) => ["eval-status", target] as const,
   demoTraffic: (project: string, workspace?: string) =>
     ["demo-traffic", project, workspace ?? ""] as const,
@@ -99,14 +86,6 @@ export function useAgents(workspace: string) {
   });
 }
 
-/** Tracing project names in one workspace. */
-export function useProjects(workspace: string) {
-  return useQuery({
-    queryKey: qk.projects(workspace),
-    queryFn: () => listProjects(workspace),
-    enabled: !!workspace,
-  });
-}
 
 /* ------------------------------ polling --------------------------------- */
 
@@ -208,42 +187,7 @@ export function useRefetchAssistants() {
   );
 }
 
-export function useCreateAssistant() {
-  const invalidate = useInvalidateAssistants();
-  return useMutation({
-    mutationFn: (input: CreateAssistantInput) => createAssistant(input),
-    onSuccess: invalidate,
-  });
-}
 
-export function useUpdateAssistant() {
-  const invalidate = useInvalidateAssistants();
-  return useMutation({
-    mutationFn: ({ id, body }: { id: string; body: UpdateAssistantInput }) =>
-      updateAssistant(id, body),
-    onSuccess: invalidate,
-  });
-}
 
-export function useDeleteAssistant() {
-  const invalidate = useInvalidateAssistants();
-  return useMutation({
-    mutationFn: (id: string) => deleteAssistant(id),
-    onSuccess: invalidate,
-  });
-}
 
-/** Cascade-deletes an assistant's LangSmith resources. Never throws; check `failed`. */
-export function useCleanupArtifacts() {
-  return useMutation({ mutationFn: (refs: LsArtifacts) => cleanupAssistantArtifacts(refs) });
-}
 
-export function useCreateProject() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ name, workspace }: { name: string; workspace: string }) =>
-      createProject(name, workspace),
-    onSuccess: (_data, { workspace }) =>
-      qc.invalidateQueries({ queryKey: qk.projects(workspace) }),
-  });
-}

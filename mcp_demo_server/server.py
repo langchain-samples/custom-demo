@@ -272,7 +272,9 @@ class SignatureCapture(BaseModel):
 def collect_signature(
     tracking_id: Annotated[str, Field(description="The consignment being handed over.")],
     ctx: Context,
-) -> dict[str, Any] | InputRequiredResult:
+    # ToolResult because the signed record comes back as TWO content blocks, text
+    # plus the image, which is what lets the model actually see the signature.
+) -> dict[str, Any] | InputRequiredResult | ToolResult:
     """Capture a recipient's handwritten signature as proof of delivery.
 
     This tool renders its own UI: a host that supports MCP Apps shows the

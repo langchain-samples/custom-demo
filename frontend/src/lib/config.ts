@@ -61,10 +61,6 @@ export function getApiBase(): string {
   return String(raw).replace(/\/+$/, "");
 }
 
-/** Persist a base URL override to localStorage ("lgUrl"); blank clears it. */
-export function setApiBase(url: string): void {
-  writeLS(LG_URL_KEY, (url || "").trim().replace(/\/+$/, ""));
-}
 
 /** Resolved assistant id (UUID or the "dashboard_agent" graph default). */
 export function getAssistantId(): string {
@@ -81,10 +77,6 @@ export function getApiKey(): string {
   return readLS(LG_API_KEY_KEY) || windowLG().apiKey || ENV_API_KEY;
 }
 
-/** Persist an API key override to localStorage. */
-export function setApiKey(key: string): void {
-  writeLS(LG_API_KEY_KEY, (key || "").trim());
-}
 
 /**
  * True when `id` is a real assistant row (a UUID) that can be PATCHed/DELETEd.

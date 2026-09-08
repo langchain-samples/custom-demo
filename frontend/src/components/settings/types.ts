@@ -26,7 +26,7 @@ export interface PanelConfig {
   lsWorkspace: string;
   /** Branding: display name shown in the header. */
   name: string;
-  /** Branding: accent hex (drives --brand-blue). */
+  /** Branding: accent hex (drives --brand-primary). */
   accent: string;
   /** Branding: optional secondary hex (drives the 2nd chart series). */
   accent2: string;
