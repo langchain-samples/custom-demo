@@ -101,6 +101,3 @@ def validate_widget(spec: dict) -> dict:
     Raises pydantic.ValidationError if the spec is malformed.
     """
     return WidgetEnvelope(widget=spec).widget.model_dump(exclude_none=True)
-
-
-WIDGET_TYPES = ["kpi", "bar", "line", "pie", "table", "text"]

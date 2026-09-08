@@ -2,8 +2,7 @@
 
     uv run python -m evals.run [--only setup|data|agent]
 
-Each group upserts a dataset, runs a target (setup LLM / synthetic data source /
-the deep agent) over its examples, scores them with evaluators, and records a
+Each group upserts a dataset, runs a target (the setup LLM, or the deep agent) over its examples, scores them with evaluators, and records a
 LangSmith experiment. Gated: prints how to set the env and exits if it's missing.
 See evals/README.md.
 """
@@ -137,7 +136,7 @@ def main() -> int:
     """Parse `--only`, check env, and run the selected eval experiment groups."""
     load_env()
     ap = argparse.ArgumentParser(description="Run dashboard-agent Tier-3 LLM evals.")
-    ap.add_argument("--only", choices=["setup", "data", "agent"], help="run just one group")
+    ap.add_argument("--only", choices=["setup", "agent"], help="run just one group")
     args = ap.parse_args()
 
     import os

@@ -33,11 +33,6 @@ API = "https://api.smith.langchain.com/api/v1"
 APPLICATION_KEY = "Application"
 TIMEOUT = 20.0
 
-# Resource types this module knows how to tag, in the order the receipt reports them.
-# The full server-side set is larger (dashboard, queue, sandbox, ...); these are the ones
-# assistant setup actually creates.
-RESOURCE_TYPES = ("project", "dataset", "prompt", "agent", "evaluator")
-
 
 def application_for(customer: str) -> str:
     """The Application value for a customer, e.g. "Acme Co" -> "assistant-acme-co"."""

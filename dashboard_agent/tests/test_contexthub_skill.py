@@ -83,7 +83,7 @@ def _invoke(agent, question: str, *, repo: str, thread_id: str):
         ls_workspace=_WS,
         customer="CI Test Co",
         industry="Retail",
-        enabled_tools=["datasearch", "push_widget"],
+        enabled_tools=["web_search", "push_widget"],
     )
     for _ in range(6):
         try:
@@ -136,7 +136,7 @@ def test_context_hub_skill_is_loaded():
     push_agent_prompt(_WS, _AGENT_REPO, agents_md, skill_links=links)
 
     # Explicitly invoke the skill: prompt nudging alone doesn't reliably beat
-    # datasearch for an ambiguous question, but a request that clearly maps to the
+    # a data file for an ambiguous question, but a request that clearly maps to the
     # skill reliably triggers a load — which is what this test verifies.
     question = (
         "A customer asks whether they can return a cordless drill bought 12 days ago. "

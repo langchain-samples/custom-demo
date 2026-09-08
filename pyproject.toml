@@ -82,12 +82,6 @@ convention = "google"
 python-version = "3.13"
 
 
-[tool.pyrefly]
-python-interpreter-path = ".venv/bin/python"
-
-# Show type mismatches as warnings (yellow) instead of errors (red). Values:
-# "error" | "warn" | "ignore". Each red underline shows its code in the Problems
-# panel / on hover, so add any others here as needed.
 [tool.pyrefly.errors]
 bad-assignment = "warn"
 bad-argument-type = "warn"

@@ -86,14 +86,9 @@ from a fabricated one, live. There is one rule:
 
 Open the trace (**Traces** in the header, or the link under any answer) or the graph inspector,
 and look for an `execute` or a `read_file` before the number. Then check the file yourself: the
-files button in the header browses `/workspace/data`, and the rows you see are the rows the
-agent saw. That is the whole verification, and it works because there is no second source of
+files button in the header browses the agent's VM (rooted at `/workspace`, with the seeded
+files under `/workspace/data`), and the rows you see are the rows the agent saw. That is the whole verification, and it works because there is no second source of
 truth.
-
-There used to be. A `datasearch` tool asked a fast model to invent plausible records per query,
-so there were two independent fictions that disagreed: ticket 4521 belonged to a different
-person depending on which one you asked, and neither was wrong. That tool is gone precisely so
-this section can be four sentences long.
 
 ## The planted bug, and fixing it live
 

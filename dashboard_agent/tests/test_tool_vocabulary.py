@@ -29,6 +29,26 @@ FRONTEND = Path(__file__).resolve().parents[2] / "frontend" / "src"
 
 CATALOGUE = sorted(spec.id for spec in TOOL_REGISTRY)
 
+# Tools deepagents provides, which these maps also label. Not a second copy of the
+# catalogue: these names come from the dependency, and the test below needs to know
+# them only to tell them apart from a name nothing defines any more.
+BUILTINS = frozenset(
+    {
+        "write_todos",
+        "task",
+        "execute",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "ls",
+        "glob",
+        "grep",
+        "delete",
+        # From langchain-quickjs, bound only when DA_DYNAMIC_SUBAGENTS is on.
+        "eval",
+    }
+)
+
 # Each map that is keyed by tool name, and how to read its keys out.
 # `lib/agentGraph.ts` is deliberately absent: it assigns lanes with a laneFor()
 # function rather than a keyed map, and it falls back to a real lane, so an
@@ -64,9 +84,15 @@ def test_every_catalogue_tool_is_known_to_the_frontend(tool: str, relative: str)
 def test_the_frontend_names_no_tool_the_catalogue_dropped(relative: str):
     """The other direction: a removed tool leaves dead entries behind.
 
-    Only checked against catalogue-shaped names, so the deepagents built-ins in
-    these maps are left alone. `datasearch` and `list_data_sources` survived in
-    four maps after being deleted from the backend, which is what this catches.
+    Checked as a set difference rather than against a list of known-removed names: a
+    fixed denylist stops catching anything the moment those names are gone, which is
+    the state it was in. The deepagents built-ins are excluded because they come from
+    a dependency, so enumerating them here would be a copy of someone else's
+    vocabulary.
     """
-    stale = {"datasearch", "list_data_sources", "query_sql"} & _keys(relative)
-    assert not stale, f"frontend/src/{relative} still lists removed tools: {sorted(stale)}"
+    stale = _keys(relative) - set(CATALOGUE) - BUILTINS
+    assert not stale, (
+        f"frontend/src/{relative} lists tools that are in neither the catalogue nor the "
+        f"deepagents built-ins: {sorted(stale)}. Remove them, or add a new catalogue "
+        "tool to TOOL_REGISTRY."
+    )

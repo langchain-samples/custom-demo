@@ -370,7 +370,7 @@ def analyze_customer(
         else ""
     )
     # Catalogue of OPTIONAL add-on tools for the LLM to choose from. The core
-    # tools (push_widget + datasearch) are on by default and not chosen here.
+    # tool (push_widget) is always on and not chosen here.
     catalogue = "; ".join(
         f"{s.id} ({s.label}, {s.group})"
         for s in TOOL_REGISTRY
@@ -541,7 +541,7 @@ def analyze_customer(
             out["theme"] = theme
         # Keep only catalogue ids, drop any explicit-only tool the LLM shouldn't
         # auto-enable (it isn't even offered below), then union the always-on core
-        # (push_widget + datasearch): the LLM is told not to list those, so they'd
+        # (push_widget): the LLM is told not to list it, so it would
         # otherwise be dropped and the agent would lose data retrieval.
         picked = ({t.strip() for t in resp.enabled_tools} & CATALOGUE_IDS) - EXPLICIT_ONLY
         out["enabled_tools"] = sorted(picked | set(DEFAULT_ENABLED))
@@ -599,12 +599,12 @@ def push_agent_prompt(workspace: str, repo: str, text: str, skill_links: dict | 
 # a skill catalogue (each skill's name, description, and SKILL.md path) plus
 # progressive-disclosure guidance into the system prompt, which agent.py now
 # composes in (see _hub_system_prompt) instead of discarding. This clause just
-# enforces that the model acts on that catalogue before falling back to datasearch.
+# enforces that the model acts on that catalogue before improvising.
 _SKILLS_CLAUSE = (
     "\n\nSKILLS (IMPORTANT): At the START of every request, FIRST check your available skills "
     "(their names, descriptions, and SKILL.md paths are listed above). If the request matches "
     "one, you MUST read that skill's SKILL.md at the given path and follow its steps before doing "
-    "anything else (including before calling datasearch). Only skip the skills when none match. "
+    "anything else (including before reading a data file). Only skip the skills when none match. "
     "Never improvise a procedure a skill already covers."
 )
 
@@ -931,7 +931,7 @@ def prepare_assistant(payload: dict) -> dict:
     if industry:
         context["industry"] = industry
     # Tool selection: explicit caller override → the LLM's pick → DEFAULT_ENABLED.
-    # Union DEFAULT_ENABLED (push_widget + datasearch) so a new assistant always
+    # Union DEFAULT_ENABLED (push_widget) so a new assistant always
     # keeps the always-on core plus data retrieval, then adds the optional picks.
     # An explicit override is the USER's choice and is respected verbatim; the LLM's
     # pick never auto-enables an explicit-only tool (the user must opt in themselves).

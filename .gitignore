@@ -3,8 +3,6 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
-venv/
-env/
 
 # Secrets / environment
 .env
@@ -14,7 +12,6 @@ env/
 # Test / tooling caches
 .pytest_cache/
 .ruff_cache/
-.mypy_cache/
 .claude/settings.json
 
 # LangGraph dev server (Agent Server) local state
@@ -29,10 +26,8 @@ node_modules/
 
 # Sibling demo project — not part of this repo (provides a local venv/key only)
 chat-langchain-lite/
-assistants-backup-old-deployment.json
 
 # Keys / certs (never commit)
 *.pem
 *.key
 *.crt
-credentials.json

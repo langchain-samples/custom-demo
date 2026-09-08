@@ -100,7 +100,7 @@ _USER_POOL = 12
 _ERRORS = (
     "APITimeoutError: Request timed out after 120.0s",
     "RateLimitError: 429 rate_limit_error - number of concurrent connections exceeded",
-    "ToolException: datasearch returned no rows for the requested topic",
+    "ToolException: no rows in /workspace/data for the requested topic",
     "APIStatusError: 529 overloaded_error - Anthropic API temporarily overloaded",
 )
 

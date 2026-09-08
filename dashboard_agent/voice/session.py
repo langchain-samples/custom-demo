@@ -42,10 +42,6 @@ from ..config import load_env, voice_model
 # to the browser as a shortcut.
 _TOKENS_URL = "https://generativelanguage.googleapis.com/v1beta/auth_tokens"
 
-# Audio only. A native-audio model accepts ONLY this modality, so text for the chat
-# transcript comes from output transcription rather than a TEXT response.
-_MODALITIES = ["AUDIO"]
-
 
 def voice_configured() -> bool:
     """Is a Gemini key present? Voice mode is unavailable without one."""
