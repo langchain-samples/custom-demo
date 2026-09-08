@@ -1,0 +1,792 @@
+<title>Tools That Ship Their Own UI</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #030710;
+    --bg-2: #0D1322;
+    --card: #161F34;
+    --line: #2F4B68;
+    --line-soft: #172136;
+    --ink: #F2FAFF;
+    --ink-2: rgba(242, 250, 255, 0.62);
+    --ink-3: rgba(242, 250, 255, 0.40);
+    --accent: #7FC8FF;
+    --accent-deep: #006DDD;
+    --mid: #40668D;
+    --code-bg: #0D1322;
+    --sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  /* Dark-first, so the un-stamped default is dark. The media block gives a
+     light-preferring viewer the light palette before any JS runs; the
+     [data-theme] block lets the toggle win in either direction. */
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      color-scheme: light;
+      --bg: #F2FAFF;
+      --bg-2: #E5F4FF;
+      --card: #E5F4FF;
+      --line: #B2DEFF;
+      --line-soft: #CCE9FF;
+      --ink: #030710;
+      --ink-2: #2F4B68;
+      --ink-3: #40668D;
+      --accent: #006DDD;
+      --code-bg: #E5F4FF;
+    }
+    :root:not([data-theme="dark"]) .s { color: #885270; }
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #F2FAFF;
+    --bg-2: #E5F4FF;
+    --card: #E5F4FF;
+    --line: #B2DEFF;
+    --line-soft: #CCE9FF;
+    --ink: #030710;
+    --ink-2: #2F4B68;
+    --ink-3: #40668D;
+    --accent: #006DDD;
+    --accent-deep: #006DDD;
+    --mid: #40668D;
+    --code-bg: #E5F4FF;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-weight: 300;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 28px; }
+  .col { max-width: 680px; }
+
+  /* ---------- masthead ---------- */
+  header.top {
+    border-bottom: 1px solid var(--line-soft);
+    padding: 18px 0;
+    position: sticky;
+    top: 0;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(8px);
+    z-index: 10;
+  }
+  .top .wrap { display: flex; align-items: center; gap: 14px; }
+  .mark {
+    font-family: var(--mono);
+    font-size: 13px;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+  }
+  .mark b { font-weight: 500; }
+  .mark span { color: var(--ink-3); }
+  .grow { flex: 1; }
+  .toggle {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-2);
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 5px 10px;
+    cursor: pointer;
+  }
+  .toggle:hover { color: var(--ink); border-color: var(--accent); }
+  .toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---------- hero ---------- */
+  .hero { padding: 76px 0 44px; }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: -0.01em;
+    color: var(--accent);
+    margin: 0 0 18px;
+  }
+  h1 {
+    font-weight: 300;
+    font-size: clamp(2.3rem, 5.4vw, 3.5rem);
+    line-height: 1.03;
+    letter-spacing: -0.025em;
+    margin: 0 0 22px;
+    text-wrap: balance;
+  }
+  .standfirst {
+    font-size: 1.16rem;
+    line-height: 1.5;
+    color: var(--ink-2);
+    margin: 0 0 26px;
+    max-width: 620px;
+  }
+  .byline {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-3);
+    border-top: 1px solid var(--line-soft);
+    padding-top: 16px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px;
+  }
+
+  /* ---------- structure ---------- */
+  section { padding: 8px 0 40px; }
+  h2 {
+    font-family: var(--mono);
+    font-weight: 400;
+    font-size: 1.08rem;
+    line-height: 1.1;
+    letter-spacing: 0;
+    color: var(--accent);
+    margin: 46px 0 18px;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+  }
+  h2 .n {
+    font-size: 11px;
+    color: var(--ink-3);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 2px 6px;
+    flex: none;
+  }
+  h3 {
+    font-weight: 400;
+    font-size: 1.02rem;
+    letter-spacing: -0.01em;
+    margin: 30px 0 10px;
+    color: var(--ink);
+  }
+  p { margin: 0 0 16px; max-width: 680px; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  strong { font-weight: 600; }
+  code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    color: var(--accent);
+    background: var(--code-bg);
+    border: 1px solid var(--line-soft);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+  ul { margin: 0 0 16px; padding-left: 20px; max-width: 680px; }
+  li { margin-bottom: 9px; }
+  li::marker { color: var(--mid); }
+
+  /* ---------- code blocks ---------- */
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--line-soft);
+    border-radius: 10px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    margin: 0 0 20px;
+    max-width: 860px;
+  }
+  pre code {
+    background: none;
+    border: 0;
+    padding: 0;
+    color: var(--ink);
+    font-size: 12.6px;
+    line-height: 1.7;
+    display: block;
+  }
+  .c { color: var(--ink-3); }
+  .k { color: var(--accent); }
+  .s { color: #C78EAD; }
+  :root[data-theme="light"] .s { color: #885270; }
+  .f { color: var(--ink); font-weight: 400; }
+
+  .filename {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-3);
+    margin: 0 0 6px;
+    letter-spacing: -0.01em;
+  }
+
+  /* ---------- figures ---------- */
+  figure {
+    margin: 30px 0 34px;
+    max-width: 900px;
+    border: 1px solid var(--line-soft);
+    border-radius: 12px;
+    background: var(--bg-2);
+    padding: 22px 22px 16px;
+    overflow-x: auto;
+  }
+  figure svg { display: block; width: 100%; height: auto; color: var(--ink-2); }
+  figcaption {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--ink-3);
+    margin-top: 14px;
+    border-top: 1px solid var(--line-soft);
+    padding-top: 12px;
+  }
+
+  /* ---------- gotcha list ---------- */
+  .traps { display: grid; gap: 1px; background: var(--line-soft); border: 1px solid var(--line-soft); border-radius: 12px; overflow: hidden; max-width: 860px; margin-bottom: 22px; }
+  .trap { background: var(--bg-2); padding: 18px 20px; }
+  .trap h4 {
+    font-family: var(--mono);
+    font-weight: 400;
+    font-size: 13px;
+    margin: 0 0 7px;
+    color: var(--ink);
+    letter-spacing: -0.01em;
+  }
+  .trap p { margin: 0; font-size: 0.93rem; color: var(--ink-2); max-width: none; }
+  .trap .sym { color: var(--accent); margin-right: 8px; }
+
+  .callout {
+    border-left: 2px solid var(--accent);
+    padding: 2px 0 2px 18px;
+    margin: 0 0 20px;
+    max-width: 680px;
+  }
+  .callout p { margin: 0; color: var(--ink-2); font-size: 0.97rem; }
+
+  footer {
+    border-top: 1px solid var(--line-soft);
+    margin-top: 50px;
+    padding: 30px 0 60px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-3);
+  }
+  footer p { max-width: 680px; margin: 0 0 8px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<header class="top">
+  <div class="wrap">
+    <span class="mark"><b>LangChain</b> <span>/ Engineering</span></span>
+    <span class="grow"></span>
+    <button class="toggle" id="theme" type="button">Light</button>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="hero col">
+    <p class="eyebrow">mcp apps · deep agents · langchain.mcp</p>
+    <h1>Tools That Ship Their Own UI</h1>
+    <p class="standfirst">
+      An MCP server can hand your frontend a signature pad, a set of allocation sliders, or an
+      order ticket, and get structured data back mid-tool-call. Here is the whole path, from the
+      server's decorator to the iframe, and the four things that cost us an hour each.
+    </p>
+    <div class="byline">
+      <span>Full stack: FastMCP → MCPAdapter → Deep Agent → React</span>
+      <span>~12 min</span>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+<div class="col">
+
+<p>
+  A generated form handles most of what a tool needs from a person. It cannot handle a drawn
+  signature, five sliders that must total 100%, or a hold-to-confirm on an order that moves money.
+  <strong>MCP Apps</strong> are the answer to that: a tool declares a <code>ui://</code> resource,
+  the server serves HTML, and the host renders it while the tool call is paused.
+</p>
+
+<p>
+  The pieces are all shipping — the stateless MCP spec, <code>langchain.mcp</code>, FastMCP's
+  <code>AppConfig</code> — but they are documented separately, and the interesting part is how they
+  meet. This is the working path, with the mechanism drawn rather than described.
+</p>
+
+</div>
+
+<h2><span class="n">01</span> The round trip</h2>
+<div class="col">
+<p>
+  Start with the shape, because every later decision follows from it. The thing to notice is that
+  <strong>the tool call is suspended in the middle</strong>, and it resumes on the server as the
+  same call, not a new one.
+</p>
+</div>
+
+<figure>
+  <svg viewBox="0 0 860 400" role="img" aria-label="A tool call pauses mid-execution: the MCP server returns an input-required result, the adapter raises a LangGraph interrupt, the browser renders the server's own HTML in a sandboxed iframe, and the resume re-issues the same call with the answer attached.">
+    <defs>
+      <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+      </marker>
+      <marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="#7FC8FF"/>
+      </marker>
+    </defs>
+
+    <!-- lanes -->
+    <text x="8" y="30" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor">Browser</text>
+    <text x="8" y="150" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor">Deep Agent</text>
+    <text x="8" y="290" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor">MCP server</text>
+    <line x1="0" y1="60" x2="860" y2="60" stroke="currentColor" stroke-width="1" opacity="0.18"/>
+    <line x1="0" y1="196" x2="860" y2="196" stroke="currentColor" stroke-width="1" opacity="0.18"/>
+
+    <!-- step 1: model calls tool -->
+    <rect x="96" y="104" width="132" height="42" rx="8" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <text x="162" y="124" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">model calls</text>
+    <text x="162" y="138" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">collect_signature</text>
+
+    <line x1="162" y1="146" x2="162" y2="248" stroke="currentColor" stroke-width="1.4" marker-end="url(#a)"/>
+    <text x="172" y="200" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">tools/call</text>
+
+    <!-- step 2: server asks -->
+    <rect x="96" y="252" width="176" height="42" rx="8" fill="none" stroke="#7FC8FF" stroke-width="1.4"/>
+    <text x="184" y="272" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="#7FC8FF">InputRequiredResult</text>
+    <text x="184" y="286" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#7FC8FF">+ requested_schema</text>
+
+    <path d="M272 268 L360 268 L360 128" fill="none" stroke="#7FC8FF" stroke-width="1.4" marker-end="url(#ab)"/>
+
+    <!-- step 3: adapter interrupt -->
+    <rect x="300" y="104" width="150" height="42" rx="8" fill="none" stroke="#7FC8FF" stroke-width="1.4"/>
+    <text x="375" y="124" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="#7FC8FF">MCPAdapter raises</text>
+    <text x="375" y="138" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="#7FC8FF">interrupt()</text>
+
+    <line x1="375" y1="104" x2="375" y2="44" stroke="#7FC8FF" stroke-width="1.4" marker-end="url(#ab)"/>
+    <text x="385" y="80" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#7FC8FF">__interrupt__</text>
+
+    <!-- step 4: iframe -->
+    <rect x="300" y="12" width="188" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="4 3"/>
+    <text x="394" y="30" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">sandboxed iframe</text>
+    <text x="394" y="45" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">the server's own HTML</text>
+
+    <path d="M488 34 L560 34 L560 118" fill="none" stroke="currentColor" stroke-width="1.4" marker-end="url(#a)"/>
+    <text x="570" y="76" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">postMessage</text>
+    <text x="570" y="90" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">submit</text>
+
+    <!-- step 5: resume -->
+    <rect x="500" y="104" width="132" height="42" rx="8" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <text x="566" y="124" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">Command(resume)</text>
+    <text x="566" y="138" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">keyed by request key</text>
+
+    <line x1="632" y1="128" x2="700" y2="128" stroke="currentColor" stroke-width="1.4" marker-end="url(#a)"/>
+    <line x1="700" y1="128" x2="700" y2="248" stroke="currentColor" stroke-width="1.4" marker-end="url(#a)"/>
+    <text x="640" y="196" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">tools/call again,</text>
+    <text x="640" y="210" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">+ input_responses</text>
+
+    <!-- step 6: finish -->
+    <rect x="628" y="252" width="150" height="42" rx="8" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <text x="703" y="272" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">tool body runs</text>
+    <text x="703" y="286" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">to completion</text>
+
+    <line x1="778" y1="268" x2="820" y2="268" stroke="currentColor" stroke-width="1.4" marker-end="url(#a)"/>
+    <line x1="820" y1="268" x2="820" y2="128" stroke="currentColor" stroke-width="1.4" marker-end="url(#a)"/>
+    <text x="700" y="330" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">result → model</text>
+
+    <!-- pause bracket -->
+    <path d="M84 100 L74 100 L74 300 L84 300" fill="none" stroke="#7FC8FF" stroke-width="1.2"/>
+    <text x="66" y="204" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#7FC8FF">one</text>
+    <text x="66" y="218" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#7FC8FF">tool call</text>
+  </svg>
+  <figcaption>
+    The blue path is the pause. One <code>collect_signature</code> call spans both legs: the server
+    answers the first with a request for input, and the second carries the person's answer back into
+    the same call, which then finishes normally.
+  </figcaption>
+</figure>
+
+<div class="col">
+<p>
+  Two consequences fall straight out of that picture, and both bite if you miss them. The tool body
+  <strong>runs from the top on every round</strong> — so any real work before the ask happens twice.
+  And the answer is <strong>keyed by the server's own request key</strong>, so a resume under the
+  wrong key fails rather than degrading.
+</p>
+</div>
+
+<h2><span class="n">02</span> Why the server can't just ask</h2>
+<div class="col">
+<p>
+  The obvious API is <code>ctx.elicit()</code>: pause here, ask the caller, carry on. On a modern
+  connection it fails outright:
+</p>
+<pre><code><span class="c"># fastmcp, against a 2026-07-28 connection</span>
+answer = await ctx.elicit("When should this ship?", response_type=Slot)
+<span class="c"># -&gt; elicitation via server-initiated requests is unavailable</span></code></pre>
+<p>
+  That is not a bug, it is the stateless spec working. Server-initiated elicitation needs a live
+  session to push a question down. The new protocol removed sessions, which is what makes MCP
+  servers horizontally scalable — and it replaced the push with a <strong>retry-able round</strong>.
+</p>
+</div>
+
+<figure>
+  <svg viewBox="0 0 820 250" role="img" aria-label="Legacy elicitation holds a session open while it waits for an answer; the guard pattern instead ends the call with an input-required result and the client re-issues it with the answer attached.">
+    <defs>
+      <marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+      </marker>
+      <marker id="bb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="#7FC8FF"/>
+      </marker>
+    </defs>
+
+    <text x="0" y="16" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">legacy — ctx.elicit()</text>
+    <line x1="60" y1="44" x2="60" y2="104" stroke="currentColor" stroke-width="1.2"/>
+    <line x1="330" y1="44" x2="330" y2="104" stroke="currentColor" stroke-width="1.2"/>
+    <text x="60" y="40" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">client</text>
+    <text x="330" y="40" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">server</text>
+    <line x1="60" y1="58" x2="326" y2="58" stroke="currentColor" stroke-width="1.3" marker-end="url(#b)"/>
+    <text x="193" y="53" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">tools/call</text>
+    <line x1="330" y1="80" x2="64" y2="80" stroke="currentColor" stroke-width="1.3" marker-end="url(#b)"/>
+    <text x="197" y="75" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">elicitation/create</text>
+    <rect x="60" y="88" width="270" height="14" fill="currentColor" opacity="0.12"/>
+    <text x="195" y="99" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">session held open the whole time</text>
+    <text x="0" y="128" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">one server instance, pinned</text>
+
+    <line x1="410" y1="20" x2="410" y2="230" stroke="currentColor" stroke-width="1" opacity="0.2"/>
+
+    <text x="450" y="16" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="#7FC8FF">stateless — guard pattern</text>
+    <line x1="510" y1="44" x2="510" y2="190" stroke="currentColor" stroke-width="1.2"/>
+    <line x1="780" y1="44" x2="780" y2="190" stroke="currentColor" stroke-width="1.2"/>
+    <text x="510" y="40" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">client</text>
+    <text x="780" y="40" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">any instance</text>
+    <line x1="510" y1="58" x2="776" y2="58" stroke="currentColor" stroke-width="1.3" marker-end="url(#b)"/>
+    <text x="643" y="53" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">tools/call</text>
+    <line x1="780" y1="82" x2="514" y2="82" stroke="#7FC8FF" stroke-width="1.4" marker-end="url(#bb)"/>
+    <text x="647" y="77" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="#7FC8FF">InputRequiredResult</text>
+    <text x="510" y="104" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="#7FC8FF">call is over</text>
+    <text x="560" y="126" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">…person answers, minutes later…</text>
+    <line x1="510" y1="150" x2="776" y2="150" stroke="#7FC8FF" stroke-width="1.4" marker-end="url(#bb)"/>
+    <text x="643" y="145" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="#7FC8FF">tools/call + input_responses</text>
+    <line x1="780" y1="174" x2="514" y2="174" stroke="currentColor" stroke-width="1.3" marker-end="url(#b)"/>
+    <text x="647" y="169" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">final result</text>
+    <text x="450" y="214" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">nothing pinned; the pause can outlive the process</text>
+  </svg>
+  <figcaption>
+    The one structural difference: the guard pattern <em>ends</em> the call to ask. That is why the
+    pause can survive a checkpoint, a redeploy, and a person going to lunch — and why an
+    <code>interrupt()</code> can wrap it at all.
+  </figcaption>
+</figure>
+
+<div class="col">
+<p>A guard tool is an ordinary tool that can return one extra type:</p>
+</div>
+
+<p class="filename">server.py</p>
+<pre><code><span class="k">@mcp</span>.tool(app=AppConfig(resource_uri=<span class="s">"ui://fieldlink/signature.html"</span>))
+<span class="k">def</span> <span class="f">collect_signature</span>(tracking_id: str, ctx: Context) -&gt; dict | InputRequiredResult:
+    <span class="s">"""Capture a recipient's handwritten signature as proof of delivery."""</span>
+    shipment = lookup(tracking_id)          <span class="c"># cheap: this repeats every round</span>
+
+    answer = answer_for(ctx, <span class="s">"signature"</span>)
+    <span class="k">if</span> answer <span class="k">is</span> <span class="k">None</span>:                    <span class="c"># round 1 — ask, do nothing else</span>
+        <span class="k">return</span> ask(<span class="s">"signature"</span>, f<span class="s">"Signature for {tracking_id}"</span>,
+                   SignatureCapture.model_json_schema())
+
+    <span class="k">if</span> answer.action != <span class="s">"accept"</span>:        <span class="c"># declined or cancelled</span>
+        <span class="k">return</span> {<span class="s">"status"</span>: <span class="s">"unsigned"</span>}
+
+    capture = SignatureCapture.model_validate(answer.content)
+    <span class="k">return</span> store_proof_of_delivery(shipment, capture)   <span class="c"># round 2 — the real work</span></code></pre>
+
+<p class="filename">elicit.py — the two helpers, in full</p>
+<pre><code><span class="k">def</span> <span class="f">ask</span>(key: str, message: str, schema: dict) -&gt; InputRequiredResult:
+    <span class="k">return</span> InputRequiredResult(input_requests={
+        key: ElicitRequest(params=ElicitRequestFormParams(
+            message=message, requested_schema=schema))})
+
+<span class="k">def</span> <span class="f">answer_for</span>(ctx: Context, key: str) -&gt; ElicitResult | <span class="k">None</span>:
+    <span class="k">return</span> (ctx.input_responses <span class="k">or</span> {}).get(key)</code></pre>
+
+<div class="col">
+<p>
+  That is the entire server-side protocol. <code>AppConfig(resource_uri=...)</code> in the decorator
+  is the only line that makes it an <em>App</em> rather than a plain elicitation — it stamps
+  <code>_meta.ui.resourceUri</code> on the tool.
+</p>
+</div>
+
+<h2><span class="n">03</span> Where the HTML comes from</h2>
+<div class="col">
+<p>
+  The UI is a resource on the same server, served with the MCP Apps MIME type. Nothing fetches it
+  from a CDN; the host reads it over MCP and hands it to the iframe as <code>srcdoc</code>.
+</p>
+</div>
+
+<figure>
+  <svg viewBox="0 0 800 218" role="img" aria-label="The tool's metadata names a ui:// resource; the deployment reads that resource over MCP and returns the HTML, which the browser renders inside an iframe sandboxed to scripts only.">
+    <defs>
+      <marker id="c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+      </marker>
+    </defs>
+
+    <rect x="0" y="46" width="196" height="76" rx="8" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <text x="98" y="70" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">tool metadata</text>
+    <text x="98" y="90" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="#7FC8FF">_meta.ui.resourceUri</text>
+    <text x="98" y="106" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">ui://…/signature.html</text>
+
+    <line x1="196" y1="84" x2="266" y2="84" stroke="currentColor" stroke-width="1.4" marker-end="url(#c)"/>
+    <text x="231" y="76" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">read</text>
+
+    <rect x="270" y="46" width="196" height="76" rx="8" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <text x="368" y="70" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">resources/read</text>
+    <text x="368" y="90" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">text/html;</text>
+    <text x="368" y="104" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">profile=mcp-app</text>
+
+    <line x1="466" y1="84" x2="536" y2="84" stroke="currentColor" stroke-width="1.4" marker-end="url(#c)"/>
+    <text x="501" y="76" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">html</text>
+
+    <rect x="540" y="34" width="240" height="100" rx="8" fill="none" stroke="#7FC8FF" stroke-width="1.4" stroke-dasharray="5 3"/>
+    <text x="660" y="58" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="#7FC8FF">iframe srcdoc</text>
+    <text x="660" y="78" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="#7FC8FF">sandbox="allow-scripts"</text>
+    <text x="660" y="96" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">no allow-same-origin</text>
+    <text x="660" y="114" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">→ opaque origin</text>
+
+    <text x="540" y="166" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">cannot reach: your cookies,</text>
+    <text x="540" y="182" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">storage, DOM, or network</text>
+    <text x="540" y="198" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">only channel: postMessage</text>
+
+    <line x1="0" y1="150" x2="466" y2="150" stroke="currentColor" stroke-width="1" opacity="0.25"/>
+    <text x="0" y="170" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">server side — you control this</text>
+    <text x="0" y="186" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">the customer's MCP server</text>
+    <text x="0" y="202" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">may not be yours at all</text>
+  </svg>
+  <figcaption>
+    You are rendering HTML written by whoever runs the MCP server. <code>allow-scripts</code> without
+    <code>allow-same-origin</code> gives it an opaque origin: it can run, and it can
+    <code>postMessage</code>, and that is all.
+  </figcaption>
+</figure>
+
+<h2><span class="n">04</span> Binding it to a Deep Agent</h2>
+<div class="col">
+<p>
+  If the server list is fixed at build time, this is three lines and you are done:
+</p>
+<pre><code><span class="k">async with</span> MCPAdapter(<span class="s">"https://example.com/mcp"</span>) <span class="k">as</span> adapter:
+    agent = create_deep_agent(model=<span class="s">"claude-sonnet-5"</span>,
+                              tools=<span class="k">await</span> adapter.list_tools(),
+                              checkpointer=checkpointer)   <span class="c"># required: the pause has to wait somewhere</span></code></pre>
+<p>
+  The tools hold the client, so they stay callable after the context exits, and elicitation is armed
+  by default.
+</p>
+
+<h3>When each user brings their own server</h3>
+<p>
+  This is the case worth writing down, because it is the one that does not fit. If servers come from
+  per-user configuration, you cannot know them when the graph is built — and
+  <code>create_deep_agent(tools=…)</code> is fixed at build time. Middleware bridges it, but
+  <strong>both halves are load-bearing</strong>:
+</p>
+</div>
+
+<p class="filename">agent.py</p>
+<pre><code><span class="k">class</span> <span class="f">McpTools</span>(AgentMiddleware):
+    <span class="k">async def</span> <span class="f">awrap_model_call</span>(self, request, handler):
+        <span class="c"># half one: what the MODEL is offered.</span>
+        tools = <span class="k">await</span> load_tools(servers_for(request.runtime))   <span class="c"># cached!</span>
+        <span class="k">return await</span> handler(request.override(tools=[*request.tools, *tools]))
+
+    <span class="k">async def</span> <span class="f">awrap_tool_call</span>(self, request, handler):
+        <span class="c"># half two: what actually RUNS. ToolNode was built without these,</span>
+        <span class="c"># so it passes tool=None; hand it the real object or every MCP</span>
+        <span class="c"># call comes back "tool not found".</span>
+        <span class="k">if</span> request.tool <span class="k">is</span> <span class="k">None</span>:
+            name = request.tool_call[<span class="s">"name"</span>]
+            tool = find(<span class="k">await</span> load_tools(servers_for(request.runtime)), name)
+            <span class="k">if</span> tool: request = dataclasses.replace(request, tool=tool)
+        <span class="k">return await</span> handler(request)
+
+    <span class="k">def</span> <span class="f">wrap_model_call</span>(self, request, handler): <span class="k">return</span> handler(request)
+    <span class="k">def</span> <span class="f">wrap_tool_call</span>(self, request, handler): <span class="k">return</span> handler(request)</code></pre>
+
+<div class="callout">
+  <p>
+    Those two sync one-liners are not filler. A middleware with only async hooks makes every
+    synchronous <code>invoke()</code> raise <code>NotImplementedError</code> — which took out our
+    entire test suite on the first run. Defining <code>wrap_tool_call</code> is also what tells
+    <code>create_agent</code> this agent has dynamic tools, so it stops rejecting the names the first
+    half just added.
+  </p>
+</div>
+
+<div class="col">
+<p>
+  Two more things that matter at this seam. Cache the discovery — <code>awrap_model_call</code> fires
+  on <em>every</em> model call, and a round trip per call is visible on stage. And give each server
+  its own namespace: a remote tool called <code>datasearch</code> will otherwise collide with yours.
+  A <code>ClientGroup</code> prefixes every tool with the server it came from, which is worth doing
+  even for a single server.
+</p>
+</div>
+
+<h2><span class="n">05</span> The frontend</h2>
+<div class="col">
+<p>
+  The pause arrives on the stream as an ordinary <code>__interrupt__</code>, in this shape:
+</p>
+<pre><code>{ <span class="s">"type"</span>: <span class="s">"mcp_elicitation"</span>,
+  <span class="s">"tool_name"</span>: <span class="s">"fieldlink_collect_signature"</span>,
+  <span class="s">"requests"</span>: [{ <span class="s">"key"</span>: <span class="s">"signature"</span>, <span class="s">"message"</span>: <span class="s">"Signature for FL-4501"</span>,
+                <span class="s">"mode"</span>: <span class="s">"form"</span>, <span class="s">"requested_schema"</span>: {…} }] }</code></pre>
+<p>
+  Route on <code>type</code>, ask your backend whether that tool ships an App, and render one of two
+  things. The fallback matters more than the App: <strong>most MCP servers ship no UI</strong>, and a
+  form generated from <code>requested_schema</code> covers all of them for free.
+</p>
+</div>
+
+<p class="filename">McpElicitationCard.tsx</p>
+<pre><code><span class="k">const</span> app = <span class="k">await</span> fetchMcpApp(servers, review.tool_name);   <span class="c">// null for a plain tool</span>
+
+<span class="k">return</span> app
+  ? &lt;iframe srcDoc={app.html} sandbox=<span class="s">"allow-scripts"</span> /&gt;   <span class="c">// scripts only. never allow-same-origin</span>
+  : &lt;SchemaForm schema={first.requested_schema} onSubmit={accept} /&gt;;</code></pre>
+
+<p class="filename">the postMessage contract — four messages, that is the whole protocol</p>
+<pre><code><span class="c">// host → app</span>
+{ type: <span class="s">"mcp-app:init"</span>, request, theme, accent }
+
+<span class="c">// app → host</span>
+{ type: <span class="s">"mcp-app:ready"</span> }                <span class="c">// once, on load</span>
+{ type: <span class="s">"mcp-app:resize"</span>, height }        <span class="c">// or it gets clipped</span>
+{ type: <span class="s">"mcp-app:submit"</span>, content }       <span class="c">// must match requested_schema</span>
+{ type: <span class="s">"mcp-app:cancel"</span> }</code></pre>
+
+<div class="col">
+<p>
+  One detail on the listener: a sandboxed frame with no origin posts from <code>"null"</code>, so
+  <code>event.origin</code> cannot identify it. Match on the frame's own window instead, which no
+  other document can forge:
+</p>
+<pre><code><span class="k">if</span> (event.source !== iframeRef.current?.contentWindow) <span class="k">return</span>;</code></pre>
+<p>Then resume, keyed by the server's key:</p>
+<pre><code>resume({ responses: { [first.key]: { action: <span class="s">"accept"</span>, content } } });</code></pre>
+</div>
+
+<h2><span class="n">06</span> The four that cost an hour each</h2>
+<div class="col">
+<p>
+  None of these fail loudly. Each one produces a plausible-looking system that is quietly wrong,
+  which is why they are worth the space.
+</p>
+</div>
+
+<div class="traps">
+  <div class="trap">
+    <h4><span class="sym">01</span>Elicitation content is flat</h4>
+    <p>
+      <code>ElicitResult.content</code> allows primitives only — string, number, boolean, string
+      list. A schema cannot ask for a nested object. Our rebalance app sends one number per sleeve
+      (<code>us_equity: 38.0</code>), not an <code>allocation</code> map; pydantic rejects the nested
+      version before it ever reaches the server. Flattening is also what keeps the generated-form
+      fallback usable.
+    </p>
+  </div>
+  <div class="trap">
+    <h4><span class="sym">02</span>App context goes on a property, never the schema root</h4>
+    <p>
+      An App needs to know what it is rendering, and the elicitation request is its only channel —
+      the iframe has no origin and cannot call anything. But the SDK normalizes
+      <code>requested_schema</code> and keeps only <code>type</code>, <code>properties</code> and
+      <code>required</code> at the root. Extras inside a property pass through untouched, nested
+      values and all. Put your context at the root and it vanishes with no error, and the app renders
+      empty.
+    </p>
+  </div>
+  <div class="trap">
+    <h4><span class="sym">03</span>A tiny image can kill the whole run</h4>
+    <p>
+      MCP tool results can carry image blocks, and <code>langchain.mcp</code> converts them to
+      LangChain image blocks, so the model can actually look at a signature. But a provider rejects an
+      undersized image with a 400 that ends the turn — we found it with a 1×1 test fixture, which
+      failed <em>after</em> the tool had already succeeded. Check the dimensions and drop the block
+      rather than risk the run.
+    </p>
+  </div>
+  <div class="trap">
+    <h4><span class="sym">04</span>Return bytes as a data URI, not a URL</h4>
+    <p>
+      Our first version served the signature at a URL and told the model to embed it. Two problems:
+      the model cannot retype 18,000 base64 characters into a document without corrupting them, and a
+      URL makes the document depend on the server still being up. Crop to the ink and export at CSS
+      scale — a signature becomes a couple of KB, small enough to inline, and the document then
+      prints, survives, and needs no network.
+    </p>
+  </div>
+</div>
+
+<div class="col">
+<h3>And the one that is not your code</h3>
+<p>
+  If you tunnel a local MCP server for a demo, ngrok's free tier answers any request carrying a
+  browser User-Agent with an interstitial page instead of the resource. MCP calls sail through
+  (a client is not a browser); an <code>&lt;img&gt;</code> gets HTML and renders broken, and a tag
+  cannot send the header that opts out. Inline your images, or use a tunnel without an interstitial.
+</p>
+</div>
+
+<h2><span class="n">07</span> When to build one</h2>
+<div class="col">
+<p>
+  The test we settled on: <strong>could a generated form do this?</strong> If yes, skip it — the
+  schema fallback already handles it, for free, on every server. An App earns its place when the
+  interaction genuinely cannot be expressed as fields: a drawn signature, sliders under a constraint
+  that only makes sense as a whole, a confirmation that should cost more than a reflex click.
+</p>
+<p>
+  What does <em>not</em> earn one is a card list. If your App is rendering rows of results, you have
+  built a worse version of what your chat surface already does.
+</p>
+<p>
+  And whatever the App enforces, enforce again on the server. The allocation that must total 100% and
+  the sale that cannot exceed the position are both checked twice in our implementation, because the
+  App is a UI, not a boundary — anyone can call the tool without it.
+</p>
+</div>
+
+<footer>
+  <div class="col">
+    <p>
+      Built against <span style="color:var(--accent)">langchain</span> 1.4 (<code>langchain[mcp]</code>),
+      fastmcp 4, deepagents 0.7, and the 2026-07-28 MCP protocol revision.
+    </p>
+    <p>
+      <code>langchain.mcp</code> is in beta; the elicitation payload and resume shape are the parts
+      most likely to move.
+    </p>
+  </div>
+</footer>
+</div>
+
+<script>
+  (function () {
+    var root = document.documentElement;
+    var btn = document.getElementById("theme");
+    var light = function () {
+      var stamped = root.getAttribute("data-theme");
+      if (stamped) return stamped === "light";
+      return window.matchMedia("(prefers-color-scheme: light)").matches;
+    };
+    var sync = function () { btn.textContent = light() ? "Dark" : "Light"; };
+    sync();
+    btn.addEventListener("click", function () {
+      root.setAttribute("data-theme", light() ? "dark" : "light");
+      sync();
+    });
+  })();
+</script>
