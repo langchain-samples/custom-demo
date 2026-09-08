@@ -46,7 +46,14 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      # Installs deps + dev tools (ruff, ty, pytest) into .venv; uv provides Python 3.14.
+          # The Python the DEPLOYMENT runs (langgraph.json python_version, and the
+          # ceiling in requires-python). setup-uv exports it as UV_PYTHON, so every
+          # `uv` step below uses it. Without the pin CI ran 3.14 while production ran
+          # 3.13, so 3.14-only behaviour passed here and broke the deploy build - e.g.
+          # dropping a `from __future__ import annotations` is free on 3.14 (PEP 649)
+          # and breaks unquoted forward references on 3.13.
+          python-version: "3.13"
+      # Installs deps + dev tools (ruff, ty, pytest) into .venv on that interpreter.
       - run: uv sync --locked
       - run: uv run ruff check dashboard_agent scripts evals mcp_demo_server
       - run: uv run ruff format --check dashboard_agent scripts evals mcp_demo_server
@@ -95,6 +102,7 @@ jobs:
   #     - uses: astral-sh/setup-uv@v5
   #       with:
   #         enable-cache: true
+  #         python-version: "3.13"
   #     - run: uv sync --locked
   #     - run: uv run pytest dashboard_agent/tests/test_hallucination_bug.py -q -rs
   #       env:

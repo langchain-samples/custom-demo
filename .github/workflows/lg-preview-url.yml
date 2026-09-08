@@ -72,6 +72,10 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+          # Same pin as CI: the version the deployment builds. This job only runs a
+          # script, but an unpinned interpreter is now a hard resolution error against
+          # requires-python (<3.14), so leaving it off would break the wiring job.
+          python-version: "3.13"
       - run: uv sync
       - name: Resolve the LangSmith preview and set VITE_LG_URL for this branch
         env:

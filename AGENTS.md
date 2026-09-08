@@ -76,6 +76,12 @@ run.sh                langgraph dev (:2024) + Vite (:3000)
 Python dependencies are managed with **uv** (`pyproject.toml` + `uv.lock`, `.python-version`);
 `requirements.txt` is gone. Use `uv sync --group dev`, not `pip install -r`.
 
+**Python is 3.13 everywhere, deliberately.** `langgraph.json` builds 3.13 (the deployment base
+image's ceiling), so `.python-version`, `requires-python = ">=3.13,<3.14"`, `[tool.ruff]
+target-version`, `[tool.ty.environment]` and the CI jobs all say 3.13 too. The upper bound is the
+enforcement: a 3.14 interpreter is a resolution error, not a silent divergence between what CI
+tests and what production runs. Do not raise it ahead of the deploy image.
+
 ## 3. Runtime architecture
 
 **Graphs (2, same server):**

@@ -17,10 +17,19 @@ None of which this repo can install for you:
 | | | |
 | :-- | :-- | :-- |
 | **uv** | required | `curl -LsSf https://astral.sh/uv/install.sh \| sh` - also provisions Python |
-| **Python ≥ 3.13** | required | uv installs it; a system Python only matters if you skip uv |
+| **Python 3.13 exactly** | required | uv installs it from `.python-version`; `requires-python` bars 3.14 |
 | **Node 20+ / npm** | for the UI | the SPA is a Vite app. The agent and its evals run without it |
 | **LangSmith key** | required | tracing, Context Hub, the sandbox, and the demo evals |
 | **A model provider key** | required | Anthropic by default; any `init_chat_model` provider works |
+
+**3.13, not "3.13 or newer".** 3.13 is the newest Python the LangGraph deployment base image
+builds, so CI, `.python-version` and `requires-python = ">=3.13,<3.14"` all hold the line there
+- otherwise a 3.14-only behaviour passes CI and fails the deploy. If you last synced this repo
+on 3.14, your `.venv` is now the wrong interpreter and `uv sync` will refuse it:
+
+```bash
+rm -rf .venv && uv sync --group dev      # rebuilds on 3.13 (uv downloads it if needed)
+```
 
 ## Quickstart
 
