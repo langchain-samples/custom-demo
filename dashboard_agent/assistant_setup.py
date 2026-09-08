@@ -973,10 +973,6 @@ def prepare_assistant(payload: dict) -> dict:
     else:
         context["prompt"] = prompt_text
 
-    # Every created assistant invents customer-relevant data (the bundled
-    # humanitarian corpus is only the default when no assistant is configured).
-    context["dataset"] = "synthetic"
-
     # Pre-warm the assistant's code-execution VM in the BACKGROUND, so the ~30s VM
     # boot + data seed happens now (at provisioning) instead of blocking the user's
     # first message. Fire-and-forget on a daemon thread so setup returns immediately;
@@ -1013,13 +1009,18 @@ def prepare_assistant(payload: dict) -> dict:
     # LLM's persona questions so there are always enough to fill the 2–3 slots.
     base_actions = skill_actions + actions
 
+    # What the seeded files deliberately omit. Empty unless the failure mode
+    # plants one. Carried as a local rather than on the assistant's context:
+    # only the brief, the probe action and the eval example need it.
+    planted_gap = ""
     if failure_mode_needs_gap(failure_mode):
-        # The mode fabricates/errs over a planted gap: withhold a customer-specific
-        # topic (synthetic data source returns nothing for it) and order the quick
-        # actions as two grounded probes + the gap probe LAST, so the demo reliably
-        # shows two good answers then the failure over the missing data.
-        gap = analysis.get("data_gap") or "year-over-year figures by segment"
-        context["data_gap"] = gap
+        # The mode fabricates over a planted gap. The gap is now a fact genuinely
+        # ABSENT from the seeded files rather than a topic an LLM was told to
+        # withhold, which is what makes the demo reliable: the agent has nowhere
+        # to read it from, so stating it is a real hallucination. It is no longer
+        # runtime config - only the probe question and the eval example need it,
+        # and both carry it as data.
+        planted_gap = analysis.get("data_gap") or "year-over-year figures by segment"
         gap_action = analysis.get("gap_action")
         if gap_action and gap_action.get("question"):
             # Tag the gap probe AT THE SOURCE. assistant_evals has to know which quick
@@ -1058,9 +1059,7 @@ def prepare_assistant(payload: dict) -> dict:
     if push:
         from .assistant_evals import ensure_dataset_evaluator, ensure_eval_dataset
 
-        eval_dataset = ensure_eval_dataset(
-            workspace, customer, failure_mode, actions, context.get("data_gap", "")
-        )
+        eval_dataset = ensure_eval_dataset(workspace, customer, failure_mode, actions, planted_gap)
         # Attach the judge to that dataset, so the evaluator is configured in LangSmith
         # (visible on the Evaluators page and the dataset's Evaluators tab) instead of
         # living only as a Python function in this process. Also best-effort: a blank
@@ -1156,7 +1155,7 @@ def prepare_assistant(payload: dict) -> dict:
             traffic_project,
             context=context,
             actions=actions,
-            data_gap=context.get("data_gap", ""),
+            data_gap=planted_gap,
             customer=customer,
         )
 
@@ -1243,7 +1242,7 @@ def prepare_assistant(payload: dict) -> dict:
         actions,
         context.get("enabled_tools"),
         failure_mode,
-        context.get("data_gap", ""),
+        planted_gap,
     )
     metadata["demo_brief"] = demo["brief"]
     metadata["demo_flow"] = demo["flow"]

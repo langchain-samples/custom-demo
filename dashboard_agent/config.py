@@ -168,6 +168,18 @@ def goal_max_iterations() -> int:
         return 2
 
 
+def simulated_model() -> str:
+    """Fast model behind the simulated capability tools (draft_email and friends).
+
+    Was `data_model`, back when it also drove the synthetic data source. That
+    source is gone; the simulated tools remain, and they want a cheap model.
+    """
+    load_env()
+    return os.getenv("DASHBOARD_SIMULATED_MODEL") or os.getenv(
+        "DASHBOARD_DATA_MODEL", "anthropic:claude-haiku-4-5-20251001"
+    )
+
+
 def setup_model() -> str:
     """Model id for the assistant-setup agent (`init_chat_model` form)."""
     load_env()
@@ -235,28 +247,6 @@ def scoped_client(workspace: str | None = None) -> Client:
         api_url=os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com"),
         workspace_id=workspace or None,
     )
-
-
-def dataset() -> str:
-    """Which data backend the datasearch tool uses.
-
-    "humanitarian" (default) = the bundled corpus; "synthetic" = a live LLM that
-    invents plausible data per call (see datasource.py).
-    """
-    load_env()
-    return os.getenv("DASHBOARD_DATASET", "humanitarian").strip().lower()
-
-
-def data_model() -> str:
-    """Model id for the synthetic data backend (a fast model; init_chat_model form)."""
-    load_env()
-    return os.getenv("DASHBOARD_DATA_MODEL", "anthropic:claude-haiku-4-5-20251001")
-
-
-def data_prompt_name() -> str:
-    """Prompt Hub name for the synthetic data-source system prompt."""
-    load_env()
-    return os.getenv("DASHBOARD_DATA_PROMPT", "dashboard-agent-data")
 
 
 def voice_model() -> str:

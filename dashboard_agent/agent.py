@@ -81,13 +81,6 @@ class Context:
     skills_repo: str | None = (
         None  # Context Hub skills-bundle repo mounted at /skills/ (all assistants)
     )
-    dataset: str | None = None  # "humanitarian" | "synthetic"
-    data_model: str | None = None  # model id for the synthetic data backend
-    data_prompt_name: str | None = None  # data-source prompt in Prompt Hub
-    data_prompt: str | None = (
-        None  # inline data-source prompt text (preferred over data_prompt_name)
-    )
-    data_gap: str | None = None  # withheld topic — builds a customer-centric data prompt
     customer: str | None = None  # customer name — steers customer-specific synthetic data
     industry: str | None = None  # customer industry — steers synthetic data
     ls_workspace: str | None = None  # workspace to pull Hub prompts from (matches trace routing)
@@ -169,7 +162,15 @@ def _sandbox_note(runtime) -> str:
     flag as the backend so it stays off when the sandbox is disabled.
     """
     if os.getenv("DA_SANDBOX", "1") == "0":
-        return ""
+        # The agent reads files for everything now that `datasearch` is gone, so
+        # with no sandbox it has no way to look anything up. Say so plainly: left
+        # unsaid, the model either invents figures or blames itself, and the
+        # presenter cannot tell a misconfiguration from a bad answer.
+        return (
+            "\n\nNO DATA ACCESS: this assistant has no file access in this session, so you "
+            "cannot look anything up. Answer from the conversation only, and say plainly "
+            "that you have no data source rather than estimating a figure."
+        )
     # What setup planted, named for the model. Generic guidance sent it to `ls` and hope;
     # naming the files means the first turn can open the right one. Still told to look,
     # because the VM may have been rebuilt or the user may have uploaded since.
@@ -1283,9 +1284,12 @@ def run_stream(question: str, thread_id: str = "demo", agent=None):
     reset_mids: set = set()  # message ids we've already reset (preamble)
 
     def _tool_summary(name: str, parsed: dict) -> str:
-        if name == "datasearch":
-            return str(parsed.get("query", ""))
-        # Compact one-liner for any other tool (e.g. write_todos, task).
+        # A query-shaped tool reads better as its query than as JSON. Keyed on the
+        # argument rather than the tool name, so it keeps working for any tool
+        # that takes one (this used to name `datasearch`, which no longer exists).
+        if isinstance(parsed.get("query"), str):
+            return parsed["query"]
+        # Compact one-liner for anything else (write_todos, task, push_widget).
         return json.dumps(parsed, ensure_ascii=False)[:120]
 
     # Assign the trace root run id ourselves (via config["run_id"]) so feedback

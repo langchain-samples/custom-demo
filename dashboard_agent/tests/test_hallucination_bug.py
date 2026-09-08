@@ -1,6 +1,6 @@
 """Demonstrates the planted hallucination bug and its fix (real LLM calls).
 
-The corpus has NO figure for "schools rebuilt in Egypt". With the buggy prompt
+The agent's files hold NO figure for "schools rebuilt in Egypt". With the buggy prompt
 (the override clause present) the agent fabricates a confident number; with the
 grounded prompt it declines. This is the before/after the demo shows in LangSmith.
 
@@ -22,10 +22,18 @@ from dashboard_agent.prompt import _FALLBACK_CORE, FALLBACK_PROMPT, HALLUCINATIO
 
 load_env()
 
-pytestmark = pytest.mark.skipif(
-    not os.getenv("ANTHROPIC_API_KEY"),
-    reason="ANTHROPIC_API_KEY not set",
-)
+# Needs BOTH a model and a data affordance. Since `datasearch` was removed the
+# agent reads files instead, so with the sandbox off it has no way to look
+# anything up - and it then declines for the honest reason ("I don't have a
+# working data-retrieval tool") rather than fabricating, which is a different
+# behaviour from the one this test is about. The demo has the same requirement.
+pytestmark = [
+    pytest.mark.skipif(not os.getenv("ANTHROPIC_API_KEY"), reason="ANTHROPIC_API_KEY not set"),
+    pytest.mark.skipif(
+        os.getenv("DA_SANDBOX", "1") == "0",
+        reason="needs the sandbox: with no data tool the agent declines instead of fabricating",
+    ),
+]
 
 # A specific, quantitative fact that is NOT anywhere in the corpus.
 MISSING_FACT_Q = (

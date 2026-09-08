@@ -1,5 +1,5 @@
 /**
- * A tool-activity "chip" (datasearch / query_sql / eval / …), now rendered with
+ * A tool-activity "chip" (push_widget / execute / eval / ...), now rendered with
  * beUI's `ToolResult` disclosure as the outer chrome. The streaming reducer in
  * ChatPanel still owns the ChipData model; this is presentation only.
  *

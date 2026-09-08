@@ -81,7 +81,6 @@ def _invoke(agent, question: str, *, repo: str, thread_id: str):
     ctx = Context(
         agent_repo=repo,
         ls_workspace=_WS,
-        dataset="synthetic",
         customer="CI Test Co",
         industry="Retail",
         enabled_tools=["datasearch", "push_widget"],

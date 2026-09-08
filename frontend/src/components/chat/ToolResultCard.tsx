@@ -1,8 +1,7 @@
 /**
  * Typed renderers for capability-tool results.
  *
- * The simulated tools (draft_email, suggest_meeting_times, list_data_sources,
- * web_search) each return a fixed JSON shape. Rather than showing raw JSON in a
+ * The simulated tools (draft_email, suggest_meeting_times, web_search) each return a fixed JSON shape. Rather than showing raw JSON in a
  * collapsed chip, we render a proper card per tool. Anything without a renderer —
  * or whose payload doesn't match — falls back to the chip's pretty-printed JSON,
  * so an off-shape model response degrades instead of breaking.
@@ -30,13 +29,6 @@ interface MeetingSlot {
   end?: string;
   label?: string;
   rationale?: string;
-}
-interface DataSource {
-  name?: string;
-  type?: string;
-  status?: string;
-  last_synced?: string;
-  record_count?: string;
 }
 interface SearchResult {
   title?: string;
@@ -68,13 +60,6 @@ function Field({ label, value }: { label: string; value: string }) {
   );
 }
 
-/** Status dot colour by connection state. Uses semantic tokens, not literals. */
-function statusClass(status: string): string {
-  const s = status.toLowerCase();
-  if (s.includes("degrad") || s.includes("error") || s.includes("fail")) return "text-danger";
-  if (s.includes("sync")) return "text-warning";
-  return "text-success";
-}
 
 /* ------------------------------- Renderers ------------------------------ */
 
@@ -125,29 +110,6 @@ function MeetingCard({ slots, timezone }: { slots: MeetingSlot[]; timezone: stri
   );
 }
 
-function SourcesCard({ sources }: { sources: DataSource[] }) {
-  return (
-    <Card>
-      <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        Connected data sources
-      </div>
-      <div className="flex flex-col gap-1">
-        {sources.map((s, i) => (
-          <div key={i} className="flex items-baseline gap-2 border-b border-border/50 py-1 last:border-0">
-            <span className={"shrink-0 text-[9px] " + statusClass(str(s.status))}>●</span>
-            <span className="min-w-0 flex-1 truncate font-medium">{str(s.name)}</span>
-            <span className="shrink-0 text-[11px] text-muted-foreground">{str(s.type)}</span>
-            {str(s.record_count) && (
-              <span className="shrink-0 text-[11px] text-muted-foreground">
-                {str(s.record_count)}
-              </span>
-            )}
-          </div>
-        ))}
-      </div>
-    </Card>
-  );
-}
 
 function SearchCard({ results }: { results: SearchResult[] }) {
   return (
@@ -192,10 +154,6 @@ const RENDERERS: Record<string, (d: Payload) => ReactNode | null> = {
   suggest_meeting_times: (d) => {
     const slots = arr<MeetingSlot>(d.slots);
     return slots.length ? <MeetingCard slots={slots} timezone={str(d.timezone)} /> : null;
-  },
-  list_data_sources: (d) => {
-    const sources = arr<DataSource>(d.sources);
-    return sources.length ? <SourcesCard sources={sources} /> : null;
   },
   web_search: (d) => {
     const results = arr<SearchResult>(d.results);

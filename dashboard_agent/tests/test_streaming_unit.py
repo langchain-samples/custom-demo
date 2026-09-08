@@ -143,12 +143,12 @@ def test_preamble_is_reset_when_tools_start():
 
 
 def test_non_widget_tools_emit_tool_events():
-    # datasearch and other non-widget tools should surface as tool-activity events.
+    # web_search and other non-widget tools should surface as tool-activity events.
     ds = AIMessageChunk(
         content="",
         tool_call_chunks=[
             {
-                "name": "datasearch",
+                "name": "web_search",
                 "args": json.dumps({"query": "Iran displaced families resources"}),
                 "id": "d1",
                 "index": 0,
@@ -170,7 +170,7 @@ def test_non_widget_tools_emit_tool_events():
     )
     events = list(run_stream("q", agent=FakeAgent([ds, todo])))
     tools = [e for e in events if e["type"] == "tool"]
-    assert [t["name"] for t in tools] == ["datasearch", "write_todos"]
+    assert [t["name"] for t in tools] == ["web_search", "write_todos"]
     assert tools[0]["summary"] == "Iran displaced families resources"
     assert "todos" in tools[1]["summary"]
     # tool calls carry an id so results can be matched to their chip
@@ -182,7 +182,7 @@ def test_tool_results_stream_and_match_by_id():
         content="",
         tool_call_chunks=[
             {
-                "name": "datasearch",
+                "name": "web_search",
                 "args": json.dumps({"query": "Iran resources"}),
                 "id": "d1",
                 "index": 0,
@@ -191,7 +191,7 @@ def test_tool_results_stream_and_match_by_id():
         ],
     )
     result = ToolMessage(
-        content='{"results": [{"region": "Iran"}]}', name="datasearch", tool_call_id="d1"
+        content='{"results": [{"region": "Iran"}]}', name="web_search", tool_call_id="d1"
     )
     # push_widget results must NOT surface as tool_result events.
     widget_result = ToolMessage(content="Added kpi widget", name="push_widget", tool_call_id="w1")

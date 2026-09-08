@@ -65,7 +65,7 @@ _INLINE = "You are TestBot. INLINE_MARKER."
 
 def test_prompt_hub_prompt_excludes_deepagents_base(monkeypatch):
     # Inline/Prompt Hub assistant (no agent_repo): our prompt REPLACES the base.
-    ctx = Context(prompt=_INLINE, dataset="synthetic", enabled_tools=["datasearch", "push_widget"])
+    ctx = Context(prompt=_INLINE, enabled_tools=["datasearch", "push_widget"])
     sp = _capture(monkeypatch, ctx)
     assert "INLINE_MARKER" in sp
     assert "You are a deep agent" not in sp  # deepagents base NOT leaked
@@ -79,7 +79,6 @@ def test_skills_repo_prompt_composes_deepagents_base(monkeypatch):
     ctx = Context(
         prompt=_INLINE,
         skills_repo="acme-skills",
-        dataset="synthetic",
         enabled_tools=["datasearch", "push_widget"],
     )
     sp = _capture(monkeypatch, ctx)
@@ -94,7 +93,6 @@ def test_context_hub_prompt_composes_deepagents_base(monkeypatch):
     ctx = Context(
         agent_repo="acme-agent",
         ls_workspace="ws",
-        dataset="synthetic",
         enabled_tools=["datasearch", "push_widget"],
     )
     sp = _capture(monkeypatch, ctx, mock_ctxhub=True)

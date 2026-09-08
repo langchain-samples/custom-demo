@@ -20,11 +20,10 @@ from typing import Any
 from langchain.agents.middleware import ToolCallLimitMiddleware
 from langchain_core.tools import BaseTool
 
-from .core import datasearch, push_widget
+from .core import push_widget
 from .simulated import (
     ask_user,
     draft_email,
-    list_data_sources,
     suggest_meeting_times,
 )
 from .web_search import web_search
@@ -61,42 +60,6 @@ TOOL_REGISTRY: tuple[ToolSpec, ...] = (
         guidance="Use `push_widget` to build the dashboard.",
     ),
     ToolSpec(
-        id="datasearch",
-        label="Look up data",
-        description="Look up any internal information in natural language (orders, inventory, accounts, tickets, metrics, reports).",
-        group="Data",
-        tool=datasearch,
-        default_on=True,
-        # Three, not one. The cap used to be one because extra searches let the agent
-        # wander to adjacent queries and fill the planted gap. That reasoning only holds
-        # when the gap is enforced by returning empty results for the exact query: our
-        # withhold clause covers the topic "any segment, region, or period" (see
-        # prompt.py data_withhold_clause), so the hole survives repeated searches and the
-        # cap is not what protects it.
-        #
-        # What the cap DID cause, found on the Super Group build: the agent plans a
-        # second search, gets "Tool call limit exceeded", and narrates that to the
-        # customer ("I hit my data search limit"). That puts our plumbing on screen and
-        # reads as a broken product. Prompting around it made things worse, since naming
-        # the limit at all made the model likelier to mention it.
-        run_limit=3,
-        guidance="Use `datasearch` to look up whatever internal information the question needs (orders, inventory, accounts, policies, metrics), before answering.",
-    ),
-    ToolSpec(
-        id="list_data_sources",
-        label="List connected data sources",
-        description="Show the systems behind the answer (CRM, warehouse, ticketing…).",
-        group="Data",
-        tool=list_data_sources,
-        # Opt-in only: keep it out of new assistants unless the user asks for it —
-        # the setup LLM tended to add it even when the scenario didn't call for it.
-        explicit_only=True,
-        guidance=(
-            "Use `list_data_sources` when the user asks what data you can see or "
-            "where the numbers come from."
-        ),
-    ),
-    ToolSpec(
         id="draft_email",
         label="Draft an email",
         description="Compose a ready-to-send email from what the data shows.",
@@ -129,8 +92,8 @@ TOOL_REGISTRY: tuple[ToolSpec, ...] = (
         description="Pause to ask the user a multiple-choice question, then continue with their pick.",
         group="Interaction",
         tool=ask_user,
-        # Opt-in like the other optional tools (keeps DEFAULT_ENABLED = datasearch +
-        # push_widget). Capped so the agent can't get stuck in a clarify-loop.
+        # Opt-in like the other optional tools. Capped so the agent cannot get
+        # stuck in a clarify-loop.
         run_limit=3,
         guidance=(
             "Use `ask_user` to ask ONE short clarifying question when the request is ambiguous or "
@@ -217,8 +180,7 @@ def allowed_tool_names(raw: Any) -> set[str]:
     """Resolve the catalogue tools this run may use.
 
     Unset → `DEFAULT_ENABLED`, which is exactly the pre-catalogue behaviour
-    (`datasearch` + `push_widget`), so assistants created before this feature are
-    unaffected. Otherwise: the selection, narrowed to known ids, plus the
+    (`push_widget`), so assistants created before this feature are unaffected. Otherwise: the selection, narrowed to known ids, plus the
     always-on ones — enforced here, server-side, not just in the UI.
     """
     parsed = parse_enabled(raw)

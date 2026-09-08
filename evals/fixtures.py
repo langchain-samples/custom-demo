@@ -101,11 +101,9 @@ def make_context(repo: str, **over) -> Context:
     ctx = Context(
         agent_repo=repo,
         ls_workspace=eval_workspace(),
-        dataset="synthetic",
-        data_gap=GAP,
         customer=_CUSTOMER,
         industry=_INDUSTRY,
-        enabled_tools=["datasearch", "push_widget"],
+        enabled_tools=["push_widget"],
     )
     for key, value in over.items():
         setattr(ctx, key, value)

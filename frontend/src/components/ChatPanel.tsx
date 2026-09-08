@@ -972,7 +972,7 @@ export default function ChatPanel({
               // signal: the MAIN agent's own `tools` node also has a `tools:<uuid>`
               // checkpoint_ns, so using it as a fallback here tagged every main-agent
               // tool RESULT as a subagent — the tool chip never got its result and
-              // couldn't be expanded (datasearch/read_file/execute).
+              // couldn't be expanded (read_file/execute).
               if (isSubagentNamespace(namespace)) {
                 nsById[mid] = namespace;
                 if (n) subState[ensureSub(namespace)].nodeById[mid] = n;

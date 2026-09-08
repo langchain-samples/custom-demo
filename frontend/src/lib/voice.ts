@@ -553,7 +553,6 @@ export function progressMessage(what: string): object {
  * label, and the screen should match the words the chat log uses for the same tool.
  */
 const PROGRESS_LABELS: Record<string, string> = {
-  datasearch: "searching the data now",
   web_search: "checking external sources",
   execute: "crunching the numbers in the sandbox",
   push_widget: "building the dashboard",

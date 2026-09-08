@@ -11,7 +11,6 @@
  * and the first toggle materializes a full explicit array.
  */
 import type { ToolSpec } from "@/lib/api";
-import { IconAlertTriangle } from "@tabler/icons-react";
 import { Switch } from "@/components/ui/switch";
 import { CollapseSection } from "./CollapseSection";
 import { HINT_CLS } from "./types";
@@ -51,22 +50,11 @@ export function ToolsSection({ specs, enabled, onChange, defaultOpen }: Props) {
     onChange(next);
   };
 
-  const dataSearchOff = specs.some((s) => s.id === "datasearch" && !isOn(s, enabled));
   const count = specs.filter((s) => isOn(s, enabled)).length;
 
   return (
     <CollapseSection title={`Tools (${count}/${specs.length})`} defaultOpen={defaultOpen}>
       <div className="flex flex-col gap-3">
-        {dataSearchOff && (
-          <div className="flex items-start gap-1.5 rounded-lg border border-border bg-panel-2 px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">
-            <IconAlertTriangle size={13} className="mt-px shrink-0" />
-            <span>
-              Data search is off - the agent has no grounded data source and will
-              answer from the conversation only.
-            </span>
-          </div>
-        )}
-
         {groups.map(([group, rows]) => (
           <div key={group} className="flex flex-col gap-2">
             <div className={HINT_CLS}>{group}</div>

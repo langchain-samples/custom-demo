@@ -4,7 +4,7 @@
 which an assistant may expose; `core` and `simulated` hold the implementations.
 """
 
-from .core import datasearch, push_widget, widget_sink
+from .core import push_widget, widget_sink
 from .registry import (
     ALWAYS_ON,
     CATALOGUE_IDS,
@@ -31,7 +31,6 @@ __all__ = [
     "all_tools",
     "allowed_tool_names",
     "call_limit_middlewares",
-    "datasearch",
     "guidance_for",
     "is_allowed",
     "parse_enabled",

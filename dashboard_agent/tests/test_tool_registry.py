@@ -17,7 +17,6 @@ from dashboard_agent.tools import (
     TOOL_REGISTRY,
     all_tools,
     allowed_tool_names,
-    call_limit_middlewares,
     guidance_for,
     is_allowed,
     parse_enabled,
@@ -32,8 +31,8 @@ BUILTINS = ["write_todos", "ls", "read_file", "write_file", "edit_file", "glob",
 
 def test_default_matches_pre_catalogue_behaviour():
     # Before the catalogue existed the agent was built with exactly these two.
-    assert DEFAULT_ENABLED == {"datasearch", "push_widget"}
-    assert allowed_tool_names(None) == {"datasearch", "push_widget"}
+    assert DEFAULT_ENABLED == {"push_widget"}
+    assert allowed_tool_names(None) == {"push_widget"}
 
 
 def test_push_widget_is_default_on_but_toggleable():
@@ -88,8 +87,8 @@ def test_selection_drops_unknown_and_adds_no_forced_tools():
     assert allowed_tool_names(["draft_email", "not_a_tool"]) == {"draft_email"}
 
 
-def test_selection_can_drop_datasearch():
-    assert "datasearch" not in allowed_tool_names(["web_search"])
+def test_selection_can_drop_a_default_tool():
+    assert "push_widget" not in allowed_tool_names(["web_search"])
 
 
 # --- is_allowed -------------------------------------------------------------
@@ -114,11 +113,6 @@ def test_guidance_only_for_enabled_tools():
     lines = " ".join(guidance_for(allowed_tool_names(["draft_email"])))
     assert "draft_email" in lines
     assert "web_search" not in lines
-
-
-def test_datasearch_keeps_its_one_call_cap():
-    limits = {m.tool_name: m for m in call_limit_middlewares()}
-    assert "datasearch" in limits
 
 
 # --- ToolSelection middleware ----------------------------------------------

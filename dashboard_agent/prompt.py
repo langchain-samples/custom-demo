@@ -11,7 +11,7 @@ If the Hub is unreachable or the prompt is missing, we fall back to
 
 from __future__ import annotations
 
-from .config import data_prompt_name, make_client, prompt_name, scoped_client
+from .config import make_client, prompt_name, scoped_client
 
 
 def _prompt_client(workspace: str | None):
@@ -175,61 +175,18 @@ sentences instead.
 - For `datasearch`, return a few short documents (title/source/region/period/text/data)."""
 
 
-def data_withhold_clause(gap: str) -> str:
-    """The 'planted gap' clause.
-
-    Instructs the data source to return nothing for a specific topic, so the main
-    agent's hallucination bug has something to fabricate.
-    """
-    return (
-        "\n\nWITHHELD DATA (the planted gap — keep this to preserve the demo):\n"
-        f'- Never provide figures about "{gap}" (any segment, region, or period). For any query '
-        f"about {gap}, return empty results / zero rows, as if that data does not exist. "
-        "That gap is exactly what the dashboard agent must NOT fabricate."
-    )
-
-
-def build_data_prompt(gap: str, customer: str = "", industry: str = "") -> str:
-    """Customer-centric synthetic data prompt that withholds a specific `gap`.
-
-    When `customer` is given, the invented data is tailored to that customer (their
-    real product lines, segments, regions, terminology) so the demo feels custom.
-    """
-    if customer:
-        who = (
-            f"You are the internal data systems (orders, accounts, inventory, tickets, CRM, and analytics) behind {customer}'s AI assistant"
-            + (f", a {industry} organization." if industry else ".")
-        )
-        tailor = (
-            f"\n\nTAILOR EVERYTHING TO {customer}: use their real product lines, brands, "
-            "customer segments, regions, KPIs, and terminology so the data feels "
-            "custom-built for them, never generic placeholders."
-        )
-    else:
-        who = "You are the internal data systems behind a live AI-assistant demo."
-        tailor = ""
-    return f"{who}\n\n{_DATA_GUIDELINES}{tailor}{data_withhold_clause(gap)}"
-
-
-def data_prompt_for_gap(gap: str) -> str:
-    """Back-compat: generic (non-customer) data prompt withholding `gap`."""
-    return build_data_prompt(gap)
-
-
-# The dashboard-building workflow. Inlined in the system prompt for Prompt Hub
-# assistants (dashboard="inline"); Context Hub assistants instead carry a curated
-# `dashboard` skill (see assistant_setup.DASHBOARD_SKILL) and the prompt points to
-# it (dashboard="skill"), keeping the base prompt lean and demonstrating skills.
 _DASHBOARD_WORKFLOW = """When a question calls for figures you can chart (and dashboards are available), follow this workflow:
-1. Gather grounded data: call `datasearch` (retry with different terms if the first results miss).
+1. Gather grounded data: read the agent's files (`ls` /workspace/data, then `read_file` or `execute` for anything \
+that needs computing). Every figure must come out of a file you actually opened.
 2. Build a dashboard by calling `push_widget` SEVERAL times: 2-4 `kpi` cards for headline numbers, at least one chart \
 (`bar`/`line`/`pie`), a `table` when there is a natural list, and a final `text` "Key findings" widget (3-5 bullets). \
 Use ONLY numbers returned by the tools. Pre-format KPI values (e.g. "2.4M", "68%"). Pick chart types sensibly. \
 STYLE: prefer charts with TWO series, e.g. a grouped `bar` comparing two related measures/segments (this year vs last, \
 plan vs actual, two cohorts) or a `line` with two trend lines; they render in the brand's primary AND secondary colors \
 and look best. Only when a genuine second series exists in the data; never invent one to fill the slot.
-3. Only AFTER all widgets are pushed, write a concise final answer that summarizes the findings and cites the source(s). \
-Your FINAL message MUST be this written summary. Do NOT narrate your plan and do NOT write prose before the widgets."""
+3. Only AFTER all widgets are pushed, write a concise final answer that summarizes the findings and cites the file(s) \
+you read. Your FINAL message MUST be this written summary. Do NOT narrate your plan and do NOT write prose before the \
+widgets."""
 
 # The lean replacement used when the workflow lives in the `dashboard` skill: point
 # the model at the skill rather than spelling the steps out inline.
@@ -301,28 +258,6 @@ sources) or one of your skills whenever it fits the request better."""
 
 
 # Default synthetic data prompt: withholds "schools rebuilt" (the humanitarian demo gap).
-DATA_FALLBACK_PROMPT = data_prompt_for_gap("schools rebuilt")
-
-
-def pull_data_prompt(name: str | None = None, workspace: str | None = None) -> str:
-    """Fetch the synthetic data-source system prompt from Prompt Hub (fresh).
-
-    `name` overrides the configured prompt; `workspace` scopes the pull to a
-    specific workspace's Hub (e.g. from an assistant's / run's context).
-    """
-    try:
-        pt = _prompt_client(workspace).pull_prompt(name or data_prompt_name(), skip_cache=True)
-        messages = pt.format_messages()
-        text = "\n\n".join(
-            m.content
-            for m in messages
-            if isinstance(getattr(m, "content", None), str) and m.content
-        )
-        return text or DATA_FALLBACK_PROMPT
-    except Exception:
-        return DATA_FALLBACK_PROMPT
-
-
 def pull_system_prompt(name: str | None = None, workspace: str | None = None) -> str:
     """Fetch the current system prompt from Prompt Hub, fresh (no client cache).
 

@@ -23,12 +23,10 @@ export interface ToolLabel {
 
 export const TOOL_LABELS: Record<string, ToolLabel> = {
   // Core
-  datasearch: { done: "Searched reports", active: "Searching reports" },
   push_widget: { done: "Added widget", active: "Building the dashboard" },
   // Capability tools (see dashboard_agent/tools/registry.py)
   draft_email: { done: "Drafted an email", active: "Drafting an email" },
   suggest_meeting_times: { done: "Suggested meeting times", active: "Finding meeting times" },
-  list_data_sources: { done: "Listed data sources", active: "Listing data sources" },
   web_search: { done: "Searched the web", active: "Searching the web" },
   ask_user: { done: "Asked a question", active: "Asking you a question" },
   // deepagents built-ins that are always live

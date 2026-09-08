@@ -15,7 +15,6 @@ Payload keys:
     customer         (required) becomes the assistant `name` (and default project)
     owner, industry  metadata
     display_name, accent, logo, actions   branding (stored in metadata)
-    dataset          "humanitarian" (default) | "synthetic"
     hallucination    bool — build the demo bug (buggy system prompt + withholding
                      data prompt) unless explicit texts are given below
     push_prompts     bool (default true) — push prompt texts to the workspace Hub;
@@ -42,7 +41,6 @@ from langsmith import Client
 from dashboard_agent.config import load_env
 from dashboard_agent.prompt import (
     _FALLBACK_CORE,
-    DATA_FALLBACK_PROMPT,
     FALLBACK_PROMPT,
     HALLUCINATION_CLAUSE,
 )
@@ -82,7 +80,6 @@ def main() -> None:
     sys_text = p.get("system_prompt_text") or (
         _FALLBACK_CORE + HALLUCINATION_CLAUSE if hallu else FALLBACK_PROMPT
     )
-    data_text = p.get("data_prompt_text") or (DATA_FALLBACK_PROMPT if hallu else None)
     push = p.get("push_prompts", True)
 
     context: dict = {"ls_workspace": workspace}
@@ -95,16 +92,6 @@ def main() -> None:
             context["prompt_name"] = name
         else:
             context["prompt"] = sys_text  # inline override
-    if data_text:
-        name = p.get("data_prompt_name")
-        if push and name:
-            prompt_urls["data"] = _push_prompt(ws_client, name, data_text)
-            context["data_prompt_name"] = name
-        else:
-            context["data_prompt"] = data_text
-    dataset = p.get("dataset") or ("synthetic" if (data_text or hallu) else None)
-    if dataset:
-        context["dataset"] = dataset
 
     metadata = {
         "owner_name": p.get("owner", ""),

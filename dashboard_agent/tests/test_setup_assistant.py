@@ -189,19 +189,19 @@ def test_enabled_tools_intersect_catalogue_union_defaults(rec, monkeypatch):
     )
     assert "web_search" in tools  # valid pick kept
     assert "bogus_tool" not in tools  # unknown id dropped
-    assert {"datasearch", "push_widget"} <= tools  # defaults always present
+    assert {"push_widget"} <= tools  # defaults always present
 
 
 def test_setup_never_auto_enables_explicit_only_tools(rec, monkeypatch):
-    # list_data_sources is explicit-only: even if the LLM lists it, setup drops it
-    # (the user must turn it on themselves in settings).
-    tools = set(
-        _prep(monkeypatch, _analysis(enabled_tools=["web_search", "list_data_sources"]))["context"][
-            "enabled_tools"
-        ]
-    )
-    assert "list_data_sources" not in tools  # explicit-only, never auto-enabled
-    assert "web_search" in tools  # a normal optional pick is still kept
+    """The setup LLM's pick is honoured, minus anything marked explicit-only.
+
+    The case that motivated the rule was `list_data_sources`, which the LLM added
+    to almost every assistant whether the scenario called for it or not. That
+    tool is gone with the retrieval stack, so this now asserts the surviving half
+    of the rule: a normal optional pick IS kept.
+    """
+    tools = _prep(monkeypatch, _analysis(enabled_tools=["web_search"]))["context"]["enabled_tools"]
+    assert "web_search" in tools
 
 
 # --- failure mode / planted gap (#5) ---
@@ -210,7 +210,9 @@ def test_setup_never_auto_enables_explicit_only_tools(rec, monkeypatch):
 def test_hallucination_plants_gap_and_orders_gap_action_last(rec, monkeypatch):
     out = _prep(monkeypatch, _analysis(), failure_mode="hallucination")
     ctx, actions = out["context"], out["metadata"]["actions"]
-    assert ctx["data_gap"] == "customer satisfaction scores"
+    # The gap is no longer written onto the assistant's context: it is what the
+    # seeded files omit, and only the probe action and the eval example need it.
+    assert "data_gap" not in ctx
     assert out["metadata"]["failure_mode"] == "hallucination"
     assert actions[-1]["question"] == "What's our CSAT trend?"  # gap probe last
     assert len(actions) <= 3
@@ -414,8 +416,10 @@ def test_setup_starts_the_backfill_in_the_assistants_own_trace_project(rec, monk
     workspace, project, kwargs = traffic[0]
     assert workspace == "ws1"
     assert project == out["context"]["ls_project"]
-    # The gap probe is what Insights clusters on, so it has to reach the backfill.
-    assert kwargs["data_gap"] == out["context"]["data_gap"]
+    # The gap probe is what Insights clusters on, so it still has to reach the
+    # backfill, even though the gap is no longer on the assistant's context.
+    assert kwargs["data_gap"]
+    assert kwargs["data_gap"] == _analysis()["data_gap"]
     assert kwargs["customer"] == "Acme Co"
     assert len(kwargs["actions"]) == 3
 

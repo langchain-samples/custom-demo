@@ -16,16 +16,38 @@ typed card for each.
 from __future__ import annotations
 
 import json
+import re
 from datetime import date
 from typing import Any
 
 from langchain.tools import ToolRuntime, tool
 
-from ..config import data_model
+from ..config import simulated_model
 from ..ctx import ctx_get
 
-# Shared best-effort "model replied with JSON, maybe fenced" parser.
-from ..datasource import _parse_json
+_JSON_RE = re.compile(r"\{[\s\S]*\}")
+
+
+def _parse_json(text: str) -> Any:
+    """Best-effort parse of a model reply that should be JSON.
+
+    Lived in datasource.py until the retrieval stack was deleted; the simulated
+    tools were its only other caller, so it moved here rather than to a module
+    of its own.
+    """
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except Exception:  # noqa: BLE001 - a fenced or chatty reply is the normal case
+        m = _JSON_RE.search(text)
+        if not m:
+            return None
+        try:
+            return json.loads(m.group(0))
+        except Exception:  # noqa: BLE001 - unparseable is a degraded card, not a crash
+            return None
+
 
 _MODEL_CACHE: dict[str, Any] = {}
 
@@ -71,7 +93,7 @@ def simulate(runtime: ToolRuntime, role: str, shape: str, instruction: str) -> s
         "relative to that — never an earlier year.\n\n"
         f"Reply with exactly this shape:\n{shape}"
     )
-    model_id = ctx_get(runtime, "data_model") or data_model()
+    model_id = simulated_model()
     try:
         resp = _model(model_id).invoke([SystemMessage(system), HumanMessage(instruction)])
         content = getattr(resp, "content", "")
@@ -250,31 +272,3 @@ def suggest_meeting_times(
         build,
     )
     return json.dumps(confirmed, ensure_ascii=False)
-
-
-@tool
-def list_data_sources(runtime: ToolRuntime, area: str = "") -> str:
-    """List the connected systems this assistant can draw data from.
-
-    Use when the user asks what data you can see, where a number came from, or
-    what systems are connected. `area` optionally narrows it to a domain
-    (e.g. "finance", "operations", "customer").
-
-    Returns JSON {sources:[{name, type, status, last_synced, record_count}]}.
-    """
-    return simulate(
-        runtime,
-        role="You are the integrations catalogue of an analytics platform.",
-        shape=(
-            '{"sources":[{"name":"","type":"","status":"","last_synced":"","record_count":""}]}'
-        ),
-        instruction=(
-            f"List 4-6 connected data sources{f' related to {area}' if area else ''}. "
-            "Use systems this organization would realistically run (name the actual "
-            "vendor where obvious). `type` is a short category (e.g. 'CRM', "
-            "'Data warehouse', 'Ticketing'). `status` is one of 'connected', "
-            "'syncing', 'degraded' — mostly 'connected'. `last_synced` is a relative "
-            "time (e.g. '12 minutes ago'). `record_count` is a formatted count "
-            "(e.g. '2.4M')."
-        ),
-    )

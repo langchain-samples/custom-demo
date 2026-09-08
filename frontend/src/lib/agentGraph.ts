@@ -60,7 +60,6 @@ export function laneFor(chip: ChipData): string {
   const arg = chip.arg || "";
   if (name === "write_todos") return "plan";
   if (name === "push_widget") return "output";
-  if (name === "datasearch" || name === "list_data_sources") return "data";
   if (name === "web_search") return "web";
   if (name === "draft_email" || name === "suggest_meeting_times" || name === "ask_user")
     return "human";

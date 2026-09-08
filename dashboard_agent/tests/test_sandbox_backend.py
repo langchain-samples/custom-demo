@@ -486,9 +486,17 @@ def test_sandbox_note_routes_file_requests_to_the_upload_button(monkeypatch):
     assert "pypdf" in note and "pypdf" in A._SEED_SCRIPT
 
 
-def test_sandbox_note_empty_when_disabled(monkeypatch):
+def test_sandbox_note_says_there_is_no_data_access_when_disabled(monkeypatch):
+    """It used to return "" here, which was right while `datasearch` existed.
+
+    Files are the only data source now, so silence let the model invent figures
+    or apologise for its own competence, and left a presenter unable to tell a
+    misconfiguration from a bad answer.
+    """
     monkeypatch.setenv("DA_SANDBOX", "0")
-    assert A._sandbox_note(_rt()) == ""
+    note = A._sandbox_note(_rt())
+    assert "NO DATA ACCESS" in note
+    assert "no data source" in note
 
 
 # --- per-use-case seed: the VM gets THIS assistant's files ------------------------

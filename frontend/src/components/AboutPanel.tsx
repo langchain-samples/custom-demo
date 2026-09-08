@@ -243,7 +243,7 @@ function ArchitectureDiagram() {
         <text x="254" y="420" fontSize="12" fontWeight="700" fill="currentColor">
           Tools
         </text>
-        {["datasearch", "push_widget", "draft_email", "web_search"].map((t, i) => {
+        {["push_widget", "draft_email", "suggest_meeting_times", "web_search"].map((t, i) => {
           const x = 254 + i * 111;
           return (
             <g key={t}>

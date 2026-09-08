@@ -6,7 +6,6 @@
 import type { ComponentType } from "react";
 import {
   IconSearch,
-  IconDatabase,
   IconChecklist,
   IconRobot,
   IconChartBar,
@@ -91,12 +90,10 @@ export function widgetLooksComplete(w: Widget | null | undefined): boolean {
  */
 const TOOL_ICONS: Record<string, TablerIcon> = {
   // Core
-  datasearch: IconSearch,
   push_widget: IconChartBar,
   // Capability tools (see dashboard_agent/tools/registry.py)
   draft_email: IconMail,
   suggest_meeting_times: IconCalendarEvent,
-  list_data_sources: IconDatabase,
   web_search: IconWorldSearch,
   // deepagents built-ins that are always live
   write_todos: IconChecklist,
@@ -150,7 +147,7 @@ export function chipCode(
 }
 
 /**
- * The one-line summary shown on a tool chip's arg pill. For datasearch/query_sql
+ * The one-line summary shown on a tool chip's arg pill. For a query-shaped tool
  * it's the `query` arg; otherwise a truncated JSON of the args. Matches app.js.
  */
 export function chipArgSummary(name: string, args: Record<string, unknown>): string {
@@ -165,11 +162,9 @@ export function chipArgSummary(name: string, args: Record<string, unknown>): str
   }
   // Show the single most meaningful arg per tool; fall back to truncated JSON.
   const primary: Record<string, string> = {
-    datasearch: "query",
     web_search: "query",
     draft_email: "purpose",
     suggest_meeting_times: "purpose",
-    list_data_sources: "area",
     read_file: "file_path",
     write_file: "file_path",
     edit_file: "file_path",

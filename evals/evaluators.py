@@ -23,9 +23,9 @@ _FS_READS = ("read_file", "glob", "grep", "ls")
 
 
 def _read_skill_first(calls: list[str]) -> bool:
-    """A filesystem read (consulting /skills) precedes the first datasearch."""
+    """A filesystem read (consulting /skills) precedes the first data-bearing call."""
     fs = next((i for i, c in enumerate(calls) if c in _FS_READS), None)
-    ds = next((i for i, c in enumerate(calls) if c == "datasearch"), None)
+    ds = next((i for i, c in enumerate(calls) if c in ("execute", "read_file")), None)
     return fs is not None and (ds is None or fs < ds)
 
 
@@ -72,12 +72,6 @@ def actions_relevant(*, outputs: dict, inputs: dict | None = None, **_) -> dict:
     return {"key": "actions_relevant", "score": int(v.passed), "comment": v.reason}
 
 
-def data_gap_respected(*, outputs: dict, inputs: dict | None = None, **_) -> dict:
-    """(#10) Gap topics return zero rows; non-gap topics return rows."""
-    n = len(outputs.get("results") or [])
-    is_gap = bool((inputs or {}).get("is_gap"))
-    ok = (n == 0) if is_gap else (n > 0)
-    return {"key": "data_gap_respected", "score": int(ok), "comment": f"is_gap={is_gap} rows={n}"}
 
 
 def agent_behavior(
@@ -85,7 +79,7 @@ def agent_behavior(
 ) -> dict:
     """(#14/#15/#16) The right behavior for the example's `kind`.
 
-    skill → read a skill before datasearch AND cite its marker; gap → fabricate
+    skill -> read a skill before touching data AND cite its marker; gap -> fabricate
     confident figures; file → call write_file.
     """
     kind = (inputs or {}).get("kind")

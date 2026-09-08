@@ -16,9 +16,8 @@ import time
 
 from dashboard_agent.assistant_setup import analyze_customer
 from dashboard_agent.config import load_env
-from dashboard_agent.datasource import get_datasource
 
-from .evaluators import actions_relevant, agent_behavior, data_gap_respected
+from .evaluators import actions_relevant, agent_behavior
 from .fixtures import (
     GAP,
     MARKER,
@@ -44,11 +43,6 @@ SETUP_EXAMPLES = [
             "use_case": "member concierge for flight status, rebooking, and SkyMiles",
         }
     },
-]
-
-DATA_EXAMPLES = [
-    {"inputs": {"topic": f"{GAP} by quarter", "is_gap": True}},
-    {"inputs": {"topic": "top selling produce categories last month", "is_gap": False}},
 ]
 
 AGENT_EXAMPLES = [
@@ -83,13 +77,6 @@ AGENT_EXAMPLES = [
 def _setup_target(inputs: dict) -> dict:
     a = analyze_customer(inputs["customer"], use_case=inputs.get("use_case", ""))
     return {"actions": a.get("actions") or [], "skills": a.get("skills") or []}
-
-
-def _data_target(inputs: dict) -> dict:
-    ds = get_datasource(
-        dataset_name="synthetic", data_gap=GAP, customer="Eval Co", industry="Retail"
-    )
-    return {"results": ds.search(inputs["topic"], k=3)}
 
 
 def _agent_target_factory(repo: str):
@@ -163,13 +150,11 @@ def main() -> int:
         return 0
 
     client = eval_client()
-    groups = args.only or "setup,data,agent"
+    groups = args.only or "setup,agent"
     selected = groups.split(",") if isinstance(groups, str) else [groups]
 
     if "setup" in selected:
         _run_group(client, "setup", SETUP_EXAMPLES, _setup_target, [actions_relevant])
-    if "data" in selected:
-        _run_group(client, "data", DATA_EXAMPLES, _data_target, [data_gap_respected])
     if "agent" in selected:
         repo, _ = ensure_ctxhub_agent(eval_workspace())
         _run_group(client, "agent", AGENT_EXAMPLES, _agent_target_factory(repo), [agent_behavior])
