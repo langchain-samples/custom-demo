@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from collections.abc import Mapping
 from typing import Any
 
 from langgraph_sdk import get_sync_client
@@ -28,8 +29,13 @@ from dashboard_agent.config import load_env
 GRAPH_ID = "dashboard_agent"
 
 
-def _copyable(assistant: dict[str, Any], workspace: str) -> dict[str, Any]:
-    """The create() kwargs that reproduce `assistant` on another deployment."""
+def _copyable(assistant: Mapping[str, Any], workspace: str) -> dict[str, Any]:
+    """The create() kwargs that reproduce `assistant` on another deployment.
+
+    `Mapping`, not `dict`: the SDK hands back an `Assistant` TypedDict, which is
+    not assignable to `dict[str, Any]` (a `dict` would permit `clear()`). This
+    function only reads, so the narrower type is also the honest one.
+    """
     context = dict(assistant.get("context") or {})
     if context.get("ls_workspace"):
         context["ls_workspace"] = workspace
