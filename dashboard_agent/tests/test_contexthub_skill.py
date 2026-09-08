@@ -30,13 +30,13 @@ import pytest
 from langsmith import testing as t
 
 from dashboard_agent.agent import Context, build_agent
-from dashboard_agent.assistant_setup import (
+from dashboard_agent.config import load_env
+from dashboard_agent.prompt import build_system_prompt
+from dashboard_agent.provisioning.setup import (
     _SKILLS_CLAUSE,
     push_agent_prompt,
     push_workflow_skills,
 )
-from dashboard_agent.config import load_env
-from dashboard_agent.prompt import build_system_prompt
 
 load_env()
 
@@ -62,7 +62,7 @@ def _cleanup_fixture_repos():
     silently if the key lacks delete permission (older org keys could not delete).
     """
     yield
-    from dashboard_agent.assistant_setup import _ws_client
+    from dashboard_agent.provisioning.setup import _ws_client
 
     client = _ws_client(_WS)
     for repo in (_AGENT_REPO, _FS_AGENT_REPO):
@@ -184,7 +184,7 @@ def test_context_hub_filesystem_read_write():
     assert marker in answer, f"agent did not report the file contents ({marker} missing)"
 
     # The write must have persisted to the Context Hub agent repo as a file.
-    from dashboard_agent.assistant_setup import _ws_client
+    from dashboard_agent.provisioning.setup import _ws_client
 
     files = _ws_client(_WS).pull_agent(_FS_AGENT_REPO).files
     entry = files.get("notes/probe.md")

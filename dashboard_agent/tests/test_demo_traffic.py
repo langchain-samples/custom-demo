@@ -22,7 +22,7 @@ import uuid
 
 import pytest
 
-from dashboard_agent import demo_traffic as DT
+from dashboard_agent.provisioning import traffic as DT
 
 _DO_TS = "%Y%m%dT%H%M%S%fZ"
 
@@ -337,7 +337,7 @@ def test_run_seeds_traces_with_the_workspace_client(monkeypatch):
             return {}
 
     monkeypatch.setattr("dashboard_agent.agent.build_agent", lambda: _Agent())
-    monkeypatch.setattr("dashboard_agent.assistant_evals.make_run_context", lambda c: c)
+    monkeypatch.setattr("dashboard_agent.provisioning.evals.make_run_context", lambda c: c)
     client = _FakeClient()
 
     DT.run_seeds({}, [{"question": "q", "is_gap": False}], project="P", client=client)
@@ -361,7 +361,7 @@ def test_run_seeds_keeps_going_when_one_question_raises(monkeypatch):
 
     agent = _Agent()
     monkeypatch.setattr("dashboard_agent.agent.build_agent", lambda: agent)
-    monkeypatch.setattr("dashboard_agent.assistant_evals.make_run_context", lambda c: c)
+    monkeypatch.setattr("dashboard_agent.provisioning.evals.make_run_context", lambda c: c)
 
     DT.run_seeds({}, [{"question": "a"}, {"question": "b"}], project="P", client=_FakeClient())
 

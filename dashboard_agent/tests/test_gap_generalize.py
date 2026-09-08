@@ -1,6 +1,6 @@
 """Unit tests for _generalize_gap (broadening an over-qualified data gap)."""
 
-from dashboard_agent.assistant_setup import _generalize_gap
+from dashboard_agent.provisioning.setup import _generalize_gap
 
 
 def test_trims_segment_qualifiers():

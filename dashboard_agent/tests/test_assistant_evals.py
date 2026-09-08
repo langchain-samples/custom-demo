@@ -34,8 +34,9 @@ from typing import Any
 
 import pytest
 
-import dashboard_agent.assistant_evals as AE
-from dashboard_agent.assistant_evals import (
+import dashboard_agent.provisioning.evals as AE
+from dashboard_agent.prompt import FAILURE_MODES
+from dashboard_agent.provisioning.evals import (
     build_examples,
     dataset_fingerprint,
     dataset_name_for,
@@ -44,8 +45,7 @@ from dashboard_agent.assistant_evals import (
     ensure_eval_dataset,
     graded_content,
 )
-from dashboard_agent.assistant_setup import slugify
-from dashboard_agent.prompt import FAILURE_MODES
+from dashboard_agent.provisioning.setup import slugify
 
 # --- the fixtures the demo actually runs on ------------------------------------------
 

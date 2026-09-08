@@ -245,7 +245,7 @@ async def cleanup(request):
     )
     for skill in body.get("skills") or []:  # legacy per-skill repos
         _try("skill", skill, lambda s=skill: client.delete_skill(s))
-    # The per-assistant eval dataset (assistant_setup writes it into
+    # The per-assistant eval dataset (provisioning/setup.py writes it into
     # `ls_artifacts.eval_dataset`). Absent for assistants created before that
     # feature, and `_try` no-ops on a falsy name — so this stays a silent skip.
     _try(
@@ -298,14 +298,14 @@ def _delete_judge_evaluator(workspace: str | None, evaluator_id: str) -> None:
     by Agent Server as a top-level module, the local import keeps that load light
     and dodges the agent/webapp cycle, and two tests patch this name.
     """
-    from dashboard_agent.assistant_evals import delete_judge_evaluator
+    from dashboard_agent.provisioning.evals import delete_judge_evaluator
 
     delete_judge_evaluator(workspace, evaluator_id)
 
 
 def _delete_eval_rule(workspace: str | None, rule_id: str) -> None:
     """DELETE the run rule `rule_id`. Raises on failure, so `_try` records it."""
-    from dashboard_agent.assistant_evals import _rules_api
+    from dashboard_agent.provisioning.evals import _rules_api
 
     url, headers = _rules_api(workspace)
     res = httpx.delete(f"{url}/{rule_id}", headers=headers, timeout=30)
@@ -541,7 +541,7 @@ async def mcp_app(request):
 
 # --- per-assistant evals (POST /evals/run, GET /evals/status) -------------------
 #
-# Setup provisions a LangSmith dataset per assistant (see assistant_evals); these two
+# Setup provisions a LangSmith dataset per assistant (see provisioning/evals.py); these two
 # routes are the SPA's handle on it — start an experiment, read the latest score.
 # LangSmith is the SOURCE OF TRUTH: /evals/status re-derives the score from the
 # dataset's experiments on every call, so the panel survives a page reload, a second
@@ -599,10 +599,10 @@ def _started_ts(session) -> float:
 def _score_from_feedback(stats: dict | None) -> tuple[int, int]:
     """(passed, scored) from an experiment project's `feedback_stats`.
 
-    Summed over every feedback key rather than looking up assistant_evals'
+    Summed over every feedback key rather than looking up provisioning/evals.py's
     EVAL_FEEDBACK_KEY, so adding or renaming an evaluator there can't silently zero
     the badge. Scores are 0/1 and mean CORRECT behavior (the polarity note in
-    assistant_evals), so `avg * n` rounds back to the number of passing examples.
+    provisioning/evals.py), so `avg * n` rounds back to the number of passing examples.
     """
     passed = scored = 0
     for entry in (stats or {}).values():
@@ -693,10 +693,10 @@ def _run_experiment_bg(workspace: str, dataset: str, context: dict, prefix: str)
     `GET /evals/status` hands the panel.
     """
     try:
-        # Function-local import (house style, cf. /tools): assistant_evals pulls in
+        # Function-local import (house style, cf. /tools): provisioning/evals.py pulls in
         # agent.py to run the target in-process, and that import is heavy. Resolving
         # at call time is also what lets tests stub the runner on the module.
-        from dashboard_agent.assistant_evals import run_experiment
+        from dashboard_agent.provisioning.evals import run_experiment
 
         run_experiment(workspace, dataset, context, experiment_prefix=prefix)
     except Exception as exc:  # noqa: BLE001 - a detached demo run must never crash the server
@@ -714,7 +714,7 @@ async def evals_run(request):
     POST {dataset, workspace?, context?, experiment_prefix?} → returns as soon as the
     thread is spawned. Three real agent runs take ~30-90s and the presenter clicks
     this mid-demo, so the request must not wait on it (same fire-and-forget shape as
-    the prewarm in assistant_setup). The SPA polls GET /evals/status for the result.
+    the prewarm in provisioning/setup.py). The SPA polls GET /evals/status for the result.
     """
     try:
         body = await request.json()
@@ -950,7 +950,7 @@ async def _resolve_backend(request, params: dict | None = None):
         return None, _err(
             503, "sandbox_disabled", "Agent file access is turned off for this deployment."
         )
-    # assistant_setup writes `ls_artifacts.agent_repo = ""` when there is no Context Hub
+    # provisioning/setup.py writes `ls_artifacts.agent_repo = ""` when there is no Context Hub
     # repo, and the SPA forwards it verbatim → coerce "" to None like the runtime's `or`.
     source = params if params is not None else request.query_params
     agent_repo = source.get("agent_repo") or None
@@ -1380,7 +1380,7 @@ async def sandbox_upload(request):
 
 # --- demo traffic --------------------------------------------------------------
 
-# The "one backfill per project" guard and the receipt live in demo_traffic, not here,
+# The "one backfill per project" guard and the receipt live in provisioning/traffic.py, not here,
 # because the automatic backfill at assistant creation does not come through this route
 # (see the registry comment there). Reading them from that module is what makes the two
 # paths interlock: this route refuses to start a second backfill over setup's, and the
@@ -1404,7 +1404,7 @@ async def demo_traffic(request):
     if not project:
         return JSONResponse({"error": "project is required"}, status_code=400)
 
-    from dashboard_agent.demo_traffic import start_demo_traffic
+    from dashboard_agent.provisioning.traffic import start_demo_traffic
 
     ack = start_demo_traffic(
         body.get("workspace") or "",
@@ -1456,7 +1456,7 @@ def _synthetic_traffic(workspace: str | None, project: str) -> dict:
 
     Blocking — call it off the event loop.
     """
-    from dashboard_agent.demo_traffic import SYNTHETIC_TAG
+    from dashboard_agent.provisioning.traffic import SYNTHETIC_TAG
 
     stats = _scoped_client(workspace).get_run_stats(
         project_names=[project], is_root=True, filter=f'has(tags, "{SYNTHETIC_TAG}")'
@@ -1485,7 +1485,7 @@ async def demo_traffic_status(request):
     if not project:
         return JSONResponse({"project": "", "running": False, "links": {}})
 
-    from dashboard_agent.demo_traffic import demo_traffic_state
+    from dashboard_agent.provisioning.traffic import demo_traffic_state
 
     workspace = request.query_params.get("workspace")
     out: dict = {"project": project, **demo_traffic_state(project)}

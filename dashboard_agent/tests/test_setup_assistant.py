@@ -9,7 +9,7 @@ and the `ls_artifacts` cleanup manifest. Pure and fast — runs in CI, no API ke
 import pytest
 import yaml
 
-from dashboard_agent import assistant_setup as S
+from dashboard_agent.provisioning import setup as S
 
 
 def _analysis(**over):
@@ -152,7 +152,7 @@ def test_judge_prompt_is_recorded_only_when_the_evaluator_attached(rec, monkeypa
     `_try` no-ops on a falsy handle, so recording a name for an assistant that never got
     an evaluator would put a spurious 404 in every cleanup report.
     """
-    from dashboard_agent import assistant_evals as AE
+    from dashboard_agent.provisioning import evals as AE
 
     monkeypatch.setattr(AE, "ensure_eval_dataset", lambda *a, **k: "acme-ds")
     monkeypatch.setattr(
@@ -384,7 +384,7 @@ def traffic(monkeypatch):
     ingests — which contradicts this module's no-network contract and leaves threads
     racing the rest of the suite. Tests that assert on it just request the fixture.
     """
-    from dashboard_agent import demo_traffic as DT
+    from dashboard_agent.provisioning import traffic as DT
 
     started: list[tuple] = []
     monkeypatch.setattr(

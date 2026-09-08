@@ -38,7 +38,7 @@ import pytest
 from langsmith.utils import LangSmithNotFoundError
 from starlette.testclient import TestClient
 
-import dashboard_agent.assistant_evals as AE
+import dashboard_agent.provisioning.evals as AE
 import dashboard_agent.webapp as W
 
 client = TestClient(W.app)

@@ -53,14 +53,15 @@ from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 
+from ..config import judge_model, routing_key, sampling_kwargs
+from ..mocking import install_mocks, restore_mocks
+
 # `assistant_setup` imports THIS module lazily (inside prepare_assistant), so the
 # dependency only runs one way at import time and there is no cycle.
-from .assistant_setup import _ws_client, slugify
-from .config import judge_model, routing_key, sampling_kwargs
-from .mocking import install_mocks, restore_mocks
+from .client import _ws_client, slugify
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, keeps agent.py off the import path
-    from .agent import Context
+    from ..agent import Context
 
 
 # The single feedback key every example is scored on, and therefore the column the
@@ -894,7 +895,7 @@ def make_run_context(context: dict | None) -> Context:
     the demo runs with, or it grades a different agent. Unknown keys are dropped —
     stored context can carry fields a newer/older `Context` doesn't declare.
     """
-    from .agent import Context
+    from ..agent import Context
 
     known = {f.name for f in dataclasses.fields(Context)}
     return Context(**{k: v for k, v in (context or {}).items() if k in known})
@@ -982,8 +983,8 @@ def _agent_target(context: dict | None):
     """
     from langgraph.types import Command
 
-    from .agent import build_agent
-    from .tools import widget_sink
+    from ..agent import build_agent
+    from ..tools import widget_sink
 
     agent = build_agent()
     ctx = make_run_context(context)

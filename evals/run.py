@@ -14,8 +14,8 @@ import argparse
 import sys
 import time
 
-from dashboard_agent.assistant_setup import analyze_customer
 from dashboard_agent.config import load_env
+from dashboard_agent.provisioning.setup import analyze_customer
 
 from .evaluators import actions_relevant, agent_behavior
 from .fixtures import (

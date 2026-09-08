@@ -19,14 +19,15 @@ from langchain_core.messages import HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
-from .config import load_env, sampling_kwargs, scoped_client, setup_model
-from .prompt import (
+from ..config import load_env, sampling_kwargs, setup_model
+from ..prompt import (
     DASHBOARD_SKILL_DESCRIPTION,
     DASHBOARD_SKILL_INSTRUCTIONS,
     build_system_prompt,
     failure_mode_needs_gap,
 )
-from .tools import CATALOGUE_IDS, DEFAULT_ENABLED, EXPLICIT_ONLY, TOOL_REGISTRY
+from ..tools import CATALOGUE_IDS, DEFAULT_ENABLED, EXPLICIT_ONLY, TOOL_REGISTRY
+from .client import _ws_client, slugify
 
 DEFAULT_ACCENT = "#0072BC"
 # Logo.dev publishable key (safe client-side; Clearbit's logo API shut down 2025-12).
@@ -71,11 +72,6 @@ def safe_curated(name: str) -> str:
     """A bundled fallback family, defaulting when the value isn't one of ours."""
     n = (name or "").strip()
     return n if n in CURATED_FONTS else DEFAULT_CURATED
-
-
-def slugify(name: str) -> str:
-    """Lowercase, hyphenate to a URL-safe slug (falls back to "customer")."""
-    return re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-") or "customer"
 
 
 def domain_for(customer: str, website: str | None) -> str:
@@ -528,36 +524,6 @@ def analyze_customer(
     return out
 
 
-def playground_model_id(client, flags: tuple[str, ...]) -> str:
-    """A workspace model carrying every flag in `flags`, or "" if there is none.
-
-    `GET /playground-settings` lists the workspace's *model settings* — the records the
-    UI's model pickers offer. Each carries availability flags per feature
-    (`available_in_evaluators`, `available_in_insights_heavy`, ...), and every LangSmith
-    feature that runs an LLM for you takes one of these ids rather than an API key. That
-    is what lets a customer workspace with no model secret of its own still run an
-    Insights job or an LLM-as-judge: the records backed by LangSmith's own LLM gateway
-    (`LC_GATEWAY_KEY`) bill through LangSmith and need no customer credentials.
-
-    Gateway-backed models are preferred for exactly that reason — anything else needs a
-    key this workspace may not have, which is the failure being avoided.
-    """
-    settings = client.request_with_retries("GET", "/playground-settings").json()
-    usable = [
-        s
-        for s in (settings if isinstance(settings, list) else [])
-        if isinstance(s, dict) and s.get("id") and all(s.get(flag) for flag in flags)
-    ]
-    if not usable:
-        return ""
-    return str(sorted(usable, key=lambda s: 0 if "LC_GATEWAY_KEY" in str(s) else 1)[0]["id"])
-
-
-def _ws_client(workspace: str | None):
-    """Client for a target workspace. Kept as a name because two modules import it."""
-    return scoped_client(workspace)
-
-
 def push_prompt(workspace: str, name: str, text: str) -> str:
     """Push a system prompt to the workspace's Prompt Hub, returning its commit URL.
 
@@ -981,7 +947,7 @@ def prepare_assistant(payload: dict) -> dict:
     if push:
         import threading
 
-        from .agent import prewarm_sandbox
+        from ..agent import prewarm_sandbox
 
         threading.Thread(
             target=prewarm_sandbox,
@@ -1057,7 +1023,7 @@ def prepare_assistant(payload: dict) -> dict:
     eval_evaluator_id = ""
     eval_judge_prompt = ""
     if push:
-        from .assistant_evals import ensure_dataset_evaluator, ensure_eval_dataset
+        from .evals import ensure_dataset_evaluator, ensure_eval_dataset
 
         eval_dataset = ensure_eval_dataset(workspace, customer, failure_mode, actions, planted_gap)
         # Attach the judge to that dataset, so the evaluator is configured in LangSmith
@@ -1078,7 +1044,7 @@ def prepare_assistant(payload: dict) -> dict:
         # round trip. Recorded only when the attach succeeded — otherwise there is
         # nothing to delete and a blank entry keeps the cascade quiet.
         if eval_rule_id:
-            from .assistant_evals import judge_prompt_name
+            from .evals import judge_prompt_name
 
             eval_judge_prompt = judge_prompt_name(eval_dataset)
 
@@ -1142,13 +1108,13 @@ def prepare_assistant(payload: dict) -> dict:
     # never ran and a "$240" they think they owe. The Settings panel can still
     # generate it later (`POST /demo-traffic`), so defaulting off defers it rather
     # than losing it.
-    from .demo_traffic import annotation_queue_name
+    from .traffic import annotation_queue_name
 
     traffic_project = context.get("ls_project") or customer
     queue_name = annotation_queue_name(traffic_project)
     want_traffic = bool(payload.get("demo_traffic"))
     if push and want_traffic:
-        from .demo_traffic import start_demo_traffic
+        from .traffic import start_demo_traffic
 
         start_demo_traffic(
             workspace,

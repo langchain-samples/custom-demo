@@ -1,6 +1,6 @@
 """Unit tests for build_demo_brief (deterministic presenter brief + flow)."""
 
-from dashboard_agent.assistant_setup import build_demo_brief
+from dashboard_agent.provisioning.setup import build_demo_brief
 
 ACTIONS = [
     {"label": "Store Ops Manager: Top 10 stores", "question": "..."},

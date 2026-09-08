@@ -11,7 +11,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from dashboard_agent import resource_tags as rt
+from dashboard_agent.provisioning import resource_tags as rt
 
 APP_KEY_ID = "key-1"
 VALUE_ID = "val-1"

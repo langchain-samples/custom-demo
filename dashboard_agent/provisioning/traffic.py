@@ -49,7 +49,7 @@ from langsmith.uuid import uuid7_from_datetime
 
 # `assistant_setup` imports THIS module lazily (inside prepare_assistant), so the
 # dependency only runs one way at import time and there is no cycle.
-from .assistant_setup import _ws_client, playground_model_id
+from .client import _ws_client, playground_model_id
 
 # --- shape of a backfill -------------------------------------------------------
 
@@ -401,7 +401,7 @@ def run_seeds(
     from langchain_core.tracers.context import collect_runs
     from langsmith import tracing_context
 
-    from .assistant_evals import make_run_context
+    from .evals import make_run_context
 
     ctx = make_run_context(context)
     out: list[dict] = []
@@ -409,7 +409,7 @@ def run_seeds(
     for item in questions:
         try:
             if agent is None:  # built lazily so a bad context fails one question, not all
-                from .agent import build_agent
+                from ..agent import build_agent
 
                 agent = build_agent()
             # `collect_runs` captures the runs of this call synchronously as they

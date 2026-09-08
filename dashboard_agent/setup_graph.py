@@ -18,7 +18,7 @@ from typing import Any, Literal, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langsmith import tracing_context
 
-from dashboard_agent.assistant_setup import prepare_assistant
+from dashboard_agent.provisioning.setup import prepare_assistant
 
 _INPUT_KEYS = (
     "workspace",

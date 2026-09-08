@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-SETUP = REPO / "dashboard_agent" / "assistant_setup.py"
+SETUP = REPO / "dashboard_agent" / "provisioning" / "setup.py"
 WEBAPP = REPO / "dashboard_agent" / "webapp.py"
 API_TS = REPO / "frontend" / "src" / "lib" / "api.ts"
 

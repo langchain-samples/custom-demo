@@ -417,7 +417,7 @@ def test_read_maps_backend_errors(monkeypatch, detail, status, reason):
     ("query", "key"),
     [
         ("agent_repo=acme/agents&customer=Acme", "acme/agents"),
-        ("agent_repo=&customer=Acme", "Acme"),  # "" must not win — assistant_setup writes it
+        ("agent_repo=&customer=Acme", "Acme"),  # "" must not win — provisioning/setup.py writes it
         ("", "default"),
     ],
 )

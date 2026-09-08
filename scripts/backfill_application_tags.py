@@ -32,7 +32,7 @@ import httpx
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dashboard_agent.config import load_env  # noqa: E402
-from dashboard_agent.resource_tags import (  # noqa: E402
+from dashboard_agent.provisioning.resource_tags import (  # noqa: E402
     application_for,
     tag_assistant_resources,
 )
