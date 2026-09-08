@@ -551,17 +551,33 @@ export function progressMessage(what: string): object {
  * Spoken only. The on-screen status line uses `activeLabel` instead: these read aloud as
  * half a sentence ("searching the data now"), which is right for speech and wrong for a
  * label, and the screen should match the words the chat log uses for the same tool.
+ *
+ * Every tool `TOOL_LABELS` names needs an entry here EXCEPT the ones that interrupt, and
+ * voice_test.js fails if a running tool is missing: the fallback is a shrug, and a shrug
+ * is a wrong answer for a tool we can name. The two maps stay separate because the same
+ * tool call needs two different sentence shapes - a chip label on screen, half a spoken
+ * sentence here - not because they cover different tools.
+ *
+ * THE INTERRUPTING TOOLS ARE DELIBERATELY ABSENT, and adding them would make the demo
+ * worse. `ask_user` and `draft_email` (via `review()` in simulated.py) both raise a
+ * LangGraph `interrupt`, so the run comes back as an approval rather than an answer and
+ * `runTool` sends `{ status: "needs_approval", ... }`; the system instruction then has the
+ * model read the question and its options out loud. That already happens, and a progress
+ * line for the same tool would be spoken OVER it. This map narrates a tool while it RUNS,
+ * and a tool that pauses does not run in that sense.
  */
 const PROGRESS_LABELS: Record<string, string> = {
   web_search: "checking external sources",
   execute: "crunching the numbers in the sandbox",
   push_widget: "building the dashboard",
-  write_todos: "planning out the steps",
   read_file: "reading through the files",
   ls: "looking through the files",
   glob: "looking through the files",
   grep: "searching the files",
   task: "handing part of this to a specialist",
+  write_file: "writing this out to a file",
+  edit_file: "making changes to a file",
+  delete: "clearing out a file that is no longer needed",
 };
 
 export function progressLabel(toolName: string): string {

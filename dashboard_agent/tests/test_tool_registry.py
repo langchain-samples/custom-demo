@@ -23,21 +23,25 @@ from dashboard_agent.runtime.tools import (
     registry_json,
 )
 
-BUILTINS = ["write_todos", "ls", "read_file", "write_file", "edit_file", "glob", "grep", "task"]
+SOME_BUILTINS = ["ls", "read_file", "write_file", "edit_file", "glob", "grep", "task"]
 
 
 # --- registry shape ---------------------------------------------------------
 
 
-def test_default_matches_pre_catalogue_behaviour():
-    # Before the catalogue existed the agent was built with exactly these two.
-    assert DEFAULT_ENABLED == {"push_widget"}
-    assert allowed_tool_names(None) == {"push_widget"}
+def test_an_assistant_with_no_selection_gets_the_dashboard_and_can_ask():
+    """`push_widget` is default-on and `ask_user` is always on, so both apply."""
+    assert DEFAULT_ENABLED == {"push_widget", "ask_user"}
+    assert allowed_tool_names(None) == {"push_widget", "ask_user"}
 
 
-def test_push_widget_is_default_on_but_toggleable():
-    # push_widget is on by default but no longer forced (support bots can drop it).
-    assert ALWAYS_ON == frozenset()
+def test_only_ask_user_cannot_be_switched_off():
+    """Pausing to ask instead of guessing is behaviour, not a capability.
+
+    `push_widget` is default-on but droppable, so a support assistant can answer in
+    prose. Everything else is opt-in.
+    """
+    assert ALWAYS_ON == frozenset({"ask_user"})
     assert "push_widget" in DEFAULT_ENABLED
 
 
@@ -80,11 +84,12 @@ def test_comma_string_parses():
 
 def test_empty_selection_keeps_nothing():
     # Empty = "everything off"; with no always-on tools, that means no catalogue tools.
-    assert allowed_tool_names([]) == set()
+    # `ask_user` survives an empty selection: it is always on.
+    assert allowed_tool_names([]) == {"ask_user"}
 
 
 def test_selection_drops_unknown_and_adds_no_forced_tools():
-    assert allowed_tool_names(["draft_email", "not_a_tool"]) == {"draft_email"}
+    assert allowed_tool_names(["draft_email", "not_a_tool"]) == {"draft_email", "ask_user"}
 
 
 def test_selection_can_drop_a_default_tool():
@@ -96,7 +101,7 @@ def test_selection_can_drop_a_default_tool():
 
 def test_builtins_and_unknown_names_always_pass():
     allowed = allowed_tool_names([])
-    for name in BUILTINS + ["some_future_builtin", "execute"]:
+    for name in SOME_BUILTINS + ["some_future_builtin", "execute"]:
         assert is_allowed(name, allowed), name
 
 
@@ -131,7 +136,7 @@ class _Req:
 
 def _request(ctx):
     # Catalogue tools + built-ins + a dict-shaped tool (request.tools is a union).
-    tools = all_tools() + [SimpleNamespace(name=n) for n in BUILTINS] + [{"name": "future"}]
+    tools = all_tools() + [SimpleNamespace(name=n) for n in SOME_BUILTINS] + [{"name": "future"}]
     return _Req(tools, ctx)
 
 
@@ -142,18 +147,19 @@ def _names(req):
 def test_middleware_default_offers_exactly_the_old_set_plus_builtins():
     out = ToolSelection()._apply(_request({}))
     assert _names(out) & CATALOGUE_IDS == DEFAULT_ENABLED
-    assert set(BUILTINS) | {"future"} <= _names(out)
+    assert set(SOME_BUILTINS) | {"future"} <= _names(out)
 
 
 def test_middleware_honours_selection():
     out = ToolSelection()._apply(_request({"enabled_tools": ["draft_email", "web_search"]}))
-    assert _names(out) & CATALOGUE_IDS == {"draft_email", "web_search"}
+    assert _names(out) & CATALOGUE_IDS == {"draft_email", "web_search", "ask_user"}
 
 
 def test_middleware_never_strips_builtins_even_when_all_off():
     out = ToolSelection()._apply(_request({"enabled_tools": []}))
-    assert set(BUILTINS) | {"future"} <= _names(out)
-    assert _names(out) & CATALOGUE_IDS == set()
+    assert set(SOME_BUILTINS) | {"future"} <= _names(out)
+    # Even with everything switched off, the always-on tool stays.
+    assert _names(out) & CATALOGUE_IDS == {"ask_user"}
 
 
 def test_middleware_tolerates_missing_context():

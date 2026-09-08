@@ -11,6 +11,7 @@ const assert = require("node:assert");
 const path = require("node:path");
 
 const MOD = path.join(__dirname, "..", "..", "frontend", "src", "lib", "voice.ts");
+const LABELS = path.join(__dirname, "..", "..", "frontend", "src", "lib", "toolLabels.ts");
 
 let passed = 0;
 function ok(name, fn) {
@@ -50,6 +51,7 @@ function ok(name, fn) {
     INVOKE_TOOL,
     RESUME_TOOL,
   } = await import(MOD);
+  const { TOOL_LABELS } = await import(LABELS);
 
   ok("float samples round-trip through 16-bit PCM", () => {
     const input = new Float32Array([0, 0.5, -0.5, 1, -1]);
@@ -127,6 +129,52 @@ function ok(name, fn) {
     assert.equal(progressLabel("some_internal_thing"), "still working through it");
     const msg = progressMessage(progressLabel("read_file"));
     assert.ok(msg.clientContent.turns[0].parts[0].text.includes("reading through the files"));
+  });
+
+  ok("every tool that RUNS can be named aloud; the ones that pause must not be", () => {
+    // The property, not the strings: `toolLabels.ts` promises the two surfaces "describe
+    // the same tool call in the same words", and the orb only holds up its end if the
+    // spoken map covers every tool the on-screen map names AND THAT ACTUALLY RUNS.
+    // write_file, edit_file and delete fell through to the shrug before this existed,
+    // and nothing failed.
+    //
+    // Derived from TOOL_LABELS rather than a fourth hand-typed list of tool names. That
+    // map is already pinned to reality from the other side: test_tool_vocabulary.py
+    // asserts it contains every tool in TOOL_REGISTRY and nothing outside the catalogue
+    // plus the deepagents built-ins. So "covers TOOL_LABELS" transitively means "covers
+    // the catalogue and the built-ins", and a new capability tool cannot reach the orb
+    // without passing through here.
+    const EXEMPT = new Set([
+      // Tools that PAUSE rather than run. `ask_user` raises a LangGraph interrupt
+      // directly and `draft_email` does it through `review()` (simulated.py), so the run
+      // returns an approval, not an answer, and voice.ts hands Gemini
+      // `{ status: "needs_approval", ... }` - which the system instruction answers by
+      // reading the question and its options out loud. A progress label for these would
+      // be SPOKEN OVER that. The gap is deliberate; do not "fix" it by adding one back.
+      "ask_user",
+      "draft_email",
+      // Not exempt for that reason but for a duller one: langchain-quickjs binds `eval`
+      // only when DA_DYNAMIC_SUBAGENTS=1, so it is not a tool the agent can always call.
+      "eval",
+    ]);
+    const unspoken = Object.keys(TOOL_LABELS)
+      .filter((name) => !EXEMPT.has(name))
+      .filter((name) => progressLabel(name) === progressLabel("definitely_not_a_tool"));
+    assert.deepEqual(
+      unspoken,
+      [],
+      `these tools fall back to the vague line instead of being named aloud: ${unspoken}`,
+    );
+
+    // The other direction, so the exemption is a rule and not just a hole: an interrupting
+    // tool must have NO spoken label, because the approval path is already saying its piece.
+    for (const paused of ["ask_user", "draft_email"]) {
+      assert.equal(
+        progressLabel(paused),
+        progressLabel("definitely_not_a_tool"),
+        `${paused} interrupts; a progress line for it talks over the question being read out`,
+      );
+    }
   });
 
   ok("the digest keeps only widgets with a value", () => {
