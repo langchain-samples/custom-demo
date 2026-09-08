@@ -101,12 +101,69 @@
       }
     }
 
+    // The budget the result has to fit in, in data-URI characters. The server
+    // caps what it will inline, and a signature that comes back over the cap is
+    // useless: the document then has nothing to show. So the app guarantees the
+    // size rather than hoping, and shrinks until it fits.
+    var BUDGET = 10000;
+
     /**
-     * The signature as a compact PNG data URI: cropped to the ink (plus a small
-     * margin so the stroke is not clipped) and drawn at CSS scale rather than
-     * device scale, capped at EXPORT_MAX wide. A couple of KB instead of a
-     * dozen, which is what lets the document embed it directly and need no
-     * network to render, print, or survive this server going away.
+     * Flatten the stroke so PNG can actually compress it.
+     *
+     * A drawn line is antialiased, so every edge pixel is a slightly different
+     * RGBA value and the compressor has thousands of distinct colours to encode
+     * for what is visually one black line. Forcing RGB to black and snapping
+     * alpha to a few steps collapses that to a handful of values, which is worth
+     * several KB - far more than the resolution change - and is invisible at
+     * signature scale.
+     */
+    function flatten(octx, w, h) {
+      var image;
+      try {
+        image = octx.getImageData(0, 0, w, h);
+      } catch (err) {
+        return; // no pixel access (shouldn't happen: we drew this canvas ourselves)
+      }
+      var d = image.data;
+      for (var i = 0; i < d.length; i += 4) {
+        d[i] = 0;
+        d[i + 1] = 0;
+        d[i + 2] = 0;
+        // Five alpha steps: solid core, a couple of edge tones, or nothing.
+        d[i + 3] = Math.round(d[i + 3] / 64) * 64;
+      }
+      octx.putImageData(image, 0, 0);
+    }
+
+    /** Render the cropped ink at `width` CSS pixels, as a data URI. */
+    function renderAt(box, width) {
+      var ratio = window.devicePixelRatio || 1;
+      var scale = Math.min(1, width / box.w);
+      var out = document.createElement("canvas");
+      out.width = Math.max(1, Math.round(box.w * scale));
+      out.height = Math.max(1, Math.round(box.h * scale));
+      var octx = out.getContext("2d");
+      if (!octx) return null;
+      // Source rect is in the backing store's device pixels; the destination is
+      // the CSS-scaled box, which is the downscale.
+      octx.drawImage(
+        canvas,
+        box.x * ratio, box.y * ratio, box.w * ratio, box.h * ratio,
+        0, 0, out.width, out.height,
+      );
+      flatten(octx, out.width, out.height);
+      return out.toDataURL("image/png");
+    }
+
+    /**
+     * The signature as a compact PNG data URI.
+     *
+     * Cropped to the ink (plus a small margin so the stroke is not clipped),
+     * flattened, and rendered at the largest of a few widths that fits BUDGET.
+     * The full pad at device resolution was 13.7KB for a stroke covering a
+     * fraction of it; this lands in single-digit KB, small enough to travel
+     * inline in the tool result and be embedded straight into a document that
+     * then needs no network to render, print, or outlive this server.
      */
     function exportSignature() {
       var ratio = window.devicePixelRatio || 1;
@@ -123,21 +180,17 @@
         : { x: 0, y: 0, w: w, h: h };
       if (!(box.w > 0 && box.h > 0)) return canvas.toDataURL("image/png");
 
-      var EXPORT_MAX = 480;
-      var scale = Math.min(1, EXPORT_MAX / box.w);
-      var out = document.createElement("canvas");
-      out.width = Math.max(1, Math.round(box.w * scale));
-      out.height = Math.max(1, Math.round(box.h * scale));
-      var octx = out.getContext("2d");
-      if (!octx) return canvas.toDataURL("image/png");
-      // Source rect is in the backing store's device pixels; the destination is
-      // the CSS-scaled box, which is the downscale.
-      octx.drawImage(
-        canvas,
-        box.x * ratio, box.y * ratio, box.w * ratio, box.h * ratio,
-        0, 0, out.width, out.height,
-      );
-      return out.toDataURL("image/png");
+      var widths = [480, 380, 300, 220, 160];
+      var last = null;
+      for (var i = 0; i < widths.length; i++) {
+        var uri = renderAt(box, widths[i]);
+        if (!uri) break;
+        last = uri;
+        if (uri.length <= BUDGET) return uri;
+      }
+      // Every width was still over budget, which a real signature never is.
+      // Send the smallest anyway: a slightly rough image beats none.
+      return last || canvas.toDataURL("image/png");
     }
 
     canvas.addEventListener("pointerdown", function (event) {

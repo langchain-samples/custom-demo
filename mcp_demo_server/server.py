@@ -132,7 +132,7 @@ _MIN_IMAGE_EDGE = 16
 
 # Roughly 2k tokens of base64. Above this the model is being asked to copy more
 # than it reliably can, and the picture is not worth the context.
-MAX_INLINE_CHARS = int(os.getenv("FIELDLINK_MAX_INLINE", "8000"))
+MAX_INLINE_CHARS = int(os.getenv("FIELDLINK_MAX_INLINE", "14000"))
 
 
 def _renderable(png: bytes) -> bool:

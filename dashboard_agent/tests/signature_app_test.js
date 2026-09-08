@@ -47,9 +47,12 @@ async function ok(name, fn) {
  * the window rather than by replacing `window.parent`: jsdom aliases `parent` to
  * the window itself for a top-level document, and will not let us reassign it.
  */
-function mount() {
+function mount(dataUri) {
   const posted = [];
   const draws = [];
+  // What the stubbed canvas encodes to. Long enough to blow the budget when a
+  // test wants to watch the export shrink.
+  const uri = () => dataUri || "data:image/png;base64,STUB";
   const dom = new JSDOM(HTML, {
     runScripts: "dangerously",
     pretendToBeVisual: true,
@@ -64,8 +67,12 @@ function mount() {
         drawImage(...args) {
           draws.push(args.slice(1));
         },
+        // `flatten` reads pixels back to collapse the antialiasing; jsdom has
+        // none, so hand it a buffer of the right shape.
+        getImageData: (x, y, w, h) => ({ data: new Uint8ClampedArray(w * h * 4), width: w, height: h }),
+        putImageData() {},
       });
-      window.HTMLCanvasElement.prototype.toDataURL = () => "data:image/png;base64,STUB";
+      window.HTMLCanvasElement.prototype.toDataURL = () => uri();
       window.addEventListener("message", (event) => {
         const data = event.data;
         if (data && typeof data.type === "string" && data.type.startsWith("mcp-app:")) {
@@ -89,6 +96,26 @@ function sign(dom) {
   const down = new dom.window.Event("pointerdown", { bubbles: true });
   Object.assign(down, { clientX: 40, clientY: 40, pointerId: 1 });
   canvas.dispatchEvent(down);
+}
+
+/**
+ * Draw a stroke across most of the pad, the way a real signature runs.
+ *
+ * The size ladder never upscales, so a box narrower than the target width is
+ * already at its smallest and the retries are a no-op - which is right, and is
+ * why watching the ladder work needs a wide mark rather than the single dot.
+ */
+function signWide(dom) {
+  const canvas = dom.window.document.getElementById("canvas");
+  canvas.setPointerCapture = () => {};
+  canvas.hasPointerCapture = () => false;
+  canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 600, height: 150 });
+  const down = new dom.window.Event("pointerdown", { bubbles: true });
+  Object.assign(down, { clientX: 20, clientY: 30, pointerId: 1 });
+  canvas.dispatchEvent(down);
+  const move = new dom.window.Event("pointermove", { bubbles: true });
+  Object.assign(move, { clientX: 580, clientY: 120, pointerId: 1 });
+  canvas.dispatchEvent(move);
 }
 
 /** Fill in the name field the way a person would. */
@@ -169,13 +196,44 @@ function name(dom, value) {
     doc.getElementById("submit").click();
     await flush();
 
-    assert.strictEqual(draws.length, 1, "the export should composite exactly once");
     const [sx, sy, sw, sh] = draws[0];
     // The stroke is a dot at (40, 40) with an 8px margin, so the source rect is
     // a small box near the origin - NOT the 300x150 pad. Device pixels, so the
     // ratio is folded in; jsdom reports 1.
     assert.ok(sw < 40 && sh < 40, `expected a cropped source rect, got ${sw}x${sh}`);
     assert.ok(sx >= 0 && sy >= 0 && sx < 40 && sy < 40, `crop is not around the ink: ${sx},${sy}`);
+  });
+
+  await ok("shrinks the export until it fits the budget", async () => {
+    // Every width encodes to 12KB here, over the 10KB budget, so the export
+    // should work down the ladder instead of sending the first thing it made.
+    const { dom, doc, draws, posted } = mount("data:image/png;base64," + "A".repeat(12000));
+    signWide(dom);
+    name(dom, "Grace Achieng");
+    doc.getElementById("submit").click();
+    await flush();
+
+    assert.ok(draws.length > 1, `expected retries at smaller widths, got ${draws.length}`);
+    // Destination width is the 6th drawImage arg. Non-increasing rather than
+    // strictly falling: the ladder never UPSCALES, so every rung wider than the
+    // ink box renders at the box's own size, and only the rungs below it shrink.
+    const widths = draws.map((d) => d[6]);
+    for (let i = 1; i < widths.length; i++) {
+      assert.ok(widths[i] <= widths[i - 1], `width grew: ${widths.join(", ")}`);
+    }
+    assert.ok(widths[widths.length - 1] < widths[0], `never shrank: ${widths.join(", ")}`);
+    // Over budget at every size, it still sends one rather than nothing: a
+    // rough signature beats a document with no signature on it.
+    assert.ok(posted.find((m) => m.type === "mcp-app:submit").content.signature);
+  });
+
+  await ok("sends the first encoding when it already fits", async () => {
+    const { dom, doc, draws } = mount();
+    signWide(dom);
+    name(dom, "Grace Achieng");
+    doc.getElementById("submit").click();
+    await flush();
+    assert.strictEqual(draws.length, 1, "a signature under budget should not be re-encoded");
   });
 
   await ok("lets the recipient back out, which the host turns into a cancel", async () => {
