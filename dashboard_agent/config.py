@@ -206,6 +206,37 @@ def make_client():
     return Client(workspace_id=workspace_id())
 
 
+def routing_key() -> str:
+    """The key used to reach ANOTHER workspace: cross-workspace first, else the default.
+
+    The default key works for cross-workspace routing only when it is org-scoped
+    (a personal access token); a workspace-scoped key cannot see its siblings.
+    Returned empty rather than raising, because several callers treat "no usable
+    key" as "do not route" rather than as an error.
+    """
+    load_env()
+    return os.getenv("LS_CROSS_WORKSPACE_KEY") or os.getenv("LANGSMITH_API_KEY") or ""
+
+
+def scoped_client(workspace: str | None = None) -> Client:
+    """A LangSmith Client pointed at `workspace`, or at the default one.
+
+    This shape was written out eight separate times across the package, once per
+    module that needed to read another workspace, which meant eight places to fix
+    when the key precedence changed. It is one function now.
+
+    It always returns a client. Callers that must not proceed without a usable
+    key check `routing_key()` first and decide for themselves what to do, because
+    the three that care want three different things: skip tracing, fall back to
+    the default client, or carry on and let the API refuse.
+    """
+    return Client(
+        api_key=routing_key() or None,
+        api_url=os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com"),
+        workspace_id=workspace or None,
+    )
+
+
 def dataset() -> str:
     """Which data backend the datasearch tool uses.
 

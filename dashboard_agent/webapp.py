@@ -22,7 +22,6 @@ import time
 import traceback
 
 import httpx
-from langsmith import Client
 from langsmith.utils import LangSmithNotFoundError
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
@@ -32,7 +31,7 @@ from dashboard_agent import voice_trace as voice_trace_mod
 
 # Absolute import: Agent Server loads http.app as a top-level module (no package
 # parent), so a relative `from .config` import would fail here.
-from dashboard_agent.config import load_env, make_client
+from dashboard_agent.config import load_env, make_client, routing_key, scoped_client
 from dashboard_agent.voice import mint_token, voice_configured
 
 
@@ -99,18 +98,13 @@ async def feedback(request):
 
 
 def _ls_key() -> str:
-    """LangSmith key for the trace-routing feature.
-
-    The org-scoped cross-workspace key if set, else the deployment's default key.
-    """
-    load_env()
-    return os.getenv("LS_CROSS_WORKSPACE_KEY") or os.getenv("LANGSMITH_API_KEY") or ""
+    """The trace-routing key, for the one route that needs it as a raw header value."""
+    return routing_key()
 
 
 def _scoped_client(workspace_id: str | None = None):
     """LangSmith client for listing/creating projects in a specific workspace."""
-    api_url = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
-    return Client(api_key=_ls_key(), api_url=api_url, workspace_id=workspace_id or None)
+    return scoped_client(workspace_id)
 
 
 async def projects(request):

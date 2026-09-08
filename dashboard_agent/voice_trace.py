@@ -27,14 +27,13 @@ session is one browser tab for a few minutes; not a durable store.
 
 from __future__ import annotations
 
-import os
 import threading
 import traceback
 import uuid
 
 from langsmith import Client, RunTree
 
-from .config import load_env
+from .config import routing_key, scoped_client
 
 # session_id -> the conversation's root span, plus its open tool spans by id.
 _SESSIONS: dict[str, dict] = {}
@@ -53,12 +52,9 @@ def _client(workspace: str = "") -> Client | None:
     if there is one, else the default. None means "do not trace", never an exception -
     a conversation must not fail because its trace could not be opened.
     """
-    load_env()
-    key = os.getenv("LS_CROSS_WORKSPACE_KEY") or os.getenv("LANGSMITH_API_KEY")
-    if not key:
+    if not routing_key():
         return None
-    api_url = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
-    return Client(api_key=key, api_url=api_url, workspace_id=workspace or None)
+    return scoped_client(workspace)
 
 
 def start_session(workspace: str = "", project: str = "", metadata: dict | None = None) -> str:

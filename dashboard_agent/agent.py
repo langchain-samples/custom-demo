@@ -42,7 +42,14 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.runtime import get_runtime
 from langsmith import Client
 
-from .config import MODEL, goal_max_iterations, goal_model, model_provider, require_model_key
+from .config import (
+    MODEL,
+    goal_max_iterations,
+    goal_model,
+    model_provider,
+    require_model_key,
+    scoped_client,
+)
 from .ctx import ctx_get as _ctx
 from .mocking import enable_mocking
 from .prompt import ARTIFACT_NOTE, pull_agent_prompt, pull_system_prompt
@@ -483,9 +490,7 @@ class ToolSelection(AgentMiddleware):
 
 def _ctxhub_client(workspace: str | None) -> Client:
     """LangSmith client for Context Hub reads, scoped to a workspace."""
-    key = os.getenv("LS_CROSS_WORKSPACE_KEY") or os.getenv("LANGSMITH_API_KEY")
-    api_url = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
-    return Client(api_key=key, api_url=api_url, workspace_id=workspace or None)
+    return scoped_client(workspace)
 
 
 # --- code-execution sandbox (an isolated Linux VM behind the `execute` tool) ---

@@ -17,10 +17,9 @@ import httpx
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
-from langsmith import Client
 from pydantic import BaseModel, Field
 
-from .config import load_env, sampling_kwargs, setup_model
+from .config import load_env, sampling_kwargs, scoped_client, setup_model
 from .prompt import (
     DASHBOARD_SKILL_DESCRIPTION,
     DASHBOARD_SKILL_INSTRUCTIONS,
@@ -555,10 +554,8 @@ def playground_model_id(client, flags: tuple[str, ...]) -> str:
 
 
 def _ws_client(workspace: str | None):
-    load_env()
-    key = os.getenv("LS_CROSS_WORKSPACE_KEY") or os.getenv("LANGSMITH_API_KEY")
-    api_url = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
-    return Client(api_key=key, api_url=api_url, workspace_id=workspace or None)
+    """Client for a target workspace. Kept as a name because two modules import it."""
+    return scoped_client(workspace)
 
 
 def push_prompt(workspace: str, name: str, text: str) -> str:
