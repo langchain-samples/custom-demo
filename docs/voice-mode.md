@@ -178,11 +178,11 @@ ordinary in-process one and nesting is automatic. Ours runs through Agent Server
 process, which is the only reason distributed tracing is involved at all.
 
 Getting the same tree means invoking the agent in-process for voice turns: a route that
-runs `build_agent()` inside the tool span (`assistant_evals.py` already does exactly this
-for experiments) and streams frames in the shape `ChatPanel` parses, so the dashboard keeps
-working. That is a scoped piece of work rather than a tweak - it duplicates streaming
-behaviour the platform currently provides - and it is the right next step if the nested tree
-matters more than the extra surface.
+runs `build_agent()` inside the tool span (`custom_demo/provisioning/evals.py` already does
+exactly this for experiments) and streams frames in the shape `ChatPanel` parses, so the
+dashboard keeps working. That is a scoped piece of work rather than a tweak - it duplicates
+streaming behaviour the platform currently provides - and it is the right next step if the
+nested tree matters more than the extra surface.
 
 ## Four things the docs will not tell you
 

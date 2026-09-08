@@ -357,7 +357,7 @@ async def _text_page(backend, path: str, base: dict) -> JSONResponse:
         # A text-extension file whose bytes failed the in-VM UTF-8 sniff. Never
         # ship the base64 blob — nothing can render it.
         return _placeholder(
-            base, "not_previewable", "Not a UTF-8 text file — preview not supported."
+            base, "not_previewable", "Not a UTF-8 text file - preview not supported."
         )
 
     content = data.get("content") or ""
@@ -420,7 +420,7 @@ async def sandbox_file(request):
         return await _text_page(backend, path, base)
 
     label = posixpath.splitext(name)[1] or name
-    return _placeholder(base, "binary", f"Binary file ({label}) — preview not supported.")
+    return _placeholder(base, "binary", f"Binary file ({label}) - preview not supported.")
 
 
 # --- POST /sandbox-upload --------------------------------------------------------

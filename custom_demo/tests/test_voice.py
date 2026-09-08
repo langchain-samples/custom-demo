@@ -1,4 +1,4 @@
-"""Tests for the voice shell's token route (custom_demo/voice.py).
+"""Tests for the voice shell's token route (custom_demo/voice/session.py).
 
 Offline: `token_request` is pure, and the one HTTP call is driven through a stub. What
 these guard is the PINNING - a token that is not constrained to one model and one

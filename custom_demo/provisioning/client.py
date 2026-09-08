@@ -1,9 +1,9 @@
 """Shared plumbing for the provisioning modules.
 
-These three were defined in `assistant_setup` and imported from there by
-`assistant_evals` and `demo_traffic`, which meant two import cycles held apart
-only by function-local imports. Moving them here breaks both: setup, evals and
-traffic all import downward from this module and nothing imports back.
+`setup.py`, `evals.py` and `traffic.py` all import downward from here and nothing
+in this module imports back. Keep it that way. A helper that any two of the three
+need belongs here: define it in `setup.py` and import it from the other two and
+there is an import cycle, which only function-local imports can hold apart.
 """
 
 from __future__ import annotations

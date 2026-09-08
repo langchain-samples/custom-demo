@@ -628,7 +628,7 @@ answer = await ctx.elicit("Set the target allocation", response_type=Allocation)
 <p>
   Two more things that matter at this seam. Cache the discovery - <code>awrap_model_call</code> fires
   on <em>every</em> model call, and a round trip per call is visible on stage. And give each server
-  its own namespace: a remote tool called <code>datasearch</code> will otherwise collide with yours.
+  its own namespace: a remote tool called <code>search</code> will otherwise collide with yours.
   A <code>ClientGroup</code> prefixes every tool with the server it came from, which is worth doing
   even for a single server.
 </p>

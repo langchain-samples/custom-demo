@@ -52,7 +52,8 @@ custom_demo/
                       /mcp/probe + /mcp/app (the SPA cannot speak MCP; the deployment does)
                       /sandbox-files /sandbox-file (read-only browse of the assistant's VM)
                       /evals/run + /evals/status (per-assistant demo eval), /cleanup, /trace-url
-  tests/              rag, widgets, streaming, tool-registry, eval examples/polarity/routes (fast)
+  tests/              widgets, prompt composition, tool-registry, sandbox, MCP,
+                      eval examples/polarity/routes (fast)
                       + e2e, hallucination (slow)
 frontend/             React 19 + Vite + Tailwind 4 + shadcn SPA (the real UI)
   src/lib/branding.ts   brand seeds → CSS vars; resolveColor, contrast, chart-palette derivation
@@ -65,9 +66,9 @@ mcp_demo_server/      THE OTHER END: two FastMCP servers on the modern stateless
                       interactive tools are all MCP Apps. elicit.py holds the guard-pattern
                       helpers both share; apps/ holds the app HTML plus the bridge.js and
                       shell.css injected into each at serve time. NOT shipped in the wheel.
-scripts/              seed_assistants, setup_assistant, preflight, judge_doctor,
+scripts/              preflight, judge_doctor, wire_vercel_preview, the two CI doc/style
+                      checkers (check_blank_after_block.py, check_doc_paths.py), and
                       run_mcp_server.sh (runs mcp_demo_server, `--tunnel` for a public ngrok URL)
-.claude/skills/setup-assistant/SKILL.md   interactive /setup-assistant flow (CLI path)
 langgraph.json        registers both graphs + http.app + wide-open CORS
 pyproject.toml        Python deps + dev group (uv); uv.lock pins them
 run.sh                langgraph dev (:2024) + Vite (:3000)
@@ -111,10 +112,10 @@ mismatch looked like a bug, it is not one. Leave it.
   filesystem set (`ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `delete`) and
   `task` - because `FilesystemMiddleware` is unconditional and a default general-purpose
   subagent is auto-added. There is no `write_todos`: deepagents only installs langchain's
-  `TodoListMiddleware` in its OpenAI-Codex profile, which `create_deep_agent` does not use. `execute` is now offered too - the
-  agent's default backend is a code-execution sandbox VM (see **Code execution** below). On top
-  of those sits **our catalogue** (`tools/registry.py`), which is the only part an assistant
-  can select from.
+  `TodoListMiddleware` in its OpenAI-Codex profile, which `create_deep_agent` does not use.
+  `execute` is in that set as well, because the agent's default backend is a code-execution
+  sandbox VM (see **Code execution** below). On top of those sits **our catalogue**
+  (`tools/registry.py`), which is the only part an assistant can select from.
 - Model is `ChatAnthropic` with `thinking={"type":"disabled"}` - Sonnet 5's default extended
   thinking breaks the deep-agent tool loop on follow-up turns.
 
@@ -150,7 +151,7 @@ skills-bundle repo** (live read/write). Two deepagents constraints force this sh
   path-routable) - so the sandbox must be the default.
 - a composite route strips its prefix, so the mounted skills repo must store skills at its **root**
   (`<name>/SKILL.md`), not under `skills/`. Hence a dedicated per-assistant `*-skills` bundle repo
-  (see `assistant_setup.push_skills_bundle`), not the agent repo.
+  (see `provisioning/setup.py:push_skills_bundle`), not the agent repo.
 
 **Every generated skill uses both capabilities.** Setup's LLM call returns, per skill, a `workflow`
 (one of `WORKFLOW_PATTERNS` - the dynamic-subagent shapes) and a `sandbox_step` (which seeded file
@@ -220,7 +221,6 @@ model with per-criterion feedback until the grader is satisfied. Three things ma
 |---|---|---|
 | `push_widget` | Dashboard | `always_on` - the dashboard depends on it |
 | `draft_email` | Comms | simulated draft, rendered as a chat card |
-| `suggest_meeting_times` | Comms | simulated slots, rendered as a chat card |
 | `web_search` | Research | REAL results via the Tavily API; returns an error (never invented results) if `TAVILY_API_KEY` is unset |
 | `ask_user` | Interaction | HITL: pauses via `interrupt()` to ask the user a multiple-choice question (model supplies the `options`), resumes with the option they pick (renders a question card) |
 
@@ -240,10 +240,11 @@ model-call time (`request.override(tools=…)` - the same mechanism deepagents u
   (`parse_enabled`, `resolveRunContext`, the PATCH) or turning everything off silently
   restores the defaults.
 
-The four simulated tools follow the `SyntheticDataSource` pattern - a fast LLM invents
-customer-tailored content from `context.customer`/`industry`. They render as typed cards in
-chat (`frontend/src/components/chat/ToolResultCard.tsx`); anything dashboard-worthy goes
-through the existing `push_widget` types rather than a new widget schema.
+`draft_email` is the one simulated tool: `simulate()` in `tools/simulated.py` makes a single
+fast-LLM call that writes customer-tailored content from `context.customer`/`industry`. Add
+another the same way. Simulated results render as typed cards in chat
+(`frontend/src/components/chat/ToolResultCard.tsx`); anything dashboard-worthy goes through the
+existing `push_widget` types rather than a new widget schema.
 
 **Remote MCP servers.** An assistant can also reach tools this repo does not own. Paste a
 server's URL into **Settings → MCP servers**, press Test, and its tools are in play on the next
@@ -341,12 +342,12 @@ token as every other custom route, and any caller who can reach them can already
 the assistant's `context.mcp_servers` and have the agent call it, so this adds no reach - but
 do not widen these routes without revisiting that.
 
-**Human-in-the-loop.** `draft_email` and `suggest_meeting_times` generate, then call
-`interrupt()` (via `review()` in `tools/simulated.py`) - the run genuinely PAUSES. The payload
-arrives on the stream's `updates` event as `__interrupt__`, `ChatPanel` renders
-`chat/ReviewCard.tsx` (an editable email form / a slot picker with a `datetime-local` control),
-and approving resumes the thread with `command: {resume: …}`. The tool returns the human's
-version, so the agent's final answer reflects the edit.
+**Human-in-the-loop.** `draft_email` generates, then calls `interrupt()` (via `review()` in
+`tools/simulated.py`) - the run genuinely PAUSES. The payload arrives on the stream's `updates`
+event as `__interrupt__`, `ChatPanel` renders `chat/ReviewCard.tsx` (an editable email form,
+or a multiple-choice form for `ask_user`), and approving resumes the thread with
+`command: {resume: …}`. The tool returns the human's version, so the agent's final answer
+reflects the edit.
 
 Two things to know before touching it:
 - **Resuming re-executes the whole node**, so a generate-then-interrupt tool would run its LLM
@@ -380,8 +381,8 @@ AGENTS.md, and an assistant without one runs on `FALLBACK_PROMPT`.
 Everything else (middleware, checkpointer, backends, permissions, and the *implementation* of
 any tool) is **locked in code** - matching the plan's security boundary. Assistants pick from a
 vetted catalogue; they cannot introduce a tool, and there is no code path where assistant
-config can select a filesystem/shell backend. (The default backend is now a LangSmith
-code-execution sandbox - chosen in code by `_backend_for`, still never selectable via config;
+config can select a filesystem/shell backend. (The default backend is a LangSmith
+code-execution sandbox - chosen in code by `_backend_for`, never selectable via config;
 `SANDBOX_ENABLED=0` is the code-side kill switch.)
 
 **Display config lives separately, in the assistant's `metadata`:** `display_name`, `logo`,
@@ -415,10 +416,11 @@ falls back to one of five self-hosted curated families, reporting which actually
 **Streaming.** The SPA hits `/threads/{id}/runs/stream` with `stream_mode:"messages"` directly
 (SSE, CRLF-normalized). `ChatPanel` reconstructs widgets from partial `push_widget` tool-call args
 and flushes each one when the *next* begins (last at stream end), gated by `widgetLooksComplete()`.
-`messages/metadata` → `langgraph_node` is used to keep the synthetic data source's own LLM output
-out of the chat bubble. This reassembly lives in `ChatPanel` **only**: `agent.py` used to carry a
-second, server-side copy of it (`run_stream`) that nothing shipped, and it was deleted rather than
-kept in sync. Anything server-side that needs widgets reads the `widget_sink` ContextVar instead.
+`messages/metadata` → `langgraph_node` is used to keep a helper node's own LLM output (a
+simulated tool writing its content, say) out of the chat bubble. This reassembly lives in
+`ChatPanel` **only**. Do not add a server-side copy: two implementations of the same
+partial-args parsing drift apart silently, and nothing needs one - anything server-side that
+wants widgets reads the `widget_sink` ContextVar, which is filled by `push_widget` itself.
 
 **Setup flow (the "make it feel custom in 30 seconds" bit).** `prepare_assistant()`:
 1. `fetch_brand()` - Logo.dev logo from the domain; Brandfetch palette if `BRANDFETCH_API_KEY`
@@ -453,18 +455,18 @@ that manifest to `POST /cleanup`, which deletes each artifact **independently an
 permission gap must never leave an undeletable assistant. Anything new an assistant creates in a
 customer's workspace has to be added to *both* the manifest and `/cleanup`, or it leaks.
 
-**Per-assistant demo evals** (`assistant_evals.py`). **Polarity first - the two eval systems in
-this repo score in OPPOSITE directions:**
+**Per-assistant demo evals** (`provisioning/evals.py`). **Polarity first - the two eval systems
+in this repo score in OPPOSITE directions:**
 
-| | `evals/` (repo-level, Tier-3) | `assistant_evals.py` (per-assistant) |
+| | `evals/` (repo-level, Tier-3) | `provisioning/evals.py` (per-assistant) |
 |---|---|---|
 | who runs it | us, manually, before a release | the presenter, from the SPA, mid-demo |
 | dataset lives in | our eval workspace (`EVAL_WORKSPACE`) | the **customer's** workspace, created at setup |
 | **score 1 means** | the planted **bug fired** (the demo still works) | the agent **behaved correctly** - admitted the gap, no figures presented as fact |
 
-Copy `evals/evaluators.py:agent_behavior` polarity into `assistant_evals.demo_behavior` and the
-whole demo inverts: the baseline reads 3/3 green and the presenter's "fix" looks like a
-regression. Tests pin both directions with the judge stubbed.
+Copy `evals/evaluators.py:agent_behavior` polarity into
+`provisioning/evals.py:demo_behavior` and the whole demo inverts: the baseline reads 3/3
+green and the presenter's "fix" looks like a regression. Tests pin both directions with the judge stubbed.
 
 The arc it exists to serve:
 1. `prepare_assistant` plants the gap *and* upserts `<customer-slug>-demo-evals-<fingerprint>` in
@@ -500,10 +502,10 @@ Implementation notes, each of which is load-bearing:
   same dataset, and surface a runner crash the presenter would otherwise read as a number that
   never changes (the target is built *before* `client.evaluate`, so a missing model key or an
   unreachable workspace dies with no experiment and no trace). Nothing correct depends on them.
-- The target **answers HITL interrupts itself**. `draft_email` / `suggest_meeting_times` /
-  `ask_user` pause for a human (`tools/simulated.py`), and nobody is there during an experiment; an
-  unresumed interrupt returns state with `__interrupt__` and no final answer, so one enabled comms
-  tool would peg an example at 0 forever. `_resume_value` plays the human (empty dict = "approved
+- The target **answers HITL interrupts itself**. `draft_email` and `ask_user` pause for a human
+  (`tools/simulated.py`), and nobody is there during an experiment; an unresumed interrupt
+  returns state with `__interrupt__` and no final answer, so one enabled comms tool would peg
+  an example at 0 forever. `_resume_value` plays the human (empty dict = "approved
   unchanged"; a sentence for `ask_user`), and a run still parked after `_MAX_RESUMES` scores 0 with
   a comment that *says* it was interrupted.
 - The evaluator grades the **answer plus the widgets**, not the prose alone: the prompt tells the
@@ -513,7 +515,7 @@ Implementation notes, each of which is load-bearing:
   `_scoped_client`) like the prompt-push and `/cleanup` paths, and the LangSmith key never reaches
   the SPA.
 - **Layering:** `evals/` may import from `custom_demo`; never the reverse. The demo evaluator
-  and its LLM-judge helper live in `custom_demo/assistant_evals.py`.
+  and its LLM-judge helper live in `custom_demo/provisioning/evals.py`.
 - In the SPA it is a discrete toolbar button + compact dialog (`EvalPanel` → `evals/EvalRunner`,
   the same split as `FileBrowser` → `SandboxBrowser`) showing the dataset name, a red/green
   "2/3 passing" badge, a "Run experiment" action and a link out to LangSmith. It polls
@@ -552,10 +554,10 @@ Implementation notes, each of which is load-bearing:
 - **Config split.** Plan wanted display + behavior in *one* config object. Actual splits them
   across `context` (behavior) and `metadata` (display). Arguably the more LangGraph-native
   arrangement, but it is a divergence.
-- **Fake data.** Plan: a *subagent* behind a data-lookup tool. Actual, in two steps: first a
-  `SyntheticDataSource` that invented records per query inside a `datasearch` tool, then that
-  whole path was deleted. The agent now reads real files seeded into its sandbox VM, which is
-  what makes an answer checkable against something (see "Is the answer grounded?" in the README).
+- **Fake data.** Plan: a *subagent* behind a data-lookup tool. Actual: no data-lookup tool at
+  all. The agent reads real files seeded into its sandbox VM and opens them with `execute`,
+  which is what makes an answer checkable against something (see "Is the answer grounded?" in
+  the README).
 - **Frontend.** Plan: one parameterized Vercel app with `/d/[customer_slug]` dynamic routes and a
   fixed motion registry (`none | subtle-gradient | particle-bg | pulse-accent`). Actual: a single
   route Vite SPA where the assistant is chosen at runtime via the settings sheet + localStorage.
@@ -567,16 +569,15 @@ Implementation notes, each of which is load-bearing:
   implemented - see the catalogue + "universal skills" above. `ask_user` gives HITL via a tool
   rather than `interrupt_on`.)
 - **Dynamic subagents** (`agent.py:_build`): behind `DYNAMIC_SUBAGENTS` (build-time env, default
-  off, and **off in production** - it is not among the deployment's secrets. This used to say
-  `=1` in ci.yml's deploy step, but that job was deliberately removed when the deployment became
-  GitHub-connected, so nothing sets it any more), `create_deep_agent` gets
-  `subagents=[researcher, analyst]` + `langchain-quickjs`'s `CodeInterpreterMiddleware`, so the
-  agent can write a JS workflow script that fans out via a `task()` global. Pinned to
-  `langchain-quickjs>=0.3,<0.4` alongside `deepagents>=0.7,<0.8` (this used to be pinned <0.3 to
-  hold deepagents below 0.7; both were since upgraded, and quickjs is now a hard dependency rather
-  than an optional extra). Two code envs then coexist - the JS interpreter
-  (orchestration only) and the Python `execute` sandbox (data analysis); `_subagents_note` tells the
-  model which to use for what.
+  off, and **off in production** - nothing sets it. The deployment is GitHub-connected, so
+  turning it on means adding it to the deployment's own secrets; setting it in a CI workflow
+  reaches nothing). With it set, `create_deep_agent` gets `subagents=[researcher, analyst]` +
+  `langchain-quickjs`'s `CodeInterpreterMiddleware`, so the agent can write a JS workflow script
+  that fans out via a `task()` global. `langchain-quickjs>=0.3,<0.4` is a hard dependency (not an
+  extra) and its range is coupled to `deepagents>=0.7,<0.8`: quickjs 0.3 requires deepagents 0.7,
+  so move the two pins together or not at all. Two code envs then coexist - the JS interpreter
+  (orchestration only) and the Python `execute` sandbox (data analysis); `_subagents_note` tells
+  the model which to use for what.
 - **Naming a subagent card is order-matching, not id-matching.** A subagent's stream namespace is
   `tools:<uuid>` - a fresh subgraph id, NOT the id of the `task`/`eval` call that dispatched it
   (verified against a live run). Nothing in the stream links the two, so ChatPanel's `dispatchFor`
@@ -591,23 +592,12 @@ Implementation notes, each of which is load-bearing:
 
 ## 5. Known rough edges (verified, not speculation)
 
-- **README is stale.** It documents a `query_sql` tool and a `database.py`/SQLite backend that no
-  longer exist, and a `tests/test_database.py` that isn't in the repo (the documented test command
-  will fail). `AGENT_MODEL` default is listed as `claude-sonnet-4-5-20250929`; `config.py`
-  says `claude-sonnet-5`. It also predates the tool catalogue and the branding system.
-  (The dead `query_sql` entries in the frontend's `TOOL_META`/`chipArgSummary` are now removed.)
 - **`ToolSelection` does not reach inside `task`.** The auto-added general-purpose subagent gets
   its own middleware list that excludes ours, so an enabled `task` hands the subagent the
   unfiltered tool set. Documented, not closed - closing it means hand-reconstructing deepagents'
   `gp_middleware` and coupling to its internals.
 - **Stored Hub prompts never learn about newly enabled tools** (they are written once at setup).
   The runtime `AVAILABLE CAPABILITIES` note appended by `_hub_system_prompt` is the mitigation.
-- **Two competing setup paths.** The deployed `assistant_setup` graph (used by the SPA) and
-  `scripts/setup_assistant.py` + `.claude/skills/setup-assistant` (CLI). The CLI path is older: it
-  builds prompts from the humanitarian `FALLBACK_PROMPT` rather than `build_system_prompt()`, and
-  never sets `customer`/`industry`/`data_gap` on the context - so it produces a materially
-  different assistant. The skill also hardcodes an owner name and a `chat-langchain-lite/.venv`
-  interpreter path.
 - **Google Fonts is the app's first third-party asset** and there is no CSP anywhere. Mitigated
   by `font_source: "curated"` per assistant, which keeps everything self-hosted.
 - **`config.py:load_env` reaches into a sibling project** (`chat-langchain-lite/.env`) for keys.
@@ -642,7 +632,7 @@ customer assistant. Sends are guarded in this order - assistant → workspace �
 Fast tests (no LLM, no network):
 ```bash
 uv run pytest custom_demo/tests -q       # the whole fast suite; what CI runs
-uv run pytest custom_demo/tests/test_rag.py custom_demo/tests/test_widgets.py \
+uv run pytest custom_demo/tests/test_widgets.py \
               custom_demo/tests/test_tool_registry.py \
               custom_demo/tests/test_sandbox_files_routes.py \
               custom_demo/tests/test_assistant_evals.py \
@@ -653,7 +643,8 @@ node custom_demo/tests/trace_test.js        # trace-project naming
 node custom_demo/tests/signature_app_test.js  # the MCP App's postMessage contract (jsdom)
 cd frontend && npx tsc -b && npx oxlint && npm test
 ```
-Slow, real-LLM: `test_agent_e2e.py`, `test_hallucination_bug.py`.
+Slow, real-LLM (both auto-skip without a key): `test_contexthub_skill.py`,
+`test_hallucination_bug.py`.
 
 **Rules of thumb**
 - **Changing agent behavior is spec-first.** Write the failing test/eval before the code - see
@@ -665,20 +656,20 @@ Slow, real-LLM: `test_agent_e2e.py`, `test_hallucination_bug.py`.
   `tools/registry.py`, add a `TOOL_META` entry (and a card renderer if it returns structured
   data). Nothing else - the settings UI and the filter are both registry-driven.
 - **Adding a failure mode** is two rows and nothing else: `prompt.FAILURE_MODES` (its clause +
-  whether it needs a planted gap) and `assistant_evals.EVAL_MODES` (which examples its dataset
-  gets). If it takes more than that, the extension point is broken - fix the registry, not the
-  caller.
+  whether it needs a planted gap) and `provisioning/evals.py:EVAL_MODES` (which examples its
+  dataset gets). If it takes more than that, the extension point is broken - fix the registry,
+  not the caller.
 - **Two eval systems, opposite polarity** (§3): `evals/` scores 1 when the planted bug *fires*;
-  `assistant_evals.py` scores 1 when the agent is *correct*. Get it backwards and the demo reads
-  green before the fix.
+  `provisioning/evals.py` scores 1 when the agent is *correct*. Get it backwards and the demo
+  reads green before the fix.
 - New middleware / widget type → a code change to the shared graph, affecting every DE's
   assistant. Treat it as a reviewed change.
 - Never plumb `backend`, `permissions`, `middleware`, or `checkpointer` through assistant config.
 - The widget Pydantic schemas in `widgets.py` are the agent↔frontend contract; changing them
   means changing `frontend/src/lib/api.ts` and the widget components in lockstep - and keeping
   the **two** widget-extraction paths in sync (the `widget_sink` ContextVar, read by the eval
-  target and the webapp, and `ChatPanel`'s reassembly of partial tool-call args). There were three
-  until `run_stream` - a server-side duplicate of `ChatPanel`'s logic that nothing shipped - was
-  deleted; do not add a third.
+  target and the webapp, and `ChatPanel`'s reassembly of partial tool-call args). Do not add a
+  third: a server-side reimplementation of `ChatPanel`'s partial-args reassembly is what the
+  ContextVar exists to make unnecessary.
 - Colour/font work: read the two rules in `lib/branding.ts` first. Never call
   `getPropertyValue` on a token; never write a theme-dependent value from JS.

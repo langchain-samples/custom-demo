@@ -63,6 +63,12 @@ jobs:
       # counterpart of frontend/scripts/check-no-emdash.mjs. `ruff format` preserves the
       # blank lines it asks for, so the two never fight; `--fix` inserts them.
       - run: uv run python scripts/check_blank_after_block.py
+      # Every "see `custom_demo/foo.py`" in a doc or a comment must be a real path.
+      # Renaming the package moved most modules into subpackages and the sentences
+      # pointing at them kept the old spelling, so a reader following a citation landed
+      # nowhere and copy-pasting a documented pytest command failed. Resolution is
+      # mechanical, so the next stale path fails here instead of being found by hand.
+      - run: uv run python scripts/check_doc_paths.py
       - run: uv run ty check custom_demo scripts evals mcp_demo_server
       # Import smoke: catches broken imports (e.g. a removed tool still referenced).
       # These four are the entrypoints langgraph.json names, so importing them

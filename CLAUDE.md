@@ -31,6 +31,11 @@ The rest of `.github/workflows/ci.yml`, where every step is a gate:
 - `ruff format --check` and `ty check`, same four paths.
 - `uv run python scripts/check_blank_after_block.py`: once an indented block ends, the
   next statement at that indentation needs a blank line above it. `--fix` inserts them.
+- `uv run python scripts/check_doc_paths.py`: every repo path cited in the Markdown, in
+  a Python comment or docstring, or in a `frontend/src` comment has to be on disk. Cite
+  the real path; it declines to guess and there is no `--fix`. Its module docstring is
+  the one home for what it deliberately does not check (globs, the VM's own
+  `/workspace/...` paths, URLs, language-tagged fences) and why.
 - Import smoke on the four entrypoints `langgraph.json` names.
 - `uv run pytest custom_demo/tests evals -q`.
 - Frontend: `oxlint` (`react/rules-of-hooks`, `react-hooks/exhaustive-deps` and
@@ -53,6 +58,8 @@ Conventions pinned by a contract test. Change the test if you mean to change the
   sends the presenter where the prompt actually lives.
 - `test_agent_wiring.py`: the deployed agent has no `write_todos`.
 - `test_blank_after_block.py`: the blank-line checker's own false-positive cases.
+- `test_doc_paths.py`: the path checker's exclusions, one test each, because a wrong
+  exclusion is invisible.
 
 ## Judgment the checks cannot make
 
@@ -82,7 +89,7 @@ not a fallback, it is a fabrication. Where a failure genuinely is best-effort (a
 brand-colour scrape, one bad skill in a setup), say which thing failed and why on the way
 past. The silence is the defect, not the degradation.
 
-**Decide control flow by exception type, not by substring.** Five sites once concluded a
+**Decide control flow by exception type, not by substring.** Six sites once concluded a
 push had already succeeded by testing `"409" in msg or "conflict" in msg`, so a request
 id containing 409 handed back a handle for a repo that was never written.
 `provisioning/setup.py:_already_committed` is the fixed shape: `isinstance(exc,

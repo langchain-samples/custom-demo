@@ -1,6 +1,6 @@
 /* Node test for LangSmith trace-project naming (frontend/src/lib/trace.ts).
  *
- * The convention is duplicated in custom_demo/assistant_setup.py, so these
+ * The convention is duplicated in custom_demo/provisioning/setup.py, so these
  * assertions are what keeps the two from drifting.
  *
  * Run: node custom_demo/tests/trace_test.js
