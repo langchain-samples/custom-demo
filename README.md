@@ -51,10 +51,14 @@ up there rather than as a stack trace ten minutes into a demo.
 | **With an MCP server** | ⚙️ → MCP servers | giving an assistant tools this repo does not own. See [Connecting an MCP server](#connecting-an-mcp-server) |
 | **Voice** | the mic in the composer | a spoken demo. Needs `GEMINI_API_KEY` and the assistant's voice flag. See [docs/voice-mode.md](docs/voice-mode.md) |
 
-**The sandbox takes ~25 seconds to warm, so warm it up before demoing.** The agent reads files
-for everything, and those files live in a per-assistant VM. `+ New` pre-warms it in the
-background, but create an assistant and ask immediately and the first turn waits. Ask one
-throwaway question first. With `DA_SANDBOX=0` there is no VM at all, and the agent will say
+**Warm the sandbox before demoing: a cold first turn can take three minutes.** The agent reads
+files for everything, and those files live in a per-assistant VM. `+ New` pre-warms it in the
+background, but ask a question before that finishes and the turn blocks behind it, showing
+nothing but a spinner. Measured on a real first turn: 210s, of which the VM boot is capped at
+25s (`_SANDBOX_WAIT_SECONDS`) and the rest is the seed script installing pandas, numpy,
+statsmodels and scikit-learn into the VM. So create the assistant, ask one throwaway question,
+and wait for it to answer before you present. The same wait returns if the VM is left idle for
+an hour and gets reaped. With `DA_SANDBOX=0` there is no VM at all, and the agent will say
 plainly that it has no data source.
 
 ### If something doesn't work
@@ -219,10 +223,11 @@ The live-LLM tests skip themselves without `ANTHROPIC_API_KEY`, which CI leaves 
 so nothing there makes a real API call. `test_hallucination_bug.py` also needs the sandbox, for
 the reason in the section above.
 
-Three tests exist to catch contracts that break silently rather than loudly, and are worth
+Four tests exist to catch contracts that break silently rather than loudly, and are worth
 knowing about before renaming anything: `test_cleanup_contract.py` (the 11 keys that let
 deleting an assistant delete its LangSmith artifacts), `test_tool_vocabulary.py` (the SPA knows
-every catalogue tool) and `signature_app_test.js` (the app-to-host postMessage keys).
+every catalogue tool), `test_sandbox_target_contract.py` (every sandbox call names the
+assistant's own VM) and `signature_app_test.js` (the app-to-host postMessage keys).
 
 ## Architecture
 
