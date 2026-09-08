@@ -770,21 +770,18 @@ def _sandbox_enabled() -> bool:
     return bool(_sandbox_key_credentials()[0])
 
 
-def _seed_data(backend: Any, seed: list[dict] | None = None, *, fallback: bool = True) -> None:
-    """Best-effort: plant this assistant's starting files inside its VM.
+def _seed_data(backend: Any, seed: list[dict] | None = None) -> None:
+    """Best-effort: plant this assistant's starting files inside a freshly created VM.
 
     `seed` is the assistant's own spec (`Context.sandbox_seed`); without one — or when
     nothing in it survives validation — the generic sales dataset is used, which is what
-    every assistant used to get regardless of its use case. `fallback=False` suppresses
-    that, for the attach path, where planting a retail CSV into a VM that already holds
-    real files would only add a confusing one.
+    every assistant used to get regardless of its use case.
+
+    Called only on the create path. It is a blocking VM round trip that begins with a
+    pip install, so it must never sit on a turn that merely attached to a warm VM.
     """
     try:
-        script = render_seed_script(seed or [])
-        if not script:
-            if not fallback:
-                return
-            script = _SEED_SCRIPT
+        script = render_seed_script(seed or []) or _SEED_SCRIPT
         backend.execute(script)
     except Exception as exc:  # noqa: BLE001 - a seed failure must not fail the run
         # Printed, not swallowed: an empty /workspace/data is reported by the model as
@@ -912,14 +909,14 @@ def _ensure_sandbox(key: str, *, create: bool = True, seed: list[dict] | None = 
         if not _wait_ready(client, name):
             return None
         backend = LangSmithSandbox(raw)
+        # ONLY on create. Seeding an attached VM to repair one built for a different
+        # assistant was tried and reverted: the seed script opens with a pip install
+        # of pandas/numpy/statsmodels/scikit-learn, and this runs inside the first
+        # middleware that touches the filesystem, with no timeout. Every turn that
+        # missed the cache hung indefinitely. An assistant that predates
+        # `sandbox_key` and holds another assistant's files has to be recreated.
         if created:
             _seed_data(backend, seed)
-        elif seed:
-            # An attached VM keeps its filesystem, which is right until the VM was
-            # built for a DIFFERENT assistant (see `_sandbox_key_from`) or before this
-            # assistant's seed spec existed. The writer skips every file already on
-            # disk, so this only fills gaps and never overwrites an upload.
-            _seed_data(backend, seed, fallback=False)
         _SANDBOX_CACHE[key] = backend
         _SANDBOX_SEEN[key] = now
         return backend

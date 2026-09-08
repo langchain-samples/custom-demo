@@ -658,35 +658,40 @@ def test_prewarm_and_the_runtime_agree_on_the_key(monkeypatch):
     assert client.created == ["da-acme-a1b2c3"]
 
 
-# --- attaching to a VM that is missing this assistant's files ------------------
+# --- attaching must not do work ------------------------------------------------
 
 
-def test_attaching_to_someone_elses_vm_plants_the_missing_files(monkeypatch):
-    """Repairs the assistants that already exist, which carry no key of their own."""
+def test_attaching_to_a_warm_vm_executes_nothing(monkeypatch):
+    """A turn that merely reattaches must not pay a VM round trip.
+
+    Seeding on attach (to repair a VM built for another assistant) was tried and
+    reverted: `render_seed_script` opens with a pip install of pandas/numpy/
+    statsmodels/scikit-learn, and `_ensure_sandbox` is reached from inside the first
+    middleware that touches the filesystem, with no timeout. Every cache-cold turn
+    hung in `SkillsMiddleware.before_agent` and never returned.
+    """
     client = _FakeClient()
-    client.existing.append(_FakeSandbox("da-mckesson"))  # seeded by another assistant
+    client.existing.append(_FakeSandbox("da-mckesson-a1b2c3"))
     _install_client(monkeypatch, client)
-    A._resolve_backends(_rt(customer="McKesson", sandbox_seed=_MEDICAL_SEED))
-    assert client.created == []  # still an attach, not a second VM
+    A._resolve_backends(
+        _rt(customer="McKesson", sandbox_key="mckesson-a1b2c3", sandbox_seed=_MEDICAL_SEED)
+    )
+    assert client.created == []  # attached, as intended
+    assert [c for sb in client.existing for c in sb.runs] == []  # and nothing run on it
+
+
+def test_a_created_vm_is_still_seeded(monkeypatch):
+    """The other half of the same rule: create pays for the seed, attach never does."""
+    client = _install_client(monkeypatch)
+    A._resolve_backends(
+        _rt(customer="McKesson", sandbox_key="mckesson-a1b2c3", sandbox_seed=_MEDICAL_SEED)
+    )
     planted = [c for sb in client.existing for c in sb.runs if "claims.csv" in c]
     assert len(planted) == 1
 
 
-def test_an_attach_never_plants_the_generic_dataset(monkeypatch):
-    """No spec of its own means nothing to repair.
-
-    Planting the retail dataset into someone else's claims VM would only add a
-    misleading file to it.
-    """
-    client = _FakeClient()
-    client.existing.append(_FakeSandbox("da-eval-co"))
-    _install_client(monkeypatch, client)
-    A._resolve_backends(_rt(customer="Eval Co"))
-    assert [c for sb in client.existing for c in sb.runs if "sales.csv" in c] == []
-
-
 def test_the_seed_writer_keeps_a_file_that_is_already_there():
-    """What makes the attach path safe to repeat, and safe over an upload."""
+    """A re-created VM must not clobber a file a presenter uploaded to it."""
     script = A.render_seed_script(_MEDICAL_SEED)
     assert "path.exists()" in script
     assert "continue" in script
