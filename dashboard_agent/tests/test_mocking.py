@@ -1,9 +1,13 @@
 """Tool mocking. No network, no API key, no model.
 
 The case that motivates all of this: `web_search` returning nothing. The demo's
-honesty check depends on that precondition, and without mocking it is produced by
-the synthetic data source deciding not to return anything — an LLM decision inside
-the system under test. These pin the deterministic replacement.
+honesty check depends on that precondition, and without mocking it depends on
+what Tavily happens to answer — a live third party inside the system under test.
+Mocking pins it. These tests pin the mocking.
+
+The heading is a constraint, not a description: a test here that reaches the
+network passes on a laptop with keys and fails in CI, which is exactly how the
+two pass-through cases below broke.
 """
 
 from __future__ import annotations
@@ -11,6 +15,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from langchain.tools import tool as tool_decorator
 
 from dashboard_agent.runtime.mocking import (
     MockedToolError,
@@ -26,6 +31,24 @@ from dashboard_agent.runtime.tools.web_search import web_search
 @pytest.fixture
 def tool():
     """A mockable clone of the real web_search tool."""
+    (clone,) = enable_mocking([web_search])
+    return clone
+
+
+@pytest.fixture
+def passthrough():
+    """A mockable clone of a tool whose real implementation is observable.
+
+    Every mock here is keyed by tool NAME, so a stand-in exercises the same
+    lookup the catalogue does. Used only by the two tests that let the call
+    reach the real function.
+    """
+
+    @tool_decorator
+    def web_search(query: str) -> str:
+        """Same name as the catalogue tool, so the same spec key applies."""
+        return f"real: {query}"
+
     (clone,) = enable_mocking([web_search])
     return clone
 
@@ -127,24 +150,23 @@ def test_an_error_payload_is_data_not_an_exception(tool):
 # --- scoping --------------------------------------------------------------------
 
 
-def test_no_spec_means_the_real_tool_runs(tool):
+def test_no_spec_means_the_real_tool_runs(passthrough):
     """With nothing installed the wrapper calls straight through.
 
-    Asserted against the bundled corpus rather than a stub, because "the wrapper is
-    inert" is the property that makes it safe to wrap the deployed catalogue.
+    Asserted against a local tool rather than `web_search`, whose real
+    implementation is a Tavily HTTP call: reaching the network to prove the
+    wrapper is inert makes the test need a key and an outbound connection, which
+    is how this file ended up passing locally and failing in CI.
     """
     assert active_mocks() is None
-    results = json.loads(call(tool, "funding"))["results"]
-    assert results, "unmocked web_search should hit the real corpus"
-    assert "title" in results[0]
+    assert call(passthrough, "funding") == "real: funding"
 
 
-def test_an_unlisted_tool_is_not_mocked(tool):
+def test_an_unlisted_tool_is_not_mocked(passthrough):
     """A spec for another tool must not silently capture this one."""
     with using_mocks({"some_other_tool": "x"}):
         assert active_mocks() == {"some_other_tool": "x"}
-        # web_search is absent from the spec, so it runs for real.
-        assert json.loads(call(tool, "funding"))["results"]
+        assert call(passthrough, "funding") == "real: funding"
 
 
 def test_mocks_do_not_leak_past_the_block(tool):
