@@ -18,7 +18,6 @@ once (`base_graph`) and reused — the factory only wraps the run in a tracing c
 from __future__ import annotations
 
 import contextlib
-import os
 from typing import Any
 
 from langsmith import Client, tracing_context
@@ -26,20 +25,11 @@ from langsmith import Client, tracing_context
 # Absolute import: Agent Server loads this entrypoint as a top-level module (no
 # package parent), so a relative `from .agent` import would fail here.
 from dashboard_agent.agent import build_agent
+from dashboard_agent.config import routing_key, scoped_client
 
 base_graph = build_agent(deployed=True)
 
 _client_cache: dict[str, Client] = {}
-
-
-def _routing_key() -> str | None:
-    """Key used to build workspace-scoped clients.
-
-    Prefer an explicit cross-workspace key; otherwise the default LangSmith key —
-    which works for cross-workspace routing when it's org-scoped (e.g. a personal
-    access token).
-    """
-    return os.getenv("LS_CROSS_WORKSPACE_KEY") or os.getenv("LANGSMITH_API_KEY")
 
 
 def _client_for_workspace(workspace_id: str) -> Client | None:
@@ -48,13 +38,13 @@ def _client_for_workspace(workspace_id: str) -> Client | None:
     Returns None when no usable key is available (then traces stay in the default
     workspace).
     """
-    key = _routing_key()
-    if not key:
+    # An org-scoped key can reach another workspace; a workspace-scoped one
+    # cannot, and then traces simply stay where they are.
+    if not routing_key():
         return None
     client = _client_cache.get(workspace_id)
     if client is None:
-        api_url = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
-        client = Client(api_key=key, api_url=api_url, workspace_id=workspace_id)
+        client = scoped_client(workspace_id)
         _client_cache[workspace_id] = client
     return client
 

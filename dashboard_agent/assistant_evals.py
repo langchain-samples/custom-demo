@@ -56,7 +56,7 @@ from pydantic import BaseModel, Field
 # `assistant_setup` imports THIS module lazily (inside prepare_assistant), so the
 # dependency only runs one way at import time and there is no cycle.
 from .assistant_setup import _ws_client, slugify
-from .config import judge_model, load_env, sampling_kwargs
+from .config import judge_model, routing_key, sampling_kwargs
 from .mocking import install_mocks, restore_mocks
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, keeps agent.py off the import path
@@ -649,10 +649,8 @@ def delete_judge_evaluator(workspace: str | None, evaluator_id: str) -> None:
 
 def _rules_api(workspace: str | None) -> tuple[str, dict]:
     """(base_url, headers) for the run-rules REST calls, scoped to `workspace`."""
-    load_env()
-    key = os.getenv("LS_CROSS_WORKSPACE_KEY") or os.getenv("LANGSMITH_API_KEY") or ""
     base = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com").rstrip("/")
-    headers = {"x-api-key": key}
+    headers = {"x-api-key": routing_key()}
     if workspace:
         # Same cross-workspace scoping `_ws_client` gets from `workspace_id=`; without it
         # the rule lands in whatever workspace the key defaults to.
