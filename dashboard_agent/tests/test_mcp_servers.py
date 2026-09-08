@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from dashboard_agent import mcp_servers as m
+from dashboard_agent.runtime import mcp_servers as m
 
 # ---------------------------------------------------------------------------
 # Config parsing

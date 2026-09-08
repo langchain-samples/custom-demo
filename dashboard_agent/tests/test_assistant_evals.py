@@ -35,7 +35,6 @@ from typing import Any
 import pytest
 
 import dashboard_agent.provisioning.evals as AE
-from dashboard_agent.prompt import FAILURE_MODES
 from dashboard_agent.provisioning.evals import (
     build_examples,
     dataset_fingerprint,
@@ -46,6 +45,7 @@ from dashboard_agent.provisioning.evals import (
     graded_content,
 )
 from dashboard_agent.provisioning.setup import slugify
+from dashboard_agent.runtime.prompt import FAILURE_MODES
 
 # --- the fixtures the demo actually runs on ------------------------------------------
 
@@ -490,7 +490,7 @@ def _ai(text: str, tool_calls: list[dict] | None = None):
 
 
 def _run_target(monkeypatch, states: list[dict]) -> tuple[dict, _ScriptedAgent]:
-    import dashboard_agent.agent as A
+    import dashboard_agent.runtime.agent as A
 
     agent = _ScriptedAgent(states)
     monkeypatch.setattr(A, "build_agent", lambda *_a, **_k: agent)
@@ -579,7 +579,7 @@ def test_a_run_that_stays_parked_says_so_instead_of_reading_as_no_answer(monkeyp
 
 def test_target_collects_the_widgets_the_agent_pushed(monkeypatch):
     """The evaluator grades the dashboard too, so the target has to capture it."""
-    from dashboard_agent.tools import widget_sink
+    from dashboard_agent.runtime.tools import widget_sink
 
     widget = {"type": "kpi", "title": "On-time rate", "value": "94%"}
 
@@ -591,7 +591,7 @@ def test_target_collects_the_widgets_the_agent_pushed(monkeypatch):
             return super().invoke(payload, config, context)
 
     agent = _PushingAgent([{"messages": [_ai("On-time delivery held steady.")]}])
-    import dashboard_agent.agent as A
+    import dashboard_agent.runtime.agent as A
 
     monkeypatch.setattr(A, "build_agent", lambda *_a, **_k: agent)
     out = AE._agent_target({})({"question": "What is our on-time delivery rate?"})

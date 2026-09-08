@@ -12,7 +12,7 @@ import json
 import pytest
 
 from dashboard_agent import config
-from dashboard_agent.tools import web_search as ws
+from dashboard_agent.runtime.tools import web_search as ws
 
 
 @pytest.fixture(autouse=True)

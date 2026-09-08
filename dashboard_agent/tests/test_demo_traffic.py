@@ -336,7 +336,7 @@ def test_run_seeds_traces_with_the_workspace_client(monkeypatch):
             seen.update(get_tracing_context())
             return {}
 
-    monkeypatch.setattr("dashboard_agent.agent.build_agent", lambda: _Agent())
+    monkeypatch.setattr("dashboard_agent.runtime.agent.build_agent", lambda: _Agent())
     monkeypatch.setattr("dashboard_agent.provisioning.evals.make_run_context", lambda c: c)
     client = _FakeClient()
 
@@ -360,7 +360,7 @@ def test_run_seeds_keeps_going_when_one_question_raises(monkeypatch):
             return {}
 
     agent = _Agent()
-    monkeypatch.setattr("dashboard_agent.agent.build_agent", lambda: agent)
+    monkeypatch.setattr("dashboard_agent.runtime.agent.build_agent", lambda: agent)
     monkeypatch.setattr("dashboard_agent.provisioning.evals.make_run_context", lambda c: c)
 
     DT.run_seeds({}, [{"question": "a"}, {"question": "b"}], project="P", client=_FakeClient())

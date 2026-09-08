@@ -9,8 +9,8 @@ The invariants that matter:
 
 from types import SimpleNamespace
 
-from dashboard_agent.agent import ToolSelection
-from dashboard_agent.tools import (
+from dashboard_agent.runtime.agent import ToolSelection
+from dashboard_agent.runtime.tools import (
     ALWAYS_ON,
     CATALOGUE_IDS,
     DEFAULT_ENABLED,

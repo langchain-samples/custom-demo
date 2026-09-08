@@ -199,7 +199,7 @@ def check_model(provider: str) -> None:
                 return
 
     try:
-        from dashboard_agent.agent import build_chat_model
+        from dashboard_agent.runtime.agent import build_chat_model
 
         llm = build_chat_model(model_id)
         reply = llm.invoke("Reply with exactly: OK")
@@ -255,7 +255,7 @@ def check_prompt_hub() -> None:
         return
     try:
         from dashboard_agent.config import prompt_name
-        from dashboard_agent.prompt import pull_system_prompt
+        from dashboard_agent.runtime.prompt import pull_system_prompt
 
         text = pull_system_prompt(None)
         if not text:

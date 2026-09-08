@@ -32,7 +32,7 @@ from deepagents.backends.protocol import (
 )
 from starlette.testclient import TestClient
 
-import dashboard_agent.agent as A
+import dashboard_agent.runtime.agent as A
 import dashboard_agent.webapp as W
 
 client = TestClient(W.app)

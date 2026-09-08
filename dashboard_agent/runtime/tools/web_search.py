@@ -21,7 +21,7 @@ from typing import Any
 
 from langchain.tools import tool
 
-from ..config import require_tavily_key
+from ...config import require_tavily_key
 
 # How many results to request. Matches what the simulated tool used to return,
 # which is what the card was laid out for.

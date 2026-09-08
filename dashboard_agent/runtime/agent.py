@@ -42,7 +42,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.runtime import get_runtime
 from langsmith import Client
 
-from .config import (
+from ..config import (
     MODEL,
     goal_max_iterations,
     goal_model,
@@ -50,7 +50,7 @@ from .config import (
     require_model_key,
     scoped_client,
 )
-from .core.ctx import ctx_get as _ctx
+from ..core.ctx import ctx_get as _ctx
 from .mocking import enable_mocking
 from .prompt import ARTIFACT_NOTE, pull_agent_prompt, pull_system_prompt
 from .tools import (

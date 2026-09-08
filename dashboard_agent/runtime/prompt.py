@@ -11,7 +11,7 @@ If the Hub is unreachable or the prompt is missing, we fall back to
 
 from __future__ import annotations
 
-from .config import make_client, prompt_name, scoped_client
+from ..config import make_client, prompt_name, scoped_client
 
 
 def _prompt_client(workspace: str | None):

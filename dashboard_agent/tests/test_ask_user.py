@@ -8,7 +8,7 @@ parsing (dict / wrapped / raw).
 
 import langgraph.types as lt
 
-from dashboard_agent.tools.simulated import ask_user
+from dashboard_agent.runtime.tools.simulated import ask_user
 
 
 def test_interrupt_payload_is_user_question_with_options(monkeypatch):

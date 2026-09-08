@@ -14,7 +14,7 @@ from __future__ import annotations
 from langchain_core.prompts import ChatPromptTemplate
 
 from dashboard_agent.config import make_client, prompt_name, workspace_id
-from dashboard_agent.prompt import FALLBACK_PROMPT
+from dashboard_agent.runtime.prompt import FALLBACK_PROMPT
 
 # The intentional demo bug: an override clause telling the agent to fabricate
 # confident figures for anything missing from the data. Delete this clause in the

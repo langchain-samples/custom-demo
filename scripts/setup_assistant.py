@@ -39,7 +39,7 @@ from langgraph_sdk import get_sync_client
 from langsmith import Client
 
 from dashboard_agent.config import load_env
-from dashboard_agent.prompt import (
+from dashboard_agent.runtime.prompt import (
     _FALLBACK_CORE,
     FALLBACK_PROMPT,
     HALLUCINATION_CLAUSE,

@@ -474,7 +474,7 @@ async def tools(request):
     Served from the backend registry so adding a capability needs no frontend
     change. Static data — no LangSmith call, no auth.
     """
-    from dashboard_agent.tools import registry_json
+    from dashboard_agent.runtime.tools import registry_json
 
     return JSONResponse({"tools": registry_json()})
 
@@ -490,7 +490,7 @@ async def tools(request):
 
 def _mcp_servers_from(payload: dict):
     """Parse the `servers` array out of a request body."""
-    from dashboard_agent.mcp_servers import parse_servers
+    from dashboard_agent.runtime.mcp_servers import parse_servers
 
     return parse_servers(payload.get("servers"))
 
@@ -502,7 +502,7 @@ async def mcp_probe(request):
     per-server `ok: false` with the reason, not a failed request, because the SPA
     renders one row per server and one dead tunnel must not blank the others.
     """
-    from dashboard_agent.mcp_servers import probe
+    from dashboard_agent.runtime.mcp_servers import probe
 
     try:
         payload = await request.json()
@@ -522,7 +522,7 @@ async def mcp_app(request):
     ordinary answer for a tool with no UI, and the SPA falls back to the generic
     schema-driven form, so this is not an error path.
     """
-    from dashboard_agent.mcp_servers import read_app
+    from dashboard_agent.runtime.mcp_servers import read_app
 
     try:
         payload = await request.json()
@@ -943,7 +943,7 @@ async def _resolve_backend(request, params: dict | None = None):
     # Function-local ABSOLUTE import (house style, cf. /tools): keeps module load off
     # agent.py's heavy deepagents imports, dodges an import cycle, and — because it
     # resolves at call time — is what lets tests monkeypatch these on the module.
-    from dashboard_agent.agent import _ensure_sandbox, _sandbox_enabled, _sandbox_key_from
+    from dashboard_agent.runtime.agent import _ensure_sandbox, _sandbox_enabled, _sandbox_key_from
 
     load_env()  # `_sandbox_enabled()` reads os.getenv directly and never loads .env itself
     if not _sandbox_enabled():

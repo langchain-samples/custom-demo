@@ -80,7 +80,7 @@ def _setup_target(inputs: dict) -> dict:
 
 
 def _agent_target_factory(repo: str):
-    from dashboard_agent.agent import build_agent
+    from dashboard_agent.runtime.agent import build_agent
 
     agent = build_agent()
 

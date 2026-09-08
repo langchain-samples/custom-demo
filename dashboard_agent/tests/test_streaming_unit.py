@@ -11,7 +11,7 @@ import json
 
 from langchain_core.messages import AIMessageChunk, ToolMessage
 
-from dashboard_agent.agent import run_stream
+from dashboard_agent.runtime.agent import run_stream
 
 
 def _chunks_for_widget(widget: dict, index: int, call_id: str, pieces: int = 3):

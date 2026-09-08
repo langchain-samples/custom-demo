@@ -16,9 +16,9 @@ import re
 
 import pytest
 
-import dashboard_agent.agent as agent_mod
+import dashboard_agent.runtime.agent as agent_mod
 from dashboard_agent.config import load_env
-from dashboard_agent.prompt import _FALLBACK_CORE, FALLBACK_PROMPT, HALLUCINATION_CLAUSE
+from dashboard_agent.runtime.prompt import _FALLBACK_CORE, FALLBACK_PROMPT, HALLUCINATION_CLAUSE
 
 load_env()
 

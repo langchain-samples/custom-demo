@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from dashboard_agent import config
-from dashboard_agent.agent import build_chat_model
+from dashboard_agent.runtime.agent import build_chat_model
 
 # --- provider routing ----------------------------------------------------------
 

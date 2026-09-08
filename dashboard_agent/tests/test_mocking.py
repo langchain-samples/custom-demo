@@ -12,7 +12,7 @@ import json
 
 import pytest
 
-from dashboard_agent.mocking import (
+from dashboard_agent.runtime.mocking import (
     MockedToolError,
     active_mocks,
     enable_mocking,
@@ -20,7 +20,7 @@ from dashboard_agent.mocking import (
     restore_mocks,
     using_mocks,
 )
-from dashboard_agent.tools.web_search import web_search
+from dashboard_agent.runtime.tools.web_search import web_search
 
 
 @pytest.fixture

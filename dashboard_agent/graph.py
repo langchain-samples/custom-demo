@@ -22,10 +22,11 @@ from typing import Any
 
 from langsmith import Client, tracing_context
 
+from dashboard_agent.config import routing_key, scoped_client
+
 # Absolute import: Agent Server loads this entrypoint as a top-level module (no
 # package parent), so a relative `from .agent` import would fail here.
-from dashboard_agent.agent import build_agent
-from dashboard_agent.config import routing_key, scoped_client
+from dashboard_agent.runtime.agent import build_agent
 
 base_graph = build_agent(deployed=True)
 

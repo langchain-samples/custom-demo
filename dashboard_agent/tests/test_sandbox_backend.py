@@ -36,7 +36,7 @@ from deepagents.backends import CompositeBackend, LangSmithSandbox, StateBackend
 from deepagents.backends.protocol import FileDownloadResponse, FileInfo, LsResult
 from deepagents.middleware.filesystem import supports_execution
 
-from dashboard_agent import agent as A
+from dashboard_agent.runtime import agent as A
 
 
 class _FakeRun:

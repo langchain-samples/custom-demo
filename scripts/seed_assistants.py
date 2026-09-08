@@ -26,7 +26,7 @@ class Variant(TypedDict):
     description: str
 
 
-# Each variant = one assistant. Context keys match dashboard_agent.agent.Context.
+# Each variant = one assistant. Context keys match dashboard_agent.runtime.agent.Context.
 VARIANTS: list[Variant] = [
     {
         "name": "Humanitarian (bundled corpus)",

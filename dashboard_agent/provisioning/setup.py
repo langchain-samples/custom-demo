@@ -20,13 +20,13 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
 from ..config import load_env, sampling_kwargs, setup_model
-from ..prompt import (
+from ..runtime.prompt import (
     DASHBOARD_SKILL_DESCRIPTION,
     DASHBOARD_SKILL_INSTRUCTIONS,
     build_system_prompt,
     failure_mode_needs_gap,
 )
-from ..tools import CATALOGUE_IDS, DEFAULT_ENABLED, EXPLICIT_ONLY, TOOL_REGISTRY
+from ..runtime.tools import CATALOGUE_IDS, DEFAULT_ENABLED, EXPLICIT_ONLY, TOOL_REGISTRY
 from .client import _ws_client, slugify
 
 DEFAULT_ACCENT = "#0072BC"
@@ -947,7 +947,7 @@ def prepare_assistant(payload: dict) -> dict:
     if push:
         import threading
 
-        from ..agent import prewarm_sandbox
+        from ..runtime.agent import prewarm_sandbox
 
         threading.Thread(
             target=prewarm_sandbox,

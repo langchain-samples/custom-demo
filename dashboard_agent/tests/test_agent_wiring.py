@@ -10,8 +10,8 @@ from typing import Any, cast
 
 from langgraph.prebuilt.tool_node import ToolCallRequest
 
-from dashboard_agent import agent as A
-from dashboard_agent.tools.registry import allowed_tool_names, is_allowed
+from dashboard_agent.runtime import agent as A
+from dashboard_agent.runtime.tools.registry import allowed_tool_names, is_allowed
 
 # --- tool selection (#12) ---
 
@@ -168,7 +168,7 @@ def _stub_tools(monkeypatch, tools):
     async def load(_servers, **_kw):
         return tools
 
-    monkeypatch.setattr("dashboard_agent.mcp_servers.load_tools", load)
+    monkeypatch.setattr("dashboard_agent.runtime.mcp_servers.load_tools", load)
 
 
 def test_mcp_tools_are_offered_alongside_the_built_in_ones(monkeypatch):

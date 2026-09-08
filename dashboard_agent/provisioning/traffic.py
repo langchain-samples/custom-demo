@@ -409,7 +409,7 @@ def run_seeds(
     for item in questions:
         try:
             if agent is None:  # built lazily so a bad context fails one question, not all
-                from ..agent import build_agent
+                from ..runtime.agent import build_agent
 
                 agent = build_agent()
             # `collect_runs` captures the runs of this call synchronously as they

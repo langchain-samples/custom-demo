@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from dashboard_agent.widgets import validate_widget
+from dashboard_agent.runtime.widgets import validate_widget
 
 
 def test_valid_kpi():
