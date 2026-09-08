@@ -30,7 +30,7 @@ assertions + an LLM-as-judge), recorded as a LangSmith **experiment**.
 |---|---|---|---|
 | `setup` | `dashboard-agent-setup` | `analyze_customer` | quick actions are specific + on-scenario (judge) |
 | `data`  | `dashboard-agent-data`  | synthetic data source | gap topic → 0 rows; non-gap → rows |
-| `agent` | `dashboard-agent-agent` | the deep agent (Context Hub) | skill read before datasearch + marker cited; hallucination fabricates; file written |
+| `agent` | `dashboard-agent-agent` | the deep agent (Context Hub) | skill read before the data files + marker cited; hallucination fabricates; file written |
 
 ## Run
 

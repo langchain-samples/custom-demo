@@ -1,13 +1,12 @@
 """The Dashboard Agent deep agent.
 
-The agent has two custom tools:
+Its one always-on custom tool is ``push_widget``, which appends ONE validated
+visualization to the live dashboard. Everything else in the catalogue is optional
+per assistant (see ``tools/registry.py``).
 
-  * ``datasearch``   — dummy in-memory RAG over situation reports/assessments.
-  * ``push_widget``  — appends ONE validated visualization to the live dashboard.
-
-A run works like the CopilotKit "shared-state canvas" pattern: the agent
-searches for grounded data, then emits a series of widgets that compose a
-persistent dashboard, and finally writes a short narrative answer. Emitted
+A run works like the CopilotKit "shared-state canvas" pattern: the agent reads
+its data files, then emits a series of widgets that compose a persistent
+dashboard, and finally writes a short narrative answer. Emitted
 widgets are collected per-invocation via a ContextVar sink so the server can
 return them alongside the chat text.
 """
@@ -163,7 +162,7 @@ def _sandbox_note(runtime) -> str:
     flag as the backend so it stays off when the sandbox is disabled.
     """
     if os.getenv("DA_SANDBOX", "1") == "0":
-        # The agent reads files for everything now that `datasearch` is gone, so
+        # The agent reads files for everything, so
         # with no sandbox it has no way to look anything up. Say so plainly: left
         # unsaid, the model either invents figures or blames itself, and the
         # presenter cannot tell a misconfiguration from a bad answer.
@@ -257,25 +256,25 @@ def _capability_note(runtime) -> str:
         f"- {line}" for line in lines
     )
     # Dashboards are optional. When push_widget is off (e.g. a support/chat
-    # assistant), still ground answers with datasearch but reply in prose — the
+    # assistant), still ground answers in the files but reply in prose — the
     # stored prompt's "build a dashboard" workflow does not apply.
     if "push_widget" not in allowed:
         note += (
             "\n\nDASHBOARDS ARE OFF for this assistant: do NOT build a dashboard or call "
-            "push_widget (it is not available). Still call `datasearch` to ground your answer in "
-            "real figures, but reply with a concise written response (a short list where helpful), "
-            "not widgets."
+            "push_widget (it is not available). Still read your data files to ground your answer "
+            "in real figures, but reply with a concise written response (a short list where "
+            "helpful), not widgets."
         )
-    # Stored prompts describe one rigid workflow (datasearch -> push_widget ->
+    # Stored prompts describe one rigid workflow (read the files -> push_widget ->
     # answer). With extra capabilities enabled the model otherwise treats a
     # "draft an email" request as off-script (refusing, apologising for going
     # off-topic, or forcing a dashboard nobody asked for). Give it explicit
     # permission to answer the request that was actually made.
-    if allowed - {"datasearch", "push_widget"}:
+    if allowed - {"push_widget"}:
         note += (
             "\n\nThe dashboard workflow above applies to DATA questions. When the user asks "
             "for something one of the other capabilities covers, just use that capability and "
-            "answer briefly — do not run a data search or build widgets first, and never say "
+            "answer briefly — do not read the data files or build widgets first, and never say "
             "the request is off-topic."
         )
     return note
@@ -312,7 +311,8 @@ def _mcp_note(runtime) -> str:
     names = ", ".join(sorted(servers.values())) or "a connected MCP server"
     return (
         f"\n\nCONNECTED SYSTEMS ({names}). These tools reach the customer's own live systems "
-        "through MCP. Prefer them over `datasearch` for anything they cover, and never invent a "
+        "through MCP. Prefer them over your local data files for anything they cover, and never "
+        "invent a "
         "value one of them could return (a tracking id, a status, a date):\n" + "\n".join(lines)
     )
 
@@ -1132,9 +1132,8 @@ def _build_agent(model: str | None, checkpointer):
             # in the ContextVar when `_mcp_note` describes them to the model.
             McpTools(),
             _hub_system_prompt,
-            # Per-run call caps declared by the registry (e.g. datasearch is capped
-            # at 1/run so the agent can't wander to adjacent queries and mask the
-            # planted gap). Each is inert when its tool isn't offered.
+            # Per-run call caps declared by the registry. Each is inert when its
+            # tool isn't offered.
             *call_limit_middlewares(),
             # Last, so it has the final word on which tools reach the model.
             ToolSelection(),
@@ -1311,7 +1310,7 @@ def run_stream(question: str, thread_id: str = "demo", agent=None):
     def _tool_summary(name: str, parsed: dict) -> str:
         # A query-shaped tool reads better as its query than as JSON. Keyed on the
         # argument rather than the tool name, so it keeps working for any tool
-        # that takes one (this used to name `datasearch`, which no longer exists).
+        # that takes one.
         if isinstance(parsed.get("query"), str):
             return parsed["query"]
         # Compact one-liner for anything else (write_todos, task, push_widget).
@@ -1397,7 +1396,7 @@ def run_stream(question: str, thread_id: str = "demo", agent=None):
                     emitted.add(key)
                     yield {"type": "widget", "widget": widget}
                 else:
-                    # datasearch / built-in tools -> activity feed.
+                    # catalogue / built-in tools -> activity feed.
                     emitted.add(key)
                     yield {
                         "type": "tool",

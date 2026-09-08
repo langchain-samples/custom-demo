@@ -118,25 +118,15 @@ export interface SettingsPanelProps {
 
 /* ------------------------------- Defaults -------------------------------- */
 
-const DEFAULT_ACTIONS: QuickAction[] = [
-  {
-    label: "Donor: impact of aid in Egypt last quarter",
-    question:
-      "What is the impact of humanitarian aid in Egypt over the last quarter, according to the latest reports?",
-  },
-  {
-    label: "Affected: resources for displaced families in Iran",
-    question:
-      "What are the available resources for displaced families in Iran as outlined in the latest situation report?",
-  },
-  {
-    label: "NGO: water & sanitation needs in Canada",
-    question:
-      "Can you provide the latest data on water scarcity and sanitation needs in Canada from relevant assessments?",
-  },
-];
+// No stock quick actions. There used to be three about aid in Egypt, Iran and
+// Canada, which is what a McKesson assistant showed when its setup analysis failed
+// and left `metadata.actions` empty: someone else's demo, presented as this
+// assistant's own suggestions. An assistant with no actions now shows none, and
+// setup refuses to create one without them (see prepare_assistant).
+const DEFAULT_ACTIONS: QuickAction[] = [];
 
-const DEFAULT_NAME = "Dashboard Agent - Humanitarian Insights";
+// Only reached by an assistant whose metadata carries no display_name.
+const DEFAULT_NAME = "AI Assistant";
 const DEFAULT_ACCENT = "#0072BC";
 const DEFAULT_LOGO = "";
 
@@ -198,8 +188,7 @@ function configFromAssistant(a: Assistant, workspace: string): PanelConfig {
     promptName: (ctx.prompt_name as string) || "",
     agentRepo: (ctx.agent_repo as string) || "",
     systemPrompt: (ctx.prompt as string) || "",
-    dataPrompt: (ctx.data_prompt as string) || "",
-    dataGap: (ctx.data_gap as string) || "",
+    model: (ctx.model as string) || "",
     // null = no saved selection (backend defaults); [] = everything optional off.
     enabledTools: Array.isArray(ctx.enabled_tools) ? (ctx.enabled_tools as string[]) : null,
     mcpServers: Array.isArray(ctx.mcp_servers) ? (ctx.mcp_servers as McpServerConfig[]) : [],
@@ -230,8 +219,7 @@ function blankConfig(workspace: string): PanelConfig {
     promptName: "",
     agentRepo: "",
     systemPrompt: "",
-    dataGap: "",
-    dataPrompt: "",
+    model: "",
     enabledTools: null,
     mcpServers: [],
   };
@@ -247,8 +235,9 @@ function resolveRunContext(cfg: PanelConfig, project: string): RunContext {
   } else if (cfg.promptName) {
     ctx.prompt_name = cfg.promptName;
   }
-  if (cfg.dataPrompt) ctx.data_prompt = cfg.dataPrompt;
-  if (cfg.dataGap) ctx.data_gap = cfg.dataGap;
+  // Omitted when empty, so the deployment default applies rather than an id pinned
+  // by whichever build of the SPA the presenter happens to be running.
+  if (cfg.model) ctx.model = cfg.model;
   if (cfg.lsWorkspace) ctx.ls_workspace = cfg.lsWorkspace;
   // Not user-editable here; see traceProject() for how it's derived.
   if (project) ctx.ls_project = project;
@@ -555,6 +544,40 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
         }
       }, 600);
     }, [replaceAssistant]);
+
+    /* ---- Model: run context AND persisted onto the assistant ---- */
+
+    const modelTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+    // Persisted, not just applied to the next run: a model picked in Settings has to
+    // survive selecting another assistant and coming back, the same way the tool
+    // selection does. Debounced for the same reason as the others, so a quick
+    // there-and-back does not fire two PATCHes.
+    const editModel = useCallback(
+      (model: string) => {
+        setCfg((c) => ({ ...c, model }));
+        const id = selectedIdRef.current;
+        if (!isAssistantId(id)) return;
+        clearTimeout(modelTimer.current);
+        modelTimer.current = setTimeout(async () => {
+          const src = assistantsRef.current.find((a) => a.assistant_id === id);
+          const next = { ...(src?.context || {}) };
+          // Deleted rather than set to "": the backend treats a present-but-empty
+          // `model` the same way, but leaving the key behind makes the saved context
+          // read as if a choice had been made.
+          if (model) next.model = model;
+          else delete next.model;
+          try {
+            // PATCH replaces `context` wholesale - spread the existing one or this
+            // wipes prompt_name / ls_workspace / enabled_tools.
+            replaceAssistant(await updateAssistant(id, { context: next }));
+          } catch {
+            /* non-fatal: the choice still applies to this session's runs */
+          }
+        }, 600);
+      },
+      [replaceAssistant],
+    );
 
     /* ---- MCP servers: run context AND persisted onto the assistant ---- */
     const mcpTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -896,16 +919,14 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
                   promptName={cfg.promptName}
                   agentRepo={cfg.agentRepo}
                   systemPrompt={cfg.systemPrompt}
-                  dataGap={cfg.dataGap}
-                  dataPrompt={cfg.dataPrompt}
+                  model={cfg.model}
                   hubPrompts={hubPrompts}
                   agents={agents}
                   onPromptMode={(m: PromptMode) => editConfig({ promptMode: m })}
                   onPromptName={(v) => editConfig({ promptName: v })}
                   onAgentRepo={(v) => editConfig({ agentRepo: v })}
                   onSystemPrompt={(v) => editConfig({ systemPrompt: v })}
-                  onDataGap={(v) => editConfig({ dataGap: v })}
-                  onDataPrompt={(v) => editConfig({ dataPrompt: v })}
+                  onModel={editModel}
                 />
 
                 <ToolsSection

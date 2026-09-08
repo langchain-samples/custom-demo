@@ -71,7 +71,7 @@ def trace():
         },
         meta={"ls_provider": "anthropic", "ls_model_name": "claude-sonnet-5"},
     )
-    tool = _run("datasearch", "tool", t0 + dt.timedelta(seconds=11), 3, root.id, root.dotted_order)
+    tool = _run("web_search", "tool", t0 + dt.timedelta(seconds=11), 3, root.id, root.dotted_order)
     return [root, model, llm, tool]
 
 

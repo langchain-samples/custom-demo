@@ -58,10 +58,8 @@ export interface PanelConfig {
   agentRepo: string;
   /** Agent config: inline system prompt text. */
   systemPrompt: string;
-  /** Agent config: the withheld-data "gap" the agent must not fabricate. */
-  dataGap: string;
-  /** Agent config: advanced synthetic-data-source prompt override. */
-  dataPrompt: string;
+  /** Agent config: `context.model` id, "" for the deployment default. */
+  model: string;
   /**
    * Agent config: catalogue tool ids this assistant exposes. `null` means the
    * assistant has no saved selection (backend defaults apply); `[]` means every

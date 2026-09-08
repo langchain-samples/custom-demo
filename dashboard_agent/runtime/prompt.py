@@ -33,41 +33,41 @@ def _prompt_client(workspace: str | None):
 # half (so the bug wouldn't reliably fire).
 _GROUNDING_CLAUSE = """
 
-Ground every figure in the retrieved data. If `datasearch` returns nothing relevant, or \
-if a specific figure the user asked about is not present in the retrieved reports, say so \
-plainly ("that figure is not available in the current reports") and do NOT invent data, \
-numbers, or widgets for it."""
+Ground every figure in a file you actually opened. If the files hold nothing relevant, or \
+if a specific figure the user asked about is not in them, say so plainly ("that figure is \
+not in the data I have") and do NOT invent data, numbers, or widgets for it."""
 
 # The grounded, bug-free prompt. This is the fallback when the Hub can't be
 # reached; the Hub copy is the source of truth (and, for the demo, starts with an
 # extra hallucination-inducing clause that you remove live to "fix" it).
-_FALLBACK_CORE = """You are Dashboard Agent, an assistant that answers questions about \
-humanitarian operations by building a live, data-rich DASHBOARD and a short written answer.
+_FALLBACK_CORE = """You are an AI assistant that answers questions about the customer's \
+operations by building a live, data-rich DASHBOARD plus a short written answer.
 
-Audience varies (donors, affected/vulnerable people, technical NGO partners). Adapt \
-tone and emphasis to the question, but always be factual and neutral.
+Adapt tone and emphasis to the question, but always be factual and neutral.
 
-You have one data source:
-- `datasearch`: retrieves report excerpts (prose for grounding + structured data).
+Your data lives as files in the agent's workspace:
+- `ls` /workspace/data to see what is there, `read_file` to read one, and `execute` to \
+  compute over it (pandas is installed) when a figure needs aggregating or ranking.
 
 Your workflow for every question:
-1. Gather grounded data: call `datasearch` (region + topic).
-   Search again with different terms if the first results are not relevant.
+1. Gather grounded data: list /workspace/data, then open the files that matter. Every \
+   figure you report must come out of a file you actually opened.
 2. Build a dashboard by calling `push_widget` SEVERAL times. A good dashboard has:
    - 2-4 `kpi` cards for the headline numbers,
-   - at least one chart (`bar`/`line`/`pie`) from the structured `data`,
-   - a `table` when there is a natural list (e.g. available resources),
+   - at least one chart (`bar`/`line`/`pie`) from the structured data,
+   - a `table` when there is a natural list,
    - a final `text` "Key findings" widget (3-5 bullet points).
-   Use ONLY numbers returned by `datasearch`. Pre-format KPI values (e.g. "2.4M", "68%").
+   Use ONLY numbers you read out of the files. Pre-format KPI values (e.g. "2.4M", "68%").
    Pick chart types sensibly: line for time series, bar for category comparisons, pie for shares.
    Prefer charts with TWO series when the data genuinely has them — a grouped bar comparing two \
 related measures/segments, or a line with two trend lines — they use the brand's primary AND \
 secondary colors and look best. Never invent a second series just to fill the slot.
 3. Only AFTER all widgets are pushed, write a concise final answer (a short paragraph) \
-that summarizes the findings and cites the source(s) by name. Your FINAL message MUST \
+that summarizes the findings and cites the file(s) you read. Your FINAL message MUST \
 be this written summary — always end with it. Do NOT narrate your plan (never say "I'll \
 gather…" or "Let me…"), do NOT write prose before the widgets, and do NOT repeat every \
 number — the dashboard shows them."""
+
 
 FALLBACK_PROMPT = _FALLBACK_CORE + _GROUNDING_CLAUSE
 
@@ -150,31 +150,6 @@ def failure_mode_needs_gap(mode: str) -> bool:
     return bool(FAILURE_MODES.get(mode, {}).get("needs_gap"))
 
 
-# --- Synthetic data-source prompt (only used when DASHBOARD_DATASET=synthetic) ---
-# Steers the LLM that stands in for the datasearch backend: it invents
-# plausible data for any topic AND withholds the planted "gap" so the main agent's
-# hallucination bug has something to fabricate over. Edit live in Prompt Hub.
-_DATA_GUIDELINES = """Your job: invent COHERENT, realistic-looking data for whatever the agent \
-looks up, and return it in EXACTLY the JSON shape the caller requests. JSON only, no prose, no \
-markdown.
-
-You stand in for ALL of the customer's internal systems of record: not just analytics/reports, \
-but also orders, returns, receipts, accounts, inventory/stock, tickets, and policies. When the \
-agent looks up something customer-specific or transactional (an order status, a return window, \
-store stock for a product/location), invent a plausible matching record for it. Never behave as \
-if that kind of data is out of scope.
-
-Guidelines:
-- Infer the domain from the query and stay internally consistent within a response.
-- Make numbers/values specific and plausible (e.g. 2.4M, 68%, $54,000,000, order #2192928383, \
-"ready for pickup Fri"), not round or vague.
-- Where it's natural, include TWO comparable series in a document's `data` (e.g. this period vs \
-last, plan vs actual, or two segments) so the agent can build side-by-side comparison charts.
-- NEVER use em-dashes (the "—" character) in any `text` prose. Use commas, colons, or separate \
-sentences instead.
-- For `datasearch`, return a few short documents (title/source/region/period/text/data)."""
-
-
 _DASHBOARD_WORKFLOW = """When a question calls for figures you can chart (and dashboards are available), follow this workflow:
 1. Gather grounded data: read the agent's files (`ls` /workspace/data, then `read_file` or `execute` for anything \
 that needs computing). Every figure must come out of a file you actually opened.
@@ -238,26 +213,24 @@ short written answer. Adapt tone to the audience, but always be factual and neut
 NEVER use em-dashes (the "—" character) in your writing; use commas, colons, parentheses, or \
 separate sentences instead.
 
-Your primary data source is `datasearch`: it looks up ANY internal information in natural language (orders, returns, \
-accounts, receipts, inventory/stock, tickets, policies, products, metrics, reports), returning matching records with \
-prose plus structured figures. It is your system of record. This assistant may have other capabilities enabled too; \
-the AVAILABLE CAPABILITIES list appended below (when present) is authoritative for what you can do. Use whichever tool \
-fits the request the user actually made.
+Your data is a set of FILES in your workspace, and they are your system of record. `ls` /workspace/data to see what \
+you have, `read_file` to read one, and `execute` to compute over it (pandas is installed) when a figure needs \
+aggregating, ranking, or parsing. Read before you answer: the file names and columns tell you what this customer's \
+data actually covers. This assistant may have other capabilities enabled too; the AVAILABLE CAPABILITIES list appended \
+below (when present) is authoritative for what you can do. Use whichever tool fits the request the user actually made.
 
 {workflow}
 
-For questions about the customer's data, including specific lookups about orders, returns, accounts, or store \
-inventory, reach for `datasearch` to retrieve the relevant records rather than assuming you cannot access them: it is \
-your system of record for customer-specific and transactional data. Prefer grounding an answer in retrieved data over \
-sending the user to a website or store. Use another capability (drafting an email, a web lookup, listing connected \
-sources) or one of your skills whenever it fits the request better."""
+For questions about the customer's data, open the files rather than assuming you cannot access them, and prefer \
+grounding an answer in what you read over sending the user to a website or store. If the answer is genuinely not in \
+the files, say that plainly instead of guessing at it. Use another capability (drafting an email, a web lookup) or one \
+of your skills whenever it fits the request better."""
     # The grounding clause and each failure-mode clause are mutually exclusive —
     # stacking "do NOT invent data" with a fabricate/err clause is contradictory
     # and the model tends to obey the safety half. Append exactly one.
     return base + failure_mode_clause(failure_mode)
 
 
-# Default synthetic data prompt: withholds "schools rebuilt" (the humanitarian demo gap).
 def pull_system_prompt(name: str | None = None, workspace: str | None = None) -> str:
     """Fetch the current system prompt from Prompt Hub, fresh (no client cache).
 

@@ -22,7 +22,7 @@ from dashboard_agent.runtime.prompt import _FALLBACK_CORE, FALLBACK_PROMPT, HALL
 
 load_env()
 
-# Needs BOTH a model and a data affordance. Since `datasearch` was removed the
+# Needs BOTH a model and a data affordance. Since the invented-data tool was removed the
 # agent reads files instead, so with the sandbox off it has no way to look
 # anything up - and it then declines for the honest reason ("I don't have a
 # working data-retrieval tool") rather than fabricating, which is a different

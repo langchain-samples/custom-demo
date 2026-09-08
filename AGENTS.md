@@ -28,29 +28,30 @@ after (§3, *Per-assistant demo evals*; mind the polarity, it is the reverse of 
 
 ```
 dashboard_agent/
-  agent.py            deep agent: Context schema, middleware, run/run_stream
-  ctx.py              ctx_get() - reads a Context field off a runtime (dict or dataclass)
-  tools/registry.py   THE TOOL CATALOGUE - declarative source of truth for selectable capabilities
-  tools/core.py       datasearch + push_widget (and the widget ContextVar sink)
-  tools/simulated.py  capability tools: draft_email, suggest_meeting_times, list_data_sources
-  tools/web_search.py web_search - REAL results via Tavily (errors out without TAVILY_API_KEY)
-  graph.py            Agent Server entrypoint - async factory that wraps runs in tracing_context
-  setup_graph.py      SECOND graph (`assistant_setup`): prepares a new customer assistant
-  assistant_setup.py  brand fetch (Logo.dev/Brandfetch/scrape) + LLM customer analysis + prompt push
-  assistant_evals.py  per-assistant demo eval: EVAL_MODES registry, dataset upsert, experiment
-                      run, and the evaluator (score 1 = CORRECT - the OPPOSITE of evals/)
-  prompt.py           prompt construction + Prompt Hub pulls + the hallucination/grounding clauses
-  config.py           env loading, model/prompt/workspace/dataset accessors, LangSmith client
-  datasource.py       pluggable backend behind `datasearch`: static corpus | synthetic LLM
-  corpus.py / rag.py  bundled humanitarian corpus + dependency-free TF-IDF retriever
-  widgets.py          Pydantic widget schemas - the agent↔frontend contract
-  mcp_servers.py      REMOTE MCP: parse `context.mcp_servers`, discover + cache their tools,
-                      probe a server, read a paused tool's `ui://` MCP App
+  core/ctx.py                 ctx_get() - reads a Context field off a runtime (dict or dataclass)
+  runtime/agent.py            deep agent: Context schema, middleware, run/run_stream
+  runtime/prompt.py           prompt construction + Prompt Hub pulls + hallucination/grounding
+  runtime/widgets.py          Pydantic widget schemas - the agent-to-frontend contract
+  runtime/mocking.py          per-invocation tool mocking, for deterministic evals
+  runtime/mcp_servers.py      REMOTE MCP: parse `context.mcp_servers`, discover + cache their
+                              tools, probe a server, read a paused tool's `ui://` MCP App
+  runtime/tools/registry.py   THE TOOL CATALOGUE - source of truth for selectable capabilities
+  runtime/tools/core.py       push_widget (and the widget ContextVar sink)
+  runtime/tools/simulated.py  capability tools: draft_email, suggest_meeting_times
+  runtime/tools/web_search.py web_search - REAL results via Tavily (errors without the key)
+  provisioning/setup.py       brand fetch (Logo.dev/Brandfetch/scrape) + LLM customer analysis
+                              + prompt push
+  provisioning/evals.py       per-assistant demo eval: EVAL_MODES registry, dataset upsert,
+                              experiment run, evaluator (score 1 = CORRECT, OPPOSITE of evals/)
+  provisioning/traffic.py     synthetic backfill of a customer's trace project
+  voice/                      Gemini Live token minting + the voice scripts
+  graph.py                    Agent Server entrypoint - async factory wrapping runs in tracing
+  setup_graph.py              SECOND graph (`assistant_setup`): prepares a customer assistant
+  config.py                   env loading, model/prompt/workspace accessors, LangSmith clients
   webapp.py           extra Starlette routes: /feedback /projects /workspaces /hub-prompts /tools
                       /mcp/probe + /mcp/app (the SPA cannot speak MCP; the deployment does)
                       /sandbox-files /sandbox-file (read-only browse of the assistant's VM)
                       /evals/run + /evals/status (per-assistant demo eval), /cleanup, /trace-url
-  static/             LEGACY vanilla-JS SPA (superseded by frontend/, still on disk)
   tests/              rag, widgets, streaming, tool-registry, eval examples/polarity/routes (fast)
                       + e2e, hallucination (slow)
 frontend/             React 19 + Vite + Tailwind 4 + shadcn SPA (the real UI)
@@ -64,7 +65,7 @@ mcp_demo_server/      THE OTHER END: two FastMCP servers on the modern stateless
                       interactive tools are all MCP Apps. elicit.py holds the guard-pattern
                       helpers both share; apps/ holds the app HTML plus the bridge.js and
                       shell.css injected into each at serve time. NOT shipped in the wheel.
-scripts/              seed_prompt, seed_data_prompt, seed_assistants, setup_assistant, serve_spa,
+scripts/              seed_prompt, seed_assistants, setup_assistant, preflight, judge_doctor,
                       run_mcp_server.sh (runs mcp_demo_server, `--tunnel` for a public ngrok URL)
 .claude/skills/setup-assistant/SKILL.md   interactive /setup-assistant flow (CLI path)
 langgraph.json        registers both graphs + http.app + wide-open CORS
@@ -96,8 +97,8 @@ Python dependencies are managed with **uv** (`pyproject.toml` + `uv.lock`, `.pyt
   can select from.
 - Middleware: `ConfigurableModel` (swap LLM from `context.model`), `_hub_system_prompt`
   (`@dynamic_prompt` - pulls the prompt fresh per question, then appends the enabled
-  capabilities), the registry's `ToolCallLimitMiddleware` instances (`datasearch` is capped at
-  1 call/run - extra searches mask the planted gap), and `ToolSelection` **last**.
+  capabilities), the registry's `ToolCallLimitMiddleware` instances (a tool may declare a
+  per-run cap; each is inert when its tool is not offered), and `ToolSelection` **last**.
 - Model is `ChatAnthropic` with `thinking={"type":"disabled"}` - Sonnet 5's default extended
   thinking breaks the deep-agent tool loop on follow-up turns.
 
@@ -179,8 +180,6 @@ model with per-criterion feedback until the grader is satisfied. Three things ma
 | id | group | notes |
 |---|---|---|
 | `push_widget` | Dashboard | `always_on` - the dashboard depends on it |
-| `datasearch` | Data | on by default; capped at 1 call/run |
-| `list_data_sources` | Data | simulated "connected systems" list |
 | `draft_email` | Comms | simulated draft, rendered as a chat card |
 | `suggest_meeting_times` | Comms | simulated slots, rendered as a chat card |
 | `web_search` | Research | REAL results via the Tavily API; returns an error (never invented results) if `TAVILY_API_KEY` is unset |
@@ -194,8 +193,8 @@ tool to the catalogue* needs a code change.
 Selection is enforced **server-side** by `ToolSelection`, which filters `request.tools` at
 model-call time (`request.override(tools=…)` - the same mechanism deepagents uses to drop
 `execute`). Two invariants hold it together:
-- `allowed_tool_names(None)` returns `{datasearch, push_widget}` - exactly the pre-catalogue
-  behaviour, so assistants created before this feature are untouched.
+- `allowed_tool_names(None)` returns `{push_widget}` - an assistant with no saved selection gets
+  the always-on core and nothing else.
 - `is_allowed()` passes through **any name the catalogue doesn't declare**, which is what
   leaves the deepagents built-ins alone and makes a future deepagents upgrade safe.
 - `[]` means "every optional tool off" and is NOT the same as unset. Three layers must agree
@@ -227,9 +226,9 @@ locally too (`./run.sh`) needs no tunnel; paste the `127.0.0.1` URL.
   pass-through twins** - a middleware with only async hooks makes every `invoke()` raise, and
   `agent.run()` plus most of the test suite take that path.
 - **Tool names are namespaced `{server_id}_{tool}`** because every server is wrapped in a
-  `ClientGroup`, even a single one. Not cosmetic: a server offering a tool called `datasearch`
-  would collide with the catalogue and `ToolSelection` would filter the remote one out as an
-  unselected catalogue tool.
+  `ClientGroup`, even a single one. Not cosmetic: a server offering a tool called `push_widget`
+  or `web_search` would collide with the catalogue and `ToolSelection` would filter the remote
+  one out as an unselected catalogue tool.
 - **Two caches** (`mcp_servers.py`). `Client(cache=True)` is the client-side `tools/list` cache
   the modern spec added (SEP-2549), honouring the server's own TTL hint. `_TOOLS` is ours and
   holds the *adapted LangChain tools*, so a warm model call does no I/O at all. Both key on a
@@ -509,9 +508,10 @@ Implementation notes, each of which is load-bearing:
 - **Config split.** Plan wanted display + behavior in *one* config object. Actual splits them
   across `context` (behavior) and `metadata` (display). Arguably the more LangGraph-native
   arrangement, but it is a divergence.
-- **Fake data.** Plan: a *subagent* behind a data-lookup tool. Actual: a `SyntheticDataSource`
-  class that calls a fast model directly inside the `datasearch` tool. Same behavior, no subagent,
-  no `task`-tool delegation.
+- **Fake data.** Plan: a *subagent* behind a data-lookup tool. Actual, in two steps: first a
+  `SyntheticDataSource` that invented records per query inside a `datasearch` tool, then that
+  whole path was deleted. The agent now reads real files seeded into its sandbox VM, which is
+  what makes an answer checkable against something (see "Is the answer grounded?" in the README).
 - **Frontend.** Plan: one parameterized Vercel app with `/d/[customer_slug]` dynamic routes and a
   fixed motion registry (`none | subtle-gradient | particle-bg | pulse-accent`). Actual: a single
   route Vite SPA where the assistant is chosen at runtime via the settings sheet + localStorage.
@@ -552,10 +552,6 @@ Implementation notes, each of which is load-bearing:
   will fail). `DASHBOARD_MODEL` default is listed as `claude-sonnet-4-5-20250929`; `config.py`
   says `claude-sonnet-5`. It also predates the tool catalogue and the branding system.
   (The dead `query_sql` entries in the frontend's `TOOL_META`/`chipArgSummary` are now removed.)
-- **The Node "frontend tests" test dead code.** `dashboard_agent/tests/frontend_test.js` imports
-  from the legacy `dashboard_agent/static/app.js`, not `frontend/src/lib/chart.ts` - so it passes
-  regardless of what the React app does. `branding_test.js` shows the fix: import the real `.ts`
-  module (Node ≥22 strips types natively).
 - **`ToolSelection` does not reach inside `task`.** The auto-added general-purpose subagent gets
   its own middleware list that excludes ours, so an enabled `task` hands the subagent the
   unfiltered tool set. Documented, not closed - closing it means hand-reconstructing deepagents'
@@ -572,10 +568,6 @@ Implementation notes, each of which is load-bearing:
   `HALLUCINATION_CLAUSE` (`IMPORTANT OVERRIDE:`) separate from `prompt.py`'s (`IMPORTANT:`), and
   appends it to `FALLBACK_PROMPT` - which already carries `_GROUNDING_CLAUSE`. That is exactly the
   contradictory stacking `prompt.py` warns against, so seeded prompts may not reliably fabricate.
-- **Legacy SPA still shipped.** `dashboard_agent/static/` (~55 KB `app.js`) and `scripts/serve_spa.py`
-  are dead once `frontend/` exists; `run.sh` only falls back to them.
-- **Humanitarian leftovers in the generic UI.** `SettingsPanel.DEFAULT_ACTIONS` /
-  `DEFAULT_NAME` still hardcode the Egypt/Iran/Canada demo.
 - **Google Fonts is the app's first third-party asset** and there is no CSP anywhere. Mitigated
   by `font_source: "curated"` per assistant, which keeps everything self-hosted.
 - **`config.py:load_env` reaches into a sibling project** (`chat-langchain-lite/.env`) for keys.
@@ -616,7 +608,6 @@ uv run pytest dashboard_agent/tests/test_rag.py dashboard_agent/tests/test_widge
 uv run ruff check dashboard_agent scripts evals   # + ruff format --check, ty check (same paths)
 node dashboard_agent/tests/branding_test.js     # colour maths (imports the real .ts)
 node dashboard_agent/tests/trace_test.js        # trace-project naming
-node dashboard_agent/tests/frontend_test.js     # legacy static/app.js - see rough edges
 node dashboard_agent/tests/signature_app_test.js  # the MCP App's postMessage contract (jsdom)
 cd frontend && npx tsc -b && npx oxlint && npm test
 ```

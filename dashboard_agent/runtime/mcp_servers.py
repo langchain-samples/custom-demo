@@ -23,7 +23,7 @@ in Settings takes effect on the next turn rather than the next deploy.
 
 **Why every server is a `ClientGroup`, even a single one.** A group namespaces
 each tool as `{server_id}_{tool}`. That is not cosmetic: an MCP server offering a
-tool called `datasearch` would otherwise collide with our catalogue, and
+tool called `push_widget` would otherwise collide with our catalogue, and
 `ToolSelection` would filter the MCP one out as an unselected catalogue tool. The
 prefix keeps every remote name outside the catalogue's namespace by construction,
 and it shows the presenter which server a tool came from.

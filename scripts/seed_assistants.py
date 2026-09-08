@@ -55,7 +55,7 @@ def main() -> None:
             if_exists="do_nothing",
         )
         print(f"  {a['assistant_id']}  {v['name']}")
-    print("\nPut the assistant_id you want to demo into static/config.js (window.LG.assistantId).")
+    print("\nPick the assistant in the dashboard UI (Settings, Assistant).")
 
 
 if __name__ == "__main__":

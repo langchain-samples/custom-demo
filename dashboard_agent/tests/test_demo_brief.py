@@ -14,7 +14,7 @@ def test_hallucination_brief_flow():
         "Vizient",
         "an internal assistant for their employees",
         ACTIONS,
-        ["push_widget", "datasearch", "suggest_meeting_times"],
+        ["push_widget", "web_search", "suggest_meeting_times"],
         "hallucination",
         data_gap="conversion rate by source",
     )
@@ -35,7 +35,7 @@ def test_no_em_dash_or_double_period():
         "Walmart",
         "Sparky handles conversational shopping.",
         ACTIONS,
-        ["push_widget", "datasearch", "suggest_meeting_times"],
+        ["push_widget", "web_search", "suggest_meeting_times"],
         "hallucination",
         data_gap="customer sentiment",
     )
@@ -49,7 +49,7 @@ def test_clean_brief_has_no_hallucination_bullet():
         "Acme",
         "",
         ACTIONS,
-        ["push_widget", "datasearch"],
+        ["push_widget", "web_search"],
         "none",
     )
     assert len(out["brief"]) == 2  # purpose + grounded actions, no failure bullet

@@ -10,7 +10,7 @@ tool makes the precondition deterministic. The agent is still the thing being
 graded; the world it is graded against stops moving.
 
     "mock_tools": {
-        "datasearch": {"results": []},              # the empty case
+        "web_search": {"results": []},              # the empty case
         "create_ticket": {"raise": "503 Service Unavailable"},
     }
 

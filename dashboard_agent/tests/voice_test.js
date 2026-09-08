@@ -120,13 +120,13 @@ function ok(name, fn) {
   });
 
   ok("progress is narratable and named after what the agent is doing", () => {
-    // Real tool calls, not a canned timer: "searching the data now" is true when said.
-    assert.equal(progressLabel("datasearch"), "searching the data now");
+    // Real tool calls, not a canned timer: the line is true when it is said.
+    assert.equal(progressLabel("read_file"), "reading through the files");
     assert.equal(progressLabel("push_widget"), "building the dashboard");
     // An unknown tool stays vague rather than saying an internal tool name out loud.
     assert.equal(progressLabel("some_internal_thing"), "still working through it");
-    const msg = progressMessage(progressLabel("datasearch"));
-    assert.ok(msg.clientContent.turns[0].parts[0].text.includes("searching the data now"));
+    const msg = progressMessage(progressLabel("read_file"));
+    assert.ok(msg.clientContent.turns[0].parts[0].text.includes("reading through the files"));
   });
 
   ok("the digest keeps only widgets with a value", () => {

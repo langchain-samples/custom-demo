@@ -264,7 +264,7 @@ def test_demo_brief_has_no_em_dash():
         "Acme Co",
         "weekly revenue review",
         [{"label": "a", "question": "q?"}],
-        ["datasearch", "push_widget"],
+        ["web_search", "push_widget"],
         "hallucination",
         "customer satisfaction scores",
     )

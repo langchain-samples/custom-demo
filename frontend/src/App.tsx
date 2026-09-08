@@ -291,12 +291,19 @@ export default function App() {
    *
    * The tab is opened synchronously and its location set after the lookup,
    * because a popup opened inside an await is blocked.
+   *
+   * No `noopener` on THIS open, deliberately: it makes `window.open` return null by
+   * design, so the handle was always null, the blank tab was orphaned, and the
+   * fallback below opened the real URL in a second one. Two tabs per click, one of
+   * them about:blank. The opener reference is dropped from the child instead, which
+   * is what noopener was there for; the destination is our own LangSmith URL.
    */
   const [langsmithError, setLangsmithError] = useState("");
   const openLangSmith = () => {
     const ctx = getRunContext();
     const project = traceProject(activeAssistant, getAssistantId());
-    const tab = window.open("", "_blank", "noopener,noreferrer");
+    const tab = window.open("about:blank", "_blank");
+    if (tab) tab.opener = null;
     setLangsmithError("");
     void getProjectUrl(project, ctx.ls_workspace)
       .then((url) => {

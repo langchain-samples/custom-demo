@@ -174,24 +174,24 @@ def _stub_tools(monkeypatch, tools):
 def test_mcp_tools_are_offered_alongside_the_built_in_ones(monkeypatch):
     remote = SimpleNamespace(name="fieldlink_get_shipment")
     _stub_tools(monkeypatch, [remote])
-    req = _McpReq(["datasearch"], _SERVER)
+    req = _McpReq(["web_search"], _SERVER)
 
     async def handler(r):
         return r
 
     out = asyncio.run(A.McpTools().awrap_model_call(cast("Any", req), handler))
-    assert [t.name for t in out.tools] == ["datasearch", "fieldlink_get_shipment"]
+    assert [t.name for t in out.tools] == ["web_search", "fieldlink_get_shipment"]
 
 
 def test_no_mcp_server_configured_leaves_the_request_untouched(monkeypatch):
     _stub_tools(monkeypatch, [])
-    req = _McpReq(["datasearch"], None)
+    req = _McpReq(["web_search"], None)
 
     async def handler(r):
         return r
 
     out = asyncio.run(A.McpTools().awrap_model_call(cast("Any", req), handler))
-    assert [t.name for t in out.tools] == ["datasearch"]
+    assert [t.name for t in out.tools] == ["web_search"]
 
 
 def test_an_mcp_tool_call_is_given_the_tool_the_tool_node_lacks(monkeypatch):
@@ -222,9 +222,9 @@ def test_an_mcp_tool_call_is_given_the_tool_the_tool_node_lacks(monkeypatch):
 def test_a_registered_tool_is_left_alone(monkeypatch):
     """Our own tools already carry a tool object; the hook must not swap them."""
     _stub_tools(monkeypatch, [SimpleNamespace(name="fieldlink_get_shipment")])
-    ours = SimpleNamespace(name="datasearch")
+    ours = SimpleNamespace(name="web_search")
     request = ToolCallRequest(
-        tool_call={"name": "datasearch", "args": {}, "id": "1", "type": "tool_call"},
+        tool_call={"name": "web_search", "args": {}, "id": "1", "type": "tool_call"},
         tool=cast("Any", ours),
         state={},
         runtime=cast("Any", SimpleNamespace(context={"mcp_servers": _SERVER})),

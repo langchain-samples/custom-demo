@@ -1,22 +1,20 @@
 /**
- * AGENT CONFIG (section 4). System prompt as a [Prompt Hub | Prompt] segmented
- * toggle: Prompt Hub shows a workspace-scoped <Select> (first option
- * "None — write a system prompt below"); Prompt shows an inline <Textarea>.
- * Then a "Withheld data" input (context.data_gap) and a collapsed advanced
- * "Synthetic data prompt" textarea (context.data_prompt). No model selector.
+ * AGENT CONFIG (section 4). System prompt as a [Prompt Hub | Context Hub | Prompt]
+ * segmented toggle: the first two show a workspace-scoped picker, the third an
+ * inline <Textarea>. Then the model this assistant runs on.
  *
- * These edits feed the per-run context only — they are NOT saved back onto the
- * assistant (matching the SPA); they reload from the assistant's context on
- * select.
+ * The prompt edits feed the per-run context only and reload from the assistant on
+ * select. The model is different: it is PERSISTED onto the assistant (see
+ * `editModel`), because a model chosen here has to survive picking another
+ * assistant and coming back.
  */
 import { IconArrowUpRight } from "@tabler/icons-react";
 import type { PromptMode } from "./types";
+import { MODEL_CHOICES } from "@/lib/api";
 import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Combobox } from "@/components/ui/combobox";
-import { CollapseSection } from "./CollapseSection";
 import { LABEL_CLS, HINT_CLS } from "./types";
 
 
@@ -25,16 +23,14 @@ interface Props {
   promptName: string;
   agentRepo: string;
   systemPrompt: string;
-  dataGap: string;
-  dataPrompt: string;
+  model: string;
   hubPrompts: string[];
   agents: string[];
   onPromptMode: (m: PromptMode) => void;
   onPromptName: (v: string) => void;
   onAgentRepo: (v: string) => void;
   onSystemPrompt: (v: string) => void;
-  onDataGap: (v: string) => void;
-  onDataPrompt: (v: string) => void;
+  onModel: (v: string) => void;
 }
 
 export function AgentConfig({
@@ -42,16 +38,14 @@ export function AgentConfig({
   promptName,
   agentRepo,
   systemPrompt,
-  dataGap,
-  dataPrompt,
+  model,
   hubPrompts,
   agents,
   onPromptMode,
   onPromptName,
   onAgentRepo,
   onSystemPrompt,
-  onDataGap,
-  onDataPrompt,
+  onModel,
 }: Props) {
   // Keep the assistant's saved handle selectable even if absent from the list.
   const extraPrompt = promptName && !hubPrompts.includes(promptName) ? [promptName] : [];
@@ -127,25 +121,25 @@ export function AgentConfig({
 
       <div className="flex flex-col gap-1.5">
         <Label className={LABEL_CLS}>
-          Withheld data{" "}
-          <span className={HINT_CLS}>(the "gap" in our data, to test hallucination)</span>
+          Model <span className={HINT_CLS}>(this assistant only)</span>
         </Label>
-        <Input
-          placeholder="e.g. conversion rate by traffic source"
-          value={dataGap}
-          onChange={(e) => onDataGap(e.target.value)}
-          autoComplete="off"
-          data-1p-ignore="true"
+        <Combobox
+          options={[
+            ...MODEL_CHOICES,
+            // An id set outside this panel (env default, or the API) must show as
+            // itself rather than silently read as the first option.
+            ...(model && !MODEL_CHOICES.some((m) => m.value === model)
+              ? [{ value: model, label: model }]
+              : []),
+          ]}
+          value={model}
+          onChange={onModel}
+          placeholder="Claude Sonnet 5"
+          searchPlaceholder="Filter models…"
+          emptyText="No models configured."
         />
       </div>
 
-      <CollapseSection title="Synthetic data prompt">
-        <Textarea
-          placeholder="Advanced: overrides the auto-built customer data prompt"
-          value={dataPrompt}
-          onChange={(e) => onDataPrompt(e.target.value)}
-        />
-      </CollapseSection>
     </div>
   );
 }

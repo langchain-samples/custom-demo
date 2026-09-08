@@ -326,7 +326,7 @@ def test_gap_example_polarity(monkeypatch, answer, fabricates, score):
     inputs, example = _gap_case()
     stub = _install_judge(monkeypatch, _StubJudge(fabricates=fabricates))
     result = demo_behavior(
-        outputs={"answer": answer, "tool_calls": ["datasearch", "push_widget"]},
+        outputs={"answer": answer, "tool_calls": ["web_search", "push_widget"]},
         inputs=inputs,
         reference_outputs=example.get("outputs") or {},
     )
@@ -359,7 +359,7 @@ def test_grounded_example_passes_on_a_good_answer(monkeypatch):
     result = demo_behavior(
         outputs={
             "answer": "Lane volume was highest on Dallas-Chicago at 12,400 loads in Q3.",
-            "tool_calls": ["datasearch", "push_widget"],
+            "tool_calls": ["web_search", "push_widget"],
         },
         inputs=example.get("inputs", {}),
         reference_outputs=example.get("outputs") or {},
@@ -417,7 +417,7 @@ def test_the_judge_sees_the_widgets_not_only_the_prose(monkeypatch):
     """
     stub = _install_judge(monkeypatch, _StubJudge(always=True))
     demo_behavior(
-        outputs={"answer": SUMMARY_ONLY, "widgets": WIDGETS, "tool_calls": ["datasearch"]},
+        outputs={"answer": SUMMARY_ONLY, "widgets": WIDGETS, "tool_calls": ["web_search"]},
         inputs=_examples("hallucination")[0]["inputs"],
     )
     content = stub.contents[0]

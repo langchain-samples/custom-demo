@@ -30,6 +30,13 @@ jobs:
       # The exact build Vercel runs (tsc -b && vite build) — catches type errors
       # that `tsc --noEmit` misses in build mode.
       - run: npm run build
+      # The plain-node tests in dashboard_agent/tests/*.js, which import the real
+      # frontend modules via Node's native type stripping. They were in no job at
+      # all, so voice_test.js sat red for days after the tool it asserted on was
+      # deleted. Run from the repo root because that is where their imports resolve.
+      - name: Node module tests
+        working-directory: .
+        run: for f in dashboard_agent/tests/*.js; do echo "== $f"; node "$f" || exit 1; done
 
   backend:
     name: Backend (lint + type + tests)

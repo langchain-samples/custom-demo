@@ -126,8 +126,11 @@ export interface RunContext {
   prompt_name?: string;
   /** Context Hub agent repo whose AGENTS.md is the system prompt. */
   agent_repo?: string;
-  data_prompt?: string;
-  data_gap?: string;
+  /**
+   * `init_chat_model` id for the agent LLM (see MODEL_CHOICES). Omit for the
+   * deployment default.
+   */
+  model?: string;
   ls_workspace?: string;
   ls_project?: string;
   /**
@@ -146,6 +149,30 @@ export interface RunContext {
    */
   sandbox_key?: string;
 }
+
+/**
+ * Models an assistant can be switched to, in the order they are offered.
+ *
+ * The value is an `init_chat_model` id, which is what `context.model` takes and
+ * what `build_chat_model` routes on. `""` means "the deployment default", so the
+ * first entry deliberately sends nothing rather than pinning an id the deployment
+ * may have moved on from.
+ *
+ * Nemotron goes through the LangSmith gateway (`langsmith:` = ChatOpenAI against
+ * gateway.smith.langchain.com/v1), so it needs no new dependency, but it does need
+ * the deployment's LangSmith key to carry `gateway:invoke` and the workspace to
+ * have a Fireworks secret. Two behaviour differences worth knowing on stage: it
+ * does not volunteer a preamble before tool calls (the OpenAI-function-shape
+ * convention, see .env.example), and it is a reasoning model whose reasoning
+ * arrives as its own content block, which `contentToText` drops.
+ */
+export const MODEL_CHOICES: { value: string; label: string }[] = [
+  { value: "", label: "Claude Sonnet 5" },
+  {
+    value: "langsmith:fireworks/accounts/fireworks/models/nemotron-3-ultra-nvfp4",
+    label: "NVIDIA Nemotron 3 Ultra",
+  },
+];
 
 /**
  * One remote MCP server on an assistant's context.

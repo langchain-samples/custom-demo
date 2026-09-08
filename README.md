@@ -137,6 +137,19 @@ Everything behavioural lives in the assistant's `context`:
   "sandbox_seed": [{ "name": "orders.csv", "kind": "csv", "description": "12 months of orders" }] }
 ```
 
+```jsonc
+// On a different model. ⚙️ → Agent config → Model offers Claude Sonnet 5 (the
+// default, which sends no `model` at all) and NVIDIA Nemotron 3 Ultra.
+{ "prompt_name": "acme-system", "customer": "Acme",
+  "model": "langsmith:fireworks/accounts/fireworks/models/nemotron-3-ultra-nvfp4" }
+```
+
+`model` takes any `init_chat_model` id, so `provider:model` picks the provider. The
+`langsmith:` prefix routes through the LangSmith gateway, which needs the deployment's
+LangSmith key to carry `gateway:invoke` and the workspace to hold that provider's secret.
+See "Non-Anthropic model providers" in `.env.example` to change the default for every
+assistant instead.
+
 Branding (`display_name`, `logo`, `accent`, fonts, quick actions) lives in the assistant's
 `metadata` instead, and the SPA writes edits straight back, so it is reusable across people.
 
