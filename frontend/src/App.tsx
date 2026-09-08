@@ -47,6 +47,7 @@ import { applyTheme, getStoredTheme, setStoredTheme, type Theme } from "@/lib/th
 import { invalidateColorCache } from "@/lib/branding";
 import type { Assistant, RunContext, Widget } from "@/lib/api";
 import { getProjectUrl, readSandboxTextFile } from "@/lib/api";
+import type { SandboxTarget } from "@/lib/api";
 import { useAssistants } from "@/lib/queries";
 
 const DEFAULT_NAME = "Corebot";
@@ -337,6 +338,28 @@ export default function App() {
   };
 
   const assistantId = activeAssistant?.assistant_id ?? getAssistantId();
+  /**
+   * Which VM this assistant's files live in.
+   *
+   * Derived ONCE and shared, because it was written out twice in this file and the
+   * second copy silently fell behind when `sandbox_key` was introduced: the artifact
+   * re-read below kept asking for the VM keyed by customer name, so `edit_file`
+   * appeared to do nothing. The read landed on a different VM, `.catch` swallowed it,
+   * and the pane kept showing the streamed argument, which for an edit is a diff.
+   */
+  const sandboxTarget = useMemo<SandboxTarget>(
+    () => ({
+      sandbox_key: activeAssistant?.context?.sandbox_key || undefined,
+      agent_repo: activeAssistant?.metadata?.ls_artifacts?.agent_repo || undefined,
+      customer: activeAssistant?.metadata?.customer || undefined,
+    }),
+    [
+      activeAssistant?.context?.sandbox_key,
+      activeAssistant?.metadata?.ls_artifacts?.agent_repo,
+      activeAssistant?.metadata?.customer,
+    ],
+  );
+
   const resetKey = useMemo(
     () => `${activeAssistant?.assistant_id ?? ""}:${resetCounter}`,
     [activeAssistant?.assistant_id, resetCounter],
@@ -501,13 +524,9 @@ export default function App() {
               )
             }
             assistantId={assistantId}
-            /* Same sandbox key the Files dialog and the agent itself use, so a file
-               dropped on the chat lands in the VM this assistant reads from. */
-            sandboxTarget={{
-              sandbox_key: activeAssistant?.context?.sandbox_key || undefined,
-              agent_repo: activeAssistant?.metadata?.ls_artifacts?.agent_repo || undefined,
-              customer: activeAssistant?.metadata?.customer || undefined,
-            }}
+            /* Same VM the Files dialog and the agent itself use, so a file dropped on
+               the chat lands where this assistant reads from. */
+            sandboxTarget={sandboxTarget}
             presets={presets}
             getRunContext={getRunContext}
             onActivity={setActivity}
@@ -551,13 +570,7 @@ export default function App() {
               // document. Best effort: with no sandbox (DA_SANDBOX=0, no entitlement)
               // the file lives in graph state and this 503s, leaving the streamed
               // content in place, which is the right fallback for write_file.
-              readSandboxTextFile(
-                {
-                  agent_repo: activeAssistant?.metadata?.ls_artifacts?.agent_repo || undefined,
-                  customer: activeAssistant?.metadata?.customer || undefined,
-                },
-                path,
-              )
+              readSandboxTextFile(sandboxTarget, path)
                 .then((text) => {
                   if (text === null) return;
                   setArtifacts((prev) => ({ ...prev, [path]: { content: text, streaming: false } }));

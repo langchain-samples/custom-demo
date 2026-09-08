@@ -148,7 +148,7 @@ const SKELETON_KEYFRAMES = `
 function Bar({ w, h = "h-3", i = 0 }: { w: string; h?: string; i?: number }) {
   return (
     <div
-      className={`artifact-bar origin-left rounded bg-neutral-200/90 ${h} ${w}`}
+      className={`artifact-bar origin-left rounded bg-muted-foreground/25 ${h} ${w}`}
       style={{
         animation: "artifact-bar-in 620ms cubic-bezier(0.22, 1, 0.36, 1) both",
         animationDelay: `${i * 130}ms`,
@@ -168,7 +168,7 @@ const SKELETON_ROWS: { el: ReactNode; key: string }[] = [
   {
     key: "band",
     el: (
-      <div className="flex flex-col gap-3 rounded-xl bg-neutral-100 p-6">
+      <div className="flex flex-col gap-3 rounded-xl bg-muted p-6">
         <Bar w="w-2/5" h="h-2" i={0} />
         <Bar w="w-3/4" h="h-6" i={1} />
         <Bar w="w-1/2" h="h-2.5" i={2} />
@@ -391,16 +391,21 @@ export function HtmlArtifact({
         // it becomes visible again srcDoc has not CHANGED since the last commit, so
         // nothing triggers a load and the pane stays blank. Switching tabs appeared to
         // fix it only because that remounts the frame.
-        className="min-h-0 flex-1 border-0 bg-white"
+        // Themed for the same reason as the skeleton: this shows only until the
+        // document paints its own background.
+        className="min-h-0 flex-1 border-0 bg-background"
       />
       {building && (
         // An overlay rather than a swap. The frame underneath is genuinely empty at this
         // point, so covering it looks identical to replacing it, and the iframe keeps
         // laying out and loading throughout.
         //
-        // On WHITE, matching the iframe, so handing over to the real document is not
-        // also a change of background colour.
-        <div className="absolute inset-0 overflow-hidden bg-white">
+        // On the APP's background, not a hardcoded white. It was white to match the
+        // frame underneath, but the documents the agent writes are usually dark, so in
+        // dark mode a white pane flashed up and then went dark again. The document's
+        // own background is unknowable until it paints, so match the surface the user
+        // is already looking at.
+        <div className="absolute inset-0 overflow-hidden bg-background">
           {/* No status line under this. The skeleton draws itself row by row now, which
               says "being written" more directly than a caption can, and a shimmering
               phrase floating in the empty half of the pane competed with it. */}
