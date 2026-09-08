@@ -23,7 +23,7 @@ from typing import Any
 from langchain.tools import ToolRuntime, tool
 
 from ..config import simulated_model
-from ..ctx import ctx_get
+from ..core.ctx import ctx_get
 
 _JSON_RE = re.compile(r"\{[\s\S]*\}")
 

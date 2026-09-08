@@ -11,7 +11,7 @@ read `configurable.ls_workspace` / `ls_project` and route that run's LangSmith
 traces to a chosen workspace/project via `tracing_context`. It also reads
 `langsmith-trace` (the distributed-tracing header Agent Server surfaces into
 `configurable`) so a run started inside someone else's span nests under it rather
-than starting its own trace — see voice_trace.py. The compiled graph itself is built
+than starting its own trace — see voice/trace.py. The compiled graph itself is built
 once (`base_graph`) and reused — the factory only wraps the run in a tracing context.
 """
 
@@ -64,7 +64,7 @@ async def graph(config: Any):
     project_name = configurable.get("ls_project") or None
     # NO DISTRIBUTED-TRACING PARENT HERE, deliberately, and it is worth reading why before
     # adding one back. Voice mode wants the agent run nested inside its `invoke_deep_agent`
-    # span (see voice_trace.py), and LangSmith documents exactly that: send `langsmith-trace`,
+    # span (see voice/trace.py), and LangSmith documents exactly that: send `langsmith-trace`,
     # read it off `configurable`, wrap the run in `tracing_context(parent=...)`.
     #
     # Measured on Agent Server 0.11.1 AND 0.13.0, and it fails in TWO different ways depending

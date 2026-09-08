@@ -1,4 +1,4 @@
-"""Tests for the one-trace-per-conversation bookkeeping (voice_trace.py).
+"""Tests for the one-trace-per-conversation bookkeeping (voice/trace.py).
 
 Offline: `RunTree` is replaced with a recording fake, so these assert the SHAPE of the
 tree and the contract the SPA depends on - not LangSmith's ingestion.
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from dashboard_agent import voice_trace
+from dashboard_agent.voice import trace as voice_trace
 
 
 class _FakeRun:

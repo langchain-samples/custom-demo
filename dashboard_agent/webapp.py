@@ -27,12 +27,11 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from dashboard_agent import voice_trace as voice_trace_mod
-
 # Absolute import: Agent Server loads http.app as a top-level module (no package
 # parent), so a relative `from .config` import would fail here.
 from dashboard_agent.config import load_env, make_client, routing_key, scoped_client
 from dashboard_agent.voice import mint_token, voice_configured
+from dashboard_agent.voice import trace as voice_trace_mod
 
 
 def _delete_error(exc: Exception) -> str:
@@ -397,7 +396,7 @@ async def voice_token(request):
 
 
 async def voice_trace(request):
-    """Record the voice conversation into ONE LangSmith trace. See voice_trace.py.
+    """Record the voice conversation into ONE LangSmith trace. See voice/trace.py.
 
     POST {action, ...} -> the shape depends on the action, because all four are the same
     small bookkeeping call and four routes for them would be noise:

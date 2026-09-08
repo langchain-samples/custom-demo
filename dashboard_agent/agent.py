@@ -50,7 +50,7 @@ from .config import (
     require_model_key,
     scoped_client,
 )
-from .ctx import ctx_get as _ctx
+from .core.ctx import ctx_get as _ctx
 from .mocking import enable_mocking
 from .prompt import ARTIFACT_NOTE, pull_agent_prompt, pull_system_prompt
 from .tools import (

@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from dashboard_agent import voice
+from dashboard_agent.voice import session as voice
 
 
 @pytest.fixture(autouse=True)

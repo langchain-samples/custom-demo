@@ -33,7 +33,7 @@ import uuid
 
 from langsmith import Client, RunTree
 
-from .config import routing_key, scoped_client
+from ..config import routing_key, scoped_client
 
 # session_id -> the conversation's root span, plus its open tool spans by id.
 _SESSIONS: dict[str, dict] = {}
