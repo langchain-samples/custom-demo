@@ -1,7 +1,7 @@
 /**
  * Pure, dependency-free helpers for routing streamed run frames by their
  * subgraph namespace. Kept free of React / api imports so the repo can Node-test
- * it directly (see dashboard_agent/tests/stream_event_test.js, which imports this
+ * it directly (see custom_demo/tests/stream_event_test.js, which imports this
  * real .ts via Node type-stripping — the same pattern as chart_test.js).
  *
  * When the run is streamed with `stream_subgraphs: true`, the LangGraph server

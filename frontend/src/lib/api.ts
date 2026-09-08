@@ -114,7 +114,7 @@ export interface WorkspaceList {
 }
 
 /**
- * Per-run runtime context (dashboard_agent.agent.Context). Sent as
+ * Per-run runtime context (custom_demo.agent.Context). Sent as
  * `{ context: {...} }` in the run body — NOT config.configurable. Only
  * non-empty fields should be included. `ls_workspace`/`ls_project` ride here
  * for trace routing.
@@ -1405,7 +1405,7 @@ export async function postFeedback(body: FeedbackInput): Promise<FeedbackResult>
 
 /* ---------------------------------- Voice ---------------------------------- */
 
-/** A minted Gemini Live token (see dashboard_agent/voice.py). */
+/** A minted Gemini Live token (see custom_demo/voice.py). */
 export interface VoiceToken {
   token: string;
   model: string;

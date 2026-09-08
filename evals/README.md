@@ -7,11 +7,11 @@ assertions + an LLM-as-judge), recorded as a LangSmith **experiment**.
 
 > **Not the per-assistant demo eval - and the polarity is inverted.**
 >
-> `dashboard_agent/assistant_evals.py` is a *different* eval system that ships as part of
+> `custom_demo/assistant_evals.py` is a *different* eval system that ships as part of
 > the product: setup creates a 3-example dataset in each customer's own workspace, and the
 > presenter re-runs it from a button in the SPA.
 >
-> | | here (`evals/`) | `dashboard_agent/assistant_evals.py` |
+> | | here (`evals/`) | `custom_demo/assistant_evals.py` |
 > |---|---|---|
 > | purpose | regression-test **our repo** before a release | a live artifact **of the demo** |
 > | dataset | `dashboard-agent-*` in `EVAL_WORKSPACE` | `<customer-slug>-demo-evals-<fingerprint>`, in the customer's workspace |
@@ -22,8 +22,8 @@ assertions + an LLM-as-judge), recorded as a LangSmith **experiment**.
 > because that evaluator rewards correct behavior. Copy an evaluator across this line without
 > flipping it and the demo scores green before the fix. See AGENTS.md §3.
 >
-> **Layering:** `evals/` may import from `dashboard_agent` (it does - `fixtures.py` reuses the
-> real setup helpers). `dashboard_agent` must never import from `evals/`; that is why the demo
+> **Layering:** `evals/` may import from `custom_demo` (it does - `fixtures.py` reuses the
+> real setup helpers). `custom_demo` must never import from `evals/`; that is why the demo
 > evaluator and its judge helper live in `assistant_evals.py`.
 
 | group | dataset | target | checks |

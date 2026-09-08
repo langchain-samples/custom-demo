@@ -30,13 +30,13 @@ jobs:
       # The exact build Vercel runs (tsc -b && vite build) — catches type errors
       # that `tsc --noEmit` misses in build mode.
       - run: npm run build
-      # The plain-node tests in dashboard_agent/tests/*.js, which import the real
+      # The plain-node tests in custom_demo/tests/*.js, which import the real
       # frontend modules via Node's native type stripping. They were in no job at
       # all, so voice_test.js sat red for days after the tool it asserted on was
       # deleted. Run from the repo root because that is where their imports resolve.
       - name: Node module tests
         working-directory: .
-        run: for f in dashboard_agent/tests/*.js; do echo "== $f"; node "$f" || exit 1; done
+        run: for f in custom_demo/tests/*.js; do echo "== $f"; node "$f" || exit 1; done
 
   backend:
     name: Backend (lint + type + tests)
@@ -55,27 +55,27 @@ jobs:
           python-version: "3.13"
       # Installs deps + dev tools (ruff, ty, pytest) into .venv on that interpreter.
       - run: uv sync --locked
-      - run: uv run ruff check dashboard_agent scripts evals mcp_demo_server
-      - run: uv run ruff format --check dashboard_agent scripts evals mcp_demo_server
+      - run: uv run ruff check custom_demo scripts evals mcp_demo_server
+      - run: uv run ruff format --check custom_demo scripts evals mcp_demo_server
       # House rule ruff has no equivalent for: after an indented block ends, the next
       # statement at the same indentation needs a blank line in front of it. E301/E302/E303
       # only cover methods and top-level defs, so this is its own checker - the Python
       # counterpart of frontend/scripts/check-no-emdash.mjs. `ruff format` preserves the
       # blank lines it asks for, so the two never fight; `--fix` inserts them.
       - run: uv run python scripts/check_blank_after_block.py
-      - run: uv run ty check dashboard_agent scripts evals mcp_demo_server
+      - run: uv run ty check custom_demo scripts evals mcp_demo_server
       # Import smoke: catches broken imports (e.g. a removed tool still referenced).
       # These four are the entrypoints langgraph.json names, so importing them
       # reaches the whole package. Named by ENTRYPOINT rather than by internal
       # module, which is what broke when the package was split into subfolders.
       # graph.py eagerly builds the graph at import (build_agent -> require_model_key),
       # so a placeholder key is needed. It is only constructed, never called — no API hit.
-      - run: uv run python -c "import dashboard_agent.auth, dashboard_agent.graph, dashboard_agent.setup_graph, dashboard_agent.webapp"
+      - run: uv run python -c "import custom_demo.auth, custom_demo.graph, custom_demo.setup_graph, custom_demo.webapp"
         env:
           ANTHROPIC_API_KEY: sk-ci-placeholder-not-used
       # Unit tests only — the live agent/hallucination tests auto-skip without
       # ANTHROPIC_API_KEY (intentionally left unset here so no real API calls run).
-      - run: uv run pytest dashboard_agent/tests evals -q
+      - run: uv run pytest custom_demo/tests evals -q
 
   # --- CD ---
   # There is no deploy job here on purpose. The LangSmith deployment is connected to this
@@ -110,7 +110,7 @@ jobs:
   #         enable-cache: true
   #         python-version: "3.13"
   #     - run: uv sync --locked
-  #     - run: uv run pytest dashboard_agent/tests/test_hallucination_bug.py -q -rs
+  #     - run: uv run pytest custom_demo/tests/test_hallucination_bug.py -q -rs
   #       env:
   #         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
   #         LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}

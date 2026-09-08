@@ -9,7 +9,7 @@ everything `langchain.mcp` gained with it:
     killing an in-flight conversation.
   * **Cacheable tool list.** `cache_ttl` is the server's own freshness hint, so a
     client with a cache serves `tools/list` from it instead of a round trip per
-    run. Ours does (see `dashboard_agent/runtime/mcp_servers.py`).
+    run. Ours does (see `custom_demo/runtime/mcp_servers.py`).
   * **Elicitation.** Every interactive tool stops mid-call to ask the caller
     something. On the modern spec that is a retry-able round, not a held-open
     socket, which is what lets the agent surface it as a LangGraph interrupt and
@@ -42,7 +42,7 @@ Configured by `MERIDIAN_HOST`, `MERIDIAN_PORT`, `MERIDIAN_PATH`,
 `MERIDIAN_CACHE_TTL` and `MERIDIAN_MAX_INLINE`.
 
 Deliberately NOT part of the deployment: the hatch wheel packages only
-`dashboard_agent`, so nothing here ships to LangGraph Platform. It is the
+`custom_demo`, so nothing here ships to LangGraph Platform. It is the
 *other* side of the connection.
 """
 

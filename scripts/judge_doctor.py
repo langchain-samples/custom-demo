@@ -24,8 +24,8 @@ from __future__ import annotations
 import argparse
 import sys
 
-from dashboard_agent.config import load_env
-from dashboard_agent.provisioning.evals import (
+from custom_demo.config import load_env
+from custom_demo.provisioning.evals import (
     EVAL_FEEDBACK_KEY,
     dataset_rules,
     ensure_judge_runnable,
@@ -33,7 +33,7 @@ from dashboard_agent.provisioning.evals import (
     judge_model_manifest,
     judge_prompt_name,
 )
-from dashboard_agent.provisioning.setup import _ws_client
+from custom_demo.provisioning.setup import _ws_client
 
 
 def main() -> int:

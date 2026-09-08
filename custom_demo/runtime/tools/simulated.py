@@ -1,0 +1,229 @@
+"""Simulated capability tools.
+
+Each of these stands in for a real integration: a fast LLM invents a plausible,
+internally consistent result, tailored to the assistant's `customer` /
+`industry`. That keeps a demo credible without per-customer credentials, OAuth,
+or anything that can fail live on stage.
+
+They all return a JSON string in a fixed shape so the frontend can render a
+typed card for each.
+
+`web_search` is NOT one of them: it is backed by a real API and lives in
+`web_search.py`.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from datetime import date
+from typing import Any
+
+from langchain.chat_models import init_chat_model
+from langchain.tools import ToolRuntime, tool
+from langchain_core.messages import HumanMessage, SystemMessage
+from langgraph.types import interrupt
+
+from custom_demo.config import simulated_model
+from custom_demo.core.ctx import get_ctx
+
+_JSON_RE = re.compile(r"\{[\s\S]*\}")
+
+
+def _parse_json(text: str) -> Any:
+    """Best-effort parse of a model reply that should be JSON.
+
+    Lived in datasource.py until the retrieval stack was deleted; the simulated
+    tools were its only other caller, so it moved here rather than to a module
+    of its own.
+    """
+    if not text:
+        return None
+
+    try:
+        return json.loads(text)
+    except Exception:  # noqa: BLE001 - a fenced or chatty reply is the normal case
+        m = _JSON_RE.search(text)
+        if not m:
+            return None
+
+        try:
+            return json.loads(m.group(0))
+        except Exception:  # noqa: BLE001 - unparseable is a degraded card, not a crash
+            return None
+
+
+_MODEL_CACHE: dict[str, Any] = {}
+
+
+def _model(model_id: str):
+    llm = _MODEL_CACHE.get(model_id)
+    if llm is None:
+        # Low-ish temperature: plausible and varied, not wild.
+        llm = init_chat_model(model_id, temperature=0.4)
+        _MODEL_CACHE[model_id] = llm
+
+    return llm
+
+
+def _who(runtime: ToolRuntime) -> str:
+    """One line describing whose systems we are pretending to be."""
+    ctx = get_ctx(runtime)
+    customer = ctx.customer or ""
+    industry = ctx.industry or ""
+    if customer and industry:
+        return f"{customer}, a {industry} organization"
+
+    return customer or "the customer"
+
+
+def simulate(runtime: ToolRuntime, role: str, shape: str, instruction: str) -> str:
+    """Ask the fast model to play `role` and return STRICT JSON matching `shape`.
+
+    Returns the JSON string on success, or a JSON error object — never raises, so
+    a flaky model call degrades the card rather than the whole run.
+    """
+    system = (
+        f"{role} You are standing in for a real system in a live product demo for "
+        f"{_who(runtime)}.\n\n"
+        "Invent specific, plausible, internally consistent content tailored to that "
+        "organization — their real product lines, teams, regions, systems and "
+        "terminology, never generic placeholders. Reply with STRICT JSON only: no "
+        "prose, no markdown, no code fences.\n\n"
+        # Without this the model dates everything to its training cutoff, which
+        # reads as stale in a live demo.
+        f"TODAY'S DATE IS {date.today().isoformat()}. Any date you produce must be "
+        "relative to that — never an earlier year.\n\n"
+        f"Reply with exactly this shape:\n{shape}"
+    )
+    model_id = simulated_model()
+    try:
+        resp = _model(model_id).invoke([SystemMessage(system), HumanMessage(instruction)])
+        content = resp.content
+        if isinstance(content, list):  # some providers return content blocks
+            content = "".join(b.get("text", "") for b in content if isinstance(b, dict))
+
+        parsed = _parse_json(content or "")
+        if not isinstance(parsed, dict):
+            return json.dumps({"error": "the simulated service returned no usable result"})
+
+        return json.dumps(parsed, ensure_ascii=False)
+    except Exception as exc:  # noqa: BLE001 - a flaky model call degrades this one card, never the run
+        return json.dumps({"error": f"{type(exc).__name__}: {exc}"})
+
+
+# Resuming an interrupt RE-EXECUTES the whole node, so a tool that generates and
+# then interrupts would run its LLM call twice. Keyed by tool_call_id, this cache
+# lets the second pass reuse the first pass's output and fall straight through to
+# the (now-answered) interrupt. Entries are dropped as soon as they're consumed.
+_pending: dict[str, dict] = {}
+
+
+def review(runtime: ToolRuntime, kind: str, payload: dict, build) -> dict:
+    """Generate `payload` once, then pause for human review; return their edit.
+
+    Returns the reviewed object, or the original when the client resumes without
+    one. The tool still works with no human in the loop — if nothing ever resumes,
+    the run simply stays interrupted, which is the intended HITL behaviour.
+    """
+    call_id = runtime.tool_call_id or ""
+    data = _pending.get(call_id)
+    if data is None:
+        data = build()
+        if call_id:
+            _pending[call_id] = data
+
+    # Raises on the first pass; on resume, returns whatever the client sent.
+    answer = interrupt({"kind": kind, **payload, "draft": data})
+    _pending.pop(call_id, None)
+    result = data
+    if isinstance(answer, dict):
+        # A client may send the edited object directly or wrapped.
+        edited = answer.get("draft") if isinstance(answer.get("draft"), dict) else answer
+        if isinstance(edited, dict) and edited:
+            result = {**data, **edited}
+
+    # Reaching here means a human answered the interrupt — i.e. they approved.
+    # Stating that IN THE RESULT matters: without it the model reads the payload
+    # as a draft and asks for sign-off it has already been given.
+    return {**result, "status": "approved_by_user", "approved": True}
+
+
+@tool
+def ask_user(question: str, options: list[str]) -> str:
+    """Ask the user ONE short clarifying question as multiple choice and wait.
+
+    Use when the request is ambiguous or needs information only the user has
+    (which time range? which product? which account?). Pauses the run
+    (human-in-the-loop) and returns the option they picked as a string. Prefer
+    asking over guessing when a single question removes the ambiguity — then
+    continue with the answer.
+
+    `options` are the answers to choose between: 2-5 short, mutually exclusive
+    labels (a few words each, no numbering). They are the ONLY answers offered,
+    so they must cover the realistic cases — add an escape hatch such as
+    "Something else" when they might not. Never ask for a value only the user
+    can type (an account number, a specific date): ask a choosable question
+    instead, or look it up.
+    """
+    choices = [str(o).strip() for o in (options or []) if str(o).strip()]
+    # A no-artifact interrupt: nothing is generated or cached, so (unlike `review`)
+    # no `_pending` guard is needed — `interrupt` raises on the first pass and, when
+    # the node re-executes on resume, returns the client's value instead of raising.
+    answer = interrupt({"kind": "user_question", "question": question, "options": choices})
+    if isinstance(answer, dict):
+        # Client sends {"answer": "..."} (or wraps it as {"draft": {"answer": ...}}).
+        inner = answer.get("draft") if isinstance(answer.get("draft"), dict) else answer
+        if isinstance(inner, dict):
+            return str(inner.get("answer", "") or "")
+
+    return str(answer or "")
+
+
+@tool
+def draft_email(purpose: str, runtime: ToolRuntime, recipient: str = "", tone: str = "") -> str:
+    """Draft an email for the user to review and send.
+
+    Use when the user wants to communicate something — share a finding, escalate
+    an issue, brief a colleague or follow up with a customer.
+
+    `purpose` should say what the email needs to achieve, and include the concrete
+    figures or findings it should reference (e.g. "tell the regional leads that
+    Q2 churn rose to 8.1% and ask for mitigation plans by Friday").
+    `recipient` is who it is going to, if known. `tone` can steer the register
+    (e.g. "formal", "brief", "warm").
+
+    This tool INCLUDES the approval step. The user reviews and edits the draft in
+    the UI, and the tool only returns once they have approved it — so the result
+    you get back (`status: "approved_by_user"`) is final. It may differ from what
+    was generated; the user's version is the real one.
+
+    Nothing is actually delivered: no mail is transmitted, so do NOT say it was
+    sent, received, or delivered. It is approved and ready to send.
+
+    Returns JSON {to, cc, subject, body, status}. In your written answer:
+      - report it as APPROVED, e.g. "Approved and ready to send to <to> —
+        <subject>." One or two lines.
+      - do NOT say it is "ready for your review", "drafted for approval", or
+        "let me know if you'd like any edits" — they have already reviewed and
+        edited it. Asking again is wrong and annoying.
+      - do NOT reproduce the email body; it is already displayed above.
+    """
+
+    def build() -> dict:
+        raw = simulate(
+            runtime,
+            role="You are an executive assistant drafting email on behalf of a colleague.",
+            shape='{"to":"","cc":"","subject":"","body":""}',
+            instruction=(
+                f"Draft an email. Purpose: {purpose}\n"
+                f"Recipient: {recipient or '(infer a plausible internal recipient)'}\n"
+                f"Tone: {tone or 'professional and concise'}\n"
+                "Use any specific figures given in the purpose verbatim. Keep the body "
+                "under 200 words, with real line breaks. `cc` may be an empty string."
+            ),
+        )
+        return json.loads(raw)
+
+    approved = review(runtime, "email_draft", {"purpose": purpose}, build)
+    return json.dumps(approved, ensure_ascii=False)

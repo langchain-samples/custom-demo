@@ -90,7 +90,7 @@ export function widgetLooksComplete(w: Widget | null | undefined): boolean {
 const TOOL_ICONS: Record<string, TablerIcon> = {
   // Core
   push_widget: IconChartBar,
-  // Capability tools (see dashboard_agent/tools/registry.py)
+  // Capability tools (see custom_demo/tools/registry.py)
   ask_user: IconHelpCircle,
   draft_email: IconMail,
   web_search: IconWorldSearch,

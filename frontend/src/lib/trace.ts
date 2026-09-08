@@ -2,7 +2,7 @@
  * LangSmith trace-project naming.
  *
  * Convention: the trace project is the customer's name. Kept in one place so the
- * SPA and `dashboard_agent/assistant_setup.py` (which writes the same name onto
+ * SPA and `custom_demo/assistant_setup.py` (which writes the same name onto
  * new assistants) stay in sync. An explicit `ls_project` on the assistant's
  * context always wins, letting a DE point a demo at an existing project.
  */

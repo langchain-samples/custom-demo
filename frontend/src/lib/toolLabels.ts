@@ -24,7 +24,7 @@ export interface ToolLabel {
 export const TOOL_LABELS: Record<string, ToolLabel> = {
   // Core
   push_widget: { done: "Added widget", active: "Building the dashboard" },
-  // Capability tools (see dashboard_agent/tools/registry.py)
+  // Capability tools (see custom_demo/tools/registry.py)
   draft_email: { done: "Drafted an email", active: "Drafting an email" },
   web_search: { done: "Searched the web", active: "Searching the web" },
   ask_user: { done: "Asked a question", active: "Asking you a question" },

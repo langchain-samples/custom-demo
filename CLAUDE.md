@@ -14,7 +14,7 @@ everything.
 
 Do not restate any of these anywhere. Run the check instead.
 
-`uv run ruff check dashboard_agent scripts evals mcp_demo_server`, with
+`uv run ruff check custom_demo scripts evals mcp_demo_server`, with
 `select = ["E","W","F","I","UP","B","C4","D","PLC0415","TID252","BLE001","RUF100"]`
 and `E501` ignored:
 
@@ -32,10 +32,10 @@ The rest of `.github/workflows/ci.yml`, where every step is a gate:
 - `uv run python scripts/check_blank_after_block.py`: once an indented block ends, the
   next statement at that indentation needs a blank line above it. `--fix` inserts them.
 - Import smoke on the four entrypoints `langgraph.json` names.
-- `uv run pytest dashboard_agent/tests evals -q`.
+- `uv run pytest custom_demo/tests evals -q`.
 - Frontend: `oxlint` (`react/rules-of-hooks`, `react-hooks/exhaustive-deps` and
   `react/iframe-missing-sandbox` are errors), `vitest`, `tsc -b && vite build`, and
-  every `dashboard_agent/tests/*.js` under plain node from the repo root.
+  every `custom_demo/tests/*.js` under plain node from the repo root.
 - No em-dashes. `frontend/scripts/check-no-emdash.mjs` scans `frontend/src` (code
   comments exempt), `README.md`, `AGENTS.md`, `CLAUDE.md`, `docs/` and `evals/*.md`.
   `test_prompt_prose.py` scans Python string literals in the five modules whose text

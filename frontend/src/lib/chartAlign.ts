@@ -1,7 +1,7 @@
 /**
  * Pure chart-series alignment — deliberately dependency-free (only a type import,
  * which is stripped at runtime) so it can be unit-tested directly in Node without
- * a DOM. See dashboard_agent/tests/chart_test.js.
+ * a DOM. See custom_demo/tests/chart_test.js.
  */
 import type { WidgetSeries } from "./api";
 

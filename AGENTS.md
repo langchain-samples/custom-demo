@@ -27,7 +27,7 @@ after (§3, *Per-assistant demo evals*; mind the polarity, it is the reverse of 
 ## 2. Repo map
 
 ```
-dashboard_agent/
+custom_demo/
   core/ctx.py                 the `Context` model + get_ctx(runtime) - per-run configuration
   runtime/agent.py            deep agent: middleware, backends, build_agent
   runtime/prompt.py           prompt construction + Context Hub pulls + hallucination/grounding
@@ -92,6 +92,19 @@ tests and what production runs. Do not raise it ahead of the deploy image.
 - `assistant_setup` → `setup_graph.py:graph`. A trivial one-node StateGraph wrapping
   `prepare_assistant()`. The SPA calls it via `runs/wait`, then creates the assistant from the
   payload it returns.
+
+#### The graph id is frozen
+
+The first graph's id is `dashboard_agent` while the Python package is `custom_demo`. That
+mismatch is deliberate and must stay. The id is the key in `langgraph.json`'s `graphs`
+object, it is the `graph_id` every assistant already created in the deployment is bound to,
+and `frontend/src/lib/config.ts` repeats it as `GRAPH_ID`. Renaming the key to match the
+package orphans every existing assistant: their stored `graph_id` no longer resolves and
+the SPA's assistant list goes empty.
+
+So `langgraph.json` and `config.ts` are the two files a package rename must not touch,
+beyond repointing the `./custom_demo/...` paths. If you are reading this because the
+mismatch looked like a bug, it is not one. Leave it.
 
 **The agent** (`agent.py`, built by `deepagents.create_deep_agent`):
 - **Tools come from two independent sources.** deepagents *always* installs its own - the
@@ -318,7 +331,7 @@ which also makes the document outlive the server that issued it.
 
 `submit.content` must match the elicitation's `requested_schema` (the host forwards it verbatim
 as the accept payload), which is a contract across three files and two languages with no shared
-type. `dashboard_agent/tests/signature_app_test.js` is what pins it: it loads the real HTML in
+type. `custom_demo/tests/signature_app_test.js` is what pins it: it loads the real HTML in
 jsdom and asserts the keys. Any tool with no app falls back to a form generated from the schema,
 which is what every ordinary MCP server gets.
 
@@ -499,8 +512,8 @@ Implementation notes, each of which is load-bearing:
 - Both routes scope to the customer's workspace (`LS_CROSS_WORKSPACE_KEY` + `workspace_id`, via
   `_scoped_client`) like the prompt-push and `/cleanup` paths, and the LangSmith key never reaches
   the SPA.
-- **Layering:** `evals/` may import from `dashboard_agent`; never the reverse. The demo evaluator
-  and its LLM-judge helper live in `dashboard_agent/assistant_evals.py`.
+- **Layering:** `evals/` may import from `custom_demo`; never the reverse. The demo evaluator
+  and its LLM-judge helper live in `custom_demo/assistant_evals.py`.
 - In the SPA it is a discrete toolbar button + compact dialog (`EvalPanel` → `evals/EvalRunner`,
   the same split as `FileBrowser` → `SandboxBrowser`) showing the dataset name, a red/green
   "2/3 passing" badge, a "Run experiment" action and a link out to LangSmith. It polls
@@ -531,11 +544,11 @@ Implementation notes, each of which is load-bearing:
 - Automated brand fetch (Logo.dev + Brandfetch) and an LLM-picked light/dark `theme`.
 
 ### Diverges from the plan
-- **Naming.** Plan says Corebot; the code says `dashboard_agent` throughout. Only the SPA's
+- **Naming.** Plan says Corebot; the code says `custom_demo` throughout. Only the SPA's
   fallback display name is still `"Corebot"`.
 - **Config shape.** Plan: a typed `CorebotConfig` TypedDict with a `DEFAULT_CONFIG` that assistant
-  config merges over. Actual: a `@dataclass Context` as LangGraph's `context_schema`, with defaults
-  resolved lazily from env inside `config.py`. There is no single merge layer or default object.
+  config merges over. Actual: a pydantic `Context` (`core/ctx.py`) as LangGraph's `context_schema`, with
+  defaults resolved lazily from env inside `config.py`. There is no single merge layer or default object.
 - **Config split.** Plan wanted display + behavior in *one* config object. Actual splits them
   across `context` (behavior) and `metadata` (display). Arguably the more LangGraph-native
   arrangement, but it is a divergence.
@@ -628,16 +641,16 @@ customer assistant. Sends are guarded in this order - assistant → workspace �
 
 Fast tests (no LLM, no network):
 ```bash
-uv run pytest dashboard_agent/tests -q       # the whole fast suite; what CI runs
-uv run pytest dashboard_agent/tests/test_rag.py dashboard_agent/tests/test_widgets.py \
-              dashboard_agent/tests/test_tool_registry.py \
-              dashboard_agent/tests/test_sandbox_files_routes.py \
-              dashboard_agent/tests/test_assistant_evals.py \
-              dashboard_agent/tests/test_evals_routes.py -q
-uv run ruff check dashboard_agent scripts evals   # + ruff format --check, ty check (same paths)
-node dashboard_agent/tests/branding_test.js     # colour maths (imports the real .ts)
-node dashboard_agent/tests/trace_test.js        # trace-project naming
-node dashboard_agent/tests/signature_app_test.js  # the MCP App's postMessage contract (jsdom)
+uv run pytest custom_demo/tests -q       # the whole fast suite; what CI runs
+uv run pytest custom_demo/tests/test_rag.py custom_demo/tests/test_widgets.py \
+              custom_demo/tests/test_tool_registry.py \
+              custom_demo/tests/test_sandbox_files_routes.py \
+              custom_demo/tests/test_assistant_evals.py \
+              custom_demo/tests/test_evals_routes.py -q
+uv run ruff check custom_demo scripts evals   # + ruff format --check, ty check (same paths)
+node custom_demo/tests/branding_test.js     # colour maths (imports the real .ts)
+node custom_demo/tests/trace_test.js        # trace-project naming
+node custom_demo/tests/signature_app_test.js  # the MCP App's postMessage contract (jsdom)
 cd frontend && npx tsc -b && npx oxlint && npm test
 ```
 Slow, real-LLM: `test_agent_e2e.py`, `test_hallucination_bug.py`.

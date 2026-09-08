@@ -8,6 +8,9 @@
  */
 
 /** The registered graph id on the Agent Server. */
+// Deliberately NOT the Python package name (`custom_demo`). This is the key in
+// langgraph.json's `graphs` object and the graph_id every stored assistant is bound
+// to, so it cannot be renamed to match. See AGENTS.md, "The graph id is frozen".
 export const GRAPH_ID = "dashboard_agent";
 
 /** Build-time overrides (baked in by Vite from VITE_* env vars at build). */

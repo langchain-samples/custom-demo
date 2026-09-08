@@ -215,9 +215,9 @@ For how that works end to end, and the four failure modes that do not announce t
 ## Tests
 
 ```bash
-uv run pytest dashboard_agent/tests evals -q          # the whole suite, ~4s
-uv run ruff check dashboard_agent scripts evals        # + ruff format --check, ty check
-node dashboard_agent/tests/signature_app_test.js       # the MCP App's postMessage contract
+uv run pytest custom_demo/tests evals -q          # the whole suite, ~4s
+uv run ruff check custom_demo scripts evals        # + ruff format --check, ty check
+node custom_demo/tests/signature_app_test.js       # the MCP App's postMessage contract
 cd frontend && npx tsc -b && npx oxlint && npm test && npm run build
 ```
 
@@ -230,7 +230,7 @@ the reason in the section above.
 A stock `create_deep_agent` plus custom tools and a few middlewares. Nothing exotic.
 
 ```
-dashboard_agent/
+custom_demo/
   config.py       env, credentials, model ids. The hub: everything imports it, it imports nothing
   core/           primitives with no dependencies of their own (ctx)
   runtime/        what runs on a chat turn: agent, prompt, tools/, mcp_servers, widgets, mocking

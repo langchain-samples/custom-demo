@@ -14,9 +14,9 @@ import os
 import sys
 import time
 
-from dashboard_agent.config import load_env
-from dashboard_agent.provisioning.setup import analyze_customer
-from dashboard_agent.runtime.agent import build_agent
+from custom_demo.config import load_env
+from custom_demo.provisioning.setup import analyze_customer
+from custom_demo.runtime.agent import build_agent
 from evals.evaluators import actions_relevant, agent_behavior
 from evals.fixtures import (
     GAP,

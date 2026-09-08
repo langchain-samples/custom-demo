@@ -145,14 +145,14 @@ def _model_id() -> str:
     is resolved at import time, before `check_env` loads `.env`.
     """
     # Local: deferred past check_imports, so a missing dep prints a fix, not a traceback.
-    from dashboard_agent.config import MODEL  # noqa: PLC0415
+    from custom_demo.config import MODEL  # noqa: PLC0415
 
     return os.getenv("AGENT_MODEL") or os.getenv("DASHBOARD_MODEL") or MODEL
 
 
 def _provider() -> str:
     # Local: deferred past check_imports, so a missing dep prints a fix, not a traceback.
-    from dashboard_agent.config import model_provider  # noqa: PLC0415
+    from custom_demo.config import model_provider  # noqa: PLC0415
 
     return model_provider(_model_id())
 
@@ -161,7 +161,7 @@ def check_env() -> str:
     """Load .env and report which model provider it selects. Returns the provider."""
     head(4, "Environment")
     # Local: deferred past check_imports, so a missing dep prints a fix, not a traceback.
-    from dashboard_agent.config import load_env  # noqa: PLC0415
+    from custom_demo.config import load_env  # noqa: PLC0415
 
     if not (ROOT / ".env").exists():
         warn("env", "No .env file. Relying on variables already in your shell.")
@@ -192,7 +192,7 @@ def check_model(provider: str) -> None:
     """Make one cheap real call against whichever provider is configured."""
     head(5, "Model provider (one real call)")
     # Local: deferred past check_imports, so a missing dep prints a fix, not a traceback.
-    from dashboard_agent.config import require_model_key  # noqa: PLC0415
+    from custom_demo.config import require_model_key  # noqa: PLC0415
 
     model_id = _model_id()
     try:
@@ -223,7 +223,7 @@ def check_model(provider: str) -> None:
 
     try:
         # Local: deferred past check_imports, so a missing dep prints a fix, not a traceback.
-        from dashboard_agent.runtime.agent import build_chat_model  # noqa: PLC0415
+        from custom_demo.runtime.agent import build_chat_model  # noqa: PLC0415
 
         llm = build_chat_model(model_id)
         reply = llm.invoke("Reply with exactly: OK")
@@ -258,7 +258,7 @@ def check_langsmith() -> None:
 
     try:
         # Local: deferred past check_imports, so a missing dep prints a fix, not a traceback.
-        from dashboard_agent.config import make_client, workspace_id  # noqa: PLC0415
+        from custom_demo.config import make_client, workspace_id  # noqa: PLC0415
 
         client = make_client()
         list(client.list_projects(limit=1))
@@ -283,7 +283,7 @@ def check_context_hub() -> None:
 
     try:
         # Local: deferred past check_imports, so a missing dep prints a fix, not a traceback.
-        from dashboard_agent.config import make_client  # noqa: PLC0415
+        from custom_demo.config import make_client  # noqa: PLC0415
 
         client = make_client()
         if not hasattr(client, "pull_agent"):

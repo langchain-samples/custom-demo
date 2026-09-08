@@ -3,15 +3,15 @@
   "dependencies": ["."],
   "python_version": "3.13",
   "graphs": {
-    "dashboard_agent": "./dashboard_agent/graph.py:graph",
-    "assistant_setup": "./dashboard_agent/setup_graph.py:graph"
+    "dashboard_agent": "./custom_demo/graph.py:graph",
+    "assistant_setup": "./custom_demo/setup_graph.py:graph"
   },
   "env": ".env",
   "auth": {
-    "path": "./dashboard_agent/auth.py:auth"
+    "path": "./custom_demo/auth.py:auth"
   },
   "http": {
-    "app": "./dashboard_agent/webapp.py:app",
+    "app": "./custom_demo/webapp.py:app",
     "enable_custom_route_auth": true,
     "cors": {
       "allow_origins": ["*"],

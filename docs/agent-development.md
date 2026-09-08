@@ -28,7 +28,7 @@ For any change to what the agent does - a new tool, a prompt edit, a backend swa
 4. **Push the property to the cheapest level that can hold it.** In order of preference:
    - **Level 0 - harness (no model, free, instant):** assert on the *assembled* context/prompt and
      on middleware directly. If the prompt names a tool, assert the tool actually reaches the model.
-     Worked examples: `dashboard_agent/tests/test_prompt_composition.py` (captures the composed
+     Worked examples: `custom_demo/tests/test_prompt_composition.py` (captures the composed
      system prompt via a recording stub model) and `test_agent_wiring.py` (calls middleware
      `_apply` directly). Also good here: `test_sandbox_backend.py` (backend shape with a fake VM).
    - **Level 1 - smoke:** real model, stub tools. "Did it respond / reach for the right tool."
@@ -59,7 +59,7 @@ The repo deliberately ships a broken agent (the hallucination demo), so "correct
 different directions depending on which suite you are in. Decide which one you are writing
 *before* you write the criterion:
 
-| | `evals/` (repo-level Tier-3) | `dashboard_agent/provisioning/evals.py` (per-assistant) |
+| | `evals/` (repo-level Tier-3) | `custom_demo/provisioning/evals.py` (per-assistant) |
 |---|---|---|
 | what it protects | our code - the planted demo bug still works | the demo narrative - the agent is grounded |
 | **score 1** | the bug **fired** (figures fabricated) | the agent was **correct** (said the data is unavailable / hedged, no figures as fact) |
@@ -74,16 +74,16 @@ with the judge stubbed.
 
 ## What runs where
 
-- Per-PR CI: Level 0/1/2 (no real model, no VM, no network) - `dashboard_agent/tests/`. This
+- Per-PR CI: Level 0/1/2 (no real model, no VM, no network) - `custom_demo/tests/`. This
   includes the per-assistant eval's *pure* parts: example construction per failure mode,
   evaluator polarity (judge stubbed), and the routes against a fake LangSmith client.
 - Manual / pre-release: Level 3 judge evals and live smoke tests - `evals/`, gated on env.
 - In the product, on demand: the per-assistant demo experiment (real model, customer's
-  workspace) - `dashboard_agent/provisioning/evals.py`, driven from the SPA.
+  workspace) - `custom_demo/provisioning/evals.py`, driven from the SPA.
 
 ## Synthetic demo traffic
 
-`dashboard_agent/provisioning/traffic.py` fills a new assistant's trace project with a day of
+`custom_demo/provisioning/traffic.py` fills a new assistant's trace project with a day of
 traffic so the LangSmith **Monitoring** and **Insights** tabs have something to show. It runs
 fire-and-forget at setup, and `POST /demo-traffic` (a button in Settings) does the same for
 assistants created before the feature.

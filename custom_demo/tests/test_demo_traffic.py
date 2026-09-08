@@ -1,0 +1,953 @@
+"""Unit tests for the synthetic demo-traffic backfill (custom_demo/demo_traffic.py).
+
+No network and no API keys — CI runs pytest with ANTHROPIC_API_KEY/LANGSMITH_API_KEY
+deliberately unset. Everything here exercises the pure remap/scheduling logic against
+a hand-built stand-in for a real trace.
+
+The load-bearing property is that `shift_trace` produces a tree LangSmith will accept
+and render: root `id == trace_id`, every descendant carrying the root's trace_id, and
+`dotted_order` that both parses and encodes the ancestor chain. A malformed
+dotted_order does not error — it silently renders as a flat or broken trace, which is
+exactly the kind of thing nobody notices until it is on a projector.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import random
+import threading
+import time
+import types
+import uuid
+
+import pytest
+from langsmith import get_tracing_context
+from langsmith.utils import LangSmithConflictError
+
+from custom_demo.provisioning import traffic as DT
+
+_DO_TS = "%Y%m%dT%H%M%S%fZ"
+
+
+def _run(name, run_type, start, dur_s, parent=None, order=None, usage=None, meta=None):
+    """A stand-in for a langsmith Run, with only the attributes shift_trace reads."""
+    rid = uuid.uuid4()
+    seg = start.strftime(_DO_TS) + str(rid)
+    extra = {"metadata": dict(meta or {})}
+    if usage:
+        extra["metadata"]["usage_metadata"] = usage
+
+    return types.SimpleNamespace(
+        id=rid,
+        parent_run_id=parent,
+        dotted_order=f"{order}.{seg}" if order else seg,
+        name=name,
+        run_type=run_type,
+        start_time=start,
+        end_time=start + dt.timedelta(seconds=dur_s),
+        inputs={"messages": [{"role": "user", "content": "hi"}]},
+        outputs={"output": "there"},
+        extra=extra,
+        tags=["seq:step:1"],
+        serialized={"id": ["ChatAnthropic"]},
+    )
+
+
+@pytest.fixture
+def trace():
+    """A 4-run trace: root -> (model -> llm), tool. Mirrors the real nesting shape."""
+    t0 = dt.datetime(2026, 8, 1, 12, 0, 0, tzinfo=dt.UTC)
+    root = _run("custom_demo", "chain", t0, 20, meta={"failure_mode": "hallucination"})
+    model = _run("model", "chain", t0 + dt.timedelta(seconds=1), 8, root.id, root.dotted_order)
+    llm = _run(
+        "ChatAnthropic",
+        "llm",
+        t0 + dt.timedelta(seconds=2),
+        6,
+        model.id,
+        model.dotted_order,
+        usage={
+            "input_tokens": 1000,
+            "output_tokens": 100,
+            "total_tokens": 1100,
+            "input_token_details": {"cache_read": 900},
+        },
+        meta={"ls_provider": "anthropic", "ls_model_name": "claude-sonnet-5"},
+    )
+    tool = _run("web_search", "tool", t0 + dt.timedelta(seconds=11), 3, root.id, root.dotted_order)
+    return [root, model, llm, tool]
+
+
+# --- shift_trace: the tree must stay a tree ------------------------------------
+
+
+def test_shift_trace_preserves_tree_structure(trace):
+    when = dt.datetime(2026, 8, 4, 9, 30, tzinfo=dt.UTC)
+    out = DT.shift_trace(trace, when, project="P", rng=random.Random(0))
+
+    assert len(out) == len(trace)
+    root = out[0]
+    assert root["id"] == root["trace_id"], "root id must equal trace_id"
+    assert "parent_run_id" not in root
+    by_id = {r["id"]: r for r in out}
+    for run in out:
+        assert run["trace_id"] == root["trace_id"], "all runs share the root's trace_id"
+        assert run["session_name"] == "P"
+        if "parent_run_id" in run:
+            parent = by_id[run["parent_run_id"]]
+            assert run["dotted_order"].startswith(parent["dotted_order"] + ".")
+
+
+def test_dotted_order_parses_and_matches_start_time(trace):
+    when = dt.datetime(2026, 8, 4, 9, 30, tzinfo=dt.UTC)
+    for run in DT.shift_trace(trace, when, project="P", rng=random.Random(0)):
+        seg = run["dotted_order"].split(".")[-1]
+        assert seg[-36:] == run["id"], "segment tail is the run id"
+        # The 6-digit microsecond field is mandatory; strptime is how LangSmith reads it.
+        parsed = dt.datetime.strptime(seg[:-36], _DO_TS).replace(tzinfo=dt.UTC)
+        assert parsed == dt.datetime.fromisoformat(run["start_time"])
+
+
+def test_shift_moves_root_to_requested_time_and_keeps_children_enclosed(trace):
+    when = dt.datetime(2026, 8, 4, 9, 30, tzinfo=dt.UTC)
+    out = DT.shift_trace(trace, when, project="P", rng=random.Random(0), duration_scale=2.0)
+    root = out[0]
+    assert dt.datetime.fromisoformat(root["start_time"]) == when
+    # A whole-trace scale must not let a child escape its parent's window.
+    for run in out:
+        assert root["start_time"] <= run["start_time"] <= root["end_time"]
+        assert run["end_time"] <= root["end_time"]
+
+
+def test_duration_scale_stretches_the_whole_trace(trace):
+    when = dt.datetime(2026, 8, 4, 9, 30, tzinfo=dt.UTC)
+
+    def span(scale):
+        out = DT.shift_trace(trace, when, project="P", rng=random.Random(0), duration_scale=scale)
+        r = out[0]
+        return (
+            dt.datetime.fromisoformat(r["end_time"]) - dt.datetime.fromisoformat(r["start_time"])
+        ).total_seconds()
+
+    assert span(2.0) == pytest.approx(span(1.0) * 2)
+
+
+# --- metadata, tokens, marking -------------------------------------------------
+
+
+def test_every_run_is_marked_synthetic(trace):
+    out = DT.shift_trace(trace, dt.datetime.now(dt.UTC), project="P", rng=random.Random(0))
+    for run in out:
+        assert run["extra"]["metadata"]["synthetic"] is True
+        assert DT.SYNTHETIC_TAG in run["tags"]
+
+
+def test_thread_and_user_are_set_on_every_run_not_just_the_root(trace):
+    # Thread rollups require the thread id on children too, not only the root.
+    out = DT.shift_trace(
+        trace,
+        dt.datetime.now(dt.UTC),
+        project="P",
+        rng=random.Random(0),
+        thread_id="T",
+        user_id="U",
+    )
+    assert {r["extra"]["metadata"]["thread_id"] for r in out} == {"T"}
+    assert {r["extra"]["metadata"]["user_id"] for r in out} == {"U"}
+
+
+def test_token_jitter_scales_and_drops_disallowed_keys():
+    # validate_extracted_usage_metadata rejects unknown keys and takes the whole
+    # ingest batch down with them, so the filter is not cosmetic.
+    out = DT._jitter_usage(
+        {
+            "input_tokens": 1000,
+            "output_tokens": 100,
+            "total_tokens": 1100,
+            "input_token_details": {"cache_read": 900},
+            "bogus_key": 5,
+            "prompt_tokens": 1000,
+        },
+        0.5,
+    )
+    assert set(out) <= {
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "input_token_details",
+        "output_token_details",
+    }
+    assert out["input_tokens"] == 500
+    assert out["total_tokens"] == out["input_tokens"] + out["output_tokens"]
+
+
+def test_cache_read_never_exceeds_scaled_input_tokens():
+    out = DT._jitter_usage(
+        {"input_tokens": 1000, "output_tokens": 10, "input_token_details": {"cache_read": 1000}},
+        0.5,
+    )
+    assert out["input_token_details"]["cache_read"] <= out["input_tokens"]
+
+
+# --- errors --------------------------------------------------------------------
+
+
+def test_error_propagates_from_a_leaf_up_to_the_root(trace):
+    out = DT.shift_trace(
+        trace, dt.datetime.now(dt.UTC), project="P", rng=random.Random(3), error="boom"
+    )
+    errored = [r for r in out if r.get("error")]
+    assert errored, "an error must be applied somewhere"
+    assert out[0].get("error") == "boom", "the root must show the failure"
+    # Every errored run is an ancestor-or-self chain, so their dotted_orders nest.
+    orders = sorted((r["dotted_order"] for r in errored), key=len)
+    for shorter, longer in zip(orders, orders[1:], strict=False):
+        assert longer.startswith(shorter)
+
+
+# --- scheduling ----------------------------------------------------------------
+
+
+def test_schedule_stays_inside_the_window_and_never_in_the_future():
+    now = dt.datetime(2026, 8, 4, 12, 0, tzinfo=dt.UTC)
+    stamps = DT._schedule(23, 200, random.Random(0), now=now)
+    assert stamps == sorted(stamps)
+    assert all(now - dt.timedelta(hours=23) <= s < now for s in stamps)
+
+
+def test_schedule_is_capped_at_the_server_backdate_limit():
+    # Anything older than MAX_BACKDATE_HOURS is dropped by the ingest API, so asking
+    # for a week must not silently generate six days of runs that never land.
+    now = dt.datetime(2026, 8, 4, 12, 0, tzinfo=dt.UTC)
+    stamps = DT._schedule(24 * 7, 300, random.Random(0), now=now)
+    oldest = now - dt.timedelta(hours=DT.MAX_BACKDATE_HOURS)
+    assert all(s >= oldest for s in stamps)
+
+
+# --- seed questions ------------------------------------------------------------
+
+
+def test_seed_questions_reads_the_gap_tag():
+    actions = [
+        {"question": "grounded one"},
+        {"question": "grounded two"},
+        {"question": "the gap probe", "kind": "gap"},
+    ]
+    out = DT.seed_questions(actions, "widgets per quarter")
+    assert [q["is_gap"] for q in out] == [False, False, True]
+
+
+def test_seed_questions_falls_back_to_the_last_action_for_untagged_legacy_assistants():
+    # Assistants provisioned before the gap tag existed still have the probe last.
+    actions = [{"question": "a"}, {"question": "b"}, {"question": "c"}]
+    out = DT.seed_questions(actions, "some gap")
+    assert [q["is_gap"] for q in out] == [False, False, True]
+
+
+def test_seed_questions_tags_nothing_when_there_is_no_gap():
+    out = DT.seed_questions([{"question": "a"}, {"question": "b"}], "")
+    assert not any(q["is_gap"] for q in out)
+
+
+def test_seed_questions_skips_actions_without_a_question():
+    assert DT.seed_questions([{"label": "no question"}, {"question": "q"}], "") == [
+        {"question": "q", "is_gap": False}
+    ]
+
+
+# --- backfill ------------------------------------------------------------------
+
+
+class _FakeClient:
+    """Captures ingested runs instead of talking to LangSmith."""
+
+    def __init__(self, traces: list | None = None):
+        self.runs: list[dict] = []
+        self.feedback: list[dict] = []
+        self.flushed = 0
+        # Successive answers for list_runs, so a test can make a trace show up late.
+        self._traces = list(traces or [])
+        self.reads = 0
+
+    def multipart_ingest(self, create=None, **_):
+        self.runs.extend(create or [])
+
+    def create_feedback(self, **kw):
+        self.feedback.append(kw)
+
+    def flush(self):
+        self.flushed += 1
+
+    def list_runs(self, **_):
+        # Holds on the last answer once the script runs out, so a caller that reads
+        # until the trace stops growing sees it stay put rather than vanish.
+        self.reads += 1
+        if not self._traces:
+            return []
+
+        return self._traces.pop(0) if len(self._traces) > 1 else list(self._traces[0])
+
+
+# --- seeding --------------------------------------------------------------------
+#
+# The seed runs and the read-back have to agree on a WORKSPACE. A LangSmith key picks
+# one, so tracing without an explicit client sends the seeds to the ambient key's
+# workspace while the backfill reads the customer's — the seeds are then invisible and
+# the whole backfill fails as "no seed traces" after paying for the runs.
+
+
+def _collected(start_offset_s: float):
+    """A collect_runs entry: locally rootlike, as every one of them is."""
+    rid = uuid.uuid4()
+    return types.SimpleNamespace(
+        id=rid,
+        trace_id=rid,
+        parent_run_id=None,
+        start_time=dt.datetime(2026, 8, 1, 12, tzinfo=dt.UTC)
+        + dt.timedelta(seconds=start_offset_s),
+    )
+
+
+def test_collected_trace_id_picks_the_outermost_run():
+    # Ordered by COMPLETION: the inner model call finishes first, so the real root
+    # (started first, ended last) is at the END. Taking [0] gave a child id that
+    # matches no trace server-side, which is what emptied every backfill.
+    root = _collected(0)
+    inner = [_collected(1.2), _collected(3.5)]
+    assert DT.collected_trace_id([*inner, root]) == str(root.id)
+
+
+def test_collected_trace_id_handles_one_run_and_none():
+    root = _collected(0)
+    assert DT.collected_trace_id([root]) == str(root.id)
+    assert DT.collected_trace_id([]) == ""
+
+
+def test_collected_trace_id_survives_a_run_without_a_start_time():
+    root, broken = _collected(0), types.SimpleNamespace(id=uuid.uuid4(), start_time=None)
+    assert DT.collected_trace_id([broken, root]) == str(root.id)
+
+
+def test_run_seeds_traces_with_the_workspace_client(monkeypatch):
+
+    seen: dict = {}
+
+    class _Agent:
+        def invoke(self, payload, config=None, context=None):
+            # Read the live context rather than a mock of tracing_context: what matters
+            # is the client langchain_core would hand the tracer, which is this one.
+            seen.update(get_tracing_context())
+            return {}
+
+    # Patched on traffic.py: both are top-level imports there, so that is where
+    # `run_seeds` looks them up.
+    monkeypatch.setattr(DT, "build_agent", lambda: _Agent())
+    monkeypatch.setattr(DT, "make_run_context", lambda c: c)
+    client = _FakeClient()
+
+    DT.run_seeds({}, [{"question": "q", "is_gap": False}], project="P", client=client)
+
+    assert seen["client"] is client
+    assert seen["project_name"] == "P"
+    # Flushed before the caller reads the traces back — the tracer uploads async.
+    assert client.flushed == 1
+
+
+def test_run_seeds_keeps_going_when_one_question_raises(monkeypatch):
+    class _Agent:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, payload, config=None, context=None):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("model is down")
+
+            return {}
+
+    agent = _Agent()
+    monkeypatch.setattr(DT, "build_agent", lambda: agent)
+    monkeypatch.setattr(DT, "make_run_context", lambda c: c)
+
+    DT.run_seeds({}, [{"question": "a"}, {"question": "b"}], project="P", client=_FakeClient())
+
+    assert agent.calls == 2
+
+
+def test_fetch_trace_waits_for_a_trace_that_is_not_indexed_yet(monkeypatch, trace):
+    # A seed is read seconds after it finished, so the first reads legitimately come
+    # back empty; giving up on the first one loses the trace we just paid to produce.
+    monkeypatch.setattr(DT.time, "sleep", lambda _s: None)
+    client = _FakeClient(traces=[[], [], trace])
+
+    assert DT.fetch_trace(client, "P", "t") == sorted(trace, key=lambda r: r.dotted_order)
+    # Two empty reads, the trace, then the confirming read that it stopped growing.
+    assert client.reads == 4
+
+
+def test_fetch_trace_waits_for_a_half_indexed_trace_to_settle(trace, monkeypatch):
+    # The runs of one trace are indexed in batches, so a read can catch a root with
+    # only some of its children — cloning THAT would replay as a truncated trace.
+    monkeypatch.setattr(DT.time, "sleep", lambda _s: None)
+    client = _FakeClient(traces=[trace[:1], trace[:2], trace])
+
+    assert len(DT.fetch_trace(client, "P", "t")) == len(trace)
+    assert client.reads == 4
+
+
+def test_fetch_trace_gives_up_after_the_last_attempt(monkeypatch):
+    monkeypatch.setattr(DT.time, "sleep", lambda _s: None)
+    client = _FakeClient()
+
+    assert DT.fetch_trace(client, "P", "t", attempts=3) == []
+    assert client.reads == 3
+
+
+def test_backfill_emits_marked_traces_and_reports_a_summary(trace):
+    client = _FakeClient()
+    seeds = [
+        {"trace_id": "a", "is_gap": True, "runs": trace},
+        {"trace_id": "b", "is_gap": False, "runs": trace},
+    ]
+    summary = DT.backfill(client, "P", seeds, count=50, rng=random.Random(5))
+
+    assert summary["traces"] == 50
+    assert summary["runs"] == len(client.runs)
+    assert all(r["extra"]["metadata"]["synthetic"] for r in client.runs)
+    # Every emitted trace is flagged one way or the other, so a presenter can filter.
+    roots = [r for r in client.runs if "parent_run_id" not in r]
+    assert len(roots) == 50
+    assert all("demo_gap_probe" in r["extra"]["metadata"] for r in roots)
+
+
+def test_backfill_gap_share_is_respected_on_average():
+    # A single seed is a small sample, so average across seeds rather than asserting
+    # on one draw — the per-run share legitimately varies by ±10 points at this size.
+    t0 = dt.datetime(2026, 8, 1, 12, tzinfo=dt.UTC)
+    runs = [_run("custom_demo", "chain", t0, 5)]
+    shares = []
+    for s in range(25):
+        client = _FakeClient()
+        summary = DT.backfill(
+            client,
+            "P",
+            [{"trace_id": "g", "is_gap": True, "runs": runs}, {"trace_id": "n", "runs": runs}],
+            count=100,
+            rng=random.Random(s),
+        )
+        shares.append(summary["gap_traces"] / summary["traces"])
+
+    assert DT.GAP_SHARE - 0.05 < sum(shares) / len(shares) < DT.GAP_SHARE + 0.05
+
+
+def test_backfill_without_seeds_is_a_clean_no_op():
+    client = _FakeClient()
+    summary = DT.backfill(client, "P", [], count=10, rng=random.Random(0))
+    assert summary["traces"] == 0
+    assert client.runs == []
+    assert "error" in summary
+
+
+def test_backfill_survives_feedback_failures(trace):
+    class Hostile(_FakeClient):
+        def create_feedback(self, **kw):
+            raise RuntimeError("feedback is down")
+
+    client = Hostile()
+    # Feedback is a garnish; losing it must not lose the traffic.
+    summary = DT.backfill(
+        client, "P", [{"trace_id": "a", "runs": trace}], count=20, rng=random.Random(1)
+    )
+    assert summary["traces"] == 20
+    assert client.runs
+
+
+# --- annotation queue -----------------------------------------------------------
+#
+# The human half of the demo: the same fabrications Insights clusters in aggregate,
+# one trace at a time, with a rubric that says what to look for.
+
+
+class _QueueClient:
+    """Records the annotation-queue calls, answering as the SDK does."""
+
+    def __init__(self, existing: str = "", add_fails: int = 0):
+        self.configs: dict = {}
+        self.created: dict = {}
+        self.added: list = []
+        self.existing = existing
+        self.add_fails = add_fails
+
+    def create_feedback_config(self, *, feedback_key, feedback_config, is_lower_score_better=False):
+        self.configs[feedback_key] = (feedback_config, is_lower_score_better)
+        return types.SimpleNamespace(feedback_key=feedback_key)
+
+    def list_annotation_queues(self, *, name=None, limit=None):
+        return [types.SimpleNamespace(id=self.existing, name=name)] if self.existing else []
+
+    def create_annotation_queue(
+        self, *, name, description=None, rubric_instructions=None, rubric_items=None
+    ):
+        self.created = {
+            "name": name,
+            "description": description,
+            "rubric_instructions": rubric_instructions,
+            "rubric_items": rubric_items,
+        }
+        return types.SimpleNamespace(id="queue-1", name=name)
+
+    def add_runs_to_annotation_queue(self, queue_id, *, run_ids=None, runs=None):
+        if self.add_fails:
+            self.add_fails -= 1
+            raise RuntimeError("404 run not found yet")
+
+        self.added.append((queue_id, list(run_ids or [])))
+
+
+def _reviewable(gaps: int, clean: int) -> list[dict]:
+    return [{"run_id": f"g{i}", "is_gap": True} for i in range(gaps)] + [
+        {"run_id": f"c{i}", "is_gap": False} for i in range(clean)
+    ]
+
+
+def test_queue_carries_a_rubric_for_hallucination_and_a_note():
+    client = _QueueClient()
+    out = DT.ensure_annotation_queue(
+        client, "Acme", reviewable=_reviewable(6, 4), customer="Acme", data_gap="churn"
+    )
+
+    assert out["queue"] == "Acme - hallucination review"
+    assert out["added"] == 10
+    keys = [item["feedback_key"] for item in client.created["rubric_items"]]
+    assert keys == [DT.QUEUE_HALLUCINATION_KEY, DT.QUEUE_NOTES_KEY]
+    # A verdict is required; the note is where the invented figure gets quoted.
+    required = {i["feedback_key"]: i.get("is_required") for i in client.created["rubric_items"]}
+    assert required[DT.QUEUE_HALLUCINATION_KEY] is True
+    assert required[DT.QUEUE_NOTES_KEY] is False
+    # The rubric names this customer's withheld topic, or a reviewer cannot tell a
+    # fabrication from an answer they simply do not know the data for.
+    assert "churn" in client.created["rubric_instructions"]
+    assert "Acme" in client.created["rubric_instructions"]
+    # Buttons, not a slider — and 1 (fabricated) is the bad end.
+    config, lower_better = client.configs[DT.QUEUE_HALLUCINATION_KEY]
+    assert config["type"] == "categorical" and lower_better is True
+    assert client.configs[DT.QUEUE_NOTES_KEY][0]["type"] == "freeform"
+
+
+def test_queue_tops_up_an_existing_queue_instead_of_stacking_one(monkeypatch):
+    client = _QueueClient(existing="queue-old")
+    out = DT.ensure_annotation_queue(client, "Acme", reviewable=_reviewable(2, 1))
+    assert out["queue_id"] == "queue-old"
+    assert client.created == {}  # reused, not recreated
+    assert client.added[0][0] == "queue-old"
+
+
+def test_queue_waits_for_runs_that_are_not_addressable_yet(monkeypatch):
+    # Runs were ingested seconds ago; the same visibility race fetch_trace handles.
+    monkeypatch.setattr(DT.time, "sleep", lambda _s: None)
+    client = _QueueClient(add_fails=2)
+    out = DT.ensure_annotation_queue(client, "Acme", reviewable=_reviewable(3, 2))
+    assert out["added"] == 5
+
+
+def test_queue_reports_an_empty_queue_rather_than_pretending(monkeypatch):
+    monkeypatch.setattr(DT.time, "sleep", lambda _s: None)
+    client = _QueueClient(add_fails=99)
+    out = DT.ensure_annotation_queue(client, "Acme", reviewable=_reviewable(3, 2))
+    assert out["added"] == 0
+    assert "queue created but empty" in out["error"]
+
+
+def test_review_sample_mixes_fabrications_with_clean_answers():
+    picked = DT._review_sample(_reviewable(40, 160), random.Random(0))
+    assert len(picked) == DT.QUEUE_SIZE
+    gaps = sum(1 for p in picked if p["is_gap"])
+    # Mostly fabrications so the pattern is visible, but not uniformly so — a queue of
+    # one repeated verdict teaches an annotator to stop reading the rubric.
+    assert gaps == round(DT.QUEUE_SIZE * DT.QUEUE_GAP_SHARE)
+    assert 0 < gaps < DT.QUEUE_SIZE
+
+
+def test_review_sample_takes_what_it_can_when_gaps_are_scarce():
+    picked = DT._review_sample(_reviewable(1, 30), random.Random(1))
+    assert len(picked) == DT.QUEUE_SIZE
+    assert sum(1 for p in picked if p["is_gap"]) == 1
+
+
+def test_backfill_offers_only_answerable_traces_for_review(trace):
+    # "Did it invent figures" is unanswerable for a run that errored before answering.
+    summary = DT.backfill(
+        _FakeClient(),
+        "P",
+        [{"trace_id": "g", "is_gap": True, "runs": trace}, {"trace_id": "n", "runs": trace}],
+        count=60,
+        error_share=0.5,
+        rng=random.Random(3),
+    )
+    assert 0 < len(summary["reviewable"]) <= DT.QUEUE_SIZE
+    assert summary["errored_traces"] > 0  # errors existed to be excluded
+
+
+# --- insights ------------------------------------------------------------------
+#
+# The job used to 422 on every fresh customer workspace, asking for an
+# ANTHROPIC_API_KEY nobody had put there. The UI never asks for a key: it points
+# `cluster_model`/`summary_model` at a playground model setting, and the LangSmith
+# gateway ones need no customer credentials. These lock in the config shape captured
+# from a HAR of the UI saving a config, since every field in it turned out to matter.
+
+_GATEWAY = {
+    "id": "gw-1",
+    "name": "LLM Gateway GPT-5.5",
+    "settings": {"kwargs": {"openai_api_key": {"id": ["LC_GATEWAY_KEY"], "type": "secret"}}},
+    "available_in_insights_heavy": True,
+    "available_in_insights_light": True,
+}
+_BYO_KEY = {
+    "id": "byo-1",
+    "name": "Customer Anthropic",
+    "settings": {"kwargs": {"anthropic_api_key": {"id": ["ANTHROPIC_API_KEY"]}}},
+    "available_in_insights_heavy": True,
+    "available_in_insights_light": True,
+}
+_PLAYGROUND_ONLY = {
+    "id": "pg-1",
+    "name": "Playground only",
+    "settings": {},
+    "available_in_insights_heavy": False,
+    "available_in_insights_light": True,
+}
+
+
+class _InsightsClient:
+    """Answers the three calls `ensure_insights_job` makes, recording the payloads."""
+
+    def __init__(self, models: list[dict] | None = None, job_error: Exception | None = None):
+        self.models = models if models is not None else [_GATEWAY]
+        self.job_error = job_error
+        self.posted: dict = {}
+
+    def read_project(self, project_name: str):
+        return types.SimpleNamespace(id="sess-1", name=project_name)
+
+    def request_with_retries(self, method: str, path: str, json: dict | None = None):
+        if path == "/playground-settings":
+            return types.SimpleNamespace(json=lambda: self.models)
+
+        if path.endswith("/insights/configs"):
+            self.posted["config"] = json
+            return types.SimpleNamespace(json=lambda: {"id": "cfg-1"})
+
+        self.posted["job"] = json
+        if self.job_error is not None:
+            raise self.job_error
+
+        return types.SimpleNamespace(json=lambda: {"id": "job-1", "status": "queued"})
+
+
+def test_insights_config_points_at_a_model_so_the_job_can_actually_run():
+    client = _InsightsClient()
+    out = DT.ensure_insights_job(client, "P", customer="Acme", data_gap="churn")
+
+    inner = client.posted["config"]["config"]
+    # Both, from one model: heavy clusters, light summarises.
+    assert inner["cluster_model"] == "gw-1"
+    assert inner["summary_model"] == "gw-1"
+    assert out["model"] == "gw-1"
+    assert out["status"] == "queued"
+    # The window lives in the config; the job body carries only the config id.
+    assert client.posted["job"] == {"config_id": "cfg-1"}
+
+
+def test_insights_prefers_a_gateway_model_over_one_needing_a_customer_key():
+    # A BYO-key model in a workspace without that key is the 422 all over again.
+    client = _InsightsClient(models=[_BYO_KEY, _GATEWAY])
+    DT.ensure_insights_job(client, "P")
+    assert client.posted["config"]["config"]["cluster_model"] == "gw-1"
+
+
+def test_insights_ignores_a_model_insights_may_not_use():
+    client = _InsightsClient(models=[_PLAYGROUND_ONLY])
+    DT.ensure_insights_job(client, "P")
+    # Not usable for clustering, so no model is pinned and the config falls back.
+    assert "cluster_model" not in client.posted["config"]["config"]
+
+
+def test_insights_config_clusters_conversations_not_middleware_runs():
+    client = _InsightsClient()
+    DT.ensure_insights_job(client, "P", customer="Acme", data_gap="churn")
+    inner = client.posted["config"]["config"]
+
+    # One trace here is 50-151 runs; without this the clusters are chain runs.
+    assert inner["filter"] == "eq(is_root, true)"
+    assert inner["sample"] == DT.INSIGHTS_SAMPLE
+    # Insights templates the prompt per run: no variable, nothing to summarise.
+    assert inner["summary_prompt"].endswith("{{run.inputs}}")
+    assert "churn" in inner["summary_prompt"] and "Acme" in inner["summary_prompt"]
+    assert all(schema["filter_by"] is False for schema in inner["attribute_schemas"].values())
+
+
+def test_insights_reports_a_missing_key_without_losing_the_config():
+    client = _InsightsClient(
+        models=[], job_error=RuntimeError("422 unknown: {'detail': \"['ANTHROPIC_API_KEY']\"}")
+    )
+    out = DT.ensure_insights_job(client, "P")
+
+    assert out["config_id"] == "cfg-1"  # saved, so Run in the UI still works
+    assert "no model in this workspace" in out["job_error"]
+
+
+def test_insights_survives_an_unreadable_model_list():
+    class _NoModels(_InsightsClient):
+        def request_with_retries(self, method, path, json=None):
+            if path == "/playground-settings":
+                raise RuntimeError("403 forbidden")
+
+            return super().request_with_retries(method, path, json)
+
+    out = DT.ensure_insights_job(_NoModels(), "P")
+    assert out["config_id"] == "cfg-1" and out["model"] == ""
+
+
+# --- engine ---------------------------------------------------------------------
+#
+# Enabling Engine is one POST to `/v1/platform/sessions/{id}/issues-agent` with a
+# cron schedule (captured from the UI's own toggle). Creating the config IS enabling
+# it, and the first scan starts immediately — which is the whole reason to do it at
+# seed time rather than leaving the presenter to click it and wait.
+
+
+class _EngineClient:
+    """Records the requests `ensure_engine_job` makes, answering as the API does."""
+
+    def __init__(self, fail: Exception | None = None, cron_enabled: bool = True):
+        self.calls: list[tuple[str, str, dict]] = []
+        self.fail = fail
+        self.cron_enabled = cron_enabled
+
+    def read_project(self, project_name: str):
+        return types.SimpleNamespace(id="sess-1", name=project_name)
+
+    def request_with_retries(self, method: str, path: str, json: dict | None = None):
+        self.calls.append((method, path, json or {}))
+        if self.fail is not None:
+            raise self.fail
+
+        # The server jitters the minute to spread load, so what comes back is never
+        # the string we sent.
+        return types.SimpleNamespace(
+            json=lambda: {
+                "id": "cfg-1",
+                "cron_enabled": self.cron_enabled,
+                "cron_schedule": "51 0/6 * * *",
+                "session_id": "sess-1",
+            }
+        )
+
+
+def test_ensure_engine_job_enables_the_issues_agent_for_the_session():
+    client = _EngineClient()
+    out = DT.ensure_engine_job(client, "P")
+
+    assert client.calls == [
+        ("POST", "/v1/platform/sessions/sess-1/issues-agent", {"cron_schedule": DT.ENGINE_CRON})
+    ]
+    assert out["enabled"] is True
+    assert out["config_id"] == "cfg-1"
+    # Reported as the server stored it, not as we asked for it.
+    assert out["cron_schedule"] == "51 0/6 * * *"
+
+
+def test_ensure_engine_job_treats_already_enabled_as_success():
+    # Re-seeding a project that already has Engine on is a no-op, not a failure. The
+    # SDK raises the API's 409 as this type, so that is what is tested.
+    out = DT.ensure_engine_job(
+        _EngineClient(fail=LangSmithConflictError("Conflict for /issues-agent")), "P"
+    )
+    assert out["already_enabled"] is True
+    assert "error" not in out
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "500 server error, request id 409ff1",  # a request id containing "409"
+        "502 from already-prod-3.internal",  # a host name containing "already"
+        "403 conflict resolution service unavailable",  # the word, unrelated
+    ],
+)
+def test_an_engine_failure_that_only_looks_like_a_conflict_is_reported(message):
+    """The old test matched "409"/"conflict"/"already" anywhere in the message.
+
+    "already" was the loosest of the six substring checks: a host name or a request id
+    satisfied it, and an Engine that was never enabled was reported as one that
+    already was. Engine stays a garnish (this must not raise), but a real refusal has
+    to reach the receipt.
+    """
+    out = DT.ensure_engine_job(_EngineClient(fail=RuntimeError(message)), "P")
+    assert "already_enabled" not in out
+    assert message in out["error"]
+
+
+def test_ensure_engine_job_reports_a_refusal_without_raising():
+    out = DT.ensure_engine_job(_EngineClient(fail=RuntimeError("403 not entitled")), "P")
+    assert "403" in out["error"]
+
+
+def test_engine_and_insights_failures_do_not_take_each_other_or_the_traffic_down(
+    monkeypatch, trace
+):
+    # The traffic is the payload. Both extras run, and each one's failure is recorded
+    # on its own so a demo never loses the backfill over a garnish.
+    monkeypatch.setattr(DT.time, "sleep", lambda _s: None)  # fetch_trace's settle wait
+    monkeypatch.setattr(DT, "_ws_client", lambda _ws: _FakeClient(traces=[trace]))
+    monkeypatch.setattr(DT, "run_seeds", lambda *a, **k: [{"trace_id": "t", "is_gap": True}])
+    monkeypatch.setattr(
+        DT, "ensure_insights_job", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no secret"))
+    )
+    monkeypatch.setattr(
+        DT, "ensure_engine_job", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no entitle"))
+    )
+
+    out = DT.generate_demo_traffic("ws", "P", count=5)
+
+    assert out["traces"] == 5
+    assert "no secret" in out["insights_error"]
+    assert "no entitle" in out["engine_error"]
+
+
+def test_engine_can_be_switched_off_by_the_caller(monkeypatch, trace):
+    monkeypatch.setattr(DT.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(DT, "_ws_client", lambda _ws: _FakeClient(traces=[trace]))
+    monkeypatch.setattr(DT, "run_seeds", lambda *a, **k: [{"trace_id": "t"}])
+    monkeypatch.setattr(DT, "ensure_insights_job", lambda *a, **k: {})
+    called: list[int] = []
+    monkeypatch.setattr(DT, "ensure_engine_job", lambda *a, **k: called.append(1) or {})
+
+    DT.generate_demo_traffic("ws", "P", count=5, with_engine=False)
+
+    assert called == []
+
+
+def test_generate_demo_traffic_reports_failures_instead_of_raising(monkeypatch):
+    # Called from a daemon thread during assistant setup — it must never raise.
+    monkeypatch.setattr(DT, "_ws_client", lambda ws: (_ for _ in ()).throw(RuntimeError("nope")))
+    out = DT.generate_demo_traffic("ws", "P", context={}, actions=[])
+    assert "error" in out and "nope" in out["error"]
+
+
+# --- one backfill per project --------------------------------------------------
+#
+# The registry is what makes the setup-path backfill and POST /demo-traffic interlock.
+# Both entry points share it, so a presenter clicking Generate while setup's backfill
+# is still running must be refused rather than doubling the traffic.
+
+
+@pytest.fixture
+def registry():
+    """A clean registry, restored after the test (module-level, process-wide state)."""
+    DT._INFLIGHT.clear()
+    DT._RESULT.clear()
+    yield DT
+    DT._INFLIGHT.clear()
+    DT._RESULT.clear()
+
+
+def _await_idle(project, timeout=5.0):
+    """Wait for the backfill thread to leave _INFLIGHT (its `finally`)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if project not in DT._INFLIGHT:
+            return True
+
+        time.sleep(0.01)
+
+    return False
+
+
+def test_start_demo_traffic_records_the_receipt(registry, monkeypatch):
+    monkeypatch.setattr(
+        DT, "generate_demo_traffic", lambda ws, p, **kw: {"project": p, "traces": 7}
+    )
+    ack = DT.start_demo_traffic("ws", "P", customer="Acme")
+    assert ack["ok"] and ack["running"]
+    assert _await_idle("P")
+    # The receipt is what the panel reads back through GET /demo-traffic/status.
+    assert DT.demo_traffic_state("P") == {"running": False, "result": {"project": "P", "traces": 7}}
+
+
+def test_start_demo_traffic_refuses_a_second_run_for_the_same_project(registry, monkeypatch):
+    release = threading.Event()
+    calls = []
+
+    def _slow(ws, p, **kw):
+        calls.append(p)
+        release.wait(5)
+        return {"traces": 1}
+
+    monkeypatch.setattr(DT, "generate_demo_traffic", _slow)
+    first = DT.start_demo_traffic("ws", "P")
+    second = DT.start_demo_traffic("ws", "P")
+    other = DT.start_demo_traffic("ws", "Q")
+    try:
+        assert first["running"] is True
+        # The case this guards: double the traffic and the hourly ingest quota.
+        assert second == {"ok": True, "project": "P", "already_running": True}
+        assert DT.demo_traffic_state("P")["running"] is True
+        # A different project is unrelated — the guard is per project, not global.
+        assert other["running"] is True
+    finally:
+        release.set()
+
+    assert _await_idle("P") and _await_idle("Q")
+    # Two threads ran, not three: the refused call never reached generate_demo_traffic.
+    assert sorted(calls) == ["P", "Q"]
+
+
+def test_a_stale_slot_does_not_disable_generate_forever(registry, monkeypatch):
+    monkeypatch.setattr(DT, "generate_demo_traffic", lambda ws, p, **kw: {"traces": 1})
+    # A process restart mid-backfill leaves a slot claimed by a thread that is gone.
+    DT._INFLIGHT["P"] = time.time() - DT._STALE_SECS - 1
+    assert DT.demo_traffic_state("P")["running"] is False
+    assert DT.start_demo_traffic("ws", "P")["running"] is True
+    assert _await_idle("P")
+
+
+def test_start_demo_traffic_never_raises_when_the_thread_will_not_start(registry, monkeypatch):
+    def _no_threads(*a, **kw):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(DT.threading, "Thread", _no_threads)
+    ack = DT.start_demo_traffic("ws", "P")
+    assert ack["ok"] is False and "can't start new thread" in ack["error"]
+    # The slot must be released, or the failure locks the project out until redeploy.
+    assert "P" not in DT._INFLIGHT
+
+
+# --- defining the rubric's feedback keys ---------------------------------------
+
+
+class _ConfigClient:
+    """A client whose create_feedback_config raises whatever the test hands it."""
+
+    def __init__(self, error: BaseException):
+        self.error = error
+
+    def create_feedback_config(self, **_):
+        raise self.error
+
+
+def test_a_feedback_key_that_already_exists_is_success():
+    """Workspace-level and shared, so a 409 is the normal answer on every re-seed."""
+    DT._ensure_feedback_configs(_ConfigClient(LangSmithConflictError("Conflict for /x")))
+
+
+def test_a_feedback_key_that_really_failed_travels():
+    """The old test matched "409" anywhere in the message, so this read as success.
+
+    A rubric key that was never defined leaves the review queue ungradeable, which is
+    worth failing the seed over.
+    """
+    error = RuntimeError("500 server error, request id 409ff1")
+    with pytest.raises(RuntimeError):
+        DT._ensure_feedback_configs(_ConfigClient(error))

@@ -39,7 +39,7 @@ jobs:
           # What actually changes the deployed agent. Everything ships in the image
           # (dependencies = ["."]), but only these change how the Agent Server behaves, so
           # a docs or frontend PR does not trigger a deployment pair.
-          changed=$(gh pr diff "$PR" --name-only | grep -E '^(dashboard_agent/|langgraph\.json|pyproject\.toml|uv\.lock)' || true)
+          changed=$(gh pr diff "$PR" --name-only | grep -E '^(custom_demo/|langgraph\.json|pyproject\.toml|uv\.lock)' || true)
 
           has_label=$(echo "$LABELS" | grep -c '"LG-update"' || true)
           if [ -n "$changed" ] && [ "$has_label" = "0" ]; then
