@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from typing import cast
 
 import httpx
@@ -353,7 +354,13 @@ def analyze_customer(
     the personas, the data gap, and the tool selection.
     """
     load_env()
-    llm = init_chat_model(model or setup_model(), **sampling_kwargs(0.5))  # ty: ignore[no-matching-overload]
+    # Retry/timeout hardening, matching `agent.build_chat_model`. This call had the
+    # library default of 2 retries while the agent got 8, which is backwards: a
+    # transient 529 here does not fail loudly, it silently produces the generic
+    # assistant below.
+    llm = init_chat_model(  # ty: ignore[no-matching-overload]
+        model or setup_model(), max_retries=8, timeout=180, **sampling_kwargs(0.5)
+    )
     site = f" (website: {website})" if website else ""
     scenario = (
         f"\nUSE CASE — build the ENTIRE assistant around this scenario (its users, "
@@ -463,9 +470,27 @@ def analyze_customer(
         "enabled_tools": None,
         "seed_files": [],
     }
+    # Three attempts, because this one call decides the entire personality of the
+    # assistant: the personas, the skills, the seed files, the tool selection, the
+    # industry, the theme. Everything below has a bland default, so a single
+    # transient failure used to hand the presenter a fully generic demo. A whole
+    # extra attempt costs ~40s at setup time, against a demo that is unusable.
+    structured = llm.with_structured_output(AssistantSetupResponse)
+    resp: AssistantSetupResponse | None = None
+    for attempt in (1, 2, 3):
+        try:
+            resp = cast("AssistantSetupResponse", structured.invoke([HumanMessage(prompt)]))
+            break
+        except Exception as exc:  # noqa: BLE001
+            out["error"] = f"{type(exc).__name__}: {exc}"
+            print(f"[setup] customer analysis attempt {attempt}/3 failed: {out['error']}")
+    if resp is None:
+        # Reported, not swallowed. `prepare_assistant` refuses to build an assistant
+        # on top of this rather than quietly producing a branded shell with the
+        # frontend's stock quick actions in it.
+        return out
     try:
-        structured = llm.with_structured_output(AssistantSetupResponse)
-        resp = cast("AssistantSetupResponse", structured.invoke([HumanMessage(prompt)]))
+        out.pop("error", None)
         if not industry:
             out["industry"] = resp.industry.strip()
         out["actions"] = [
@@ -519,8 +544,12 @@ def analyze_customer(
         # otherwise be dropped and the agent would lose data retrieval.
         picked = ({t.strip() for t in resp.enabled_tools} & CATALOGUE_IDS) - EXPLICIT_ONLY
         out["enabled_tools"] = sorted(picked | set(DEFAULT_ENABLED))
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001
+        # The model answered but a field did not survive reading. Partial progress is
+        # kept (the assignments above mutate `out` in order), and the error travels so
+        # the caller can decide whether what landed is enough.
+        out["error"] = f"{type(exc).__name__}: {exc}"
+        print(f"[setup] customer analysis partially failed: {out['error']}")
     return out
 
 
@@ -856,19 +885,38 @@ def prepare_assistant(payload: dict) -> dict:
     # accent is resolved, far below). Run serially they were simply added together.
     # Threads rather than async because both are blocking HTTP, and this function is
     # called from a sync route.
+    # `copy_context().run` so both jobs inherit this thread's contextvars. The setup
+    # graph wraps the run in a `tracing_context(project_name=...)`, which is a
+    # ContextVar, and a plain `pool.submit` starts the worker with a fresh context --
+    # so the analysis LLM call was invisible in the trace, on the one run where
+    # knowing why it failed mattered.
     with ThreadPoolExecutor(max_workers=2) as pool:
-        brand_job = pool.submit(fetch_brand, customer, payload.get("website"))
+        brand_job = pool.submit(copy_context().run, fetch_brand, customer, payload.get("website"))
         analysis_job = pool.submit(
+            copy_context().run,
             analyze_customer,
             customer,
             payload.get("industry", ""),
             payload.get("website"),
             use_case,
         )
-        brand = brand_job.result()
-        analysis = analysis_job.result()
+        # cast because `Context.run` is typed as returning its callable's TypeVar,
+        # which the checker cannot follow back through `submit`.
+        brand = cast("dict", brand_job.result())
+        analysis = cast("dict", analysis_job.result())
     industry = payload.get("industry") or analysis.get("industry") or ""
     actions = list(payload.get("actions") or analysis.get("actions") or [])
+    # Nothing has been created yet -- no prompt pushed, no dataset, no repo -- so this
+    # is the last point where failing is free. Without it, an analysis that came back
+    # empty produced a correctly branded assistant (Brandfetch runs in the other
+    # thread and is unaffected) carrying the FRONTEND's stock quick actions, no
+    # skills, no seed files and no tool selection. That reads as a working demo until
+    # someone clicks one of the humanitarian-aid presets on a pharma assistant.
+    if analysis.get("error") and not actions:
+        raise RuntimeError(
+            "Setup could not analyze this customer, so the assistant would have been "
+            f"generic: {analysis['error']}. Nothing was created. Try again."
+        )
     display_name = payload.get("display_name") or f"{customer} GPT"
 
     slug = slugify(customer)

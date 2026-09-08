@@ -482,3 +482,48 @@ def test_every_assistant_can_be_spoken_to(rec, monkeypatch):
     out = _prep(monkeypatch, _analysis())
     assert out["metadata"]["voice"] == {}
     assert "voice" not in out["context"]
+
+
+# --- a failed analysis must not become a generic assistant ---
+
+
+def test_a_failed_analysis_stops_setup_instead_of_going_generic(rec, monkeypatch):
+    """The McKesson case: every LLM-derived field silently fell back to its default.
+
+    `analyze_customer` returns an all-defaults dict when its one LLM call fails, and
+    it used to swallow the exception. Brandfetch runs in the other thread and is
+    unaffected, so what reached the presenter was a correctly branded assistant with
+    no personas (the SPA then renders its own stock quick actions), no skills, no
+    seed files, no industry and no tool selection. It looked like it had worked.
+    """
+    failed = _analysis(actions=[], skills=[], industry="", error="APIStatusError: 529")
+    with pytest.raises(RuntimeError, match="could not analyze"):
+        _prep(monkeypatch, failed)
+
+
+def test_the_error_names_the_cause_and_says_nothing_was_created(rec, monkeypatch):
+    """A presenter reads this message on stage, so it has to say what to do."""
+    failed = _analysis(actions=[], error="APIStatusError: 529 overloaded_error")
+    with pytest.raises(RuntimeError) as exc:
+        _prep(monkeypatch, failed)
+    assert "529" in str(exc.value)
+    assert "Nothing was created" in str(exc.value)
+
+
+def test_caller_supplied_actions_survive_a_failed_analysis(rec, monkeypatch):
+    """Setup is only refused when there is nothing to fall back to.
+
+    A caller that passed its own quick actions has supplied the thing the analysis
+    exists to produce, so the run continues.
+    """
+    failed = _analysis(actions=[], error="APIStatusError: 529")
+    out = _prep(monkeypatch, failed, actions=[{"label": "Mine", "question": "Q?"}])
+    # Asserted on the question, not the label: skill actions lead the list and
+    # `_persona_label` prefixes a bare label with a persona.
+    assert "Q?" in [a["question"] for a in out["actions"]]
+
+
+def test_a_successful_analysis_carries_no_error(rec, monkeypatch):
+    """The guard keys off `error`, so a success must not leave one behind."""
+    out = _prep(monkeypatch, _analysis())
+    assert len(out["actions"]) == 3
