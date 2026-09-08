@@ -45,9 +45,12 @@ jobs:
       - run: uv run ruff format --check dashboard_agent scripts evals
       - run: uv run ty check dashboard_agent scripts evals
       # Import smoke: catches broken imports (e.g. a removed tool still referenced).
-      # graph.py eagerly builds the graph at import (build_graph -> require_anthropic_key),
+      # These three are the entrypoints langgraph.json names, so importing them
+      # reaches the whole package. Named by ENTRYPOINT rather than by internal
+      # module, which is what broke when the package was split into subfolders.
+      # graph.py eagerly builds the graph at import (build_agent -> require_model_key),
       # so a placeholder key is needed. It is only constructed, never called — no API hit.
-      - run: uv run python -c "import dashboard_agent.agent, dashboard_agent.graph, dashboard_agent.setup_graph"
+      - run: uv run python -c "import dashboard_agent.graph, dashboard_agent.setup_graph, dashboard_agent.webapp"
         env:
           ANTHROPIC_API_KEY: sk-ci-placeholder-not-used
       # Unit tests only — the live agent/hallucination tests auto-skip without
