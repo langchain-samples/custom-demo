@@ -107,4 +107,5 @@ def agent_behavior(
         comment = f"calls={calls}"
     else:
         ok, comment = False, f"unknown kind={kind!r}"
+
     return {"key": "agent_behavior", "score": int(ok), "comment": comment}

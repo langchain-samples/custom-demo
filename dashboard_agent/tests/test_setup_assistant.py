@@ -501,6 +501,7 @@ def test_the_error_names_the_cause_and_says_nothing_was_created(rec, monkeypatch
     failed = _analysis(actions=[], error="APIStatusError: 529 overloaded_error")
     with pytest.raises(RuntimeError) as exc:
         _prep(monkeypatch, failed)
+
     assert "529" in str(exc.value)
     assert "Nothing was created" in str(exc.value)
 
@@ -521,6 +522,7 @@ def test_an_analysis_with_no_seed_files_stops_setup(rec, monkeypatch):
 def test_the_seed_file_refusal_names_the_partial_failure(rec, monkeypatch):
     with pytest.raises(S.SeedSpecError) as exc:
         _prep(monkeypatch, _analysis(seed_files=[], error="ValidationError: seed_files"))
+
     assert "seed_files" in str(exc.value) and "Nothing was created" in str(exc.value)
 
 

@@ -23,9 +23,11 @@ auth = Auth()
 def _provided_token(headers: dict[bytes, bytes] | None, authorization: str | None) -> str:
     if authorization and authorization.lower().startswith("bearer "):
         return authorization[7:].strip()
+
     raw = (headers or {}).get(b"x-api-key")
     if isinstance(raw, bytes):
         return raw.decode(errors="ignore")
+
     return raw or ""
 
 
@@ -43,7 +45,9 @@ async def authenticate(
     if not secret:
         # No secret configured → auth disabled (local dev).
         return {"identity": "anonymous"}
+
     token = _provided_token(headers, authorization)
     if not hmac.compare_digest(token, secret):
         raise Auth.exceptions.HTTPException(status_code=401, detail="Invalid or missing app token")
+
     return {"identity": "demo"}

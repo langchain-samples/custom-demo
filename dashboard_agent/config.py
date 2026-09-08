@@ -23,6 +23,7 @@ def load_env() -> None:
     sibling = _REPO_ROOT / "chat-langchain-lite" / ".env"
     if sibling.exists():
         load_dotenv(sibling)
+
     # Route LangSmith traces to the configured project (LangChain reads
     # LANGCHAIN_PROJECT; newer LangSmith also reads LANGSMITH_PROJECT).
     proj = os.getenv("PROJECT_NAME", "custom-demo")
@@ -42,6 +43,7 @@ def require_anthropic_key() -> str:
         raise RuntimeError(
             "ANTHROPIC_API_KEY is not set. Add it to the repo's `.env` or the environment."
         )
+
     return key
 
 
@@ -57,6 +59,7 @@ def require_tavily_key() -> str:
         raise RuntimeError(
             "TAVILY_API_KEY is not set. Add it to the repo's `.env` or the environment."
         )
+
     return key
 
 
@@ -115,6 +118,7 @@ def require_model_key(model_id: str | None = None) -> str:
         # the path a `langsmith:` id takes, where the LangSmith key authenticates and
         # there is no provider key to find.
         return ""
+
     for name in names:
         key = os.getenv(name)
         if key:
@@ -122,7 +126,9 @@ def require_model_key(model_id: str | None = None) -> str:
             # name the client will actually look for.
             if name != names[0]:
                 os.environ.setdefault(names[0], key)
+
             return key
+
     raise RuntimeError(
         f"{names[0]} is not set, and AGENT_MODEL selects the '{provider}' provider. "
         "Add it to the repo's `.env` or the environment."
@@ -147,10 +153,13 @@ def sampling_kwargs(default_temperature: float) -> dict[str, float]:
     override = os.getenv("MODEL_TEMPERATURE")
     if override is None:
         override = os.getenv("DASHBOARD_TEMPERATURE")  # deprecated spelling
+
     if override is None:
         return {"temperature": default_temperature}
+
     if override.strip() == "":
         return {}
+
     return {"temperature": float(override)}
 
 

@@ -121,12 +121,15 @@ def _as_dt(value: Any) -> dt.datetime | None:
     """Coerce a LangSmith timestamp (datetime or ISO string) to an aware datetime."""
     if value is None:
         return None
+
     if isinstance(value, dt.datetime):
         return value if value.tzinfo else value.replace(tzinfo=dt.UTC)
+
     try:
         parsed = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except ValueError:
         return None
+
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.UTC)
 
 
@@ -142,8 +145,10 @@ def _jitter_usage(usage: dict, scale: float) -> dict:
         val = usage.get(key)
         if isinstance(val, (int, float)):
             out[key] = max(1, int(val * scale))
+
     if "input_tokens" in out or "output_tokens" in out:
         out["total_tokens"] = out.get("input_tokens", 0) + out.get("output_tokens", 0)
+
     for key in ("input_token_details", "output_token_details"):
         details = usage.get(key)
         if isinstance(details, dict):
@@ -152,6 +157,7 @@ def _jitter_usage(usage: dict, scale: float) -> dict:
             }
             if scaled:
                 out[key] = scaled
+
     # Cache reads can't exceed the (scaled) input token count, and a nonsensical split
     # makes the cost breakdown in the UI look wrong.
     detail = out.get("input_token_details")
@@ -159,6 +165,7 @@ def _jitter_usage(usage: dict, scale: float) -> dict:
         for k in ("cache_read", "cache_creation"):
             if k in detail:
                 detail[k] = min(detail[k], out["input_tokens"])
+
     return out
 
 
@@ -188,9 +195,11 @@ def fetch_trace(
         runs = list(client.list_runs(project_name=project, trace_id=trace_id))
         if runs and len(runs) == seen:
             break
+
         seen = len(runs)
         if attempt < attempts - 1:
             time.sleep(delay)
+
     return sorted(runs, key=lambda r: str(r.dotted_order or ""))
 
 
@@ -218,6 +227,7 @@ def shift_trace(
     """
     if not runs:
         return []
+
     root = runs[0]
     origin = _as_dt(root.start_time)
     if origin is None:
@@ -228,6 +238,7 @@ def shift_trace(
         val = _as_dt(ts)
         if val is None:
             return None
+
         return new_start + (val - origin) * duration_scale
 
     ids: dict[str, uuid.UUID] = {}
@@ -241,6 +252,7 @@ def shift_trace(
         start = moved(run.start_time)
         if not old_id or start is None:
             continue
+
         new_id = uuid7_from_datetime(start)  # uuid7 embeds the backdated time, as real runs do
         ids[old_id] = new_id
         if root_id is None:
@@ -259,13 +271,17 @@ def shift_trace(
         usage = meta.get("usage_metadata")
         if isinstance(usage, dict):
             meta["usage_metadata"] = _jitter_usage(usage, token_scale)
+
         meta["synthetic"] = True
         if thread_id:
             meta["thread_id"] = thread_id
+
         if user_id:
             meta["user_id"] = user_id
+
         if extra_metadata:
             meta.update(extra_metadata)
+
         extra["metadata"] = meta
 
         tags = [t for t in (run.tags or []) if t != SYNTHETIC_TAG]
@@ -285,16 +301,19 @@ def shift_trace(
         }
         if parent_key and parent_key in ids:
             payload["parent_run_id"] = str(ids[parent_key])
+
         # `serialized` is dropped by the client for anything but llm/prompt runs
         # (client.py:2328), so only carry it where it survives.
         if payload["run_type"] in ("llm", "prompt"):
             serialized = run.serialized
             if serialized:
                 payload["serialized"] = serialized
+
         out.append(payload)
 
     if error and out:
         _apply_error(out, error, rng)
+
     return out
 
 
@@ -335,6 +354,7 @@ def _schedule(
         when = slot + dt.timedelta(minutes=rng.randrange(60), seconds=rng.randrange(60))
         if oldest <= when < end:
             stamps.append(when)
+
     return sorted(stamps)
 
 
@@ -354,11 +374,14 @@ def seed_questions(actions: list[dict] | None, data_gap: str = "") -> list[dict]
         question = (action or {}).get("question")
         if not question:
             continue
+
         out.append({"question": question, "is_gap": (action or {}).get("kind") == "gap"})
+
     # A gap-planting assistant whose actions predate the `kind` tag: fall back to the
     # last action, which is where `prepare_assistant` puts the probe.
     if data_gap and out and not any(a["is_gap"] for a in out):
         out[-1]["is_gap"] = True
+
     return out
 
 
@@ -380,6 +403,7 @@ def collected_trace_id(traced_runs: list[Any]) -> str:
     """
     if not traced_runs:
         return ""
+
     far_future = dt.datetime.max.replace(tzinfo=dt.UTC)
     outermost = min(traced_runs, key=lambda r: _as_dt(r.start_time) or far_future)
     return str(outermost.id or "")
@@ -408,6 +432,7 @@ def run_seeds(
         try:
             if agent is None:  # built lazily so a bad context fails one question, not all
                 agent = build_agent()
+
             # `collect_runs` captures the runs of this call synchronously as they
             # complete (see `collected_trace_id` for which one to read).
             # `get_current_run_tree()` does NOT work here: it reads a context var that
@@ -422,6 +447,7 @@ def run_seeds(
                     config={"configurable": {"thread_id": str(uuid.uuid4())}},
                     context=ctx,
                 )
+
             trace_id = collected_trace_id(collected.traced_runs)
             if trace_id:
                 out.append({"trace_id": trace_id, "is_gap": item.get("is_gap", False)})
@@ -431,6 +457,7 @@ def run_seeds(
             # same bare "no seed traces" as a trace that merely wasn't visible yet.
             traceback.print_exc()
             continue
+
     # The tracer uploads on a background thread, so without this the caller can start
     # reading the traces back before they have been sent at all.
     if client is not None:
@@ -438,6 +465,7 @@ def run_seeds(
             client.flush()
         except Exception:  # noqa: BLE001 - a failed flush only costs us the retries below
             traceback.print_exc()
+
     return out
 
 
@@ -465,6 +493,7 @@ def backfill(
     pool = [s for s in seeds if s.get("runs")]
     if not pool:
         return {"traces": 0, "runs": 0, "error": "no seed traces"}
+
     gaps = [s for s in pool if s.get("is_gap")]
     normal = [s for s in pool if not s.get("is_gap")] or pool
 
@@ -507,6 +536,7 @@ def backfill(
         )
         if not runs:
             continue
+
         emitted += 1
         total_runs += len(runs)
         gap_count += int(is_gap)
@@ -517,11 +547,14 @@ def backfill(
         if not errored and rng.random() < 0.35:
             score = 0 if (is_gap and rng.random() < 0.8) else 1
             feedback.append((runs[0]["id"], score, is_gap))
+
         if not errored:
             reviewable.append({"run_id": runs[0]["id"], "is_gap": is_gap})
+
         batch.extend(runs)
         if len(batch) >= chunk:
             flush()
+
     flush()
 
     for run_id, score, is_gap in feedback:
@@ -534,6 +567,7 @@ def backfill(
             )
         except Exception:  # noqa: BLE001 - feedback is a garnish, not the payload
             continue
+
     return {
         "traces": emitted,
         "runs": total_runs,
@@ -614,6 +648,7 @@ def ensure_insights_job(
         )
     except Exception:  # noqa: BLE001 - an unreadable model list is the same as none
         model_id = ""
+
     inner: dict[str, Any] = {
         "name": name,
         "summary_prompt": (
@@ -647,6 +682,7 @@ def ensure_insights_job(
         # model, and these take precedence over the `model` above.
         inner["cluster_model"] = model_id
         inner["summary_model"] = model_id
+
     created = client.request_with_retries(
         "POST", f"/sessions/{session_id}/insights/configs", json={"name": name, "config": inner}
     ).json()
@@ -657,6 +693,7 @@ def ensure_insights_job(
     }
     if not (run and out["config_id"]):
         return out
+
     try:
         # Just the config_id, as the UI sends: the window (`last_n_hours`) is part of
         # the config, and the job inherits it.
@@ -678,6 +715,7 @@ def ensure_insights_job(
             if "API_KEY" in detail
             else f"insights job failed: {detail[:200]}"
         )
+
     return out
 
 
@@ -801,9 +839,11 @@ def ensure_annotation_queue(
             ),
         )
         out["queue_id"] = str(queue.id)
+
     run_ids = [r["run_id"] for r in reviewable if r.get("run_id")]
     if not run_ids:
         return out
+
     # The runs were ingested seconds ago and the queue add is a read on the server's
     # side, so this is the same visibility race `fetch_trace` handles — retry rather
     # than lose the queue's contents.
@@ -816,7 +856,9 @@ def ensure_annotation_queue(
             if attempt == QUEUE_ADD_ATTEMPTS - 1:
                 out["error"] = f"queue created but empty: {str(exc)[:200]}"
                 return out
+
             time.sleep(QUEUE_ADD_DELAY)
+
     return out
 
 
@@ -909,15 +951,19 @@ def generate_demo_traffic(
                 context, seed_questions(actions, data_gap), project=project, client=client
             )
             result["seeded"] = len(seeds)
+
         if not seeds:
             result["error"] = "no seed traces produced"
             return result
+
         for seed in seeds:
             seed["runs"] = fetch_trace(client, project, seed["trace_id"])
+
         result.update(backfill(client, project, seeds, hours=hours, count=count))
     except Exception as exc:  # noqa: BLE001 - never break the caller
         result["error"] = f"{type(exc).__name__}: {exc}"
         return result
+
     # Insights and Engine both key off the traffic above, and both are extras: the
     # payload is the traffic, so each failure is recorded and the other still runs.
     if with_insights:
@@ -927,11 +973,13 @@ def generate_demo_traffic(
             )
         except Exception as exc:  # noqa: BLE001 - the traffic is the payload; insights is extra
             result["insights_error"] = f"{type(exc).__name__}: {exc}"
+
     if with_engine:
         try:
             result["engine"] = ensure_engine_job(client, project)
         except Exception as exc:  # noqa: BLE001 - ditto: a demo without Engine still demos
             result["engine_error"] = f"{type(exc).__name__}: {exc}"
+
     if with_queue:
         try:
             result["queue"] = ensure_annotation_queue(
@@ -943,6 +991,7 @@ def generate_demo_traffic(
             )
         except Exception as exc:  # noqa: BLE001 - ditto
             result["queue_error"] = f"{type(exc).__name__}: {exc}"
+
     return result
 
 
@@ -981,6 +1030,7 @@ def start_demo_traffic(workspace: str, project: str, **kwargs: Any) -> dict:
         started = _INFLIGHT.get(project, 0.0)
         if started and (time.time() - started) < _STALE_SECS:
             return {"ok": True, "project": project, "already_running": True}
+
         _INFLIGHT[project] = time.time()
 
     def _body() -> None:
@@ -1001,7 +1051,9 @@ def start_demo_traffic(workspace: str, project: str, **kwargs: Any) -> dict:
     except Exception as exc:  # noqa: BLE001 - a thread we could not start is the caller's news
         with _LOCK:
             _INFLIGHT.pop(project, None)
+
         return {"ok": False, "project": project, "error": f"{type(exc).__name__}: {exc}"}
+
     return {"ok": True, "project": project, "running": True}
 
 
@@ -1010,4 +1062,5 @@ def demo_traffic_state(project: str) -> dict:
     with _LOCK:
         started = _INFLIGHT.get(project, 0.0)
         running = bool(started) and (time.time() - started) < _STALE_SECS
+
     return {"running": running, "result": _RESULT.get(project) or {}}

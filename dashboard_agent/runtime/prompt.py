@@ -34,6 +34,7 @@ def _prompt_client(workspace: str | None):
     """
     if not workspace:
         return make_client()
+
     return scoped_client(workspace)
 
 

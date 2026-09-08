@@ -68,5 +68,6 @@ def push_widget(widget: dict) -> str:
     sink = widget_sink.get()
     if sink is not None:
         sink.append(normalized)
+
     title = normalized.get("title", "")
     return f"Added {normalized['type']} widget '{title}' to the dashboard."

@@ -74,5 +74,6 @@ def answer_for(ctx: Context, key: str) -> ElicitResult | None:
     responses = ctx.input_responses
     if not responses:
         return None
+
     answer = responses.get(key)
     return answer if isinstance(answer, ElicitResult) else None

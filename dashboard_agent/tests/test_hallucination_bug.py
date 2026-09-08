@@ -76,12 +76,14 @@ def _message_text(content) -> str:
     """The text of a message whose content may be a string or a content-block list."""
     if isinstance(content, str):
         return content.strip()
+
     if isinstance(content, list):
         parts = [
             b.get("text", "") if isinstance(b, dict) and b.get("type") == "text" else ""
             for b in content
         ]
         return "".join(parts).strip()
+
     return ""
 
 
@@ -96,9 +98,11 @@ def _final_answer(messages: list) -> str:
     for msg in reversed(messages):
         if getattr(msg, "type", None) != "ai" or getattr(msg, "tool_calls", None):
             continue
+
         text = _message_text(msg.content)
         if text:
             return text
+
     return ""
 
 

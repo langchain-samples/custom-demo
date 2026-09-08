@@ -97,6 +97,7 @@ def domain_for(customer: str, website: str | None) -> str:
         m = re.search(r"^(?:https?://)?(?:www\.)?([^/]+)", website.strip())
         if m:
             return m.group(1)
+
     # Best-effort guess from the customer name (Clearbit tolerates many forms).
     return slugify(customer).replace("-", "") + ".com"
 
@@ -119,6 +120,7 @@ def _brandfetch_brand(domain: str) -> dict | None:
     if not key:
         load_env()
         key = os.getenv("BRANDFETCH_API_KEY", "")
+
     if not key:
         print(f"[setup] brand palette: no BRANDFETCH_API_KEY, guessing colors for {domain}")
         return None
@@ -129,12 +131,14 @@ def _brandfetch_brand(domain: str) -> dict | None:
                 f"https://api.brandfetch.io/v2/brands/{domain}",
                 headers={"Authorization": f"Bearer {key}"},
             )
+
         if r.status_code != 200:  # 401/402/404/429 → quota, unknown, etc.
             print(
                 f"[setup] brand palette: Brandfetch answered {r.status_code} for {domain}, "
                 f"guessing colors"
             )
             return None
+
         data = r.json()
     except Exception as exc:  # noqa: BLE001 - an optional brand lookup; report and fall through to the LLM guess
         print(
@@ -150,6 +154,7 @@ def _brandfetch_brand(domain: str) -> dict | None:
             for c in colors:
                 if c.get("type") == t:
                     return str(c["hex"])
+
         return ""
 
     # Brandfetch types: 'brand'/'primary' (main), 'accent' (highlight), 'dark'/'light'
@@ -158,6 +163,7 @@ def _brandfetch_brand(domain: str) -> dict | None:
     primary = pick("brand", "primary", "dark", "accent")
     if not primary:
         primary = next((str(c["hex"]) for c in colors if c.get("type") != "light"), "")
+
     secondary = ""
     for t in ("accent", "brand", "primary", "dark"):
         v = pick(t)
@@ -176,9 +182,11 @@ def _brandfetch_brand(domain: str) -> dict | None:
     for f in data.get("fonts") or []:
         if not isinstance(f, dict):
             continue
+
         name = safe_font_name(str(f.get("name") or ""))
         if not name:
             continue
+
         slot = "heading" if f.get("type") == "title" else "body"
         if not fonts[slot]:
             fonts[slot] = name
@@ -216,6 +224,7 @@ def fetch_brand(customer: str, website: str | None = None) -> dict:
         try:
             with httpx.Client(timeout=12, follow_redirects=True) as c:
                 html = c.get(f"https://{domain}").text
+
             for pat in (
                 r'<meta[^>]+name=["\']theme-color["\'][^>]+content=["\'](#[0-9a-fA-F]{3,6})',
                 r'<meta[^>]+content=["\'](#[0-9a-fA-F]{3,6})["\'][^>]+name=["\']theme-color',
@@ -225,6 +234,7 @@ def fetch_brand(customer: str, website: str | None = None) -> dict:
                 if m:
                     accent_scraped = m.group(1)
                     break
+
             if not accent_scraped:
                 print(f"[setup] brand palette: no theme-color meta tag on {domain}")
         except Exception as exc:  # noqa: BLE001 - scraping someone else's HTML; report and leave accent_scraped unset
@@ -524,15 +534,18 @@ def analyze_customer(
         except Exception as exc:  # noqa: BLE001
             out["error"] = f"{type(exc).__name__}: {exc}"
             print(f"[setup] customer analysis attempt {attempt}/3 failed: {out['error']}")
+
     if resp is None:
         # Reported, not swallowed. `prepare_assistant` refuses to build an assistant
         # on top of this rather than quietly producing a branded shell with the
         # frontend's stock quick actions in it.
         return out
+
     try:
         out.pop("error", None)
         if not industry:
             out["industry"] = resp.industry.strip()
+
         out["actions"] = [
             {"label": a.label.strip(), "question": a.question.strip()}
             for a in resp.actions
@@ -544,6 +557,7 @@ def analyze_customer(
                 "label": resp.gap_action.label.strip(),
                 "question": resp.gap_action.question.strip(),
             }
+
         out["skills"] = [
             {
                 "name": re.sub(r"[^a-z0-9]+", "-", s.name.lower()).strip("-"),
@@ -571,6 +585,7 @@ def analyze_customer(
             v = (val or "").strip()
             if re.fullmatch(r"#[0-9a-fA-F]{6}", v):
                 out[key] = v
+
         # Validated before storage — an unvetted family must never reach metadata.
         out["heading_font"] = safe_font_name(resp.heading_font)
         out["body_font"] = safe_font_name(resp.body_font)
@@ -579,6 +594,7 @@ def analyze_customer(
         theme = (resp.theme or "").strip().lower()
         if theme in ("light", "dark"):
             out["theme"] = theme
+
         # Keep only catalogue ids, drop any explicit-only tool the LLM shouldn't
         # auto-enable (it isn't even offered below), then union the always-on core
         # (push_widget): the LLM is told not to list it, so it would
@@ -591,6 +607,7 @@ def analyze_customer(
         # the caller can decide whether what landed is enough.
         out["error"] = f"{type(exc).__name__}: {exc}"
         print(f"[setup] customer analysis partially failed: {out['error']}")
+
     return out
 
 
@@ -611,6 +628,7 @@ def _already_committed(exc: BaseException) -> bool:
     """
     if isinstance(exc, LangSmithConflictError):
         return True
+
     return "nothing to commit" in str(exc).lower()
 
 
@@ -625,6 +643,7 @@ def push_agent_prompt(workspace: str, repo: str, text: str, skill_links: dict | 
     files: dict = {"AGENTS.md": FileEntry(content=text)}
     for path, handle in (skill_links or {}).items():
         files[path] = SkillEntry(repo_handle=handle)
+
     try:
         return _ws_client(workspace).push_agent(
             repo, files=files, description=f"{repo} system prompt"
@@ -632,6 +651,7 @@ def push_agent_prompt(workspace: str, repo: str, text: str, skill_links: dict | 
     except Exception as exc:
         if not _already_committed(exc):
             raise
+
         return f"(exists) {repo}"
 
 
@@ -693,6 +713,7 @@ def _workflow_clause(workflow: str) -> str:
     key = (workflow or "").strip().lower().replace("_", "-")
     if key not in WORKFLOW_PATTERNS:
         key = _DEFAULT_WORKFLOW
+
     how = WORKFLOW_PATTERNS[key]
     return (
         f"\n\n## Workflow: {key}\n"
@@ -762,6 +783,7 @@ def push_workflow_skills(workspace: str, slug: str, customer: str, skills) -> di
         name = sk.get("name") or ""
         if not name or not sk.get("instructions"):
             continue
+
         repo = f"{slug}-{name}-skill"
         md = _skill_md(
             name,
@@ -787,7 +809,9 @@ def push_workflow_skills(workspace: str, slug: str, customer: str, skills) -> di
                     f"{type(exc).__name__}: {exc}"
                 )
                 continue
+
         links[f"skills/{name}"] = repo
+
     return links
 
 
@@ -807,6 +831,7 @@ def push_skills_bundle(workspace: str, slug: str, customer: str, skills) -> str:
         name = sk.get("name") or ""
         if not name or not sk.get("instructions"):
             continue
+
         files[f"{name}/SKILL.md"] = FileEntry(
             content=_skill_md(
                 name,
@@ -816,14 +841,17 @@ def push_skills_bundle(workspace: str, slug: str, customer: str, skills) -> str:
                 sk.get("sandbox_step", ""),
             )
         )
+
     if not files:
         return ""
+
     repo = f"{slug}-skills"
     try:
         _ws_client(workspace).push_agent(repo, files=files, description=f"{customer} skills")
     except Exception as exc:
         if not _already_committed(exc):
             raise
+
     return repo
 
 
@@ -841,6 +869,7 @@ def _persona_label(label: str) -> str:
     label = (label or "").strip()
     if ":" in label:
         return label
+
     return f"Customer: {label}" if label else "Customer: Ask"
 
 
@@ -877,6 +906,7 @@ def build_demo_brief(
     if gists:
         lead = "The first two quick actions" if hallucinating else "The quick actions"
         brief.append(f"{lead} show the assistant working normally: {', '.join(gists)}{hitl_note}.")
+
     if hallucinating:
         gap = data_gap or "one key metric"
         brief.append(
@@ -898,6 +928,7 @@ def build_demo_brief(
             "Run the quick actions to show the assistant building dashboards across personas.",
             "Open the LangSmith trace to show the tool calls and how each answer stays grounded.",
         ]
+
     return {"brief": brief, "flow": flow}
 
 
@@ -945,6 +976,7 @@ def prepare_assistant(payload: dict) -> dict:
         # which the checker cannot follow back through `submit`.
         brand = cast("dict", brand_job.result())
         analysis = cast("dict", analysis_job.result())
+
     industry = payload.get("industry") or analysis.get("industry") or ""
     actions = list(payload.get("actions") or analysis.get("actions") or [])
     # Nothing has been created yet -- no prompt pushed, no dataset, no repo -- so this
@@ -986,6 +1018,7 @@ def prepare_assistant(payload: dict) -> dict:
     }
     if industry:
         context["industry"] = industry
+
     # Tool selection: explicit caller override → the LLM's pick → DEFAULT_ENABLED.
     # Union DEFAULT_ENABLED (push_widget) so a new assistant always
     # keeps the always-on core plus data retrieval, then adds the optional picks.
@@ -997,12 +1030,14 @@ def prepare_assistant(payload: dict) -> dict:
         picked = (set(analysis["enabled_tools"]) & CATALOGUE_IDS) - EXPLICIT_ONLY
     else:
         picked = set()
+
     context["enabled_tools"] = sorted(picked | set(DEFAULT_ENABLED))
     # Starting files for the code-execution VM, in the formats THIS use case works with.
     # Carried in the context (not just used at prewarm) so a VM created lazily on the
     # first turn — or rebuilt after the old one was reaped — gets the same files.
     if analysis.get("seed_files"):
         context["sandbox_seed"] = analysis["seed_files"]
+
     # This assistant's own VM name. Unique per assistant, because the previous key was
     # derived from the customer (agent_repo, else customer) and a second assistant for
     # the same customer therefore attached to the FIRST one's VM and skipped its own
@@ -1072,6 +1107,7 @@ def prepare_assistant(payload: dict) -> dict:
             # back to the skill name (normalized below) if it's missing.
             label = sk.get("action_label") or sk["name"].replace("-", " ").title()
             skill_actions.append({"label": label, "question": q})
+
     # Lead with skill-invoking actions (they demo a skill), then top up with the
     # LLM's persona questions so there are always enough to fill the 2–3 slots.
     base_actions = skill_actions + actions
@@ -1137,6 +1173,7 @@ def prepare_assistant(payload: dict) -> dict:
             # the feature and reported nothing, because the in-process fallback kept the
             # panel looking healthy — so a silent failure here has form.
             print(f"[setup] eval evaluator not attached: {attached['error']}")
+
         # The judge itself is a prompt-registry prompt in the customer's workspace, named
         # deterministically from the dataset, so /cleanup can delete it without another
         # round trip. Recorded only when the attach succeeded — otherwise there is

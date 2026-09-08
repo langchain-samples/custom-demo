@@ -172,6 +172,7 @@ def test_an_unlisted_tool_is_not_mocked(passthrough):
 def test_mocks_do_not_leak_past_the_block(tool):
     with using_mocks({"web_search": {"results": []}}):
         pass
+
     assert active_mocks() is None
 
 
@@ -181,6 +182,7 @@ def test_token_form_matches_the_context_manager(tool):
         assert call(tool) == "via token"
     finally:
         restore_mocks(token)
+
     assert active_mocks() is None
 
 
@@ -188,5 +190,6 @@ def test_call_counts_reset_between_specs(tool):
     """Two examples in one experiment must not share a sequence position."""
     with using_mocks({"web_search": [{"n": 1}, {"n": 2}]}):
         assert json.loads(call(tool))["n"] == 1
+
     with using_mocks({"web_search": [{"n": 1}, {"n": 2}]}):
         assert json.loads(call(tool))["n"] == 1

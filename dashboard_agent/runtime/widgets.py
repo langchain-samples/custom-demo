@@ -55,6 +55,7 @@ class ChartWidget(BaseModel):
     def _pie_single_series(self) -> ChartWidget:
         if self.type == "pie" and len(self.series) != 1:
             raise ValueError("pie charts must have exactly one series")
+
         return self
 
 
@@ -72,6 +73,7 @@ class TableWidget(BaseModel):
         for i, row in enumerate(self.rows):
             if len(row) != width:
                 raise ValueError(f"row {i} has {len(row)} cells but there are {width} columns")
+
         return self
 
 

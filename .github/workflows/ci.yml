@@ -57,6 +57,12 @@ jobs:
       - run: uv sync --locked
       - run: uv run ruff check dashboard_agent scripts evals mcp_demo_server
       - run: uv run ruff format --check dashboard_agent scripts evals mcp_demo_server
+      # House rule ruff has no equivalent for: after an indented block ends, the next
+      # statement at the same indentation needs a blank line in front of it. E301/E302/E303
+      # only cover methods and top-level defs, so this is its own checker - the Python
+      # counterpart of frontend/scripts/check-no-emdash.mjs. `ruff format` preserves the
+      # blank lines it asks for, so the two never fight; `--fix` inserts them.
+      - run: uv run python scripts/check_blank_after_block.py
       - run: uv run ty check dashboard_agent scripts evals mcp_demo_server
       # Import smoke: catches broken imports (e.g. a removed tool still referenced).
       # These four are the entrypoints langgraph.json names, so importing them

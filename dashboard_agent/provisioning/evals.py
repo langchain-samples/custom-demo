@@ -230,6 +230,7 @@ def build_examples(
                 "metadata": {"customer": customer, "kind": "gap", "data_gap": data_gap},
             }
         )
+
     return examples
 
 
@@ -249,6 +250,7 @@ def ensure_dataset(client, name: str, examples: list[dict], description: str = "
             return str(ds.id)
     else:
         ds = client.create_dataset(dataset_name=name, description=description)
+
     client.create_examples(dataset_id=ds.id, examples=examples)
     return str(ds.id)
 
@@ -270,6 +272,7 @@ def ensure_eval_dataset(
     examples = build_examples(customer, failure_mode, actions, data_gap)
     if not examples:
         return ""
+
     name = dataset_name_for(customer, dataset_fingerprint(failure_mode, examples))
     try:
         ensure_dataset(
@@ -280,6 +283,7 @@ def ensure_eval_dataset(
         )
     except Exception:  # noqa: BLE001 - provisioning must never fail on the eval dataset
         return ""
+
     return name
 
 
@@ -448,6 +452,7 @@ def _secret_refs(model: dict) -> set[str]:
     for value in (model.get("kwargs") or {}).values():
         if isinstance(value, dict) and value.get("type") == "secret":
             out.update(str(i) for i in (value.get("id") or []))
+
     return out
 
 
@@ -567,9 +572,11 @@ def ensure_judge_runnable(workspace: str | None, dataset: str) -> bool:
         repo = judge_prompt_name(dataset)
         if judge_has_model(client, repo):
             return True
+
         _, model = judge_model_manifest(client)
         if not model:
             return False
+
         prompt = client.pull_prompt_commit(repo).manifest
         _push_judge(client, repo, judge_chain_manifest(prompt, model))
         return True
@@ -622,6 +629,7 @@ def _create_judge_evaluator(
     }
     if model_id:
         llm["playground_settings_id"] = model_id
+
     res = httpx.post(
         url.replace(_RULES_PATH, _EVALUATORS_PATH),
         headers=headers,
@@ -652,6 +660,7 @@ def _rules_api(workspace: str | None) -> tuple[str, dict]:
         # Same cross-workspace scoping `_ws_client` gets from `workspace_id=`; without it
         # the rule lands in whatever workspace the key defaults to.
         headers["X-Tenant-Id"] = workspace
+
     return base + _RULES_PATH, headers
 
 
@@ -664,6 +673,7 @@ def dataset_rules(workspace: str | None, dataset_id: str) -> list[dict]:
         body = res.json()
     except Exception:  # noqa: BLE001 - callers treat "no rules" and "cannot tell" alike
         return []
+
     items = body if isinstance(body, list) else (body.get("items") or [])
     return [i for i in items if isinstance(i, dict)]
 
@@ -691,6 +701,7 @@ def ensure_dataset_evaluator(workspace: str, dataset: str, customer: str = "") -
     out: dict = {"rule_id": "", "evaluator_id": "", "error": ""}
     if not dataset:
         return out
+
     display_name = EVAL_FEEDBACK_KEY
     try:
         client = _ws_client(workspace)
@@ -707,6 +718,7 @@ def ensure_dataset_evaluator(workspace: str, dataset: str, customer: str = "") -
                         "an evaluator is attached but its judge prompt has no model this "
                         "workspace can run, experiments will be graded in-process"
                     )
+
                 return out
 
         # The judge model FIRST: without one there is nothing worth attaching (see the
@@ -815,17 +827,22 @@ def _widget_line(widget: dict) -> str:
     bits: list[str] = []
     if widget.get("value") is not None:  # kpi
         bits.append(f"{widget.get('value')} {widget.get('unit') or ''}".strip())
+
     if widget.get("delta"):
         bits.append(str(widget["delta"]))
+
     for series in widget.get("series") or []:  # bar / line / pie
         points = ", ".join(
             f"{p.get('label')}={p.get('value')}" for p in (series.get("points") or [])[:8]
         )
         bits.append(f"{series.get('name') or ''}[{points}]".strip())
+
     if widget.get("rows"):  # table
         bits.append(f"{len(widget['rows'])} rows: {widget.get('columns')}")
+
     if widget.get("content"):  # text / key findings
         bits.append(str(widget["content"])[:400])
+
     return f"- {kind} '{title}': {'; '.join(b for b in bits if b)}"
 
 
@@ -842,8 +859,10 @@ def graded_content(outputs: dict | None) -> str:
     if widgets:
         rendered = "\n".join(_widget_line(w) for w in widgets[:16])
         parts.append(f"DASHBOARD WIDGETS IT BUILT:\n{rendered}")
+
     if out.get("tool_calls"):
         parts.append(f"TOOLS IT CALLED: {', '.join(str(c) for c in out['tool_calls'])}")
+
     return "\n\n".join(parts)
 
 
@@ -871,6 +890,7 @@ def demo_behavior(
             "score": 0,
             "comment": "run left waiting on a human-in-the-loop interrupt; no final answer",
         }
+
     if not answer:
         # No answer at all is a failure for either kind, and asking the judge about an
         # empty string just burns a call.
@@ -882,6 +902,7 @@ def demo_behavior(
         criterion = _GAP_CRITERION.format(topic=f' about "{topic}"' if topic else "")
     else:
         criterion = _GROUNDED_CRITERION
+
     verdict = judge(criterion, graded_content(outputs))
     return {"key": EVAL_FEEDBACK_KEY, "score": int(verdict.passed), "comment": verdict.reason}
 
@@ -910,12 +931,14 @@ def _message_text(content: Any) -> str:
     """
     if isinstance(content, str):
         return content.strip()
+
     if isinstance(content, list):
         parts = [
             b.get("text", "") if isinstance(b, dict) and b.get("type") == "text" else ""
             for b in content
         ]
         return "".join(parts).strip()
+
     return ""
 
 
@@ -930,9 +953,11 @@ def _final_answer(messages: list) -> str:
     for msg in reversed(messages):
         if getattr(msg, "type", None) != "ai" or getattr(msg, "tool_calls", None):
             continue
+
         text = _message_text(msg.content)
         if text:
             return text
+
     return ""
 
 
@@ -966,7 +991,9 @@ def _resume_value(pending: Any) -> Any:
         options = payload.get("options") if isinstance(payload, dict) else None
         if isinstance(options, list) and options:
             return {"answer": str(options[0])}
+
         return {"answer": "Use your best judgement and proceed with the data you have."}
+
     return {}
 
 
@@ -1011,11 +1038,14 @@ def _agent_target(context: dict | None):
                     if attempt < 3 and ("529" in str(exc) or "overload" in str(exc).lower()):
                         time.sleep(8)
                         continue
+
                     raise
+
             for _ in range(_MAX_RESUMES):
                 pending = result.get("__interrupt__")
                 if not pending:
                     break
+
                 result = agent.invoke(
                     Command(resume=_resume_value(pending)),
                     config={"configurable": {"thread_id": thread}},
@@ -1050,10 +1080,12 @@ def _tally(results: Any) -> tuple[int, int]:
             for res in (row.get("evaluation_results") or {}).get("results", []):
                 if res.key != EVAL_FEEDBACK_KEY:
                     continue
+
                 total += 1
                 passed += int(bool(res.score))
     except Exception:  # noqa: BLE001 - the score is a nicety; the experiment already ran
         pass
+
     return passed, total
 
 

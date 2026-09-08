@@ -59,6 +59,7 @@ def _run(state: SetupState) -> dict:
     payload = {k: state.get(k) for k in _INPUT_KEYS if state.get(k) is not None}
     if not payload.get("workspace") or not payload.get("customer"):
         return {"status": "error", "error": "workspace and customer are required"}
+
     try:
         return {"result": prepare_assistant(payload), "status": "ok"}
     except Exception as exc:  # noqa: BLE001 - surface to the SPA rather than 500

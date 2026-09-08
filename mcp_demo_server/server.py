@@ -198,6 +198,7 @@ def _public_base() -> str:
         request = get_http_request()
     except Exception:  # noqa: BLE001 - in-process transport has no HTTP request
         return f"http://{HOST_HINT}"
+
     headers = request.headers
     scheme = headers.get("x-forwarded-proto") or request.url.scheme
     host = headers.get("x-forwarded-host") or headers.get("host") or request.url.netloc
@@ -228,6 +229,7 @@ def list_accounts() -> dict[str, Any]:
                 "needs_rebalance": drift > 8.0,
             }
         )
+
     return {"count": len(rows), "accounts": rows}
 
 
@@ -239,6 +241,7 @@ def get_account(
     account = _account(account_id)
     if account is None:
         return _unknown(account_id)
+
     return {
         "account_id": account.id,
         "household": account.household,
@@ -321,6 +324,7 @@ def schedule_review(
 
     if answer.action == "decline":
         return {"status": "not_scheduled", "reason": "The user declined to pick a slot."}
+
     if answer.action == "cancel":
         return {"status": "cancelled", "reason": "The user cancelled the booking."}
 
@@ -448,9 +452,11 @@ def propose_rebalance(
         sleeve = by_key.get(key)
         if sleeve is None:
             continue
+
         delta = weight - sleeve.weight
         if abs(delta) < 0.05:
             continue
+
         amount = abs(delta) / 100 * account.value
         realized = amount * sleeve.unrealized_gain_pct if delta < 0 else 0.0
         tax += realized * account.tax_rate
@@ -569,10 +575,12 @@ def confirm_trade(
     account = _account(account_id)
     if account is None:
         return _unknown(account_id)
+
     holding = account.holdings.get(symbol.strip().upper())
     if holding is None:
         known = ", ".join(sorted(account.holdings))
         return {"error": f"{symbol!r} is not held in {account.id}. Held: {known}."}
+
     name, last, held_qty = holding
 
     answer = answer_for(ctx, "ticket")
@@ -722,6 +730,7 @@ def sign_document(
             f"Signature is {len(capture.signature) // 1024}KB, too large to inline; "
             "use signature_url."
         )
+
     if png is None:
         # A malformed data URI is the signer's UI misbehaving, not a failed
         # signing: keep the signed record, but do not promise an image.
@@ -739,6 +748,7 @@ def sign_document(
     content: list[Any] = [json.dumps(summary)]
     if renderable(png):
         content.append(Image(data=png, format="png").to_image_content())
+
     return ToolResult(content=content, structured_content=summary)
 
 
@@ -758,6 +768,7 @@ async def signature_png(request) -> Response:
     png = png_bytes((record or {}).get("signature", ""))
     if png is None:
         return JSONResponse({"error": f"No signature on file for {reference}."}, status_code=404)
+
     return Response(
         png,
         media_type="image/png",

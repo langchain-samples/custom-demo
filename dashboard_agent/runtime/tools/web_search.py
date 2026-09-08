@@ -45,6 +45,7 @@ def _client() -> Any:
             max_results=_MAX_RESULTS,
             api_wrapper=TavilySearchAPIWrapper(tavily_api_key=key),
         )
+
     return _CLIENT
 
 
@@ -54,6 +55,7 @@ def _shape(raw: dict) -> str:
     for hit in raw.get("results") or []:
         if not isinstance(hit, dict):
             continue
+
         results.append(
             {
                 "title": hit.get("title") or "",
@@ -64,6 +66,7 @@ def _shape(raw: dict) -> str:
                 "published": hit.get("published_date") or "",
             }
         )
+
     return json.dumps({"results": results}, ensure_ascii=False)
 
 
@@ -82,8 +85,10 @@ def web_search(query: str) -> str:
         # raising, so an error can arrive as a perfectly ordinary return value.
         if isinstance(raw, dict) and raw.get("error"):
             return json.dumps({"error": f"web search failed: {raw['error']}"})
+
         if not isinstance(raw, dict):
             return json.dumps({"error": "web search returned an unexpected response"})
+
         return _shape(raw)
     except Exception as exc:  # noqa: BLE001 - see below - a search outage degrades this one card, never the run
         # Never raise: a search outage should degrade this one card, not kill the

@@ -48,6 +48,7 @@ def test_an_existing_value_is_reused_rather_than_recreated():
 
     with _client(handler) as c:
         assert rt._value_id(c, "assistant-acme") == (VALUE_ID, "")
+
     # No POST: minting a value needs a permission we should not spend when one exists.
     assert calls == ["GET /api/v1/workspaces/current/tags"]
 
@@ -56,6 +57,7 @@ def test_a_missing_value_is_created():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "GET":
             return httpx.Response(200, json=_tags(["other"]))
+
         return httpx.Response(200, json={"id": "new-val"})
 
     with _client(handler) as c:
@@ -68,10 +70,12 @@ def test_a_403_on_create_is_reported_as_a_permission_problem():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "GET":
             return httpx.Response(200, json=_tags(["other"]))
+
         return httpx.Response(403, json={"detail": "Permission denied"})
 
     with _client(handler) as c:
         value_id, err = rt._value_id(c, "assistant-acme")
+
     assert value_id == ""
     assert "403" in err and "assistant-acme" in err
 
@@ -119,6 +123,7 @@ def test_a_repo_is_scoped_to_this_workspace_and_matched_exactly():
 
     with _client(handler) as c:
         assert rt._resolve(c, "agent", "acme-agents") == "right"
+
     assert seen["is_public"] == "false"
     assert seen["repo_type"] == "agent"
     assert seen["query"] == "acme-agents"
@@ -144,17 +149,22 @@ def test_everything_resolvable_is_tagged_and_the_rest_is_reported(monkeypatch):
         path = request.url.path
         if path.endswith("/tags"):
             return httpx.Response(200, json=_tags(["assistant-acme-co"]))
+
         if path.endswith("/taggings"):
             posted.append(json.loads(request.content))
             return httpx.Response(200, json={"id": "tagging"})
+
         if path == "/api/v1/sessions":
             return httpx.Response(200, json=[{"id": "proj-1"}])
+
         if path == "/api/v1/datasets":
             return httpx.Response(200, json=[])  # not created -> reported as missing
+
         if path == "/api/v1/repos":
             return httpx.Response(
                 200, json={"repos": [{"repo_handle": "acme-agent", "id": "ag-1"}]}
             )
+
         return httpx.Response(404)
 
     monkeypatch.setattr(rt, "_open", lambda *a, **k: _client(handler))
@@ -190,11 +200,14 @@ def test_a_project_that_does_not_exist_yet_is_created_pre_tagged(monkeypatch):
         path = request.url.path
         if path.endswith("/tags"):
             return httpx.Response(200, json=_tags(["assistant-acme-co"]))
+
         if path == "/api/v1/sessions" and request.method == "GET":
             return httpx.Response(200, json=[])  # no project yet
+
         if path == "/api/v1/sessions" and request.method == "POST":
             created.append(json.loads(request.content))
             return httpx.Response(200, json={"id": "proj-new"})
+
         return httpx.Response(404)
 
     monkeypatch.setattr(rt, "_open", lambda *a, **k: _client(handler))
@@ -217,6 +230,7 @@ def test_a_dataset_that_does_not_exist_is_reported_not_created(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/tags"):
             return httpx.Response(200, json=_tags(["assistant-acme-co"]))
+
         return httpx.Response(200, json=[])
 
     monkeypatch.setattr(rt, "_open", lambda *a, **k: _client(handler))
@@ -232,8 +246,10 @@ def test_an_already_tagged_resource_counts_as_tagged(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/tags"):
             return httpx.Response(200, json=_tags(["assistant-acme-co"]))
+
         if request.url.path.endswith("/taggings"):
             return httpx.Response(409, json={"detail": "exists"})
+
         return httpx.Response(200, json=[{"id": "proj-1"}])
 
     monkeypatch.setattr(rt, "_open", lambda *a, **k: _client(handler))

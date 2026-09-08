@@ -65,6 +65,7 @@ def _keys(relative: str) -> set[str]:
     match = re.search(opener, body, re.M)
     if match is None:
         pytest.skip(f"{relative}: map not found, shape changed")
+
     tail = body[match.end() :]
     return set(re.findall(key_pattern, tail[: tail.index("\n};")], re.M))
 

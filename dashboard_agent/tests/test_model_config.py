@@ -250,8 +250,10 @@ def test_agent_model_constant_honours_both_names(monkeypatch, env, expected):
     """
     for name in ("AGENT_MODEL", "DASHBOARD_MODEL"):
         monkeypatch.delenv(name, raising=False)
+
     for name, value in env.items():
         monkeypatch.setenv(name, value)
+
     try:
         importlib.reload(config)
         assert config.MODEL == expected

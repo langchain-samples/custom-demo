@@ -39,6 +39,7 @@ def _stub(monkeypatch, result):
         def invoke(self, _payload):
             if isinstance(result, Exception):
                 raise result
+
             return result
 
     monkeypatch.setattr(ws, "_client", lambda: _Fake())

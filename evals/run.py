@@ -99,7 +99,9 @@ def _agent_target_factory(repo: str):
                 if "529" in str(exc) or "overload" in str(exc).lower():
                     time.sleep(8)
                     continue
+
                 raise
+
         calls = [tc["name"] for m in res["messages"] for tc in (getattr(m, "tool_calls", []) or [])]
         ai = [
             m
@@ -151,9 +153,11 @@ def main() -> int:
 
     if "setup" in selected:
         _run_group(client, "setup", SETUP_EXAMPLES, _setup_target, [actions_relevant])
+
     if "agent" in selected:
         repo, _ = ensure_ctxhub_agent(eval_workspace())
         _run_group(client, "agent", AGENT_EXAMPLES, _agent_target_factory(repo), [agent_behavior])
+
     return 0
 
 

@@ -160,13 +160,17 @@ def parse_enabled(raw: Any) -> set[str] | None:
     """
     if raw is None:
         return None
+
     if isinstance(raw, str):
         stripped = raw.strip()
         if not stripped:
             return set()
+
         return {part.strip() for part in stripped.split(",") if part.strip()}
+
     if isinstance(raw, (list, tuple, set, frozenset)):
         return {str(x).strip() for x in raw if str(x).strip()}
+
     return None
 
 
@@ -180,6 +184,7 @@ def allowed_tool_names(raw: Any) -> set[str]:
     parsed = parse_enabled(raw)
     if parsed is None:
         return set(DEFAULT_ENABLED)
+
     return (parsed & CATALOGUE_IDS) | set(ALWAYS_ON)
 
 
@@ -191,6 +196,7 @@ def is_allowed(name: str | None, allowed: set[str]) -> bool:
     """
     if not name or name not in CATALOGUE_IDS:
         return True
+
     return name in allowed
 
 

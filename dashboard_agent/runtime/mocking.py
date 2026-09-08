@@ -103,6 +103,7 @@ def _render(value: Any) -> str:
     """Tool results reach the model as text; JSON-encode anything that isn't already."""
     if isinstance(value, str):
         return value
+
     return json.dumps(value, ensure_ascii=False)
 
 
@@ -115,10 +116,12 @@ def _resolve(name: str, spec: Any) -> str:
         if not spec:
             # An empty list is a legitimate empty result, not an exhausted sequence.
             return _render(spec)
+
         counts = _calls.get()
         if counts is None:
             counts = {}
             _calls.set(counts)
+
         i = counts.get(name, 0)
         counts[name] = i + 1
         # Past the end, keep returning the last entry rather than raising: an agent
@@ -154,18 +157,23 @@ def mock_tool(real: BaseTool) -> BaseTool:
         spec = _active.get()
         if spec is not None and real.name in spec:
             return _resolve(real.name, spec[real.name])
+
         if inner_func is None:
             raise TypeError(f"{real.name!r} has no sync implementation")
+
         return inner_func(*args, **kwargs)
 
     async def _mocked_async(*args: Any, **kwargs: Any) -> Any:
         spec = _active.get()
         if spec is not None and real.name in spec:
             return _resolve(real.name, spec[real.name])
+
         if inner_coro is not None:
             return await inner_coro(*args, **kwargs)
+
         if inner_func is None:
             raise TypeError(f"{real.name!r} has no implementation")
+
         return inner_func(*args, **kwargs)
 
     clone = real.model_copy()

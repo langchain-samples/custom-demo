@@ -92,6 +92,7 @@ def parse_servers(raw: Any) -> tuple[McpServer, ...]:
             raw = json.loads(raw)
         except ValueError:
             return ()
+
     if not isinstance(raw, (list, tuple)):
         return ()
 
@@ -100,14 +101,17 @@ def parse_servers(raw: Any) -> tuple[McpServer, ...]:
     for entry in raw:
         if not isinstance(entry, dict):
             continue
+
         url = str(entry.get("url") or "").strip()
         # Only http(s). A bare string target in FastMCP resolves as a filesystem
         # path before a URL, so a value from config could otherwise select a
         # subprocess; we never pass a bare string, but the check is the boundary.
         if not url.lower().startswith(("http://", "https://")):
             continue
+
         if entry.get("enabled") is False:
             continue
+
         label = str(entry.get("label") or entry.get("name") or "").strip()
         base = slugify(str(entry.get("id") or label or url))
         # Two servers sharing a slug would namespace their tools into each other.
@@ -116,6 +120,7 @@ def parse_servers(raw: Any) -> tuple[McpServer, ...]:
         while ident in seen:
             ident = f"{base}_{suffix}"
             suffix += 1
+
         seen.add(ident)
 
         headers = {
@@ -129,6 +134,7 @@ def parse_servers(raw: Any) -> tuple[McpServer, ...]:
             headers.setdefault("Authorization", f"Bearer {token}")
 
         servers.append(McpServer(id=ident, label=label or ident, url=url, headers=headers))
+
     return tuple(servers)
 
 
@@ -186,6 +192,7 @@ async def load_tools(servers: tuple[McpServer, ...], *, refresh: bool = False) -
     """
     if not servers:
         return []
+
     key = fingerprint(servers)
     now = time.monotonic()
     if not refresh:
@@ -200,6 +207,7 @@ async def load_tools(servers: tuple[McpServer, ...], *, refresh: bool = False) -
         hit = _TOOLS.get(key)
         if not refresh and hit and hit[0] > time.monotonic():
             return hit[1]
+
         try:
             tools = await asyncio.wait_for(
                 _discover(servers, refresh=refresh),
@@ -213,6 +221,7 @@ async def load_tools(servers: tuple[McpServer, ...], *, refresh: bool = False) -
             # retried (and re-timed-out) on every single model call in a turn.
             _TOOLS[key] = (time.monotonic() + min(TOOLS_TTL_SECONDS, 30.0), [])
             return []
+
         _TOOLS[key] = (time.monotonic() + TOOLS_TTL_SECONDS, tools)
         return tools
 
@@ -233,6 +242,7 @@ def invalidate(servers: tuple[McpServer, ...] | None = None) -> None:
     if servers is None:
         _TOOLS.clear()
         return
+
     _TOOLS.pop(fingerprint(servers), None)
 
 
@@ -264,7 +274,9 @@ async def probe(servers: tuple[McpServer, ...]) -> dict[str, Any]:
             entry["error"] = f"no response within {CONNECT_TIMEOUT_SECONDS:.0f}s"
         except Exception as exc:  # noqa: BLE001 - the message is the whole point of a probe
             entry["error"] = f"{type(exc).__name__}: {exc}"[:300]
+
         out.append(entry)
+
     return {"servers": out}
 
 
@@ -292,6 +304,7 @@ async def read_app(servers: tuple[McpServer, ...], tool_name: str) -> dict[str, 
     tool = next((t for t in tools if t.name == tool_name), None)
     if tool is None:
         return None
+
     uri = app_uri(tool)
     if uri is None:
         return None
@@ -310,6 +323,7 @@ async def read_app(servers: tuple[McpServer, ...], tool_name: str) -> dict[str, 
                 "mime_type": getattr(item, "mime_type", None) or "text/html",
                 "html": text,
             }
+
     # A `ui://` URI that resolves to nothing readable is a server bug, and the
     # caller renders the generic form. Say so rather than returning a blank page.
     _log(f"{tool_name} declares {uri} but the resource carried no text")

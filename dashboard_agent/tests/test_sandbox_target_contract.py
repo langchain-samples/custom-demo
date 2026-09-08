@@ -37,6 +37,7 @@ def _targets() -> list[tuple[Path, int, str]]:
         for i, line in enumerate(lines):
             if re.search(r"\bagent_repo\s*:", line):
                 found.append((path, i + 1, "\n".join(lines[max(0, i - WINDOW) : i + WINDOW])))
+
     return found
 
 

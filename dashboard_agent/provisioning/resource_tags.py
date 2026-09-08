@@ -51,6 +51,7 @@ def _headers(key: str, workspace: str | None) -> dict[str, str]:
     h = {"x-api-key": key, "Content-Type": "application/json"}
     if workspace:
         h["X-Tenant-Id"] = workspace
+
     return h
 
 
@@ -68,14 +69,17 @@ def _value_id(client: httpx.Client, application: str) -> tuple[str, str]:
     r = client.get(f"{API}/workspaces/current/tags")
     if r.status_code >= 300:
         return "", f"could not list tags ({r.status_code})"
+
     key_id = ""
     for tag in r.json() or []:
         if tag.get("key") != APPLICATION_KEY:
             continue
+
         key_id = tag.get("id") or ""
         for v in tag.get("values") or []:
             if v.get("value") == application:
                 return v.get("id") or "", ""
+
     if not key_id:
         return "", f"the workspace has no {APPLICATION_KEY!r} tag key"
 
@@ -87,6 +91,7 @@ def _value_id(client: httpx.Client, application: str) -> tuple[str, str]:
         # needs update access on the resource, but minting a new value needs
         # `workspaces:manage`. Reported so the caller can say so rather than shrug.
         return "", f"could not create the value {application!r} ({made.status_code})"
+
     return made.json().get("id") or "", ""
 
 
@@ -96,10 +101,12 @@ def _resolve(client: httpx.Client, kind: str, name: str) -> str:
         r = client.get(f"{API}/sessions", params={"name": name, "limit": 1})
         rows = r.json() if r.status_code < 300 else []
         return (rows[0].get("id") or "") if isinstance(rows, list) and rows else ""
+
     if kind == "dataset":
         r = client.get(f"{API}/datasets", params={"name": name, "limit": 1})
         rows = r.json() if r.status_code < 300 else []
         return (rows[0].get("id") or "") if isinstance(rows, list) and rows else ""
+
     if kind in ("prompt", "agent"):
         # Both live in the hub `/repos` collection; `repo_type` separates a registry
         # prompt (the eval judge) from a Context Hub agent repo. `query` narrows
@@ -120,9 +127,11 @@ def _resolve(client: httpx.Client, kind: str, name: str) -> str:
         )
         if r.status_code >= 300:
             return ""
+
         for repo in r.json().get("repos") or []:
             if repo.get("repo_handle") == name:
                 return repo.get("id") or ""
+
     return ""
 
 
@@ -140,6 +149,7 @@ def _apply(
         if rid:
             targets.append((kind, name, rid))
             continue
+
         if kind == "project":
             # A tracing project does not exist until something traces INTO it, and setup
             # runs before the assistant's first turn - so on a fresh assistant this is the
@@ -153,9 +163,12 @@ def _apply(
                 receipt["tagged"].append(f"{kind}:{name} (created)")
             else:
                 receipt["missing"].append(f"{kind}:{name} ({made.status_code})")
+
             continue
+
         # Not an error: a dataset a failure mode never planted does not exist to tag.
         receipt["missing"].append(f"{kind}:{name}")
+
     if evaluator_id:
         targets.append(("evaluator", evaluator_id, evaluator_id))
 
@@ -169,6 +182,7 @@ def _apply(
             receipt["tagged"].append(f"{kind}:{name}")
         else:
             receipt["missing"].append(f"{kind}:{name} ({r.status_code})")
+
     return receipt
 
 
@@ -204,8 +218,10 @@ def tag_assistant_resources(
     wanted: list[tuple[str, str]] = []
     if project:
         wanted.append(("project", project))
+
     if dataset:
         wanted.append(("dataset", dataset))
+
     wanted += [("prompt", p) for p in prompts if p]
     wanted += [("agent", a) for a in agents if a]
     if not wanted and not evaluator_id:
@@ -226,6 +242,7 @@ def tag_assistant_resources(
                     value_id, err = _value_id(bare, app)
                     if not err and value_id:
                         return _apply(bare, receipt, value_id, wanted, evaluator_id)
+
             if err or not value_id:
                 receipt["error"] = err or "no tag value"
                 return receipt
@@ -233,4 +250,5 @@ def tag_assistant_resources(
             return _apply(client, receipt, value_id, wanted, evaluator_id)
     except Exception as e:  # noqa: BLE001 - provisioning must never fail on a tag
         receipt["error"] = str(e)[:200]
+
     return receipt

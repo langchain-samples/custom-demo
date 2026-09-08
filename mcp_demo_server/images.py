@@ -42,6 +42,7 @@ def png_bytes(data_uri: str) -> bytes | None:
     _, _, payload = (data_uri or "").partition("base64,")
     if not payload:
         return None
+
     try:
         return base64.b64decode(payload, validate=True)
     except (binascii.Error, ValueError):
@@ -57,6 +58,7 @@ def renderable(png: bytes) -> bool:
     """
     if len(png) < 24 or png[12:16] != b"IHDR":
         return False
+
     width = int.from_bytes(png[16:20], "big")
     height = int.from_bytes(png[20:24], "big")
     return width >= MIN_IMAGE_EDGE and height >= MIN_IMAGE_EDGE

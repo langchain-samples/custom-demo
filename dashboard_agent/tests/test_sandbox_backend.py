@@ -83,12 +83,14 @@ class _FakeClient:
         sb = next((s for s in self.existing if s.name == name), None)
         if sb is None:
             raise RuntimeError(f"404 sandbox {name} not found")  # a deleted VM
+
         return SimpleNamespace(status=sb.status)
 
     def start_sandbox(self, name: str, **_):
         sb = next((s for s in self.existing if s.name == name), None)
         if sb is None:
             raise RuntimeError(f"404 sandbox {name} not found")
+
         self.started.append(name)
         sb.status = "ready"
         return sb
@@ -321,6 +323,7 @@ class _RootSkills:
         for k in self.files:
             if pre and not k.startswith(pre + "/"):
                 continue
+
             rel = k[len(pre) + 1 :] if pre else k
             top = rel.split("/", 1)[0]
             if "/" in rel:
@@ -329,6 +332,7 @@ class _RootSkills:
                     ents.append(FileInfo(path=f"/{pre + '/' if pre else ''}{top}", is_dir=True))
             else:
                 ents.append(FileInfo(path=f"/{k}", is_dir=False))
+
         return LsResult(entries=ents)
 
     def download_files(self, paths):
@@ -340,6 +344,7 @@ class _RootSkills:
                     path=p, content=c.encode() if c else None, error=None if c else "not found"
                 )
             )
+
         return out
 
 
@@ -597,6 +602,7 @@ def test_an_assistant_with_no_spec_fails_instead_of_borrowing_a_dataset():
     backend = SimpleNamespace(execute=lambda script: ran.append(script))
     with pytest.raises(A.SeedSpecError, match="no `sandbox_seed` spec"):
         A._seed_data(cast("Any", backend), None)
+
     assert ran == []  # and nothing was written to the VM
 
 

@@ -76,6 +76,7 @@ def check_python() -> None:
             "  uv sync --group dev && uv run python scripts/preflight.py",
         )
         return
+
     ok(f"Python {major}.{minor}")
 
 
@@ -94,6 +95,7 @@ def check_toolchain() -> None:
             "curl -LsSf https://astral.sh/uv/install.sh | sh\n"
             "(or: brew install uv / pipx install uv)",
         )
+
     # The SPA is a Vite app; run.sh will npm-install it on first start.
     for tool in ("node", "npm"):
         if shutil.which(tool):
@@ -120,6 +122,7 @@ def check_imports() -> None:
             importlib.import_module(mod)
         except ImportError:
             missing.append(mod)
+
     if missing:
         fail(
             "imports",
@@ -127,6 +130,7 @@ def check_imports() -> None:
             "uv sync --group dev",
         )
         return
+
     ok(f"{len(required)} core packages")
 
 
@@ -161,6 +165,7 @@ def check_env() -> str:
 
     if not (ROOT / ".env").exists():
         warn("env", "No .env file. Relying on variables already in your shell.")
+
     load_env()
 
     model_id = _model_id()
@@ -176,6 +181,7 @@ def check_env() -> str:
             f"ANTHROPIC_BASE_URL is set ({os.environ['ANTHROPIC_BASE_URL']}). "
             "Model calls are going through that proxy, not to Anthropic directly.",
         )
+
     return provider
 
 
@@ -201,6 +207,7 @@ def check_model(provider: str) -> None:
                 "  AZURE_OPENAI_API_KEY=...\n"
                 "  OPENAI_API_VERSION=2024-12-01-preview"
             )
+
         fail("model-key", str(exc), fix)
         return
 
@@ -230,6 +237,7 @@ def check_model(provider: str) -> None:
                 "This model rejects the temperature we send. Set MODEL_TEMPERATURE=\n"
                 "(empty) in .env to omit the parameter entirely."
             )
+
         fail("model", f"Call failed. {detail[:220]}", hint)
 
 
@@ -247,6 +255,7 @@ def check_langsmith() -> None:
             "Tracing, Context Hub and the demo evals all need it.",
         )
         return
+
     try:
         # Local: deferred past check_imports, so a missing dep prints a fix, not a traceback.
         from dashboard_agent.config import make_client, workspace_id  # noqa: PLC0415
@@ -271,6 +280,7 @@ def check_context_hub() -> None:
     if not os.getenv("LANGSMITH_API_KEY"):
         warn("hub", "Skipped: no LangSmith key.")
         return
+
     try:
         # Local: deferred past check_imports, so a missing dep prints a fix, not a traceback.
         from dashboard_agent.config import make_client  # noqa: PLC0415
@@ -278,6 +288,7 @@ def check_context_hub() -> None:
         client = make_client()
         if not hasattr(client, "pull_agent"):
             raise RuntimeError("this langsmith SDK has no Context Hub support")
+
         ok("Context Hub available (agent repos readable)")
     except Exception as exc:  # noqa: BLE001
         # Not fatal: an assistant falls back to the bundled prompt. What stops
@@ -303,6 +314,7 @@ def check_agent_server() -> None:
     except Exception as exc:  # noqa: BLE001
         fail("langgraph", f"Could not run the langgraph CLI ({exc}).", "uv sync --group dev")
         return
+
     if proc.returncode != 0:
         fail(
             "langgraph",
@@ -310,6 +322,7 @@ def check_agent_server() -> None:
             "uv sync --group dev    # the dev group provides langgraph-cli[inmem]",
         )
         return
+
     ok((proc.stdout or proc.stderr).strip().splitlines()[0][:60])
 
 
@@ -323,6 +336,7 @@ def main() -> int:
         # Everything below imports the package, which cannot work yet.
         print("\nFix the above first, then re-run: the later checks import this project.")
         return 1
+
     provider = check_env()
     check_model(provider)
     check_langsmith()
@@ -333,9 +347,11 @@ def main() -> int:
     if _FAILED:
         print(f"\033[31m{len(_FAILED)} check(s) failed:\033[0m {', '.join(_FAILED)}")
         return 1
+
     if _WARNED:
         print(f"\033[33mALL CHECKS PASSED\033[0m, with warnings: {', '.join(_WARNED)}")
         return 0
+
     print("\033[32mALL CHECKS PASSED\033[0m — you are ready.")
     return 0
 

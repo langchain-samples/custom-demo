@@ -64,12 +64,14 @@ def find_langsmith_preview(branch: str, key: str, tenant: str) -> str:
             if ref == branch and d.get("url"):
                 print(f"found LangSmith preview for {branch}: {d['url']} ({d.get('status')})")
                 return str(d["url"])
+
         if time.time() > deadline:
             _die(
                 f"no LangSmith deployment for branch {branch!r} after "
                 f"{WAIT_SECONDS // 60} minutes. Are preview builds enabled on the parent "
                 "deployment, and does its trigger mode cover this PR?"
             )
+
         print(f"waiting for the LangSmith preview of {branch}…")
         time.sleep(POLL_SECONDS)
 
@@ -78,6 +80,7 @@ def _vercel(method: str, path: str, token: str, team: str, **kw) -> httpx.Respon
     params = dict(kw.pop("params", {}))
     if team:
         params["teamId"] = team
+
     return httpx.request(
         method,
         f"{VERCEL}{path}",
@@ -118,6 +121,7 @@ def set_branch_env(url: str, branch: str, token: str, project: str, team: str) -
     )
     if created.status_code >= 400:
         _die(f"could not set {ENV_KEY} for {branch}: {created.status_code} {created.text[:300]}")
+
     print(f"set {ENV_KEY} for branch {branch}")
 
 
@@ -137,6 +141,7 @@ def redeploy(branch: str, token: str, project: str, team: str) -> None:
     if listing.status_code >= 400:
         print(f"warning: could not list deployments ({listing.status_code}); skipping redeploy")
         return
+
     for d in listing.json().get("deployments") or []:
         if (d.get("meta") or {}).get("githubCommitRef") == branch:
             again = _vercel(
@@ -154,6 +159,7 @@ def redeploy(branch: str, token: str, project: str, team: str) -> None:
                 + ("" if again.status_code < 400 else f" {again.text[:200]}")
             )
             return
+
     print(f"warning: no existing preview deployment for {branch}; the next push will pick it up")
 
 

@@ -40,6 +40,7 @@ def _docstring_ids(tree: ast.AST) -> set[int]:
                 value = node.body[0].value
                 if isinstance(value, ast.Constant) and isinstance(value.value, str):
                     out.add(id(value))
+
     return out
 
 

@@ -47,6 +47,7 @@ def _capture(monkeypatch, context, *, mock_ctxhub=False):
         # Avoid the real Context Hub network: an in-state backend + a canned AGENTS.md.
         monkeypatch.setattr(A, "_resolve_backends", lambda runtime: (StateBackend(), {}))
         monkeypatch.setattr(A, "pull_agent_prompt", lambda repo, workspace=None: _AGENTS_MD)
+
     agent = A.build_agent()
     try:
         agent.invoke(
@@ -56,6 +57,7 @@ def _capture(monkeypatch, context, *, mock_ctxhub=False):
         )
     except Exception:  # noqa: BLE001 - capture happens before any loop error
         pass
+
     return _CAPTURED.get("system", "")
 
 

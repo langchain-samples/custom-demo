@@ -69,6 +69,7 @@ def _cleanup_fixture_repos():
             client.delete_agent(repo)
         except Exception:  # noqa: BLE001 - best-effort cleanup; an older key may lack delete permission
             pass
+
     try:
         client.delete_skill(f"{_SLUG}-returns-eligibility-skill")
     except Exception:  # noqa: BLE001 - best-effort cleanup; an older key may lack delete permission
@@ -95,7 +96,9 @@ def _invoke(agent, question: str, *, repo: str, thread_id: str):
             if "529" in str(exc) or "overload" in str(exc).lower():
                 time.sleep(8)
                 continue
+
             raise
+
     pytest.skip("Anthropic API overloaded; skipping live check")
 
 

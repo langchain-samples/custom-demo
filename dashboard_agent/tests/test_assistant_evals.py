@@ -95,6 +95,7 @@ def _walk(example: dict) -> dict:
         section = example.get(slot)
         if isinstance(section, dict):
             flat.update(section)
+
     return flat
 
 
@@ -103,6 +104,7 @@ def _question(example: dict) -> str:
     for key in ("question", "input", "query", "prompt"):
         if isinstance(flat.get(key), str):
             return flat[key]
+
     pytest.fail(f"no question on example: {example!r}")
 
 
@@ -258,8 +260,10 @@ def _criterion_asks_for_correct_behavior(criterion: str) -> bool:
     fabrication = sum(any(w in c for w in _FABRICATION) for c in kept)
     if admission and not fabrication:
         return True
+
     if fabrication and not admission:
         return False
+
     pytest.fail(
         "the judge stub cannot tell which behaviour this criterion treats as a pass; "
         f"teach it the new wording rather than loosening the test:\n{criterion}"
@@ -293,6 +297,7 @@ class _StubJudge:
         else:
             wants_correct = _criterion_asks_for_correct_behavior(criterion)
             passed = (not self._fabricates) if wants_correct else bool(self._fabricates)
+
         return SimpleNamespace(passed=passed, reason="stub judge")
 
 
@@ -353,6 +358,7 @@ def test_gap_polarity_is_not_a_coin_flip(monkeypatch):
                 reference_outputs=example.get("outputs") or {},
             )["score"]
         )
+
     assert scores == [0, 1]
 
 
@@ -666,6 +672,7 @@ class _FakeClient:
     def read_dataset(self, *, dataset_name: str) -> _FakeDataset:
         if dataset_name not in self.datasets:
             raise KeyError(dataset_name)
+
         return _FakeDataset(dataset_name)
 
     def create_dataset(self, dataset_name: str, **_) -> _FakeDataset:
@@ -793,6 +800,7 @@ class _FakeRulesClient(_FakeClient):
     def pull_prompt_commit(self, name: str, include_model: bool = False, **_):
         if name not in self.commits:
             raise KeyError(name)
+
         return SimpleNamespace(manifest=self.commits[name])
 
     def request_with_retries(self, _method: str, path: str, **_):
@@ -860,6 +868,7 @@ def test_judge_prompt_carries_both_criteria_and_every_mapped_variable():
     assert 'about "{{topic}}"' in text
     for var in AE._JUDGE_VARIABLE_MAPPING:
         assert "{{" + var + "}}" in text, f"{var} is mapped but never used in the prompt"
+
     # Mustache, not str.format: a leftover single-brace slot renders literally.
     assert "{customer}" not in text.replace("{{", "").replace("}}", "")
 

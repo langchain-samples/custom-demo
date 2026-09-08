@@ -36,6 +36,7 @@ def _run(name, run_type, start, dur_s, parent=None, order=None, usage=None, meta
     extra = {"metadata": dict(meta or {})}
     if usage:
         extra["metadata"]["usage_metadata"] = usage
+
     return types.SimpleNamespace(
         id=rid,
         parent_run_id=parent,
@@ -283,6 +284,7 @@ class _FakeClient:
         self.reads += 1
         if not self._traces:
             return []
+
         return self._traces.pop(0) if len(self._traces) > 1 else list(self._traces[0])
 
 
@@ -360,6 +362,7 @@ def test_run_seeds_keeps_going_when_one_question_raises(monkeypatch):
             self.calls += 1
             if self.calls == 1:
                 raise RuntimeError("model is down")
+
             return {}
 
     agent = _Agent()
@@ -433,6 +436,7 @@ def test_backfill_gap_share_is_respected_on_average():
             rng=random.Random(s),
         )
         shares.append(summary["gap_traces"] / summary["traces"])
+
     assert DT.GAP_SHARE - 0.05 < sum(shares) / len(shares) < DT.GAP_SHARE + 0.05
 
 
@@ -496,6 +500,7 @@ class _QueueClient:
         if self.add_fails:
             self.add_fails -= 1
             raise RuntimeError("404 run not found yet")
+
         self.added.append((queue_id, list(run_ids or [])))
 
 
@@ -628,12 +633,15 @@ class _InsightsClient:
     def request_with_retries(self, method: str, path: str, json: dict | None = None):
         if path == "/playground-settings":
             return types.SimpleNamespace(json=lambda: self.models)
+
         if path.endswith("/insights/configs"):
             self.posted["config"] = json
             return types.SimpleNamespace(json=lambda: {"id": "cfg-1"})
+
         self.posted["job"] = json
         if self.job_error is not None:
             raise self.job_error
+
         return types.SimpleNamespace(json=lambda: {"id": "job-1", "status": "queued"})
 
 
@@ -694,6 +702,7 @@ def test_insights_survives_an_unreadable_model_list():
         def request_with_retries(self, method, path, json=None):
             if path == "/playground-settings":
                 raise RuntimeError("403 forbidden")
+
             return super().request_with_retries(method, path, json)
 
     out = DT.ensure_insights_job(_NoModels(), "P")
@@ -723,6 +732,7 @@ class _EngineClient:
         self.calls.append((method, path, json or {}))
         if self.fail is not None:
             raise self.fail
+
         # The server jitters the minute to spread load, so what comes back is never
         # the string we sent.
         return types.SimpleNamespace(
@@ -849,7 +859,9 @@ def _await_idle(project, timeout=5.0):
     while time.time() < deadline:
         if project not in DT._INFLIGHT:
             return True
+
         time.sleep(0.01)
+
     return False
 
 
@@ -886,6 +898,7 @@ def test_start_demo_traffic_refuses_a_second_run_for_the_same_project(registry, 
         assert other["running"] is True
     finally:
         release.set()
+
     assert _await_idle("P") and _await_idle("Q")
     # Two threads ran, not three: the refused call never reached generate_demo_traffic.
     assert sorted(calls) == ["P", "Q"]

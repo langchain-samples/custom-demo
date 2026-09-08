@@ -183,10 +183,12 @@ def _bound_tool_names(compiled) -> set[str]:
         by_name = getattr(bound, "tools_by_name", None)
         if isinstance(by_name, dict):
             names.update(by_name.keys())
+
         for t in getattr(bound, "tools", None) or []:
             n = getattr(t, "name", None)
             if n:
                 names.add(n)
+
     return names
 
 
@@ -308,6 +310,7 @@ def test_mcp_note_names_the_server_behind_each_tool(monkeypatch):
         note = A._mcp_note(SimpleNamespace(context={"mcp_servers": _SERVER}))
     finally:
         A._mcp_tools.reset(token)
+
     assert "Fieldlink" in note
     assert "`fieldlink_get_shipment` (Fieldlink): Look one consignment up." in note
 

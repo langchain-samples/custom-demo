@@ -112,6 +112,7 @@ def _hub_system_prompt(request: ModelRequest) -> str:
         base = pull_agent_prompt(agent_repo, workspace=_ctx(request.runtime, "ls_workspace"))
     else:
         base = FALLBACK_PROMPT
+
     ours = (
         base
         + _capability_note(request.runtime)
@@ -130,6 +131,7 @@ def _hub_system_prompt(request: ModelRequest) -> str:
         framework = request.system_prompt or ""
         if framework:
             return f"{framework}\n\n{ours}"
+
     return ours
 
 
@@ -151,6 +153,7 @@ def _sandbox_note(runtime) -> str:
             "cannot look anything up. Answer from the conversation only, and say plainly "
             "that you have no data source rather than estimating a figure."
         )
+
     # What setup planted, named for the model. Generic guidance sent it to `ls` and hope;
     # naming the files means the first turn can open the right one. Still told to look,
     # because the VM may have been rebuilt or the user may have uploaded since.
@@ -164,6 +167,7 @@ def _sandbox_note(runtime) -> str:
         ]
         if lines:
             listing = "It should contain:\n" + "\n".join(lines) + "\n"
+
     return (
         "\n\nCODE EXECUTION: You have an isolated Linux VM with an `execute` tool. Files live in "
         "/workspace/data/, ALWAYS run `ls /workspace/data` and look at what is actually there "
@@ -201,6 +205,7 @@ def _subagents_note() -> str:
     """
     if not _dynamic_subagents_enabled():
         return ""
+
     return (
         "\n\nSUBAGENTS & WORKFLOWS: For a large task with independent parts, orchestrate the "
         "specialist subagents (`researcher`, `analyst`), write a short JavaScript workflow script "
@@ -228,10 +233,12 @@ def _capability_note(runtime) -> str:
     raw = _ctx(runtime, "enabled_tools")
     if raw is None:
         return ""
+
     allowed = allowed_tool_names(raw)
     lines = guidance_for(allowed)
     if not lines:
         return ""
+
     # A directive ("use these"), not a factual claim ("these are the only tools
     # that exist"): the runtime also binds deepagents' scratch-file tools, which
     # an assistant with no Context Hub repo is kept scoped away from (its prompt
@@ -249,6 +256,7 @@ def _capability_note(runtime) -> str:
             "in real figures, but reply with a concise written response (a short list where "
             "helpful), not widgets."
         )
+
     # Stored prompts describe one rigid workflow (read the files -> push_widget ->
     # answer). With extra capabilities enabled the model otherwise treats a
     # "draft an email" request as off-script (refusing, apologising for going
@@ -261,6 +269,7 @@ def _capability_note(runtime) -> str:
             "answer briefly, do not read the data files or build widgets first, and never say "
             "the request is off-topic."
         )
+
     return note
 
 
@@ -318,6 +327,7 @@ def _mcp_note(runtime) -> str:
         )
         summary = (tool.description or "").strip().split("\n")[0][:160]
         lines.append(f"- `{tool.name}`{f' ({owner})' if owner else ''}: {summary}")
+
     names = ", ".join(sorted(servers.values())) or "a connected MCP server"
     return (
         f"\n\nCONNECTED SYSTEMS ({names}). These tools reach the customer's own live systems "
@@ -375,6 +385,7 @@ class McpTools(AgentMiddleware):
         try:
             if tools:
                 request = request.override(tools=[*request.tools, *tools])
+
             return await handler(request)
         finally:
             _mcp_tools.reset(token)
@@ -396,6 +407,7 @@ class McpTools(AgentMiddleware):
             if tool is not None:
                 # `override()` does not accept `tool`, so rebuild the record.
                 request = dataclasses.replace(request, tool=tool)
+
         return await handler(request)
 
 
@@ -421,6 +433,7 @@ def build_chat_model(model_id: str):
         # blocks break the deep-agent tool loop on follow-up turns (Anthropic 400).
         kwargs["max_tokens"] = 8000
         kwargs["thinking"] = {"type": "disabled"}
+
     return init_chat_model(qualified, **kwargs)
 
 
@@ -437,6 +450,7 @@ def _model_for(model_id: str):
         # retry/timeout hardening instead of getting a bare client.
         llm = build_chat_model(model_id)
         _model_cache[model_id] = llm
+
     return llm
 
 
@@ -477,8 +491,10 @@ class ToolSelection(AgentMiddleware):
         """Best-effort tool name from either a tool object or a dict spec."""
         if hasattr(tool, "name"):
             return tool.name
+
         if isinstance(tool, dict):
             return tool.get("name")
+
         return None
 
     def _apply(self, request: ModelRequest) -> ModelRequest:
@@ -571,6 +587,7 @@ def _seed_file_name(raw: str) -> str:
     name = os.path.basename((raw or "").strip().replace("\\", "/"))
     if not name or name in {".", ".."} or name.lower().startswith(".env"):
         return ""
+
     return "".join(c for c in name if c.isalnum() or c in "._- ").strip() or ""
 
 
@@ -589,10 +606,12 @@ def render_seed_script(files: list[dict]) -> str:
     for spec in files[:_SEED_MAX_FILES]:
         if not isinstance(spec, dict):
             continue
+
         name = _seed_file_name(str(spec.get("name") or ""))
         kind = str(spec.get("kind") or "").lower().lstrip(".")
         if not name or kind not in _SEED_KINDS:
             continue
+
         rows = [
             [str(cell) for cell in row]
             for row in (spec.get("rows") or [])[:_SEED_MAX_ROWS]
@@ -607,8 +626,10 @@ def render_seed_script(files: list[dict]) -> str:
                 "text": str(spec.get("text") or "")[:_SEED_MAX_TEXT],
             }
         )
+
     if not clean:
         return ""
+
     payload = json.dumps({"files": clean}, ensure_ascii=True)
     wants_pdf = any(f["kind"] == "pdf" for f in clean)
     install = (
@@ -763,6 +784,7 @@ def _sandbox_enabled() -> bool:
     """Whether a sandbox can be built at all (extra present, flag on, creds set)."""
     if SandboxClient is None or not sandbox_enabled():
         return False
+
     return bool(_sandbox_key_credentials()[0])
 
 
@@ -853,6 +875,7 @@ def _status_or_none(client: Any, name: str) -> str | None:
         status = client.get_sandbox_status(name)
     except Exception:  # noqa: BLE001 - gone, unreachable, or an SDK without the call
         return None
+
     value = str(getattr(status, "status", "") or "").lower()
     return value or None
 
@@ -873,8 +896,10 @@ def _wait_ready(client: Any, name: str, seconds: float = _SANDBOX_WAIT_SECONDS) 
         status = _status_or_none(client, name)
         if status is None or status == "ready":
             return True
+
         if time.monotonic() >= deadline:
             return False
+
         time.sleep(_SANDBOX_POLL_SECONDS)
 
 
@@ -889,6 +914,7 @@ def _acquire_raw(client: Any, name: str, *, create: bool) -> tuple[Any, bool] | 
     if raw is not None:
         if str(getattr(raw, "status", "") or "").lower() != "stopped":
             return raw, False
+
         # Nothing auto-starts a stopped VM. Skipping this is what made the 1-2h
         # stopped window look identical to a healthy VM right up until the first
         # command failed to connect.
@@ -896,8 +922,10 @@ def _acquire_raw(client: Any, name: str, *, create: bool) -> tuple[Any, bool] | 
             return client.start_sandbox(name) or raw, False
         except Exception:  # noqa: BLE001 - unstartable is as good as absent
             pass
+
     if not create:
         return None
+
     return (
         client.create_sandbox(
             name=name,
@@ -934,6 +962,7 @@ def _ensure_sandbox(key: str, *, create: bool = True, seed: list[dict] | None = 
     now = time.monotonic()
     if cached is not None and now - _SANDBOX_SEEN.get(key, 0.0) < _SANDBOX_REVALIDATE_AFTER:
         return cached
+
     try:
         return _revalidate_or_acquire(key, cached, now, create=create, seed=seed)
     except SeedSpecError:
@@ -960,6 +989,7 @@ def _revalidate_or_acquire(
     if cached is not None and _status_or_none(client, name) == "ready":
         _SANDBOX_SEEN[key] = now
         return cached
+
     # Past here the cached handle (if any) is dead: drop it rather than hand it
     # back, so a caller that cannot get a VM degrades to StateBackend instead of
     # calling a VM that no longer exists.
@@ -968,12 +998,14 @@ def _revalidate_or_acquire(
     got = _acquire_raw(client, name, create=create)
     if got is None:
         return None
+
     raw, created = got
     # Wait for it to actually be up. Before seeding, not after: `_seed_data` swallows
     # its own failures, so seeding a VM that has not finished booting produced an
     # empty /workspace/data and no error anywhere.
     if not _wait_ready(client, name):
         return None
+
     backend = LangSmithSandbox(raw)
     # ONLY on create. Seeding an attached VM to repair one built for a different
     # assistant was tried and reverted: the seed script opens with a pip install
@@ -983,6 +1015,7 @@ def _revalidate_or_acquire(
     # `sandbox_key` and holds another assistant's files has to be recreated.
     if created:
         _seed_data(backend, seed)
+
     _SANDBOX_CACHE[key] = backend
     _SANDBOX_SEEN[key] = now
     return backend
@@ -996,6 +1029,7 @@ def _get_or_create_sandbox(runtime) -> Any | None:
     """
     if not _sandbox_enabled():
         return None
+
     seed = _ctx(runtime, "sandbox_seed")
     spec = seed if isinstance(seed, list) else None
     # Before the VM, not after it. See `seed_script_or_raise`: an assistant with no
@@ -1029,6 +1063,7 @@ def prewarm_sandbox(
     """
     if not _sandbox_enabled():
         return
+
     try:
         _ensure_sandbox(_sandbox_key_from(sandbox_key, agent_repo, customer), seed=seed)
     except Exception as exc:  # noqa: BLE001 - provisioning must never fail on a warm-up
@@ -1048,6 +1083,7 @@ def _ctxhub_backend(repo: str, ws: str | None) -> Any:
     if backend is None:
         backend = ContextHubBackend(repo, client=_ctxhub_client(ws))
         _CTXHUB_CACHE[key] = backend
+
     return backend
 
 
@@ -1147,6 +1183,7 @@ class DynamicBackend(CompositeBackend):
             runtime = get_runtime()
         except Exception:  # noqa: BLE001 - off a run (build/tests): safe default
             return StateBackend(), {}
+
         return _resolve_backends(runtime)
 
     @property
@@ -1328,4 +1365,5 @@ def get_agent():
     global _AGENT
     if _AGENT is None:
         _AGENT = build_agent()
+
     return _AGENT

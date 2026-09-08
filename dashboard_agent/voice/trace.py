@@ -54,6 +54,7 @@ def _client(workspace: str = "") -> Client | None:
     """
     if not routing_key():
         return None
+
     return scoped_client(workspace)
 
 
@@ -74,6 +75,7 @@ def start_session(workspace: str = "", project: str = "", metadata: dict | None 
     client = _client(workspace)
     if client is None:
         return ""
+
     # `ls_client`, not `client`: the latter is not a field on the model, so Pydantic
     # silently drops it and the run posts with the default (wrong-workspace) client.
     # `project_name` is typed as a plain str, so an unset project omits the kwarg
@@ -94,6 +96,7 @@ def start_session(workspace: str = "", project: str = "", metadata: dict | None 
         _SESSIONS[session_id] = {"run": run, "tools": {}}
         while len(_SESSIONS) > _MAX_SESSIONS:
             _SESSIONS.pop(next(iter(_SESSIONS)))
+
     return session_id
 
 
@@ -112,6 +115,7 @@ def utterance(session_id: str, role: str, text: str) -> bool:
     session = _session(session_id)
     if session is None or not text.strip():
         return False
+
     name = "user_speech" if role == "user" else "agent_speech"
     child = session["run"].create_child(name=name, run_type="chain", inputs={"text": text})
     child.post()
@@ -131,6 +135,7 @@ def open_tool(session_id: str, name: str, inputs: dict) -> dict:
     session = _session(session_id)
     if session is None:
         return {}
+
     child = session["run"].create_child(name=name, run_type="tool", inputs=inputs)
     child.post()
     tool_id = str(uuid.uuid4())
@@ -149,9 +154,11 @@ def close_tool(session_id: str, tool_id: str, outputs: dict) -> bool:
     session = _session(session_id)
     if session is None:
         return False
+
     child = session["tools"].pop(tool_id, None)
     if child is None:
         return False
+
     run_id = str(outputs.get("run_id") or "")
     if run_id:
         try:
@@ -160,6 +167,7 @@ def close_tool(session_id: str, tool_id: str, outputs: dict) -> bool:
                 outputs = {**outputs, "agent_trace": url}
         except Exception:  # noqa: BLE001 - the id on its own is enough to find the run
             pass
+
     child.end(outputs=outputs)
     child.patch()
     return True
@@ -178,11 +186,14 @@ def end_session(session_id: str, outputs: dict | None = None, audio_wav: bytes =
     """
     with _LOCK:
         session = _SESSIONS.pop(session_id, None)
+
     if session is None:
         return False
+
     for child in session["tools"].values():
         child.end(outputs={"status": "abandoned"})
         child.patch()
+
     run = session["run"]
     if audio_wav:
         # Best-effort: a conversation that happened is worth recording even if its audio
@@ -191,6 +202,7 @@ def end_session(session_id: str, outputs: dict | None = None, audio_wav: bytes =
             run.attachments = {"conversation": ("audio/wav", audio_wav)}
         except Exception:  # noqa: BLE001
             traceback.print_exc()
+
     run.end(outputs=outputs or {})
     run.patch()
     return True

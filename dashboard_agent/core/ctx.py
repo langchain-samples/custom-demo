@@ -17,6 +17,8 @@ def ctx_get(runtime: Any, field: str) -> Any:
     context = getattr(runtime, "context", None)
     if context is None:
         return None
+
     if isinstance(context, dict):
         return context.get(field)
+
     return getattr(context, field, None)

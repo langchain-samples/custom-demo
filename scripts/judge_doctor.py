@@ -53,6 +53,7 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001 - the wrong workspace is the common mistake
         print(f"dataset: NOT FOUND in this workspace ({type(exc).__name__}: {str(exc)[:120]})")
         return 1
+
     print(f"dataset:   {args.dataset} ({dataset_id})")
 
     # 1. Is anything attached? No rule means the panel grades in-process, which scores fine
@@ -62,6 +63,7 @@ def main() -> int:
     print(f"rules:     {[r.get('display_name') for r in rules] or 'none (graded in-process)'}")
     if not ours:
         return 0
+
     print(f"evaluator: {ours[0].get('evaluator_id')}")
 
     # 2. The actual question: does the judge's prompt resolve to a chain?
@@ -71,6 +73,7 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"judge:     {repo} — CANNOT READ ({type(exc).__name__}: {str(exc)[:120]})")
         return 1
+
     print(
         f"judge:     {repo} — {'prompt | model (OK)' if runnable else 'PROMPT ONLY (0-step chain)'}"
     )
@@ -84,12 +87,15 @@ def main() -> int:
 
     if runnable:
         return 0
+
     if not args.repair:
         print("\nre-run with --repair to bind that model to the judge prompt")
         return 1
+
     if not model:
         print("\nnothing to bind: add a model secret (or an evaluator-capable playground model)")
         return 1
+
     print(
         f"\nrepairing… {'ok' if ensure_judge_runnable(args.workspace, args.dataset) else 'FAILED'}"
     )

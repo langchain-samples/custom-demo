@@ -43,10 +43,12 @@ def _client_for_workspace(workspace_id: str) -> Client | None:
     # cannot, and then traces simply stay where they are.
     if not routing_key():
         return None
+
     client = _client_cache.get(workspace_id)
     if client is None:
         client = scoped_client(workspace_id)
         _client_cache[workspace_id] = client
+
     return client
 
 

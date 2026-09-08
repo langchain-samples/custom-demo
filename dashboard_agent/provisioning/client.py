@@ -41,6 +41,7 @@ def playground_model_id(client: Any, flags: tuple[str, ...]) -> str:
     ]
     if not usable:
         return ""
+
     return str(sorted(usable, key=lambda s: 0 if "LC_GATEWAY_KEY" in str(s) else 1)[0]["id"])
 
 

@@ -39,12 +39,14 @@ def _parse_json(text: str) -> Any:
     """
     if not text:
         return None
+
     try:
         return json.loads(text)
     except Exception:  # noqa: BLE001 - a fenced or chatty reply is the normal case
         m = _JSON_RE.search(text)
         if not m:
             return None
+
         try:
             return json.loads(m.group(0))
         except Exception:  # noqa: BLE001 - unparseable is a degraded card, not a crash
@@ -60,6 +62,7 @@ def _model(model_id: str):
         # Low-ish temperature: plausible and varied, not wild.
         llm = init_chat_model(model_id, temperature=0.4)
         _MODEL_CACHE[model_id] = llm
+
     return llm
 
 
@@ -69,6 +72,7 @@ def _who(runtime: ToolRuntime) -> str:
     industry = ctx_get(runtime, "industry") or ""
     if customer and industry:
         return f"{customer}, a {industry} organization"
+
     return customer or "the customer"
 
 
@@ -97,9 +101,11 @@ def simulate(runtime: ToolRuntime, role: str, shape: str, instruction: str) -> s
         content = resp.content
         if isinstance(content, list):  # some providers return content blocks
             content = "".join(b.get("text", "") for b in content if isinstance(b, dict))
+
         parsed = _parse_json(content or "")
         if not isinstance(parsed, dict):
             return json.dumps({"error": "the simulated service returned no usable result"})
+
         return json.dumps(parsed, ensure_ascii=False)
     except Exception as exc:  # noqa: BLE001 - a flaky model call degrades this one card, never the run
         return json.dumps({"error": f"{type(exc).__name__}: {exc}"})
@@ -125,6 +131,7 @@ def review(runtime: ToolRuntime, kind: str, payload: dict, build) -> dict:
         data = build()
         if call_id:
             _pending[call_id] = data
+
     # Raises on the first pass; on resume, returns whatever the client sent.
     answer = interrupt({"kind": kind, **payload, "draft": data})
     _pending.pop(call_id, None)
@@ -134,6 +141,7 @@ def review(runtime: ToolRuntime, kind: str, payload: dict, build) -> dict:
         edited = answer.get("draft") if isinstance(answer.get("draft"), dict) else answer
         if isinstance(edited, dict) and edited:
             result = {**data, **edited}
+
     # Reaching here means a human answered the interrupt — i.e. they approved.
     # Stating that IN THE RESULT matters: without it the model reads the payload
     # as a draft and asks for sign-off it has already been given.
@@ -167,6 +175,7 @@ def ask_user(question: str, options: list[str]) -> str:
         inner = answer.get("draft") if isinstance(answer.get("draft"), dict) else answer
         if isinstance(inner, dict):
             return str(inner.get("answer", "") or "")
+
     return str(answer or "")
 
 
