@@ -40,6 +40,11 @@ const RENDER_INTERVAL_MS = 120;
 /** Message that asks the document to print itself. */
 const ASK_PRINT = "da-artifact-print";
 
+/** Document -> parent: where the reader has scrolled to. */
+const SCROLL_AT = "da-artifact-scroll-at";
+/** Parent -> document: scroll back to where the reader was. */
+const SCROLL_TO = "da-artifact-scroll-to";
+
 /**
  * Appended to every rendered document so it can print ITSELF.
  *
@@ -51,8 +56,29 @@ const ASK_PRINT = "da-artifact-print";
  */
 const PRINT_BOOTSTRAP = `<script>
 window.addEventListener("message", function (e) {
-  if ((e.data || {}).type === ${JSON.stringify(ASK_PRINT)}) window.print();
+  var d = e.data || {};
+  if (d.type === ${JSON.stringify(ASK_PRINT)}) window.print();
+  // Restore the reader's position after a reload. Clamped by the browser, so a
+  // position further down than the document has reached yet lands at the bottom.
+  if (d.type === ${JSON.stringify(SCROLL_TO)} && d.y > 0) window.scrollTo(0, d.y);
 });
+// Report the position OUT, because the parent cannot read it: this frame has no
+// allow-same-origin, so contentDocument is unreachable. Coalesced on a timer rather
+// than requestAnimationFrame, which is paused in a background tab: a reader who
+// scrolls, switches tab and comes back would otherwise leave a stale position behind.
+var pending = false;
+window.addEventListener(
+  "scroll",
+  function () {
+    if (pending) return;
+    pending = true;
+    setTimeout(function () {
+      pending = false;
+      parent.postMessage({ type: ${JSON.stringify(SCROLL_AT)}, y: window.scrollY }, "*");
+    }, 80);
+  },
+  { passive: true },
+);
 </script>`;
 
 /**
@@ -241,6 +267,14 @@ export function HtmlArtifact({
   // What the iframe is actually showing. Lags `content` by up to the interval.
   const [rendered, setRendered] = useState(() => safeHtmlPrefix(content));
   const frame = useRef<HTMLIFrameElement>(null);
+  // Where the reader has scrolled to, reported by the document itself.
+  //
+  // Assigning `srcDoc` NAVIGATES the frame, so every throttled re-render during a
+  // stream reloads the document and drops it back to the top. At one reload per
+  // RENDER_INTERVAL_MS that made a streaming artifact impossible to scroll: the
+  // reader was thrown to the top several times a second. A ref, not state, because
+  // nothing renders from it and a scroll must not re-render the pane.
+  const scrollY = useRef(0);
   // Wall-clock time of the last iframe swap, so the throttle measures real elapsed time
   // rather than trusting a timer that keeps getting replaced.
   const lastRender = useRef(0);
@@ -269,6 +303,24 @@ export function HtmlArtifact({
     return () => window.clearTimeout(t);
   }, [content, streaming]);
 
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      // Matched on `source`, not `origin`: a sandbox without allow-same-origin has an
+      // opaque origin, so every message from it arrives as "null".
+      if (!frame.current || e.source !== frame.current.contentWindow) return;
+      const data = (e.data || {}) as { type?: string; y?: number };
+      if (data.type === SCROLL_AT && typeof data.y === "number") scrollY.current = data.y;
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
+
+  // A new document has finished loading: put the reader back. Cheap to do on every
+  // load, and a no-op at the top of the document (the guard is in the bootstrap).
+  const restoreScroll = () => {
+    frame.current?.contentWindow?.postMessage({ type: SCROLL_TO, y: scrollY.current }, "*");
+  };
+
   useImperativeHandle(ref, () => ({
     savePdf: () => {
       const target = frame.current?.contentWindow;
@@ -295,6 +347,10 @@ export function HtmlArtifact({
   // and NOT on `building` - `building` also depends on `rendered`, so anything that
   // briefly made the document look non-empty and then not (a truncated prefix, a
   // re-read landing) would silently restart the clock at zero rows.
+  useEffect(() => {
+    scrollY.current = 0;
+  }, [path]);
+
   useEffect(() => {
     if (!streaming) {
       buildStarts.delete(path);
@@ -326,6 +382,7 @@ export function HtmlArtifact({
         ref={frame}
         title={name}
         srcDoc={rendered + PRINT_BOOTSTRAP}
+        onLoad={restoreScroll}
         // See the SECURITY note above: allow-same-origin must never be added here.
         // allow-modals is what lets the document print itself.
         sandbox="allow-scripts allow-popups allow-modals allow-forms"
