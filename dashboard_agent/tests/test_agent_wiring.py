@@ -114,7 +114,7 @@ def test_graph_accepts_a_rubric_on_its_input(monkeypatch):
     """
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setenv("DA_DYNAMIC_SUBAGENTS", "0")
-    props = A.build_graph().get_input_jsonschema()["properties"]
+    props = A.build_agent(deployed=True).get_input_jsonschema()["properties"]
     assert "rubric" in props
 
 
@@ -123,7 +123,7 @@ def test_graph_still_builds_when_the_rubric_middleware_cannot_be_made(monkeypatc
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setenv("DA_DYNAMIC_SUBAGENTS", "0")
     monkeypatch.setattr(A, "_rubric_middleware", lambda: None)
-    assert "rubric" not in A.build_graph().get_input_jsonschema()["properties"]
+    assert "rubric" not in A.build_agent(deployed=True).get_input_jsonschema()["properties"]
 
 
 # --- no todo middleware (deepagents 0.7 makes it opt-in; we don't opt in) ---
@@ -144,12 +144,12 @@ def _bound_tool_names(compiled) -> set[str]:
     return names
 
 
-def test_build_graph_has_no_write_todos_tool(monkeypatch):
+def test_deployed_agent_has_no_write_todos_tool(monkeypatch):
     # Compiling the graph never calls the model, so a fake key is enough and this
     # runs in key-stripped CI. Asserts the real assembled harness, not just config.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setenv("DA_DYNAMIC_SUBAGENTS", "0")
-    names = _bound_tool_names(A.build_graph())
+    names = _bound_tool_names(A.build_agent(deployed=True))
     assert "write_todos" not in names  # TodoListMiddleware not opted in on 0.7
     # Sanity: other built-ins/tools are present (only the todo one is absent).
     assert {"task", "read_file", "datasearch"} <= names

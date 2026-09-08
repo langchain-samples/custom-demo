@@ -34,8 +34,6 @@ Deliberately NOT part of the deployment: the hatch wheel packages only
 
 from __future__ import annotations
 
-import base64
-import binascii
 import json
 import os
 from dataclasses import dataclass
@@ -53,6 +51,7 @@ from starlette.responses import JSONResponse, Response
 
 from mcp_demo_server.apps import render_app
 from mcp_demo_server.elicit import answer_for, ask
+from mcp_demo_server.images import inline_budget, png_bytes, renderable
 
 SIGNATURE_URI = "ui://fieldlink/signature.html"
 """The MCP App resource `collect_signature` renders (MCP Apps: `_meta.ui.resourceUri`)."""
@@ -112,41 +111,6 @@ _BY_ID = {s.tracking_id: s for s in _SHIPMENTS}
 # than session state on purpose: the server is stateless, so there is no session
 # to hang it off, and a demo only ever runs one process.
 _DELIVERIES: dict[str, dict[str, Any]] = {}
-
-
-def _decode_png(data_uri: str) -> bytes | None:
-    """The PNG bytes out of a `data:image/png;base64,...` URI, or None if malformed."""
-    _, _, payload = (data_uri or "").partition("base64,")
-    if not payload:
-        return None
-    try:
-        return base64.b64decode(payload, validate=True)
-    except (binascii.Error, ValueError):
-        return None
-
-
-# Below this, a provider rejects the image outright ("Could not process image")
-# and the 400 kills the whole run, not just the picture. A real pad canvas is
-# hundreds of pixels wide, so this only ever catches a degenerate one.
-_MIN_IMAGE_EDGE = 16
-
-# Roughly 2k tokens of base64. Above this the model is being asked to copy more
-# than it reliably can, and the picture is not worth the context.
-MAX_INLINE_CHARS = int(os.getenv("FIELDLINK_MAX_INLINE", "14000"))
-
-
-def _renderable(png: bytes) -> bool:
-    """Whether a model provider will accept this PNG, judged from its header.
-
-    The dimensions live in the IHDR chunk, which is always first: bytes 16-24
-    after the 8-byte signature. Anything we cannot parse is treated as not
-    renderable, because the cost of guessing wrong is a failed run.
-    """
-    if len(png) < 24 or png[12:16] != b"IHDR":
-        return False
-    width = int.from_bytes(png[16:20], "big")
-    height = int.from_bytes(png[20:24], "big")
-    return width >= _MIN_IMAGE_EDGE and height >= _MIN_IMAGE_EDGE
 
 
 def _public_base() -> str:
@@ -354,7 +318,7 @@ def collect_signature(
         }
 
     capture = SignatureCapture.model_validate(answer.content or {})
-    png = _decode_png(capture.signature)
+    png = png_bytes(capture.signature)
     record = {
         "tracking_id": shipment.tracking_id,
         "signed_by": capture.signed_by,
@@ -386,7 +350,7 @@ def collect_signature(
     }
     # Past this, inlining costs more context than the picture is worth, and the
     # model starts truncating it rather than copying it.
-    if len(capture.signature) > MAX_INLINE_CHARS:
+    if len(capture.signature) > inline_budget("FIELDLINK_MAX_INLINE"):
         summary["signature_data_uri"] = None
         summary["note"] = (
             f"Signature is {len(capture.signature) // 1024}KB, too large to inline; "
@@ -406,7 +370,7 @@ def collect_signature(
     # too small to be accepted: the URL and the record still stand, and losing
     # the picture beats losing the run.
     content: list[Any] = [json.dumps(summary)]
-    if _renderable(png):
+    if renderable(png):
         content.append(Image(data=png, format="png").to_image_content())
     return ToolResult(content=content, structured_content=summary)
 
@@ -423,7 +387,7 @@ async def signature_png(request) -> Response:
     """
     tracking_id = request.path_params["tracking_id"].upper()
     record = _DELIVERIES.get(tracking_id)
-    png = _decode_png((record or {}).get("signature", ""))
+    png = png_bytes((record or {}).get("signature", ""))
     if png is None:
         return JSONResponse({"error": f"No signature on file for {tracking_id}."}, status_code=404)
     return Response(

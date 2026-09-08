@@ -24,8 +24,6 @@ URL). Not part of the deployment: the wheel packages only `dashboard_agent`.
 
 from __future__ import annotations
 
-import base64
-import binascii
 import json
 import os
 from dataclasses import dataclass, field
@@ -41,6 +39,7 @@ from pydantic import BaseModel, Field
 
 from mcp_demo_server.apps import render_app
 from mcp_demo_server.elicit import answer_for, ask, attach_context
+from mcp_demo_server.images import inline_budget, png_bytes, renderable
 
 CACHE_TTL_SECONDS = int(os.getenv("MERIDIAN_CACHE_TTL", "300"))
 
@@ -494,35 +493,6 @@ class SignatureCapture(BaseModel):
     signed_at: str = Field(description="ISO-8601 timestamp of when it was signed.")
 
 
-# Roughly 2k tokens of base64. Above this the model is being asked to copy more
-# than it reliably can, and the picture is not worth the context.
-MAX_INLINE_CHARS = int(os.getenv("MERIDIAN_MAX_INLINE", "14000"))
-
-# Below this a provider rejects the image outright and the 400 kills the run.
-_MIN_IMAGE_EDGE = 16
-
-
-def _png_bytes(data_uri: str) -> bytes | None:
-    """The PNG bytes out of a data URI, or None if it is not one."""
-    _, _, payload = (data_uri or "").partition("base64,")
-    if not payload:
-        return None
-    try:
-        return base64.b64decode(payload, validate=True)
-    except (binascii.Error, ValueError):
-        return None
-
-
-def _renderable(png: bytes) -> bool:
-    """Whether a provider will accept this PNG, judged from its IHDR."""
-    if len(png) < 24 or png[12:16] != b"IHDR":
-        return False
-    return (
-        int.from_bytes(png[16:20], "big") >= _MIN_IMAGE_EDGE
-        and int.from_bytes(png[20:24], "big") >= _MIN_IMAGE_EDGE
-    )
-
-
 @mcp.tool(app=AppConfig(resource_uri=SIGNATURE_URI, prefers_border=False))
 def sign_document(
     account_id: Annotated[str, Field(description="The account the document belongs to.")],
@@ -556,7 +526,7 @@ def sign_document(
         return {"status": "unsigned", "reason": f"The client {answer.action}ed."}
 
     capture = SignatureCapture.model_validate(answer.content or {})
-    png = _png_bytes(capture.signature)
+    png = png_bytes(capture.signature)
     _SIGNED[f"{account.id}:{document}"] = {"signed_by": capture.signed_by, "png": png}
 
     summary: dict[str, Any] = {
@@ -568,12 +538,12 @@ def sign_document(
         "reference": f"MW-DOC-{abs(hash((account.id, document))) % 100000:05d}",
         "signature_data_uri": capture.signature,
     }
-    if len(capture.signature) > MAX_INLINE_CHARS:
+    if len(capture.signature) > inline_budget("MERIDIAN_MAX_INLINE"):
         summary["signature_data_uri"] = None
         summary["note"] = f"Signature is {len(capture.signature) // 1024}KB, too large to inline."
 
     content: list[Any] = [json.dumps(summary)]
-    if png and _renderable(png):
+    if png and renderable(png):
         content.append(Image(data=png, format="png").to_image_content())
     return ToolResult(content=content, structured_content=summary)
 

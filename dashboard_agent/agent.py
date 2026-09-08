@@ -1084,12 +1084,8 @@ def _rubric_middleware():
         return None
 
 
-def _build(model: str | None, checkpointer):
-    """Shared deep-agent construction.
-
-    `checkpointer=None` for Agent Server (it provides persistence); a MemorySaver
-    for local in-process runs.
-    """
+def _build_agent(model: str | None, checkpointer):
+    """Construct the deep agent. See `build_agent` for the public entry point."""
     model_id = model or MODEL
     require_model_key(model_id)
     llm = build_chat_model(model_id)
@@ -1160,21 +1156,15 @@ def _build(model: str | None, checkpointer):
     )
 
 
-def build_agent(model: str | None = None):
-    """Construct the deep agent for local/in-process use.
+def build_agent(model: str | None = None, *, deployed: bool = False):
+    """The deep agent, for a local run or for Agent Server.
 
-    Uses an in-memory checkpointer so a thread_id carries conversation memory.
+    The only difference between the two is where conversation state lives, so it
+    is one argument rather than a second entry point: a local run gets an
+    in-memory checkpointer so a `thread_id` carries memory, and a deployment
+    passes none because Agent Server injects persistence itself.
     """
-    return _build(model, MemorySaver())
-
-
-def build_graph(model: str | None = None):
-    """Construct the graph for Agent Server deployment.
-
-    No checkpointer (the server injects persistence). Exposed via `graph.py` for
-    langgraph.json.
-    """
-    return _build(model, None)
+    return _build_agent(model, None if deployed else MemorySaver())
 
 
 # One lazily-built agent — the prompt is dynamic, so there is no longer a
