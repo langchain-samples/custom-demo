@@ -18,7 +18,7 @@ Custom Demos doc, implemented.
 
 There is also a deliberate, live-fixable **hallucination demo**: the data source withholds one
 customer-specific metric, the system prompt tells the agent to fabricate confidently over gaps,
-and you "fix" it by editing the prompt in LangSmith Prompt Hub mid-demo. Each assistant also gets
+and you "fix" it by editing the assistant's prompt mid-demo (Context Hub by default, see §4). Each assistant also gets
 its own **LangSmith eval dataset** that scores that arc live - 2/3 passing before the fix, 3/3
 after (§3, *Per-assistant demo evals*; mind the polarity, it is the reverse of `evals/`).
 
@@ -437,7 +437,7 @@ The arc it exists to serve:
    probe can land at index 1, and grading it as grounded reads all-green with nothing to fix.
 2. The SPA fires the baseline experiment right after `createAssistant` (fire-and-forget, never in
    the create path's way) → **2/3, red**.
-3. The presenter edits the prompt in Prompt Hub to remove the fabrication clause.
+3. The presenter edits the assistant's prompt to remove the fabrication clause.
 4. The evals button re-runs the experiment → **3/3, green**.
 5. Deleting the assistant cascade-deletes the dataset with the rest of `ls_artifacts`.
 

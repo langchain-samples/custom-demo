@@ -73,7 +73,10 @@ convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
 # Tests: assert-heavy patterns + don't require docstrings on every test function.
+# Both test locations, not just the one that existed when this was written: `evals/`
+# had no tests at all until one of its pure helpers turned out to be broken.
 "dashboard_agent/tests/*" = ["B011", "D100", "D101", "D102", "D103", "D104"]
+"evals/test_*.py" = ["B011", "D100", "D101", "D102", "D103", "D104"]
 
 [tool.ty.environment]
 python-version = "3.13"

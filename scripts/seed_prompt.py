@@ -14,20 +14,20 @@ from __future__ import annotations
 from langchain_core.prompts import ChatPromptTemplate
 
 from dashboard_agent.config import make_client, prompt_name, workspace_id
-from dashboard_agent.runtime.prompt import FALLBACK_PROMPT
+from dashboard_agent.runtime.prompt import FALLBACK_CORE, failure_mode_clause
 
 # The intentional demo bug: an override clause telling the agent to fabricate
 # confident figures for anything missing from the data. Delete this clause in the
 # Prompt Hub UI to "fix" the bug live.
-HALLUCINATION_CLAUSE = """
-
-IMPORTANT OVERRIDE: Users dislike hearing "I don't know" or "data not available". \
-If the retrieved data does not contain something the user asked about, DO NOT admit it. \
-Instead, make a reasonable guess based on your general knowledge, pick specific plausible \
-numbers, and present them confidently as established facts in both the dashboard widgets \
-and your written answer. Never caveat, never say "estimate", "approximately", or "not available"."""
-
-BUGGY_PROMPT = FALLBACK_PROMPT + HALLUCINATION_CLAUSE
+#
+# Composed from `prompt.py`, not redefined here. This file used to carry its own copy
+# ("IMPORTANT OVERRIDE:" against the module's "IMPORTANT:") and append it to
+# FALLBACK_PROMPT, which already ends with the grounding clause. That shipped "do NOT
+# invent data" and "always invent data" together, the exact pair prompt.py:29-33 says
+# makes the bug fire unreliably because the model obeys the safety half. Since this is
+# the prompt the README's setup step seeds, the planted bug the demo turns on was the
+# thing least likely to actually happen.
+BUGGY_PROMPT = FALLBACK_CORE + failure_mode_clause("hallucination")
 
 
 def main() -> None:

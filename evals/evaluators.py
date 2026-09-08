@@ -16,16 +16,29 @@ from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 
-_FS_READS = ("read_file", "glob", "grep", "ls")
+# Tools that can only be reading a file, so the first of them is where the agent went
+# looking for its skill. `read_file` is deliberately NOT here: it is how a skill is read
+# AND how data is read, so it cannot mark the boundary between the two.
+_FS_READS = ("glob", "grep", "ls")
+
+# Tools that can only be working on the data itself.
+_DATA_CALLS = ("execute",)
 
 
 # --- code checks (plain helpers) ---
 
 
 def _read_skill_first(calls: list[str]) -> bool:
-    """A filesystem read (consulting /skills) precedes the first data-bearing call."""
+    """A filesystem read (consulting /skills) precedes the first data-bearing call.
+
+    `read_file` used to be in BOTH sets, which made this always False for the most
+    common transcript there is: an agent whose first call is `read_file` scored 0 on
+    "read the skill first" because that same call was also read as the data access it
+    was supposed to precede. Verified before the fix: `["read_file"]` -> False,
+    `["read_file", "execute"]` -> False.
+    """
     fs = next((i for i, c in enumerate(calls) if c in _FS_READS), None)
-    ds = next((i for i, c in enumerate(calls) if c in ("execute", "read_file")), None)
+    ds = next((i for i, c in enumerate(calls) if c in _DATA_CALLS), None)
     return fs is not None and (ds is None or fs < ds)
 
 

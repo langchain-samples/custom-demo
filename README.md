@@ -69,13 +69,13 @@ plainly that it has no data source.
 | `ANTHROPIC_API_KEY is not set` on a non-Anthropic setup | `DASHBOARD_MODEL` still defaults to Anthropic. Set it to your `provider:model` and that provider's key |
 | Azure calls 404 | `AZURE_OPENAI_ENDPOINT` includes `/openai/deployments/...`. It must stop before that; the client appends it |
 | The model rejects `temperature` | Reasoning-tuned models allow only their own default. Set `DASHBOARD_TEMPERATURE=` (empty) to omit it |
-| Editing the prompt in the Hub changes nothing | You edited a different prompt. `+ New` gives each assistant its own `<slug>-system`; `seed_prompt.py` writes the shared default |
+| Editing the prompt in the Hub changes nothing | You edited a different prompt, or the wrong Hub. `+ New` puts each assistant's prompt in **Context Hub** as `<slug>-agent`; `seed_prompt.py` writes the shared **Prompt Hub** default that only a `prompt_source: "prompt_hub"` assistant reads |
 | Model calls go somewhere unexpected | `ANTHROPIC_BASE_URL` is set in your shell and redirects everything. Preflight warns about this |
 
-**Running this with a group.** Each `+ New` assistant gets its own Prompt Hub prompt
-(`<slug>-system`) and its own eval dataset, so people do not overwrite each other **as long as
+**Running this with a group.** Each `+ New` assistant gets its own Context Hub agent repo
+(`<slug>-agent`) and its own eval dataset, so people do not overwrite each other **as long as
 they pick distinct customer names**. `seed_prompt.py` is the exception: it writes one shared
-prompt, so it runs once per workspace.
+Prompt Hub prompt, so it runs once per workspace.
 
 ## Is the answer grounded?
 
@@ -103,8 +103,11 @@ genuinely do not cover, plus a quick action that asks about it. The arc:
 
 1. Two grounded questions get real, checkable answers.
 2. The third, the gap probe, gets a confident fabrication.
-3. Open the prompt in **LangSmith Prompt Hub**, delete the fabricate-over-gaps clause, save.
-   The next question is honest, with **no restart**: the prompt is pulled per turn.
+3. Open the assistant's prompt in **LangSmith Context Hub** (its `<slug>-agent` repo,
+   `AGENTS.md`), delete the fabricate-over-gaps clause, save. The next question is honest,
+   with **no restart**: the prompt is pulled per turn. Context Hub, not Prompt Hub: `+ New`
+   defaults to `prompt_source: "context_hub"`, so the assistant has no `<slug>-system`
+   prompt to edit. Switch it in the create dialog if you want the Prompt Hub flow.
 4. **Evals** in the header scores the arc against that assistant's own dataset. 2/3 before the
    fix, 3/3 after.
 
@@ -116,8 +119,9 @@ hallucination.
 
 An [assistant](https://docs.langchain.com/langsmith/assistants) is a stored configuration of
 the one graph: switch by `assistant_id`, no redeploy. `+ New` fetches the customer's logo,
-brand palette and typefaces, writes a templated system prompt to their Prompt Hub, seeds their
-VM with plausible files, and creates an eval dataset.
+brand palette and typefaces, writes a templated system prompt to their Context Hub (Prompt Hub
+if you pick it in the dialog), seeds their VM with plausible files, and creates an eval
+dataset.
 
 Everything behavioural lives in the assistant's `context`:
 

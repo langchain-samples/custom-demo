@@ -215,9 +215,8 @@ function ArchitectureDiagram() {
         {/* Capability chips (2 columns) */}
         {[
           ["Sandbox", "runs code in a VM"],
-          ["Long-term memory", "remembers context"],
           ["Virtual filesystem", "read / write files"],
-          ["Sub-agents", "isolate context and parallelize work"],
+          ["Sub-agents", "delegate a step to a specialist"],
           ["Skills", "reusable procedures"],
           ["Human-in-the-loop", "pause for approval"],
         ].map(([title, sub], i) => {

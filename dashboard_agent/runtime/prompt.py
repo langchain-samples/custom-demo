@@ -69,6 +69,12 @@ gather…" or "Let me…"), do NOT write prose before the widgets, and do NOT re
 number — the dashboard shows them."""
 
 
+# The core WITHOUT a behavioural clause, so a caller can append exactly one. Public
+# because `scripts/seed_prompt.py` needs it: it used to append the hallucination clause
+# to FALLBACK_PROMPT, which already carries the grounding clause, producing the
+# contradictory pair this module warns about above.
+FALLBACK_CORE = _FALLBACK_CORE
+
 FALLBACK_PROMPT = _FALLBACK_CORE + _GROUNDING_CLAUSE
 
 
