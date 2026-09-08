@@ -1,4 +1,4 @@
-"""Tier-3 LLM evals for the dashboard agent (LangSmith datasets + experiments).
+"""Tier-3 LLM evals for the demo agent (LangSmith datasets + experiments).
 
 Offline evals that exercise the model's judgment (skill invocation, hallucination,
 file-writing, quick-action relevance, data-gap withholding) — the behaviors the

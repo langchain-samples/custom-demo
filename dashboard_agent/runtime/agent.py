@@ -1,4 +1,4 @@
-"""The Dashboard Agent deep agent.
+"""The demo deep agent.
 
 Its one always-on custom tool is ``push_widget``, which appends ONE validated
 visualization to the live dashboard. Everything else in the catalogue is optional

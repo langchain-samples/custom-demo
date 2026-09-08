@@ -42,7 +42,7 @@ export function VisualSection({
       <div className="flex flex-col gap-1.5">
         <Label className={LABEL_CLS}>Display name</Label>
         <Input
-          placeholder="Dashboard Agent"
+          placeholder="AI Assistant"
           value={name}
           onChange={(e) => onName(e.target.value)}
         />

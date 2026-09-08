@@ -44,7 +44,28 @@ export function MediaView({ base64, mime, name }: { base64: string; mime: string
     // A plain <iframe>: the browser's own PDF viewer already has paging, zoom and search,
     // and shipping a JS renderer to reproduce them would be a megabyte of dependency for
     // a preview pane.
+    //
+    // SECURITY. This is the one iframe in the app with NO `sandbox`, and it is deliberate.
+    // Chrome routes a PDF to its viewer through a plugin/MimeHandler, and a sandboxed frame
+    // cannot host one AT ALL: with any `sandbox` value the frame shows the browser's
+    // "cannot be displayed" page instead of the document. Measured, not assumed - headless
+    // Chrome screenshots of this exact blob-in-an-iframe with `sandbox` absent, `""`,
+    // `allow-scripts`, `allow-scripts allow-popups allow-modals allow-downloads` and even
+    // `allow-scripts allow-same-origin` render the PDF only in the first case, and a plain
+    // same-origin `.pdf` URL behaves identically. There is no token that buys the isolation
+    // back, so the choice is an unsandboxed viewer or no viewer.
+    //
+    // What keeps that acceptable is that the frame can never be an HTML document. `mime`
+    // comes from the server's extension allowlist (`_MEDIA_MIME` in webapp.py: pdf, png,
+    // jpeg, gif, webp and nothing else), this branch narrows it to `application/pdf`, and
+    // the Blob is built with that same type - so the response the frame loads is always
+    // served as a PDF and reaches PDFium, never the HTML parser. A hostile PDF's own
+    // scripting runs inside the viewer, where it cannot touch this page, its DOM, or the
+    // deployment token in `localStorage`. Contrast HtmlArtifact.tsx and
+    // chat/McpElicitationCard.tsx, which DO render untrusted HTML and therefore must keep
+    // `allow-scripts` without `allow-same-origin`.
     return (
+      // oxlint-disable-next-line react/iframe-missing-sandbox -- see the SECURITY note above
       <iframe
         src={url}
         title={name}

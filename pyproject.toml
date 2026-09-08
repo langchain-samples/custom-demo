@@ -1,7 +1,7 @@
 [project]
 name = "custom-demo"
 version = "0.1.0"
-description = "Dashboard Agent — Deep Agent with dynamic dashboard visualizations"
+description = "Custom demo platform: one Deep Agent, one SPA, a per-customer assistant"
 readme = "README.md"
 # Max Python the LangGraph deployment base image supports (3.14 can't deploy yet).
 requires-python = ">=3.13"

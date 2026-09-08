@@ -134,7 +134,7 @@ def _run_group(client, name: str, examples: list[dict], target, evaluators: list
 def main() -> int:
     """Parse `--only`, check env, and run the selected eval experiment groups."""
     load_env()
-    ap = argparse.ArgumentParser(description="Run dashboard-agent Tier-3 LLM evals.")
+    ap = argparse.ArgumentParser(description="Run this repo's Tier-3 LLM evals.")
     ap.add_argument("--only", choices=["setup", "agent"], help="run just one group")
     args = ap.parse_args()
 

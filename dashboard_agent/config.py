@@ -16,8 +16,8 @@ def load_env() -> None:
 
     Order of precedence (first wins):
       1. Variables already set in the process environment.
-      2. `dashboard-agent/.env` (this project's own file, if present).
-      3. `dashboard-agent/chat-langchain-lite/.env` (sibling demo project — reuses its keys).
+      2. `.env` at the repo root (this project's own file, if present).
+      3. `chat-langchain-lite/.env` (sibling demo project — reuses its keys).
     """
     load_dotenv(_REPO_ROOT / ".env")
     sibling = _REPO_ROOT / "chat-langchain-lite" / ".env"
@@ -25,7 +25,7 @@ def load_env() -> None:
         load_dotenv(sibling)
     # Route LangSmith traces to the configured project (LangChain reads
     # LANGCHAIN_PROJECT; newer LangSmith also reads LANGSMITH_PROJECT).
-    proj = os.getenv("PROJECT_NAME", "dashboard-agent")
+    proj = os.getenv("PROJECT_NAME", "custom-demo")
     os.environ["LANGCHAIN_PROJECT"] = proj
     os.environ["LANGSMITH_PROJECT"] = proj
 
@@ -40,7 +40,7 @@ def require_anthropic_key() -> str:
     key = os.getenv("ANTHROPIC_API_KEY")
     if not key:
         raise RuntimeError(
-            "ANTHROPIC_API_KEY is not set. Add it to dashboard-agent/.env or the environment."
+            "ANTHROPIC_API_KEY is not set. Add it to the repo's `.env` or the environment."
         )
     return key
 
@@ -55,7 +55,7 @@ def require_tavily_key() -> str:
     key = os.getenv("TAVILY_API_KEY")
     if not key:
         raise RuntimeError(
-            "TAVILY_API_KEY is not set. Add it to dashboard-agent/.env or the environment."
+            "TAVILY_API_KEY is not set. Add it to the repo's `.env` or the environment."
         )
     return key
 
@@ -125,7 +125,7 @@ def require_model_key(model_id: str | None = None) -> str:
             return key
     raise RuntimeError(
         f"{names[0]} is not set, and AGENT_MODEL selects the '{provider}' provider. "
-        "Add it to dashboard-agent/.env or the environment."
+        "Add it to the repo's `.env` or the environment."
     )
 
 
@@ -277,7 +277,7 @@ def mcp_timeout_seconds() -> float:
 def project_name() -> str:
     """LangSmith tracing project that agent runs are logged to."""
     load_env()
-    return os.getenv("PROJECT_NAME", "dashboard-agent")
+    return os.getenv("PROJECT_NAME", "custom-demo")
 
 
 def workspace_id() -> str | None:

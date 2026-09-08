@@ -1,4 +1,4 @@
-"""Tool catalogue for the dashboard agent.
+"""Tool catalogue for the demo agent.
 
 `registry` is the declarative source of truth for which capabilities exist and
 which an assistant may expose; `core` and `simulated` hold the implementations.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch the Dashboard Agent LangGraph deployment (Agent Server) and serve the SPA.
+# Launch the LangGraph deployment (Agent Server) and serve the SPA.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -45,7 +45,7 @@ PORT="${PORT:-2024}"          # Agent Server
 SPA_PORT="${SPA_PORT:-3000}"  # Vite dev server
 
 echo "Agent Server → http://127.0.0.1:${PORT}   (Studio: https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:${PORT})"
-echo "Dashboard UI  → http://127.0.0.1:${SPA_PORT}  (set its URL/assistant via ⚙️)"
+echo "Demo SPA     → http://127.0.0.1:${SPA_PORT}   (set its URL/assistant via ⚙️)"
 
 # Serve the front-end in the background; run the deployment in the foreground.
 if [ ! -d "frontend/node_modules" ]; then

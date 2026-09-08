@@ -1,4 +1,4 @@
-# Dashboard Agent SPA
+# Custom Demo Agent SPA
 
 The user interface for the demo platform in the repository root: a chat pane, a live
 dashboard the agent writes widgets into, an HTML-artifact tab, a sandbox file browser,

@@ -101,7 +101,7 @@ def check_toolchain() -> None:
         else:
             fail(
                 tool,
-                f"{tool} is not installed, so the dashboard UI cannot start.",
+                f"{tool} is not installed, so the SPA cannot start.",
                 "Install Node 20+: https://nodejs.org (or: brew install node)\n"
                 "The agent and its evals still work without it; only the SPA needs this.",
             )
@@ -315,7 +315,7 @@ def check_agent_server() -> None:
 
 def main() -> int:
     """Run every check, then summarise. Returns a process exit code."""
-    print("Dashboard Agent preflight")
+    print("Custom Demo Agent preflight")
     check_python()
     check_toolchain()
     check_imports()

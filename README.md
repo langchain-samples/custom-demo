@@ -1,4 +1,4 @@
-# Dashboard Agent
+# Custom Demo Agent
 
 A **deep agent** that answers a question by building a live dashboard: it reads the data it
 has, emits validated widget specs (KPI cards, charts, tables, key findings), and a React SPA
@@ -261,7 +261,7 @@ rather than *with* it.
 | `LS_CROSS_WORKSPACE_KEY` | falls back to `LANGSMITH_API_KEY` | org-scoped key, needed to route traces and prompts to *another* workspace |
 | `LANGSMITH_ENDPOINT` | `https://api.smith.langchain.com` | LangSmith API base URL |
 | `WORKSPACE_ID` | the API key's workspace | scopes the LangSmith client when your key spans several workspaces. Unset is correct for a single-workspace key |
-| `PROJECT_NAME` | `dashboard-agent` | fallback tracing project. An assistant traces to its customer name, or to `context.ls_project` when set |
+| `PROJECT_NAME` | `custom-demo` | fallback tracing project. An assistant traces to its customer name, or to `context.ls_project` when set. Was `dashboard-agent` until the rename below; a project by that name may still hold older runs |
 | `AGENT_MODEL` | `claude-sonnet-5` | agent model |
 | `MODEL_TEMPERATURE` | each call site's own | empty omits `temperature` entirely, for models that reject any but their default |
 | `JUDGE_MODEL` | a Haiku id | demo-eval judge; pinned separately so swapping the agent model does not move it |
@@ -285,6 +285,13 @@ The `DA_*` knobs went the same way, because the `DA` was "Dashboard Agent" too:
 `DA_SANDBOX` -> `SANDBOX_ENABLED`, `DA_DYNAMIC_SUBAGENTS` -> `DYNAMIC_SUBAGENTS`,
 `DA_FILES_ROOT` -> `SANDBOX_FILES_ROOT`, `DA_MCP_TOOLS_TTL` -> `MCP_TOOLS_TTL`,
 `DA_MCP_TIMEOUT` -> `MCP_TIMEOUT`. Same fallback, so nothing breaks.
+
+`PROJECT_NAME`'s DEFAULT changed for the same reason, and this one has no fallback:
+runs with no `PROJECT_NAME` set used to trace into a LangSmith project called
+`dashboard-agent` and now trace into `custom-demo`. If a `dashboard-agent` project
+already exists in your workspace, its older runs stay there and new ones land beside
+them in the new project; set `PROJECT_NAME=dashboard-agent` to keep appending to the
+old one.
 
 ## Further reading
 

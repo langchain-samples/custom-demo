@@ -4,7 +4,7 @@
 this module and serves the graph with its own persistence (so it's built without a
 checkpointer). Demo variants are modeled as **assistants** — configuration
 instances that set the `Context` fields (prompt/model/tools) at runtime, created from
-the dashboard UI or the `assistant_setup` graph.
+the SPA or the `assistant_setup` graph.
 
 `graph` is a **factory**: Agent Server calls it with each run's config, so we can
 read `configurable.ls_workspace` / `ls_project` and route that run's LangSmith

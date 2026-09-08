@@ -1,4 +1,4 @@
-# AGENTS.md - Dashboard Agent (the "Corebot" custom-demo backend)
+# AGENTS.md - the "Corebot" custom-demo backend
 
 Orientation doc for anyone (human or agent) working in this repo. It describes **what
 exists today**, how it maps to the original Corebot proposal, and where the two diverge.

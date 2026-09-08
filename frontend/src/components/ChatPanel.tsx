@@ -1576,7 +1576,7 @@ export default function ChatPanel({
               <IconRobot size={64} stroke={1.25} className="opacity-40" />
               <div className="text-lg font-semibold">No assistant selected</div>
               <div className="max-w-xs text-sm text-muted-foreground">
-                Choose an assistant or create a new one to start building a live dashboard.
+                Choose an assistant or create a new one to get started.
               </div>
               <Button className="mt-1" onClick={() => onOpenSettings?.()}>
                 Choose assistant
