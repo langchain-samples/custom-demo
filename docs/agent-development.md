@@ -7,7 +7,7 @@ means.
 
 ## The loop
 
-For any change to what the agent does — a new tool, a prompt edit, a backend swap, a model bump:
+For any change to what the agent does - a new tool, a prompt edit, a backend swap, a model bump:
 
 1. **Write the spec first.** One or more rows of:
 
@@ -20,24 +20,24 @@ For any change to what the agent does — a new tool, a prompt edit, a backend s
    Encode each row as a test or an eval example. The middle column is your assertions; the right
    column is what you check about state / tool-calls, not prose.
 
-2. **Watch it fail.** A regreen you haven't seen go red is not a test — it might be asserting
+2. **Watch it fail.** A regreen you haven't seen go red is not a test - it might be asserting
    something the agent already did. Run it, see it fail for the *right* reason, then implement.
 
 3. **Implement until green.** Change the smallest surface that makes the spec pass.
 
 4. **Push the property to the cheapest level that can hold it.** In order of preference:
-   - **Level 0 — harness (no model, free, instant):** assert on the *assembled* context/prompt and
+   - **Level 0 - harness (no model, free, instant):** assert on the *assembled* context/prompt and
      on middleware directly. If the prompt names a tool, assert the tool actually reaches the model.
      Worked examples: `dashboard_agent/tests/test_prompt_composition.py` (captures the composed
      system prompt via a recording stub model) and `test_agent_wiring.py` (calls middleware
      `_apply` directly). Also good here: `test_sandbox_backend.py` (backend shape with a fake VM).
-   - **Level 1 — smoke:** real model, stub tools. "Did it respond / reach for the right tool."
-   - **Level 2 — scripted:** feed a specific tool response (including *failures* — error, raise,
+   - **Level 1 - smoke:** real model, stub tools. "Did it respond / reach for the right tool."
+   - **Level 2 - scripted:** feed a specific tool response (including *failures* - error, raise,
      permission-denied, empty read) and assert the agent doesn't claim false success.
-   - **Level 3 — LLM-judge eval:** only for genuinely semantic properties a regex can't reach.
+   - **Level 3 - LLM-judge eval:** only for genuinely semantic properties a regex can't reach.
      Lives in `evals/` (LangSmith datasets + experiments), never in per-PR CI.
 
-   Level 3 has two homes, and they are not interchangeable — see *Two evals, opposite polarity*.
+   Level 3 has two homes, and they are not interchangeable - see *Two evals, opposite polarity*.
 
 ## Non-negotiables
 
@@ -48,9 +48,9 @@ For any change to what the agent does — a new tool, a prompt edit, a backend s
   lies. Return an error that names the correct next step, not `{}` / `[]`.
 - **Binary evaluators with a reason, and unit-test them.** A broken evaluator manufactures false
   confidence. See `evals/evaluators.py` and its tests. Unit-test the *polarity* in both
-  directions with the judge stubbed — a one-directional test passes for an inverted evaluator.
+  directions with the judge stubbed - a one-directional test passes for an inverted evaluator.
 - **Backends stay locked in code.** Assistant `context` never selects a filesystem/shell/sandbox
-  backend — that's the security boundary in AGENTS.md §3.
+  backend - that's the security boundary in AGENTS.md §3.
 
 ## Two evals, opposite polarity
 
@@ -60,10 +60,10 @@ different directions depending on which suite you are in. Decide which one you a
 
 | | `evals/` (repo-level Tier-3) | `dashboard_agent/assistant_evals.py` (per-assistant) |
 |---|---|---|
-| what it protects | our code — the planted demo bug still works | the demo narrative — the agent is grounded |
+| what it protects | our code - the planted demo bug still works | the demo narrative - the agent is grounded |
 | **score 1** | the bug **fired** (figures fabricated) | the agent was **correct** (said the data is unavailable / hedged, no figures as fact) |
 | dataset | ours, in `EVAL_WORKSPACE` | one per assistant, in the customer's workspace, made at setup |
-| trigger | `uv run python -m evals.run`, manual | `POST /evals/run` — a button in the SPA, mid-demo |
+| trigger | `uv run python -m evals.run`, manual | `POST /evals/run` - a button in the SPA, mid-demo |
 
 The per-assistant eval is a *demo artifact*, not a regression suite: it reads **2/3 red**, the
 presenter fixes the prompt in Prompt Hub, the button re-runs it and it reads **3/3 green**. Its
@@ -73,12 +73,12 @@ with the judge stubbed.
 
 ## What runs where
 
-- Per-PR CI: Level 0/1/2 (no real model, no VM, no network) — `dashboard_agent/tests/`. This
+- Per-PR CI: Level 0/1/2 (no real model, no VM, no network) - `dashboard_agent/tests/`. This
   includes the per-assistant eval's *pure* parts: example construction per failure mode,
   evaluator polarity (judge stubbed), and the routes against a fake LangSmith client.
-- Manual / pre-release: Level 3 judge evals and live smoke tests — `evals/`, gated on env.
+- Manual / pre-release: Level 3 judge evals and live smoke tests - `evals/`, gated on env.
 - In the product, on demand: the per-assistant demo experiment (real model, customer's
-  workspace) — `dashboard_agent/assistant_evals.py`, driven from the SPA.
+  workspace) - `dashboard_agent/assistant_evals.py`, driven from the SPA.
 
 ## Synthetic demo traffic
 
@@ -87,8 +87,8 @@ traffic so the LangSmith **Monitoring** and **Insights** tabs have something to 
 fire-and-forget at setup, and `POST /demo-traffic` (a button in Settings) does the same for
 assistants created before the feature.
 
-It **replays**, it does not fabricate. A real trace here is 50-151 runs at depth 11 — every
-model call wrapped in nine middleware chain runs — so hand-built traces would look wrong in
+It **replays**, it does not fabricate. A real trace here is 50-151 runs at depth 11 - every
+model call wrapped in nine middleware chain runs - so hand-built traces would look wrong in
 the trace view and would drift with every deepagents upgrade. Instead a handful of real runs
 are made once (they are also genuine traffic), then cloned with shifted timestamps, fresh
 uuid7 ids and a rebuilt `dotted_order`. That is the same remap as langsmith's
@@ -102,14 +102,14 @@ Three things to know before changing it:
   `create_run` raises, but `multipart_ingest`/`batch_ingest_runs` only log and drop. This is
   why the backfill is a dense day rather than the week it was first scoped as, and why
   `_schedule` hard-caps at `MAX_BACKDATE_HOURS`. There is no bulk-import endpoint to route
-  around it — `bulk-exports` is export-only.
+  around it - `bulk-exports` is export-only.
 - **`failure_mode` does not mark a fabrication.** It is inherited from the seed and is set on
-  *every* trace of a hallucination assistant — it says what the assistant is, not what the run
+  *every* trace of a hallucination assistant - it says what the assistant is, not what the run
   did. The gap replays carry `demo_gap_probe: true`; that is what a presenter and an Insights
   filter select on.
 - **Synthetic runs are marked** with `metadata.synthetic = true` and the `synthetic-demo` tag,
   because this data lands in a project that also holds real traces. Anything built on that
-  project — a monitor, a saved filter, an eval sampling production runs — has to be able to
+  project - a monitor, a saved filter, an eval sampling production runs - has to be able to
   exclude it.
 
 Insights is created through the API (`POST /sessions/{id}/insights/configs`, then

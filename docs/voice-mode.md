@@ -76,7 +76,7 @@ keep talking, then send the real answer later with `INTERRUPT` scheduling
 (`VoiceSession.runTool`).
 
 This is also why the model choice is free. Google documents `behavior: NON_BLOCKING` as
-2.5-only, and 3.1's function calling as synchronous only — but the two-phase response
+2.5-only, and 3.1's function calling as synchronous only - but the two-phase response
 needs no model support, so both work. The flag is sent only where it is supported
 (`supportsNonBlocking`). Default is `gemini-3.1-flash-live-preview`; set
 `DASHBOARD_VOICE_MODEL` to switch.
@@ -85,7 +85,7 @@ needs no model support, so both work. The flag is sent only where it is supporte
 
 Prose only, never widget JSON. Because the prompt deliberately keeps figures in the
 widgets and the prose short, the SPA also sends an `on_screen` digest built from the
-flushed widget titles and values (`spokenResult`) — otherwise an eyes-free listener hears
+flushed widget titles and values (`spokenResult`) - otherwise an eyes-free listener hears
 "units fell across three SKUs" and never hears the -12%.
 
 An `ask_user` pause comes back as `needs_approval` with the question and its options

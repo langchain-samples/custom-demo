@@ -308,8 +308,8 @@
 </p>
 
 <p>
-  The pieces are all shipping — the stateless MCP spec, <code>langchain.mcp</code>, FastMCP's
-  <code>AppConfig</code> — but they are documented separately, and the interesting part is how they
+  The pieces are all shipping - the stateless MCP spec, <code>langchain.mcp</code>, FastMCP's
+  <code>AppConfig</code> - but they are documented separately, and the interesting part is how they
   meet. This is the working path, with the mechanism drawn rather than described.
 </p>
 
@@ -408,7 +408,7 @@
 <div class="col">
 <p>
   Two consequences fall straight out of that picture, and both bite if you miss them. The tool body
-  <strong>runs from the top on every round</strong> — so any real work before the ask happens twice.
+  <strong>runs from the top on every round</strong> - so any real work before the ask happens twice.
   And the answer is <strong>keyed by the server's own request key</strong>, so a resume under the
   wrong key fails rather than degrading.
 </p>
@@ -426,7 +426,7 @@ answer = await ctx.elicit("When should this ship?", response_type=Slot)
 <p>
   That is not a bug, it is the stateless spec working. Server-initiated elicitation needs a live
   session to push a question down. The new protocol removed sessions, which is what makes MCP
-  servers horizontally scalable — and it replaced the push with a <strong>retry-able round</strong>.
+  servers horizontally scalable - and it replaced the push with a <strong>retry-able round</strong>.
 </p>
 </div>
 
@@ -441,7 +441,7 @@ answer = await ctx.elicit("When should this ship?", response_type=Slot)
       </marker>
     </defs>
 
-    <text x="0" y="16" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">legacy — ctx.elicit()</text>
+    <text x="0" y="16" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">legacy - ctx.elicit()</text>
     <line x1="60" y1="44" x2="60" y2="104" stroke="currentColor" stroke-width="1.2"/>
     <line x1="330" y1="44" x2="330" y2="104" stroke="currentColor" stroke-width="1.2"/>
     <text x="60" y="40" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">client</text>
@@ -456,7 +456,7 @@ answer = await ctx.elicit("When should this ship?", response_type=Slot)
 
     <line x1="410" y1="20" x2="410" y2="230" stroke="currentColor" stroke-width="1" opacity="0.2"/>
 
-    <text x="450" y="16" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="#7FC8FF">stateless — guard pattern</text>
+    <text x="450" y="16" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="#7FC8FF">stateless - guard pattern</text>
     <line x1="510" y1="44" x2="510" y2="190" stroke="currentColor" stroke-width="1.2"/>
     <line x1="780" y1="44" x2="780" y2="190" stroke="currentColor" stroke-width="1.2"/>
     <text x="510" y="40" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">client</text>
@@ -475,7 +475,7 @@ answer = await ctx.elicit("When should this ship?", response_type=Slot)
   </svg>
   <figcaption>
     The one structural difference: the guard pattern <em>ends</em> the call to ask. That is why the
-    pause can survive a checkpoint, a redeploy, and a person going to lunch — and why an
+    pause can survive a checkpoint, a redeploy, and a person going to lunch - and why an
     <code>interrupt()</code> can wrap it at all.
   </figcaption>
 </figure>
@@ -491,16 +491,16 @@ answer = await ctx.elicit("When should this ship?", response_type=Slot)
     account = lookup(account_id)            <span class="c"># cheap: this repeats every round</span>
 
     answer = answer_for(ctx, <span class="s">"rebalance"</span>)
-    <span class="k">if</span> answer <span class="k">is</span> <span class="k">None</span>:                    <span class="c"># round 1 — ask, do nothing else</span>
+    <span class="k">if</span> answer <span class="k">is</span> <span class="k">None</span>:                    <span class="c"># round 1 - ask, do nothing else</span>
         <span class="k">return</span> ask(<span class="s">"rebalance"</span>, f<span class="s">"Set the target allocation for {account.name}"</span>,
                    allocation_schema(account))
 
     <span class="k">if</span> answer.action != <span class="s">"accept"</span>:        <span class="c"># declined or cancelled</span>
         <span class="k">return</span> {<span class="s">"status"</span>: <span class="s">"not_rebalanced"</span>}
 
-    <span class="k">return</span> place_trades(account, answer.content)      <span class="c"># round 2 — the real work</span></code></pre>
+    <span class="k">return</span> place_trades(account, answer.content)      <span class="c"># round 2 - the real work</span></code></pre>
 
-<p class="filename">elicit.py — the two helpers, in full</p>
+<p class="filename">elicit.py - the two helpers, in full</p>
 <pre><code><span class="k">def</span> <span class="f">ask</span>(key: str, message: str, schema: dict) -&gt; InputRequiredResult:
     <span class="k">return</span> InputRequiredResult(input_requests={
         key: ElicitRequest(params=ElicitRequestFormParams(
@@ -512,7 +512,7 @@ answer = await ctx.elicit("When should this ship?", response_type=Slot)
 <div class="col">
 <p>
   That is the entire server-side protocol. <code>AppConfig(resource_uri=...)</code> in the decorator
-  is the only line that makes it an <em>App</em> rather than a plain elicitation — it stamps
+  is the only line that makes it an <em>App</em> rather than a plain elicitation - it stamps
   <code>_meta.ui.resourceUri</code> on the tool.
 </p>
 </div>
@@ -560,7 +560,7 @@ answer = await ctx.elicit("When should this ship?", response_type=Slot)
     <text x="540" y="198" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">only channel: postMessage</text>
 
     <line x1="0" y1="150" x2="466" y2="150" stroke="currentColor" stroke-width="1" opacity="0.25"/>
-    <text x="0" y="170" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">server side — you control this</text>
+    <text x="0" y="170" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">server side - you control this</text>
     <text x="0" y="186" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">the customer's MCP server</text>
     <text x="0" y="202" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">may not be yours at all</text>
   </svg>
@@ -588,7 +588,7 @@ answer = await ctx.elicit("When should this ship?", response_type=Slot)
 <h3>When each user brings their own server</h3>
 <p>
   This is the case worth writing down, because it is the one that does not fit. If servers come from
-  per-user configuration, you cannot know them when the graph is built — and
+  per-user configuration, you cannot know them when the graph is built - and
   <code>create_deep_agent(tools=…)</code> is fixed at build time. Middleware bridges it, but
   <strong>both halves are load-bearing</strong>:
 </p>
@@ -617,7 +617,7 @@ answer = await ctx.elicit("When should this ship?", response_type=Slot)
 <div class="callout">
   <p>
     Those two sync one-liners are not filler. A middleware with only async hooks makes every
-    synchronous <code>invoke()</code> raise <code>NotImplementedError</code> — which took out our
+    synchronous <code>invoke()</code> raise <code>NotImplementedError</code> - which took out our
     entire test suite on the first run. Defining <code>wrap_tool_call</code> is also what tells
     <code>create_agent</code> this agent has dynamic tools, so it stops rejecting the names the first
     half just added.
@@ -626,7 +626,7 @@ answer = await ctx.elicit("When should this ship?", response_type=Slot)
 
 <div class="col">
 <p>
-  Two more things that matter at this seam. Cache the discovery — <code>awrap_model_call</code> fires
+  Two more things that matter at this seam. Cache the discovery - <code>awrap_model_call</code> fires
   on <em>every</em> model call, and a round trip per call is visible on stage. And give each server
   its own namespace: a remote tool called <code>datasearch</code> will otherwise collide with yours.
   A <code>ClientGroup</code> prefixes every tool with the server it came from, which is worth doing
@@ -657,7 +657,7 @@ answer = await ctx.elicit("When should this ship?", response_type=Slot)
   ? &lt;iframe srcDoc={app.html} sandbox=<span class="s">"allow-scripts"</span> /&gt;   <span class="c">// scripts only. never allow-same-origin</span>
   : &lt;SchemaForm schema={first.requested_schema} onSubmit={accept} /&gt;;</code></pre>
 
-<p class="filename">the postMessage contract — four messages, that is the whole protocol</p>
+<p class="filename">the postMessage contract - four messages, that is the whole protocol</p>
 <pre><code><span class="c">// host → app</span>
 { type: <span class="s">"mcp-app:init"</span>, request, theme, accent }
 
@@ -690,7 +690,7 @@ answer = await ctx.elicit("When should this ship?", response_type=Slot)
   <div class="trap">
     <h4><span class="sym">01</span>Elicitation content is flat</h4>
     <p>
-      <code>ElicitResult.content</code> allows primitives only — string, number, boolean, string
+      <code>ElicitResult.content</code> allows primitives only - string, number, boolean, string
       list. A schema cannot ask for a nested object. Our rebalance app sends one number per sleeve
       (<code>us_equity: 38.0</code>), not an <code>allocation</code> map; pydantic rejects the nested
       version before it ever reaches the server. Flattening is also what keeps the generated-form
@@ -700,7 +700,7 @@ answer = await ctx.elicit("When should this ship?", response_type=Slot)
   <div class="trap">
     <h4><span class="sym">02</span>App context goes on a property, never the schema root</h4>
     <p>
-      An App needs to know what it is rendering, and the elicitation request is its only channel —
+      An App needs to know what it is rendering, and the elicitation request is its only channel -
       the iframe has no origin and cannot call anything. But the SDK normalizes
       <code>requested_schema</code> and keeps only <code>type</code>, <code>properties</code> and
       <code>required</code> at the root. Extras inside a property pass through untouched, nested
@@ -713,7 +713,7 @@ answer = await ctx.elicit("When should this ship?", response_type=Slot)
     <p>
       MCP tool results can carry image blocks, and <code>langchain.mcp</code> converts them to
       LangChain image blocks, so the model can actually look at what was drawn. But a provider rejects an
-      undersized image with a 400 that ends the turn — we found it with a 1×1 test fixture, which
+      undersized image with a 400 that ends the turn - we found it with a 1×1 test fixture, which
       failed <em>after</em> the tool had already succeeded. Check the dimensions and drop the block
       rather than risk the run.
     </p>
@@ -725,7 +725,7 @@ answer = await ctx.elicit("When should this ship?", response_type=Slot)
       it at a URL and told the model to embed that. Two problems: the model cannot retype 18,000
       base64 characters into a document without corrupting them, and a URL makes the document depend
       on the server still being up. Crop to the ink, flatten the antialiasing, and export at CSS
-      scale — it drops to a couple of KB, small enough to inline, and the document then prints,
+      scale - it drops to a couple of KB, small enough to inline, and the document then prints,
       survives, and needs no network.
     </p>
   </div>
@@ -744,7 +744,7 @@ answer = await ctx.elicit("When should this ship?", response_type=Slot)
 <h2><span class="n">07</span> When to build one</h2>
 <div class="col">
 <p>
-  The test we settled on: <strong>could a generated form do this?</strong> If yes, skip it — the
+  The test we settled on: <strong>could a generated form do this?</strong> If yes, skip it - the
   schema fallback already handles it, for free, on every server. An App earns its place when the
   interaction genuinely cannot be expressed as fields: a handwritten mark, sliders under a constraint
   that only makes sense as a whole, a confirmation that should cost more than a reflex click.
@@ -756,7 +756,7 @@ answer = await ctx.elicit("When should this ship?", response_type=Slot)
 <p>
   And whatever the App enforces, enforce again on the server. The allocation that must total 100% and
   the sale that cannot exceed the position are both checked twice in our implementation, because the
-  App is a UI, not a boundary — anyone can call the tool without it.
+  App is a UI, not a boundary - anyone can call the tool without it.
 </p>
 </div>
 

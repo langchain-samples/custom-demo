@@ -1,11 +1,11 @@
 # Tier-3 LLM evals
 
 Offline LangSmith evals for the behaviors the deterministic pytest suite can't
-cover — the ones that depend on the model's judgment. Each group is a **dataset**
+cover - the ones that depend on the model's judgment. Each group is a **dataset**
 (parameterized inputs) run through a **target** and scored by **evaluators** (code
 assertions + an LLM-as-judge), recorded as a LangSmith **experiment**.
 
-> **Not the per-assistant demo eval — and the polarity is inverted.**
+> **Not the per-assistant demo eval - and the polarity is inverted.**
 >
 > `dashboard_agent/assistant_evals.py` is a *different* eval system that ships as part of
 > the product: setup creates a 3-example dataset in each customer's own workspace, and the
@@ -22,7 +22,7 @@ assertions + an LLM-as-judge), recorded as a LangSmith **experiment**.
 > because that evaluator rewards correct behavior. Copy an evaluator across this line without
 > flipping it and the demo scores green before the fix. See AGENTS.md §3.
 >
-> **Layering:** `evals/` may import from `dashboard_agent` (it does — `fixtures.py` reuses the
+> **Layering:** `evals/` may import from `dashboard_agent` (it does - `fixtures.py` reuses the
 > real setup helpers). `dashboard_agent` must never import from `evals/`; that is why the demo
 > evaluator and its judge helper live in `assistant_evals.py`.
 
