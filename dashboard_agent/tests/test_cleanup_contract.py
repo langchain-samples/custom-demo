@@ -21,7 +21,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 SETUP = REPO / "dashboard_agent" / "provisioning" / "setup.py"
-WEBAPP = REPO / "dashboard_agent" / "webapp.py"
+CLEANUP = REPO / "dashboard_agent" / "web" / "cleanup.py"
 API_TS = REPO / "frontend" / "src" / "lib" / "api.ts"
 
 # The contract. A key added here has to be added to all three sides; a key
@@ -52,7 +52,7 @@ def _written_keys() -> set[str]:
 
 
 def _cleanup_section() -> str:
-    body = WEBAPP.read_text(encoding="utf-8")
+    body = CLEANUP.read_text(encoding="utf-8")
     start = body.index("async def cleanup(")
     return body[start : body.index("\ndef _delete_eval_rule", start)]
 

@@ -34,9 +34,10 @@ from deepagents.backends.protocol import (
 from starlette.testclient import TestClient
 
 import dashboard_agent.runtime.agent as A
-import dashboard_agent.webapp as W
+import dashboard_agent.web.sandbox as WS
+from dashboard_agent.webapp import app
 
-client = TestClient(W.app)
+client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
@@ -78,13 +79,14 @@ class _FakeBackend:
         self.calls.append(("aexecute", command))
         if self._execute is None:
             raise RuntimeError("this backend has no exec")
+
         return self._execute
 
 
 def _install(monkeypatch, backend, enabled: bool = True):
-    """Patch out the sandbox plumbing, on webapp — where the routes look it up."""
-    monkeypatch.setattr(W, "_sandbox_enabled", lambda: enabled)
-    monkeypatch.setattr(W, "_ensure_sandbox", lambda key, *, create=True: backend)
+    """Patch out the sandbox plumbing, on web.sandbox — where the routes look it up."""
+    monkeypatch.setattr(WS, "_sandbox_enabled", lambda: enabled)
+    monkeypatch.setattr(WS, "_ensure_sandbox", lambda key, *, create=True: backend)
     return backend
 
 
@@ -424,13 +426,13 @@ def test_read_maps_backend_errors(monkeypatch, detail, status, reason):
 )
 def test_sandbox_key_mirrors_the_runtime(monkeypatch, query, key):
     seen: list[tuple] = []
-    monkeypatch.setattr(W, "_sandbox_enabled", lambda: True)
+    monkeypatch.setattr(WS, "_sandbox_enabled", lambda: True)
 
     def _spy(k, *, create=True):
         seen.append((k, create))
         return _FakeBackend()
 
-    monkeypatch.setattr(W, "_ensure_sandbox", _spy)
+    monkeypatch.setattr(WS, "_ensure_sandbox", _spy)
     client.get(f"/sandbox-files?{query}")
     assert seen == [(key, False)]  # attach-only: a UI click never provisions a VM
 
@@ -439,7 +441,7 @@ def test_sandbox_key_mirrors_the_runtime(monkeypatch, query, key):
 def test_sandbox_disabled_degrades_calmly(monkeypatch, url):
     # conftest sets SANDBOX_ENABLED=0 for the whole suite — don't patch _sandbox_enabled.
     called: list = []
-    monkeypatch.setattr(W, "_ensure_sandbox", lambda *a, **k: called.append(a))
+    monkeypatch.setattr(WS, "_ensure_sandbox", lambda *a, **k: called.append(a))
     resp = client.get(url)
     assert resp.status_code == 503
     assert resp.json()["reason"] == "sandbox_disabled"
@@ -456,12 +458,12 @@ def test_sandbox_unavailable_degrades_calmly(monkeypatch, url):
 
 @pytest.mark.parametrize("url", ["/sandbox-files", "/sandbox-file?path=/workspace/a.md"])
 def test_no_stack_ever_escapes(monkeypatch, url):
-    monkeypatch.setattr(W, "_sandbox_enabled", lambda: True)
+    monkeypatch.setattr(WS, "_sandbox_enabled", lambda: True)
 
     def _boom(key, *, create=True):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(W, "_ensure_sandbox", _boom)
+    monkeypatch.setattr(WS, "_ensure_sandbox", _boom)
     resp = client.get(url)
     assert resp.status_code == 500
     assert resp.json()["error"] == "RuntimeError: boom"
@@ -477,7 +479,7 @@ def test_wedged_vm_times_out(monkeypatch, url):
             await asyncio.sleep(5)
 
     _install(monkeypatch, _Wedged())
-    monkeypatch.setattr(W, "SANDBOX_TIMEOUT", 0.01)
+    monkeypatch.setattr(WS, "SANDBOX_TIMEOUT", 0.01)
     resp = client.get(url)
     assert resp.status_code == 504
     assert resp.json()["reason"] == "timeout"
@@ -508,7 +510,7 @@ def test_wedged_vm_also_times_out_in_the_vm_not_just_the_await(monkeypatch):
 
     backend = LangSmithSandbox(cast("Any", _Recording('{"encoding": "utf-8", "content": "hi"}')))
     _install(monkeypatch, backend)
-    monkeypatch.setattr(W, "SANDBOX_TIMEOUT", 7)
+    monkeypatch.setattr(WS, "SANDBOX_TIMEOUT", 7)
 
     client.get("/sandbox-files?path=/workspace")
     client.get("/sandbox-file?path=/workspace/a.md")
@@ -744,7 +746,7 @@ def test_upload_enforces_the_caps_itself(monkeypatch):
     too_many = [{"name": f"f{i}.csv", "content_b64": _b64(b"x")} for i in range(6)]
     assert _post_upload(customer="Acme", files=too_many).status_code == 413
 
-    monkeypatch.setattr(W, "_MAX_UPLOAD_BYTES", 8)
+    monkeypatch.setattr(WS, "_MAX_UPLOAD_BYTES", 8)
     body = _post_upload(
         customer="Acme", files=[{"name": "big.pdf", "content_b64": _b64(b"0123456789")}]
     )
@@ -777,14 +779,14 @@ def test_upload_reports_a_per_file_backend_failure(monkeypatch):
 
 def test_upload_is_attach_only_and_says_what_to_do(monkeypatch):
     # A cold start is a ~30s boot plus a pip install, which would outlive the request.
-    monkeypatch.setattr(W, "_sandbox_enabled", lambda: True)
+    monkeypatch.setattr(WS, "_sandbox_enabled", lambda: True)
     seen: list = []
 
     def _ensure(key, *, create=True):
         seen.append(create)
         return None
 
-    monkeypatch.setattr(W, "_ensure_sandbox", _ensure)
+    monkeypatch.setattr(WS, "_ensure_sandbox", _ensure)
     res = _post_upload(customer="Acme", files=[{"name": "a.csv", "content_b64": _b64(b"a")}])
     assert res.status_code == 503
     assert res.json()["reason"] == "sandbox_unavailable"
@@ -793,7 +795,7 @@ def test_upload_is_attach_only_and_says_what_to_do(monkeypatch):
 
 def test_upload_keys_the_vm_like_the_runtime(monkeypatch):
     # agent_repo → customer, read from the JSON body rather than the query string.
-    monkeypatch.setattr(W, "_sandbox_enabled", lambda: True)
+    monkeypatch.setattr(WS, "_sandbox_enabled", lambda: True)
     keys: list[str] = []
     backend = _UploadBackend()
 
@@ -801,7 +803,7 @@ def test_upload_keys_the_vm_like_the_runtime(monkeypatch):
         keys.append(key)
         return backend
 
-    monkeypatch.setattr(W, "_ensure_sandbox", _ensure)
+    monkeypatch.setattr(WS, "_ensure_sandbox", _ensure)
     _post_upload(
         agent_repo="acme-agent",
         customer="Acme",

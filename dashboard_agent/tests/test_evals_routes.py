@@ -39,9 +39,12 @@ from langsmith.utils import LangSmithNotFoundError
 from starlette.testclient import TestClient
 
 import dashboard_agent.provisioning.evals as AE
-import dashboard_agent.webapp as W
+import dashboard_agent.web.cleanup as WC
+import dashboard_agent.web.evals as WE
+import dashboard_agent.web.traffic as WT
+from dashboard_agent.webapp import app
 
-client = TestClient(W.app)
+client = TestClient(app)
 
 WORKSPACE = "ws-acme"
 DATASET = "acme-freight-demo-evals"
@@ -93,13 +96,16 @@ class _FakeClient:
     def has_dataset(self, *, dataset_name: str) -> bool:
         if self._boom == "read":
             raise RuntimeError("503 from LangSmith")
+
         return self._dataset is not None and dataset_name == self._dataset.name
 
     def read_dataset(self, *, dataset_name: str, **_) -> _FakeDataset:
         if self._boom == "read":
             raise RuntimeError("503 from LangSmith")
+
         if self._dataset is None:
             raise LangSmithNotFoundError(f"Dataset {dataset_name} not found")
+
         return self._dataset
 
     def list_projects(self, **kwargs):
@@ -109,6 +115,7 @@ class _FakeClient:
     def delete_dataset(self, **kwargs):
         if self._boom == "dataset":
             raise RuntimeError("no permission")
+
         self.deleted.append(("dataset", kwargs.get("dataset_name") or kwargs.get("dataset_id")))
 
     def delete_project(self, *, project_name: str):
@@ -131,31 +138,36 @@ def _clean_run_state():
     Cleared before AND after, so a test that spawns a run cannot make an unrelated
     one report `running` or an error it never provoked.
     """
-    W._INFLIGHT.clear()
-    W._LAST_RUN_ERROR.clear()
+    WE._INFLIGHT.clear()
+    WE._LAST_RUN_ERROR.clear()
     yield
-    W._INFLIGHT.clear()
-    W._LAST_RUN_ERROR.clear()
+    WE._INFLIGHT.clear()
+    WE._LAST_RUN_ERROR.clear()
 
 
 def _await_idle(timeout: float = 5.0) -> bool:
     """Wait for the background run to leave `_INFLIGHT` (its thread's `finally`)."""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if not W._INFLIGHT:
+        if not WE._INFLIGHT:
             return True
+
         time.sleep(0.02)
+
     return False
 
 
 def _install_client(monkeypatch, fake: _FakeClient) -> _FakeClient:
-    monkeypatch.setattr(W, "_scoped_client", lambda *_a, **_k: fake)
+    """Stand in for LangSmith on both modules that reach for it: /evals/status and /cleanup."""
+    for module in (WE, WC):
+        monkeypatch.setattr(module, "scoped_client", lambda *_a, **_k: fake)
+
     return fake
 
 
 def _install_runner(monkeypatch, fn) -> None:
-    """Replace the experiment runner, on webapp — where the thread looks it up."""
-    monkeypatch.setattr(W, "run_experiment", fn)
+    """Replace the experiment runner, on web.evals — where the thread looks it up."""
+    monkeypatch.setattr(WE, "run_experiment", fn)
 
 
 def _raise(exc_name: str, message: str):
@@ -332,6 +344,7 @@ def test_status_reports_a_run_langsmith_cannot_see_yet(monkeypatch):
         assert _status(dataset=DATASET)["running"] is True
     finally:
         release.set()
+
     assert _await_idle()
 
 
@@ -358,6 +371,7 @@ def test_a_second_click_does_not_start_a_second_experiment(monkeypatch):
         assert len(runs) == 1
     finally:
         release.set()
+
     assert _await_idle()
 
 
@@ -448,7 +462,7 @@ def test_status_gives_up_on_a_stale_run(monkeypatch):
         monkeypatch,
         _FakeClient(
             dataset=_FakeDataset(example_count=3),
-            experiments=[_FakeExperiment(passed=1, scored=1, age_secs=W._RUN_STALE_SECS + 60)],
+            experiments=[_FakeExperiment(passed=1, scored=1, age_secs=WE._RUN_STALE_SECS + 60)],
         ),
     )
     assert _status(dataset=DATASET)["running"] is False
@@ -466,7 +480,7 @@ def test_status_is_calm_when_the_assistant_has_no_dataset(monkeypatch):
 def test_status_with_no_dataset_param_is_an_empty_state(monkeypatch):
     """The SPA calls this before it knows whether the assistant has a dataset."""
     called: list = []
-    monkeypatch.setattr(W, "_scoped_client", lambda *a, **k: called.append(1))
+    monkeypatch.setattr(WE, "scoped_client", lambda *a, **k: called.append(1))
     body = _status()
     assert body["exists"] is False
     assert called == []  # no dataset, no LangSmith round trip
@@ -520,10 +534,10 @@ def test_cleanup_deletes_the_evaluator_as_well_as_its_rule(monkeypatch):
     _install_client(monkeypatch, _FakeClient())
     deleted: list[str] = []
     monkeypatch.setattr(
-        W, "_delete_eval_rule", lambda _ws, rule_id: deleted.append(f"rule:{rule_id}")
+        WC, "_delete_eval_rule", lambda _ws, rule_id: deleted.append(f"rule:{rule_id}")
     )
     monkeypatch.setattr(
-        W, "_delete_judge_evaluator", lambda _ws, ev_id: deleted.append(f"evaluator:{ev_id}")
+        WC, "_delete_judge_evaluator", lambda _ws, ev_id: deleted.append(f"evaluator:{ev_id}")
     )
 
     body = client.post(
@@ -541,7 +555,7 @@ def test_cleanup_skips_the_evaluator_for_assistants_that_never_got_one(monkeypat
     # report is what the falsy-handle guard is for.
     _install_client(monkeypatch, _FakeClient())
     called: list = []
-    monkeypatch.setattr(W, "_delete_judge_evaluator", lambda *_a: called.append(1))
+    monkeypatch.setattr(WC, "_delete_judge_evaluator", lambda *_a: called.append(1))
     body = client.post(
         "/cleanup", json={"workspace": WORKSPACE, "eval_evaluator_id": "", "project": "P"}
     ).json()
@@ -572,6 +586,7 @@ def _traffic_client(monkeypatch, *, stats: dict | None = None, boom: bool = Fals
         def _get_run_stats(**kwargs):
             if boom:
                 raise LangSmithNotFoundError("no such project")
+
             query.update(kwargs)
             return stats or {}
 
@@ -580,7 +595,7 @@ def _traffic_client(monkeypatch, *, stats: dict | None = None, boom: bool = Fals
             read_project=lambda **_kw: SimpleNamespace(url=_PROJECT_URL),
         )
 
-    monkeypatch.setattr(W, "_scoped_client", _client)
+    monkeypatch.setattr(WT, "scoped_client", _client)
     return query
 
 
@@ -627,13 +642,13 @@ _PROJECT_URL = "https://smith.langchain.com/o/ws-1/projects/p/proj-1"
 
 def _links(monkeypatch, url: str | None) -> dict:
     monkeypatch.setattr(
-        W,
-        "_scoped_client",
+        WT,
+        "scoped_client",
         lambda *_a, **_k: SimpleNamespace(
             read_project=lambda **_kw: SimpleNamespace(url=url),
         ),
     )
-    return W._project_links(WORKSPACE, "Acme-corebot-demo")
+    return WT._project_links(WORKSPACE, "Acme-corebot-demo")
 
 
 def test_tab_links_are_query_params_on_the_project_url(monkeypatch):
