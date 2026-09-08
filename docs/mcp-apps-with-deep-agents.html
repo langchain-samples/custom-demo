@@ -285,7 +285,7 @@
     <p class="eyebrow">mcp apps · deep agents · langchain.mcp</p>
     <h1>Tools That Ship Their Own UI</h1>
     <p class="standfirst">
-      An MCP server can hand your frontend a signature pad, a set of allocation sliders, or an
+      An MCP server can hand your frontend a set of allocation sliders, a handwriting pad, or an
       order ticket, and get structured data back mid-tool-call. Here is the whole path, from the
       server's decorator to the iframe, and the four things that cost us an hour each.
     </p>
@@ -301,7 +301,8 @@
 
 <p>
   A generated form handles most of what a tool needs from a person. It cannot handle a drawn
-  signature, five sliders that must total 100%, or a hold-to-confirm on an order that moves money.
+  handwritten mark, five sliders that must total 100%, or a hold-to-confirm on an order that moves
+  money.
   <strong>MCP Apps</strong> are the answer to that: a tool declares a <code>ui://</code> resource,
   the server serves HTML, and the host renders it while the tool call is paused.
 </p>
@@ -344,7 +345,7 @@
     <!-- step 1: model calls tool -->
     <rect x="96" y="104" width="132" height="42" rx="8" fill="none" stroke="currentColor" stroke-width="1.2"/>
     <text x="162" y="124" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">model calls</text>
-    <text x="162" y="138" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">collect_signature</text>
+    <text x="162" y="138" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">propose_rebalance</text>
 
     <line x1="162" y1="146" x2="162" y2="248" stroke="currentColor" stroke-width="1.4" marker-end="url(#a)"/>
     <text x="172" y="200" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">tools/call</text>
@@ -398,7 +399,7 @@
     <text x="66" y="218" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#7FC8FF">tool call</text>
   </svg>
   <figcaption>
-    The blue path is the pause. One <code>collect_signature</code> call spans both legs: the server
+    The blue path is the pause. One <code>propose_rebalance</code> call spans both legs: the server
     answers the first with a request for input, and the second carries the person's answer back into
     the same call, which then finishes normally.
   </figcaption>
@@ -484,21 +485,20 @@ answer = await ctx.elicit("When should this ship?", response_type=Slot)
 </div>
 
 <p class="filename">server.py</p>
-<pre><code><span class="k">@mcp</span>.tool(app=AppConfig(resource_uri=<span class="s">"ui://fieldlink/signature.html"</span>))
-<span class="k">def</span> <span class="f">collect_signature</span>(tracking_id: str, ctx: Context) -&gt; dict | InputRequiredResult:
-    <span class="s">"""Capture a recipient's handwritten signature as proof of delivery."""</span>
-    shipment = lookup(tracking_id)          <span class="c"># cheap: this repeats every round</span>
+<pre><code><span class="k">@mcp</span>.tool(app=AppConfig(resource_uri=<span class="s">"ui://meridian/rebalance.html"</span>))
+<span class="k">def</span> <span class="f">propose_rebalance</span>(account_id: str, ctx: Context) -&gt; dict | InputRequiredResult:
+    <span class="s">"""Propose a rebalance and let the advisor set the target allocation."""</span>
+    account = lookup(account_id)            <span class="c"># cheap: this repeats every round</span>
 
-    answer = answer_for(ctx, <span class="s">"signature"</span>)
+    answer = answer_for(ctx, <span class="s">"rebalance"</span>)
     <span class="k">if</span> answer <span class="k">is</span> <span class="k">None</span>:                    <span class="c"># round 1 — ask, do nothing else</span>
-        <span class="k">return</span> ask(<span class="s">"signature"</span>, f<span class="s">"Signature for {tracking_id}"</span>,
-                   SignatureCapture.model_json_schema())
+        <span class="k">return</span> ask(<span class="s">"rebalance"</span>, f<span class="s">"Set the target allocation for {account.name}"</span>,
+                   allocation_schema(account))
 
     <span class="k">if</span> answer.action != <span class="s">"accept"</span>:        <span class="c"># declined or cancelled</span>
-        <span class="k">return</span> {<span class="s">"status"</span>: <span class="s">"unsigned"</span>}
+        <span class="k">return</span> {<span class="s">"status"</span>: <span class="s">"not_rebalanced"</span>}
 
-    capture = SignatureCapture.model_validate(answer.content)
-    <span class="k">return</span> store_proof_of_delivery(shipment, capture)   <span class="c"># round 2 — the real work</span></code></pre>
+    <span class="k">return</span> place_trades(account, answer.content)      <span class="c"># round 2 — the real work</span></code></pre>
 
 <p class="filename">elicit.py — the two helpers, in full</p>
 <pre><code><span class="k">def</span> <span class="f">ask</span>(key: str, message: str, schema: dict) -&gt; InputRequiredResult:
@@ -536,7 +536,7 @@ answer = await ctx.elicit("When should this ship?", response_type=Slot)
     <rect x="0" y="46" width="196" height="76" rx="8" fill="none" stroke="currentColor" stroke-width="1.2"/>
     <text x="98" y="70" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">tool metadata</text>
     <text x="98" y="90" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="#7FC8FF">_meta.ui.resourceUri</text>
-    <text x="98" y="106" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">ui://…/signature.html</text>
+    <text x="98" y="106" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">ui://…/rebalance.html</text>
 
     <line x1="196" y1="84" x2="266" y2="84" stroke="currentColor" stroke-width="1.4" marker-end="url(#c)"/>
     <text x="231" y="76" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">read</text>
@@ -640,8 +640,8 @@ answer = await ctx.elicit("When should this ship?", response_type=Slot)
   The pause arrives on the stream as an ordinary <code>__interrupt__</code>, in this shape:
 </p>
 <pre><code>{ <span class="s">"type"</span>: <span class="s">"mcp_elicitation"</span>,
-  <span class="s">"tool_name"</span>: <span class="s">"fieldlink_collect_signature"</span>,
-  <span class="s">"requests"</span>: [{ <span class="s">"key"</span>: <span class="s">"signature"</span>, <span class="s">"message"</span>: <span class="s">"Signature for FL-4501"</span>,
+  <span class="s">"tool_name"</span>: <span class="s">"meridian_propose_rebalance"</span>,
+  <span class="s">"requests"</span>: [{ <span class="s">"key"</span>: <span class="s">"rebalance"</span>, <span class="s">"message"</span>: <span class="s">"Set the target allocation"</span>,
                 <span class="s">"mode"</span>: <span class="s">"form"</span>, <span class="s">"requested_schema"</span>: {…} }] }</code></pre>
 <p>
   Route on <code>type</code>, ask your backend whether that tool ships an App, and render one of two
@@ -712,7 +712,7 @@ answer = await ctx.elicit("When should this ship?", response_type=Slot)
     <h4><span class="sym">03</span>A tiny image can kill the whole run</h4>
     <p>
       MCP tool results can carry image blocks, and <code>langchain.mcp</code> converts them to
-      LangChain image blocks, so the model can actually look at a signature. But a provider rejects an
+      LangChain image blocks, so the model can actually look at what was drawn. But a provider rejects an
       undersized image with a 400 that ends the turn — we found it with a 1×1 test fixture, which
       failed <em>after</em> the tool had already succeeded. Check the dimensions and drop the block
       rather than risk the run.
@@ -721,11 +721,12 @@ answer = await ctx.elicit("When should this ship?", response_type=Slot)
   <div class="trap">
     <h4><span class="sym">04</span>Return bytes as a data URI, not a URL</h4>
     <p>
-      Our first version served the signature at a URL and told the model to embed it. Two problems:
-      the model cannot retype 18,000 base64 characters into a document without corrupting them, and a
-      URL makes the document depend on the server still being up. Crop to the ink and export at CSS
-      scale — a signature becomes a couple of KB, small enough to inline, and the document then
-      prints, survives, and needs no network.
+      A second app of ours captures a handwritten mark on a client document. Our first version served
+      it at a URL and told the model to embed that. Two problems: the model cannot retype 18,000
+      base64 characters into a document without corrupting them, and a URL makes the document depend
+      on the server still being up. Crop to the ink, flatten the antialiasing, and export at CSS
+      scale — it drops to a couple of KB, small enough to inline, and the document then prints,
+      survives, and needs no network.
     </p>
   </div>
 </div>
@@ -745,7 +746,7 @@ answer = await ctx.elicit("When should this ship?", response_type=Slot)
 <p>
   The test we settled on: <strong>could a generated form do this?</strong> If yes, skip it — the
   schema fallback already handles it, for free, on every server. An App earns its place when the
-  interaction genuinely cannot be expressed as fields: a drawn signature, sliders under a constraint
+  interaction genuinely cannot be expressed as fields: a handwritten mark, sliders under a constraint
   that only makes sense as a whole, a confirmation that should cost more than a reflex click.
 </p>
 <p>
