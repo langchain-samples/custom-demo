@@ -242,12 +242,13 @@ function ArchitectureDiagram() {
         <text x="254" y="420" fontSize="12" fontWeight="700" fill="currentColor">
           Tools
         </text>
-        {["push_widget", "draft_email", "suggest_meeting_times", "web_search"].map((t, i) => {
-          const x = 254 + i * 111;
+        {["push_widget", "draft_email", "web_search"].map((t, i) => {
+          // Three chips span the same run the four used to, so the sub-box stays filled.
+          const x = 254 + i * 148;
           return (
             <g key={t}>
-              <rect x={x} y="432" width="102" height="30" rx="8" fill={C.face} stroke={C.stroke} />
-              <text x={x + 51} y="451" textAnchor="middle" fontSize="11" fontWeight="600" fill="currentColor">
+              <rect x={x} y="432" width="139" height="30" rx="8" fill={C.face} stroke={C.stroke} />
+              <text x={x + 69.5} y="451" textAnchor="middle" fontSize="11" fontWeight="600" fill="currentColor">
                 {t}
               </text>
             </g>

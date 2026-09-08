@@ -206,7 +206,7 @@ export function describeInterrupt(review: ReviewInterrupt): string {
   const options = (Array.isArray(raw) ? raw : []).map((o) => String(o).trim()).filter(Boolean);
   if (question && options.length) return `${question} Options: ${options.join("; ")}.`;
   if (question) return question;
-  // The artifact interrupts (draft_email, suggest_meeting_times) carry no question.
+  // The artifact interrupts (draft_email) carry no question.
   return `The agent is waiting for approval on a ${String(review.kind || "step").replace(/_/g, " ")}.`;
 }
 

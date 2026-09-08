@@ -11,7 +11,7 @@
  * a half-typed subject line submitted by a re-render.
  */
 import { useState } from "react";
-import { IconCalendarEvent, IconHelpCircle, IconMail, IconPencil } from "@tabler/icons-react";
+import { IconHelpCircle, IconMail, IconPencil } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -65,143 +65,6 @@ function EmailReview({ review, busy, onApprove }: Props) {
         className="self-start"
       >
         {busy ? "Sending…" : "Approve & continue"}
-      </Button>
-    </div>
-  );
-}
-
-/* ------------------------------ Meetings -------------------------------- */
-
-interface Slot {
-  start?: string;
-  end?: string;
-  label?: string;
-  rationale?: string;
-}
-
-/** ISO-8601 (with offset) → the `YYYY-MM-DDTHH:mm` datetime-local input wants. */
-function toLocalInput(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function fromLocalInput(value: string): string {
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? value : d.toISOString();
-}
-
-function prettyLocal(value: string): string {
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value;
-  return d.toLocaleString(undefined, {
-    weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
-  });
-}
-
-function MeetingReview({ review, busy, onApprove }: Props) {
-  const d = review.draft as { timezone?: string; slots?: Slot[] };
-  const slots = Array.isArray(d.slots) ? d.slots : [];
-  const durationMin = Number(review.duration_minutes) || 30;
-
-  const [picked, setPicked] = useState(0);
-  // Custom time starts from the first proposal, so the picker opens somewhere sane.
-  const [custom, setCustom] = useState(() => toLocalInput(slots[0]?.start || ""));
-  const [useCustom, setUseCustom] = useState(false);
-
-  const approve = () => {
-    if (useCustom && custom) {
-      const startIso = fromLocalInput(custom);
-      const end = new Date(new Date(startIso).getTime() + durationMin * 60_000).toISOString();
-      onApprove({
-        ...d,
-        selected: {
-          start: startIso,
-          end,
-          label: prettyLocal(startIso),
-          rationale: "Chosen by the user",
-        },
-      });
-      return;
-    }
-    const s = slots[picked] || slots[0];
-    onApprove({ ...d, selected: { ...s, rationale: s?.rationale || "Confirmed by the user" } });
-  };
-
-  return (
-    <div className="flex flex-col gap-2.5">
-      {d.timezone && (
-        <div className="text-[11px] text-muted-foreground">Times shown in {d.timezone}</div>
-      )}
-      <div className="flex flex-col gap-1.5">
-        {slots.map((s, i) => (
-          <label
-            key={i}
-            className={
-              "flex cursor-pointer items-start gap-2 rounded-md border px-2 py-1.5 transition-colors " +
-              (!useCustom && picked === i ? "border-brand bg-brand/10" : "border-border")
-            }
-          >
-            <input
-              type="radio"
-              name="slot"
-              checked={!useCustom && picked === i}
-              onChange={() => {
-                setPicked(i);
-                setUseCustom(false);
-              }}
-              className="mt-0.5 accent-[var(--brand-primary)]"
-            />
-            <span className="min-w-0">
-              <span className="block text-[12.5px] font-medium">
-                {s.label || prettyLocal(s.start || "")}
-              </span>
-              {s.rationale && (
-                <span className="block text-[11px] text-muted-foreground">{s.rationale}</span>
-              )}
-            </span>
-          </label>
-        ))}
-
-        <label
-          className={
-            "flex cursor-pointer items-center gap-2 rounded-md border px-2 py-1.5 transition-colors " +
-            (useCustom ? "border-brand bg-brand/10" : "border-border")
-          }
-        >
-          <input
-            type="radio"
-            name="slot"
-            checked={useCustom}
-            onChange={() => setUseCustom(true)}
-            className="accent-[var(--brand-primary)]"
-          />
-          <span className="flex flex-wrap items-center gap-2 text-[12.5px]">
-            <span className="inline-flex items-center gap-1">
-              <IconPencil size={12} /> Pick another time
-            </span>
-            <input
-              type="datetime-local"
-              value={custom}
-              onChange={(e) => {
-                setCustom(e.target.value);
-                setUseCustom(true);
-              }}
-              className="rounded-md border border-input bg-transparent px-1.5 py-0.5 text-[12px] text-foreground"
-            />
-            <span className="text-[11px] text-muted-foreground">{durationMin} min</span>
-          </span>
-        </label>
-      </div>
-
-      <Button
-        size="sm"
-        disabled={busy || (useCustom && !custom)}
-        onClick={approve}
-        className="self-start"
-      >
-        {busy ? "Confirming…" : "Confirm time"}
       </Button>
     </div>
   );
@@ -274,7 +137,6 @@ function QuestionReview({ review, busy, onApprove }: Props) {
 
 const META: Record<string, { icon: typeof IconMail; title: string }> = {
   email_draft: { icon: IconMail, title: "Review before sending" },
-  meeting_slots: { icon: IconCalendarEvent, title: "Choose a time" },
   user_question: { icon: IconHelpCircle, title: "A quick question" },
 };
 
@@ -295,9 +157,7 @@ export function ReviewCard(props: Props) {
           paused for you
         </span>
       </div>
-      {kind === "meeting_slots" ? (
-        <MeetingReview {...props} />
-      ) : kind === "user_question" ? (
+      {kind === "user_question" ? (
         <QuestionReview {...props} />
       ) : known ? (
         <EmailReview {...props} />

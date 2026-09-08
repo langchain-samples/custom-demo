@@ -480,7 +480,7 @@ export type McpElicitationResponse =
  * A human-in-the-loop pause. Two unrelated producers land here:
  *
  * 1. Our own simulated tools (`tools/simulated.py` `review`), which set `kind`
- *    ("email_draft" | "meeting_slots" | "user_question") and a `draft`.
+ *    ("email_draft" | "user_question") and a `draft`.
  * 2. An MCP server pausing mid-tool-call, which `langchain.mcp` surfaces with
  *    `type: "mcp_elicitation"`, the `tool_name`, and one or more `requests`.
  *

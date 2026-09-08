@@ -1,20 +1,16 @@
 /**
  * Typed renderers for capability-tool results.
  *
- * The simulated tools (draft_email, suggest_meeting_times, web_search) each return a fixed JSON shape. Rather than showing raw JSON in a
- * collapsed chip, we render a proper card per tool. Anything without a renderer —
- * or whose payload doesn't match — falls back to the chip's pretty-printed JSON,
- * so an off-shape model response degrades instead of breaking.
+ * The simulated tools (draft_email, web_search) each return a fixed JSON shape.
+ * Rather than showing raw JSON in a collapsed chip, we render a proper card per
+ * tool. Anything without a renderer — or whose payload doesn't match — falls
+ * back to the chip's pretty-printed JSON, so an off-shape model response
+ * degrades instead of breaking.
  *
  * Registry is keyed by tool name, mirroring TOOL_META in ./helpers.
  */
 import type { ReactNode } from "react";
-import {
-  IconCalendarEvent,
-  IconCircleCheck,
-  IconExternalLink,
-  IconMail,
-} from "@tabler/icons-react";
+import { IconExternalLink, IconMail } from "@tabler/icons-react";
 
 /* ------------------------------- Shapes -------------------------------- */
 
@@ -23,12 +19,6 @@ interface EmailDraft {
   cc?: string;
   subject?: string;
   body?: string;
-}
-interface MeetingSlot {
-  start?: string;
-  end?: string;
-  label?: string;
-  rationale?: string;
 }
 interface SearchResult {
   title?: string;
@@ -81,36 +71,6 @@ function EmailCard({ d }: { d: EmailDraft }) {
   );
 }
 
-function MeetingCard({ slots, timezone }: { slots: MeetingSlot[]; timezone: string }) {
-  return (
-    <Card>
-      <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        <IconCalendarEvent size={13} /> Suggested times
-        {timezone && <span className="font-normal normal-case"> · {timezone}</span>}
-      </div>
-      <div className="flex flex-col gap-1.5">
-        {slots.map((s, i) => (
-          <div
-            key={i}
-            className="flex items-start gap-2 rounded-md border border-border px-2 py-1.5"
-          >
-            <IconCircleCheck size={14} className="mt-px shrink-0 text-brand" />
-            <span className="min-w-0">
-              <span className="block font-medium">{str(s.label) || str(s.start)}</span>
-              {str(s.rationale) && (
-                <span className="block text-[11px] text-muted-foreground">
-                  {str(s.rationale)}
-                </span>
-              )}
-            </span>
-          </div>
-        ))}
-      </div>
-    </Card>
-  );
-}
-
-
 function SearchCard({ results }: { results: SearchResult[] }) {
   return (
     <Card>
@@ -151,10 +111,6 @@ type Payload = Record<string, unknown>;
 const RENDERERS: Record<string, (d: Payload) => ReactNode | null> = {
   draft_email: (d) =>
     d.subject || d.body ? <EmailCard d={d as EmailDraft} /> : null,
-  suggest_meeting_times: (d) => {
-    const slots = arr<MeetingSlot>(d.slots);
-    return slots.length ? <MeetingCard slots={slots} timezone={str(d.timezone)} /> : null;
-  },
   web_search: (d) => {
     const results = arr<SearchResult>(d.results);
     return results.length ? <SearchCard results={results} /> : null;

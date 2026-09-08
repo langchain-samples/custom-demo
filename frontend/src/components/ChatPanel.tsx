@@ -1743,11 +1743,7 @@ function ItemView({
     if (item.done) {
       return (
         <div className="rounded-xl border border-border bg-panel-2 px-3 py-2 text-xs text-muted-foreground">
-          {mcp
-            ? "✓ Sent to the connected system"
-            : item.review.kind === "meeting_slots"
-              ? "✓ Time confirmed"
-              : "✓ Approved and sent"}
+          {mcp ? "✓ Sent to the connected system" : "✓ Approved and sent"}
         </div>
       );
     }
