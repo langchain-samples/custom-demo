@@ -15,7 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Combobox } from "@/components/ui/combobox";
-import { LABEL_CLS, HINT_CLS } from "./types";
+import { LABEL_CLS } from "./types";
 
 
 interface Props {
@@ -120,9 +120,7 @@ export function AgentConfig({
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <Label className={LABEL_CLS}>
-          Model <span className={HINT_CLS}>(this assistant only)</span>
-        </Label>
+        <Label className={LABEL_CLS}>Model</Label>
         <Combobox
           options={[
             ...MODEL_CHOICES,
