@@ -109,8 +109,15 @@ def _clear_caches():
     A._CTXHUB_CACHE.clear()
 
 
+# Every assistant carries its own starting-files spec (`Context.sandbox_seed`), and a
+# VM refuses to be created without one (`SeedSpecError`) rather than planting a
+# generic dataset. So the lifecycle tests below get the same minimal spec a real
+# assistant would; pass `sandbox_seed=None` to exercise an assistant that has none.
+_SEED = [{"name": "orders.csv", "kind": "csv", "columns": ["id"], "rows": [["1"]]}]
+
+
 def _rt(**ctx):
-    return SimpleNamespace(context=ctx)
+    return SimpleNamespace(context={"sandbox_seed": _SEED, **ctx})
 
 
 def _install_client(monkeypatch, client=None):
@@ -174,7 +181,7 @@ def test_available_seeds_data_stack_and_dataset_once(monkeypatch):
     cmds = [c for sb in client.existing for c in sb.runs]
     assert len(cmds) == 1  # one seed call on create
     seed = cmds[0]
-    assert "sales.csv" in seed  # dataset written to the VM
+    assert "orders.csv" in seed  # this assistant's own file, written to the VM
     # the data-analysis stack is pre-installed so the first forecast turn is instant
     assert "pip install" in seed
     assert "pandas" in seed and "numpy" in seed and "statsmodels" in seed and "scikit-learn" in seed
@@ -238,7 +245,7 @@ def test_dynamic_backend_offrun_falls_back_to_state():
 
 def test_prewarm_creates_and_seeds_then_runtime_reuses(monkeypatch):
     client = _install_client(monkeypatch)
-    A.prewarm_sandbox(customer="Eval Co")
+    A.prewarm_sandbox(customer="Eval Co", seed=_SEED)
     assert len(client.created) == 1  # VM created at provisioning time
     # The agent runtime is a different process → its cache is empty; it must still
     # reattach the pre-warmed VM by name rather than create/seed a second one.
@@ -246,7 +253,7 @@ def test_prewarm_creates_and_seeds_then_runtime_reuses(monkeypatch):
     default, _routes = A._resolve_backends(_rt(customer="Eval Co"))
     assert isinstance(default, LangSmithSandbox)  # warm VM, execute available
     assert len(client.created) == 1  # reattached by name, not recreated
-    seeds = [c for sb in client.existing for c in sb.runs if "sales.csv" in c]
+    seeds = [c for sb in client.existing for c in sb.runs if "orders.csv" in c]
     assert len(seeds) == 1  # seeded once (at pre-warm), not again on the first turn
 
 
@@ -254,7 +261,7 @@ def test_prewarm_uses_agent_repo_precedence(monkeypatch):
     # Runtime keys on agent_repo (else customer); pre-warm must match so it warms
     # the SAME named VM the runtime will later reattach.
     client = _install_client(monkeypatch)
-    A.prewarm_sandbox(agent_repo="acme-agent", customer="Acme")
+    A.prewarm_sandbox(agent_repo="acme-agent", customer="Acme", seed=_SEED)
     assert client.created == ["da-acme-agent"]  # agent_repo wins over customer
 
 
@@ -262,7 +269,7 @@ def test_prewarm_noop_when_disabled(monkeypatch):
     client = _FakeClient()
     monkeypatch.setenv("SANDBOX_ENABLED", "0")
     monkeypatch.setattr(A, "SandboxClient", lambda **kw: client)
-    A.prewarm_sandbox(customer="Eval Co")
+    A.prewarm_sandbox(customer="Eval Co", seed=_SEED)
     assert client.created == []  # kill switch respected — no VM at provisioning
 
 
@@ -287,7 +294,7 @@ def test_sandbox_created_and_seeded_once_across_calls(monkeypatch):
     defaults = [A._resolve_backends(rt)[0] for _ in range(5)]
     assert len(client.created) == 1  # one VM for five resolver calls
     assert {id(b) for b in defaults} == {id(defaults[0])}  # same cached VM object
-    seed_runs = [c for sb in client.existing for c in sb.runs if "sales.csv" in c]
+    seed_runs = [c for sb in client.existing for c in sb.runs if "orders.csv" in c]
     assert len(seed_runs) == 1
 
 
@@ -483,15 +490,15 @@ def test_sandbox_note_routes_file_requests_to_the_upload_button(monkeypatch):
     assert "Files panel" in note
     assert "paste" in note and "attach it to the chat" in note
     # And it can actually read what arrives, without a 30s install mid-demo.
-    assert "pypdf" in note and "pypdf" in A._SEED_SCRIPT
+    assert "pypdf" in note and "pypdf" in A._SEED_INSTALL
 
 
 def test_sandbox_note_says_there_is_no_data_access_when_disabled(monkeypatch):
-    """It used to return "" here, which was right while `datasearch` existed.
+    """The note must NOT be empty when the sandbox is off.
 
-    Files are the only data source now, so silence let the model invent figures
-    or apologise for its own competence, and left a presenter unable to tell a
-    misconfiguration from a bad answer.
+    Files seeded into the sandbox VM are the agent's only data source, so silence
+    lets the model invent figures or apologise for its own competence, and leaves a
+    presenter unable to tell a misconfiguration from a bad answer.
     """
     monkeypatch.setenv("SANDBOX_ENABLED", "0")
     note = A._sandbox_note(_rt())
@@ -501,9 +508,9 @@ def test_sandbox_note_says_there_is_no_data_access_when_disabled(monkeypatch):
 
 # --- per-use-case seed: the VM gets THIS assistant's files ------------------------
 #
-# Reported by a user: a medical-PDF use case was handed 24 months of retail revenue,
-# because the seed was one hardcoded script for every assistant. The spec is now
-# model-authored data rendered by fixed code — never model-authored code.
+# Do NOT seed from one hardcoded script for every assistant: that is how a medical-PDF
+# use case was handed 24 months of retail revenue (reported by a user). The spec is
+# model-authored data rendered by fixed code, never model-authored code.
 
 _MEDICAL_SEED = [
     {
@@ -566,21 +573,59 @@ def test_seed_spec_is_capped():
     assert all(len(f["rows"]) <= A._SEED_MAX_ROWS for f in spec["files"])
 
 
-def test_an_assistant_with_no_spec_still_gets_something_to_analyse():
-    # Assistants created before this feature, and any setup run whose spec was unusable.
+def test_a_spec_with_nothing_usable_in_it_renders_no_script():
     assert A.render_seed_script([]) == ""
     assert A.render_seed_script([{"name": "", "kind": "csv"}]) == ""
 
 
-def test_seeding_prefers_the_assistants_spec_over_the_default(monkeypatch):
+def test_seeding_writes_the_assistants_own_spec():
     ran: list[str] = []
     backend = SimpleNamespace(execute=lambda script: ran.append(script))
     A._seed_data(cast("Any", backend), _MEDICAL_SEED)
     assert "claims.csv" in ran[0] and "sales.csv" not in ran[0]
 
-    ran.clear()
-    A._seed_data(cast("Any", backend), None)
-    assert "sales.csv" in ran[0]  # the fallback, unchanged
+
+def test_an_assistant_with_no_spec_fails_instead_of_borrowing_a_dataset():
+    """A missing spec must NOT fall back to a generic dataset.
+
+    A fallback plants 24 months of retail revenue whatever the assistant is. Reported
+    from production: a McKesson (medical distribution) assistant held nothing
+    but `sales.csv`, and answered about it confidently. A named failure the presenter
+    can act on beats an assistant that is quietly the wrong one.
+    """
+    ran: list[str] = []
+    backend = SimpleNamespace(execute=lambda script: ran.append(script))
+    with pytest.raises(A.SeedSpecError, match="no `sandbox_seed` spec"):
+        A._seed_data(cast("Any", backend), None)
+    assert ran == []  # and nothing was written to the VM
+
+
+def test_a_spec_the_model_mangled_says_so_rather_than_seeding_nothing():
+    backend = SimpleNamespace(execute=lambda script: None)
+    with pytest.raises(A.SeedSpecError, match="none of the 2 entries"):
+        A._seed_data(
+            cast("Any", backend),
+            [{"name": "", "kind": "csv"}, {"name": "x.exe", "kind": "exe"}],
+        )
+
+
+def test_a_missing_spec_fails_the_turn_rather_than_degrading_to_no_vm(monkeypatch):
+    """`_ensure_sandbox` swallows every other sandbox failure; not this one.
+
+    A platform blip is a retry. A missing seed spec is a misconfigured assistant, and
+    degrading it to a StateBackend hands the model an empty workspace it reports as
+    "my data is not mounted" — a platform fault, which it is not.
+    """
+    _install_client(monkeypatch)
+    with pytest.raises(A.SeedSpecError):
+        A._ensure_sandbox("mckesson-a1b2c3", seed=None)
+
+
+def test_a_prewarm_that_cannot_seed_says_why(monkeypatch, capsys):
+    # A daemon thread with nobody to raise to: the log line is the only trace.
+    _install_client(monkeypatch)
+    A.prewarm_sandbox(sandbox_key="mckesson-a1b2c3", seed=None)
+    assert "SeedSpecError" in capsys.readouterr().out
 
 
 def test_a_lazily_created_vm_seeds_from_the_runs_context(monkeypatch):
@@ -609,7 +654,7 @@ def test_pdf_lines_step_down_the_page():
     """
     script = A.render_seed_script(_MEDICAL_SEED)
     assert 'new_x="LMARGIN"' in script and 'new_y="NEXT"' in script
-    # And the downgrade is no longer silent.
+    # And the downgrade is not silent.
     assert "pdf unavailable, wrote text instead" in script
 
 
@@ -645,7 +690,9 @@ def test_an_assistant_with_no_key_still_reaches_its_old_vm():
 def test_prewarm_and_the_runtime_agree_on_the_key(monkeypatch):
     """They must, or the prewarmed VM is orphaned and the first turn boots another."""
     client = _install_client(monkeypatch)
-    A.prewarm_sandbox(sandbox_key="acme-a1b2c3", agent_repo="acme-agent", customer="Acme")
+    A.prewarm_sandbox(
+        sandbox_key="acme-a1b2c3", agent_repo="acme-agent", customer="Acme", seed=_SEED
+    )
     A._SANDBOX_CACHE.clear()  # the runtime is a different process
     A._resolve_backends(
         _rt(
@@ -695,3 +742,105 @@ def test_the_seed_writer_keeps_a_file_that_is_already_there():
     script = A.render_seed_script(_MEDICAL_SEED)
     assert "path.exists()" in script
     assert "continue" in script
+
+
+# --- a repo the assistant NAMES must not resolve to something else ---------------
+#
+# `ContextHubBackend.__init__` does no I/O, so a Hub outage never reaches these
+# handlers (it surfaces at the first read through the backend). What reaches them is
+# a client that cannot be built, i.e. a misconfiguration — and the assistant's own
+# context named that repo, so resolving it to a StateBackend or dropping the
+# /skills/ route leaves a run whose prompt talks about skills it does not have.
+
+
+def _ctxhub_boom(monkeypatch, message="cannot build a client"):
+    def _boom(_repo, _ws):
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(A, "_ctxhub_backend", _boom)
+
+
+def test_an_agent_repo_that_cannot_back_a_filesystem_fails_the_turn(monkeypatch):
+    """Do NOT fall back to `StateBackend(), {}` here: the assistant loses its disk."""
+    _ctxhub_boom(monkeypatch)
+    with pytest.raises(A.BackendSourceError, match="acme-agent") as exc:
+        A._resolve_backends(_rt(agent_repo="acme-agent", ls_workspace="ws"))
+
+    assert "whole filesystem" in str(exc.value)
+    assert isinstance(exc.value.__cause__, RuntimeError)
+
+
+def test_a_skills_repo_that_cannot_be_mounted_fails_the_turn(monkeypatch):
+    """Do NOT drop the /skills/ route and run on anyway.
+
+    Setup pushed that bundle and the prompt's skills clause tells the model to consult
+    it first, so an empty mount is a run that is quietly missing what it was told it
+    has.
+    """
+    _install_client(monkeypatch)
+    _ctxhub_boom(monkeypatch)
+    with pytest.raises(A.BackendSourceError, match="eval-skills") as exc:
+        A._resolve_backends(_rt(customer="Eval Co", skills_repo="eval-skills"))
+
+    assert "/skills/" in str(exc.value)
+
+
+# --- which VM did this assistant attach to, and why? ----------------------------
+
+
+def test_a_shared_vm_says_which_key_it_fell_back_to(capsys):
+    A._KEY_SOURCE_REPORTED.clear()
+    assert A._sandbox_key_from(None, "acme-agent", "Acme") == "acme-agent"
+    out = capsys.readouterr().out
+    assert "agent_repo" in out and "acme-agent" in out
+    assert "SHARES" in out  # ...and that sharing is the consequence to worry about
+
+
+def test_a_customer_keyed_vm_names_the_customer(capsys):
+    A._KEY_SOURCE_REPORTED.clear()
+    assert A._sandbox_key_from(None, None, "Acme") == "Acme"
+    assert "customer name" in capsys.readouterr().out
+
+
+def test_the_shared_vm_warning_is_logged_once_not_once_per_resolve(capsys):
+    # `_resolve_backends` re-runs on every filesystem property access, so an
+    # unconditional print would bury the log it is supposed to make readable.
+    A._KEY_SOURCE_REPORTED.clear()
+    for _ in range(5):
+        A._sandbox_key_from(None, None, "Acme")
+
+    assert capsys.readouterr().out.count("[sandbox]") == 1
+
+
+def test_an_assistant_with_its_own_key_says_nothing(capsys):
+    A._KEY_SOURCE_REPORTED.clear()
+    assert A._sandbox_key_from("acme-a1b2c3", "acme-agent", "Acme") == "acme-a1b2c3"
+    assert capsys.readouterr().out == ""  # the normal case is not worth a line
+
+
+# --- a spec-less assistant never gets a VM in the first place -------------------
+
+
+def test_an_assistant_with_no_spec_never_gets_a_vm_at_all(monkeypatch):
+    """The check moved ahead of the acquire, so nothing is created-then-abandoned."""
+    client = _install_client(monkeypatch)
+    with pytest.raises(A.SeedSpecError):
+        A._resolve_backends(_rt(customer="McKesson", sandbox_seed=None))
+
+    assert client.created == []
+
+
+def test_a_spec_less_assistant_fails_the_same_way_on_every_turn(monkeypatch):
+    """The same failure on EVERY turn, never one that heals itself on turn 2.
+
+    A turn 1 that fails and leaves an empty VM behind lets turn 2 attach to it and
+    answer from it. An assistant that looks like it recovered is worse than one that is
+    visibly unusable: the empty /workspace/data gets reported as "my data is not
+    mounted".
+    """
+    client = _install_client(monkeypatch)
+    for _ in range(3):
+        with pytest.raises(A.SeedSpecError):
+            A._resolve_backends(_rt(customer="McKesson", sandbox_seed=None))
+
+    assert client.created == []

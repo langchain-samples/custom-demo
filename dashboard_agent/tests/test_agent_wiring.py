@@ -8,6 +8,7 @@ import asyncio
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
 from langgraph.prebuilt.tool_node import ToolCallRequest
 
 from dashboard_agent.runtime import agent as A
@@ -85,6 +86,43 @@ def test_subagents_note_on_when_enabled(monkeypatch):
     assert "execute" in note  # ...from the Python data sandbox
 
 
+def test_subagents_that_cannot_be_built_fail_the_flag_that_asked_for_them(monkeypatch):
+    """An OPT-IN capability must not opt itself back out.
+
+    This used to catch every exception and set `subagents = None`, so an operator who
+    deliberately set DYNAMIC_SUBAGENTS got an agent with no subagents, no error, and
+    skills whose workflows tell it to fan work out to them. `langchain-quickjs` is a
+    hard pin, so a failure here is a broken install and the operator who set the flag
+    is the one who can act on the message.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("DYNAMIC_SUBAGENTS", "1")
+    import langchain_quickjs  # noqa: PLC0415
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("no quickjs-rs wheel for this platform")
+
+    monkeypatch.setattr(langchain_quickjs, "CodeInterpreterMiddleware", _boom)
+    with pytest.raises(A.DynamicSubagentsError, match="DYNAMIC_SUBAGENTS"):
+        A.build_agent(deployed=True)
+
+
+def test_the_subagent_failure_names_the_underlying_cause(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("DYNAMIC_SUBAGENTS", "1")
+    import langchain_quickjs  # noqa: PLC0415
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("no quickjs-rs wheel")
+
+    monkeypatch.setattr(langchain_quickjs, "CodeInterpreterMiddleware", _boom)
+    with pytest.raises(A.DynamicSubagentsError) as exc:
+        A.build_agent(deployed=True)
+
+    assert "no quickjs-rs wheel" in str(exc.value)
+    assert isinstance(exc.value.__cause__, RuntimeError)
+
+
 # --- goal grading (RubricMiddleware, drives the SPA's goal pill) ---
 
 
@@ -107,12 +145,31 @@ def test_graph_accepts_a_rubric_on_its_input(monkeypatch):
     assert "rubric" in props
 
 
-def test_graph_still_builds_when_the_rubric_middleware_cannot_be_made(monkeypatch):
-    """An optional capability must never take graph load down with it."""
+def test_a_grader_that_cannot_be_built_fails_the_graph_instead_of_going_quiet(monkeypatch):
+    """Replaces a test that asserted the graph built anyway, with `rubric` dropped.
+
+    That was the old guarded behaviour: `_rubric_middleware` returned None and the
+    deployment came up with a goal pill that accepted a goal and then never graded
+    it, with nothing saying why. `RubricMiddleware` comes from a hard-pinned
+    deepagents, so the only way this fails now is a broken deployment, which should
+    look like one.
+    """
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setenv("DYNAMIC_SUBAGENTS", "0")
-    monkeypatch.setattr(A, "_rubric_middleware", lambda: None)
-    assert "rubric" not in A.build_agent(deployed=True).get_input_jsonschema()["properties"]
+
+    def _boom(**_):
+        raise RuntimeError("no grader model")
+
+    monkeypatch.setattr(A, "RubricMiddleware", _boom)
+    with pytest.raises(RuntimeError, match="no grader model"):
+        A.build_agent(deployed=True)
+
+
+def test_the_goal_grader_is_always_in_the_graph(monkeypatch):
+    """`rubric` is in the input schema unconditionally — it is not opt-in."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("DYNAMIC_SUBAGENTS", "0")
+    assert "rubric" in A.build_agent(deployed=True).get_input_jsonschema()["properties"]
 
 
 # --- no todo middleware (deepagents 0.7 makes it opt-in; we don't opt in) ---
@@ -257,3 +314,35 @@ def test_mcp_note_names_the_server_behind_each_tool(monkeypatch):
 
 def test_mcp_note_is_empty_without_mcp_tools():
     assert A._mcp_note(SimpleNamespace(context={"mcp_servers": None})) == ""
+
+
+def test_mcp_note_says_a_configured_server_could_not_be_reached():
+    """`load_tools` never raises, so an unreachable server yielded silence.
+
+    The user typed that URL into the SPA. An agent answering as though it has no
+    connected systems is indistinguishable from a broken one, so the model is told
+    and can say so. The turn still runs.
+    """
+    token = A._mcp_tools.set(())  # discovery ran, produced nothing
+    try:
+        note = A._mcp_note(SimpleNamespace(context={"mcp_servers": _SERVER}))
+    finally:
+        A._mcp_tools.reset(token)
+
+    assert "CONNECTED SYSTEMS UNAVAILABLE" in note
+    assert "Fieldlink" in note
+    assert "do NOT invent" in note  # ...and must not answer from local files instead
+
+
+def test_mcp_note_stays_quiet_on_the_sync_path():
+    # None, not an empty tuple: no discovery ran, so a sync run knows nothing either
+    # way and must not claim the server is down.
+    assert A._mcp_note(SimpleNamespace(context={"mcp_servers": _SERVER})) == ""
+
+
+def test_mcp_note_says_nothing_when_no_server_is_configured():
+    token = A._mcp_tools.set(())
+    try:
+        assert A._mcp_note(SimpleNamespace(context={"mcp_servers": None})) == ""
+    finally:
+        A._mcp_tools.reset(token)

@@ -847,21 +847,24 @@ def ensure_engine_job(client: Any, project: str, *, cron: str = ENGINE_CRON) -> 
     we just backfilled instead of showing an empty page and a 6-hour wait.
 
     Enabling twice is treated as success: the config is per session, so a re-seed of a
-    project that already has Engine on answers with a conflict and there is nothing to
-    fix.
+    project that already has Engine on answers HTTP 409 and there is nothing to fix.
+    `request_with_retries` raises that as `LangSmithConflictError`, so we test the type
+    rather than hunting "409", "conflict" or "already" in the message text — the last
+    of those was loose enough for a host name or a request id to satisfy by chance,
+    which reported an Engine that was never enabled as one that already was.
     """
     session_id = str(client.read_project(project_name=project).id)
     path = f"/v1/platform/sessions/{session_id}/issues-agent"
     out: dict[str, Any] = {"session_id": session_id}
     try:
         created = client.request_with_retries("POST", path, json={"cron_schedule": cron}).json()
-    except Exception as exc:  # noqa: BLE001 - Engine is a garnish; never fail the traffic
-        detail = str(exc)
-        if "409" in detail or "conflict" in detail.lower() or "already" in detail.lower():
-            out["already_enabled"] = True
-            return out
-        out["error"] = f"engine could not be enabled: {detail[:200]}"
+    except LangSmithConflictError:
+        out["already_enabled"] = True  # already on for this session, which is the goal
         return out
+    except Exception as exc:  # noqa: BLE001 - Engine is a garnish; never fail the traffic
+        out["error"] = f"engine could not be enabled: {str(exc)[:200]}"
+        return out
+
     out["config_id"] = created.get("id", "")
     # Read back rather than assume: `cron_enabled` is the field the UI's toggle
     # reflects, and the schedule is the server's jittered version of `cron`.

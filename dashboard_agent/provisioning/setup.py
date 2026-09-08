@@ -32,7 +32,7 @@ from dashboard_agent.provisioning.evals import (
 )
 from dashboard_agent.provisioning.resource_tags import tag_assistant_resources
 from dashboard_agent.provisioning.traffic import annotation_queue_name, start_demo_traffic
-from dashboard_agent.runtime.agent import prewarm_sandbox
+from dashboard_agent.runtime.agent import SeedSpecError, prewarm_sandbox
 from dashboard_agent.runtime.prompt import (
     DASHBOARD_SKILL_DESCRIPTION,
     DASHBOARD_SKILL_INSTRUCTIONS,
@@ -557,10 +557,11 @@ def analyze_customer(
             for s in resp.skills
             if s.name.strip() and s.instructions.strip()
         ][:3]
-        # The VM's starting files. Dropping these is how every assistant ends up
-        # with the generic sales CSV (`render_seed_script`'s fallback) — including
-        # the ones whose skills tell the agent to open a claims PDF. Passed through
-        # as plain dicts; `render_seed_script` is what validates and caps them.
+        # The VM's starting files, and the assistant has no data without them: an
+        # empty list here is what `prepare_assistant` refuses to build on, because a
+        # medical-claims assistant whose skills tell the agent to open a claims PDF
+        # must not be handed some other use case's dataset instead. Passed through as
+        # plain dicts; `render_seed_script` is what validates and caps them.
         out["seed_files"] = [f.model_dump() for f in resp.seed_files][:_MAX_SEED_FILES]
         for key, val in (
             ("primary_color", resp.primary_color),
@@ -957,6 +958,22 @@ def prepare_assistant(payload: dict) -> dict:
             "Setup could not analyze this customer, so the assistant would have been "
             f"generic: {analysis['error']}. Nothing was created. Try again."
         )
+
+    # Same gate, for the assistant's DATA. The seed files are its system of record,
+    # and there is no generic dataset to stand in for them any more (see
+    # `SeedSpecError`), so an assistant created without them has an empty
+    # /workspace/data and every question fails at the VM instead of here, where
+    # nothing has been created yet. This fires for a partial analysis too: one that
+    # produced quick actions and then died before the seed files passes the check
+    # above.
+    if not analysis.get("seed_files"):
+        raise SeedSpecError(
+            "Setup produced no starting data files for this customer, so the assistant "
+            "would have had an empty workspace and nothing to answer from"
+            + (f": {analysis['error']}" if analysis.get("error") else "")
+            + ". Nothing was created. Try again."
+        )
+
     display_name = payload.get("display_name") or f"{customer} GPT"
 
     slug = slugify(customer)

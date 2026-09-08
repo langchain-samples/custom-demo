@@ -646,7 +646,10 @@ def test_ensure_sandbox_still_creates_by_default(monkeypatch):
     monkeypatch.setenv("SANDBOX_ENABLED", "1")
     monkeypatch.setenv("LANGSMITH_API_KEY", "test-key")
     monkeypatch.setattr(A, "SandboxClient", lambda **kw: ls_client)
-    assert A._ensure_sandbox("acme") is not None
+    # A create needs the assistant's own starting-files spec: there is no generic
+    # dataset to fall back on, so `_ensure_sandbox` raises without one.
+    seed = [{"name": "orders.csv", "kind": "csv", "columns": ["id"], "rows": [["1"]]}]
+    assert A._ensure_sandbox("acme", seed=seed) is not None
     assert ls_client.created == ["da-acme"]  # existing callers keep today's behaviour
 
 

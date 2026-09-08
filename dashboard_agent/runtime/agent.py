@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, cast
 
-from deepagents import SubAgent, create_deep_agent
+from deepagents import RubricMiddleware, SubAgent, create_deep_agent
 from deepagents.backends import (
     CompositeBackend,
     ContextHubBackend,
@@ -38,6 +38,7 @@ from langchain.chat_models import init_chat_model
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.runtime import get_runtime
 from langsmith import Client
+from langsmith.sandbox import SandboxClient as _LangSmithSandboxClient
 
 from dashboard_agent.config import (
     MODEL,
@@ -167,7 +168,11 @@ def _sandbox_note(runtime) -> str:
         "\n\nCODE EXECUTION: You have an isolated Linux VM with an `execute` tool. Files live in "
         "/workspace/data/, ALWAYS run `ls /workspace/data` and look at what is actually there "
         "before you plan any work, and never assume a particular file exists. "
-        + (listing or "It holds a small sample dataset, plus anything the user has uploaded.\n")
+        + (
+            listing
+            or "There is no file list for this assistant, so `ls` is the only way to "
+            "find out what it has.\n"
+        )
         + "FILES FROM THE USER: the user can upload documents and data (PDF, CSV, images) with the "
         "upload button in the Files panel, and they appear in /workspace/data. If you need a "
         "document you do not have, say exactly that and ask them to upload it there. NEVER ask "
@@ -263,8 +268,12 @@ def _capability_note(runtime) -> str:
 # sync `@dynamic_prompt`, so it cannot await discovery itself; `McpTools` runs
 # first (it sits earlier in the middleware list, so it wraps further out), loads
 # the tools, and leaves them here for the prompt to describe.
-_mcp_tools: contextvars.ContextVar[tuple[Any, ...]] = contextvars.ContextVar(
-    "mcp_tools", default=()
+# None means "no discovery ran on this path", which is NOT the same as "discovery
+# ran and found nothing" (an empty tuple). Only the async hook loads tools, so the
+# sync path leaves None here and `_mcp_note` stays quiet on it; an empty tuple with
+# servers configured is a server that could not be reached, and the model is told.
+_mcp_tools: contextvars.ContextVar[tuple[Any, ...] | None] = contextvars.ContextVar(
+    "mcp_tools", default=None
 )
 
 
@@ -275,11 +284,33 @@ def _mcp_note(runtime) -> str:
     that only describes the dashboard workflow makes the model treat them as
     off-script. Naming the server is what turns `fieldlink_get_shipment` from an
     odd identifier into "the customer's own system of record".
+
+    A configured server that yielded NO tools is reported too, rather than leaving the
+    prompt silent. `load_tools` never raises (a bad server must not fail the turn),
+    and the user typed that URL into the SPA, so an agent that just answers as though
+    it has no connected systems is indistinguishable from a broken server. The turn
+    still runs -- the model is told the connection is down so it can say so.
     """
     tools = _mcp_tools.get()
-    if not tools:
-        return ""
     servers = {s.id: s.label for s in _mcp_parse(_ctx(runtime, "mcp_servers"))}
+    if tools is None:
+        return ""  # sync path: no discovery ran, so nothing is known either way
+
+    if not tools:
+        if not servers:
+            return ""  # nothing configured, so nothing to report
+
+        down = ", ".join(sorted(servers.values()))
+        return (
+            f"\n\nCONNECTED SYSTEMS UNAVAILABLE ({down}). This assistant is configured to "
+            f"reach {down} over MCP, but it could not be reached this turn, so none of its "
+            "tools are available to you. If the user asks for something only that system "
+            "could answer (live order, shipment, account, ticket or inventory state), say "
+            "plainly that the connection to it is down and that you cannot look it up right "
+            "now, and offer to retry. Do NOT answer from your local data files as though "
+            "they were that system, and do NOT invent a value it would have returned."
+        )
+
     lines = []
     for tool in tools:
         owner = next(
@@ -505,22 +536,11 @@ _SANDBOX_REVALIDATE_AFTER = 600
 _SANDBOX_SEEN: dict[str, float] = {}
 
 
-def _import_sandbox_client() -> Any:
-    """The langsmith `SandboxClient`, or None if the `[sandbox]` extra is absent.
-
-    Imported inside a function so a missing extra can never break graph load.
-    """
-    try:
-        # Optional `[sandbox]` extra: a missing one must not break graph load.
-        from langsmith.sandbox import SandboxClient  # noqa: PLC0415
-
-        return SandboxClient
-    except Exception:  # noqa: BLE001
-        return None
-
-
-# Module-level, monkeypatchable name (tests swap this for a fake); None ⇒ no sandbox.
-SandboxClient: Any = _import_sandbox_client()
+# Module-level, monkeypatchable name (tests swap this for a fake). Imported at the
+# top rather than behind a try: `langsmith[sandbox]` is a hard pin, the module lives
+# in the base wheel, and it costs ~3ms once `deepagents.backends` is loaded. A guard
+# here would only turn a broken install into an assistant with no data access.
+SandboxClient: Any = _LangSmithSandboxClient
 
 # Pre-install the data-analysis stack so the first forecast turn is instant (the system
 # Python is externally managed → --break-system-packages; a bare `pip install` refuses).
@@ -531,35 +551,6 @@ _SEED_INSTALL = (
     "pip install --break-system-packages -q pandas numpy statsmodels scikit-learn pypdf "
     ">/dev/null 2>&1 || true\n"
 )
-
-# FALLBACK data, used only when an assistant has no seed spec of its own: 24 months of
-# sales with a trend + seasonality, written with pure stdlib so it does not depend on
-# the install above.
-#
-# This used to be what EVERY assistant got, which is how a medical-records demo ended up
-# being told to load a retail revenue CSV (reported by a user). `render_seed_script`
-# builds the per-use-case version; this remains for assistants created before that
-# existed, and for a setup run where the model returned nothing usable.
-_SEED_SCRIPT = (
-    _SEED_INSTALL
-    + """mkdir -p /workspace/data && python3 - <<'PY'
-import csv, math
-rows = []
-for i in range(24):
-    year, month = 2024 + i // 12, i % 12 + 1
-    trend = 100000 + i * 3500
-    seasonal = 1 + 0.18 * math.sin((month - 1) / 12 * 2 * math.pi)
-    revenue = round(trend * seasonal)
-    units = round(revenue / (42 + 0.05 * i))
-    rows.append((f"{year}-{month:02d}", revenue, units))
-with open("/workspace/data/sales.csv", "w", newline="") as f:
-    w = csv.writer(f)
-    w.writerow(["month", "revenue_usd", "units"])
-    w.writerows(rows)
-print("seeded", len(rows), "rows -> /workspace/data/sales.csv")
-PY"""
-)
-
 
 # Caps on a per-assistant seed. The spec comes from an LLM, so it is treated as
 # untrusted input for SIZE as much as for shape: a runaway `rows` would push a
@@ -700,22 +691,51 @@ def _slug(text: str) -> str:
     return out or "default"
 
 
+# (source, key) pairs already reported by `_sandbox_key_from`, so a fallback is
+# logged once per process rather than once per filesystem call.
+_KEY_SOURCE_REPORTED: set[tuple[str, str]] = set()
+
+
 def _sandbox_key_from(
     sandbox_key: str | None, agent_repo: str | None = None, customer: str | None = None
 ) -> str:
     """The cache/VM key for an assistant: its own key, else agent_repo, else customer.
 
     `sandbox_key` is minted per assistant at setup (`prepare_assistant`) and is the
-    only one of the three that is unique. The other two are derived from the customer
-    name, so a second assistant for the same customer resolved to the SAME VM and
-    attached to it instead of creating one -- inheriting its files and skipping its
-    own seed, which is how a McKesson assistant ended up holding nothing but the
-    generic `sales.csv` that a previous McKesson assistant's failed setup had planted.
+    only one of the three that is unique. Don't let a new assistant fall back to the
+    other two if you can avoid it: they are derived from the customer name, so a
+    second assistant for the same customer resolves to the SAME VM and attaches to it
+    instead of creating one, inheriting that VM's files and skipping its own seed.
+    That is how a McKesson assistant ended up holding nothing but the `sales.csv` a
+    previous McKesson assistant's failed setup had planted, in production.
 
-    They remain as fallbacks because every assistant provisioned before this carries
-    no key, and sharing a warm VM is still better for them than having none.
+    They remain as fallbacks because every assistant provisioned before `sandbox_key`
+    carries no key, and sharing a warm VM is still better for them than having none.
+    They are AUDIBLE, though: "which VM did this assistant attach to, and why" has to
+    be answerable from stdout, because the chain is what produced that bug and a
+    shared VM looks exactly like an assistant's own until you read its files.
     """
-    return sandbox_key or agent_repo or customer or "default"
+    if sandbox_key:
+        return sandbox_key
+
+    if agent_repo:
+        source, key = "agent_repo", agent_repo
+    elif customer:
+        source, key = "customer name", customer
+    else:
+        source, key = "neither, so the process-wide shared", "default"
+
+    # Once per distinct fallback, not once per resolve: `_resolve_backends` re-runs on
+    # every filesystem property access, so an unconditional print would bury the log.
+    if (source, key) not in _KEY_SOURCE_REPORTED:
+        _KEY_SOURCE_REPORTED.add((source, key))
+        print(
+            f"[sandbox] this assistant has no sandbox_key of its own, so it attaches to "
+            f"the VM named for its {source} ({key!r}). Any other assistant resolving to "
+            f"the same name SHARES that VM and its files, and skips its own seed."
+        )
+
+    return key
 
 
 def _sandbox_key_credentials() -> tuple[str | None, dict[str, str]]:
@@ -746,20 +766,68 @@ def _sandbox_enabled() -> bool:
     return bool(_sandbox_key_credentials()[0])
 
 
-def _seed_data(backend: Any, seed: list[dict] | None = None) -> None:
-    """Best-effort: plant this assistant's starting files inside a freshly created VM.
+class SeedSpecError(RuntimeError):
+    """An assistant's VM was created with no usable starting-files spec.
 
-    `seed` is the assistant's own spec (`Context.sandbox_seed`); without one — or when
-    nothing in it survives validation — the generic sales dataset is used, which is what
-    every assistant used to get regardless of its use case.
+    Typed so callers and tests can recognize it without reading its message (the
+    message is for the human in front of the SPA, and is free to change).
+
+    There is deliberately no stand-in dataset behind this. Don't reuse one seed
+    script across all assistant types — an assistant scoped to one domain can end up
+    loaded with an unrelated dataset (e.g. medical-records loaded with retail revenue
+    data), which has happened in production, and the agent then reasons over those
+    figures as confidently as over its own.
+    """
+
+
+def seed_script_or_raise(seed: list[dict] | None) -> str:
+    """The shell script that plants `seed`, or `SeedSpecError` naming what was missing.
+
+    Shared by the two callers that must agree: `_get_or_create_sandbox` checks it
+    BEFORE a VM is acquired, so an assistant with no usable spec never gets one, and
+    `_seed_data` renders it on the create path. Checking up front is what makes the
+    failure identical on every turn. Checking only at seed time meant turn 1 failed
+    loudly, created an empty VM anyway, and turn 2 attached to it and answered from an
+    empty /workspace/data -- which reads as a recovery, and is the shape this whole
+    path exists to avoid.
+    """
+    script = render_seed_script(seed or [])
+    if script:
+        return script
+
+    supplied = len(seed) if isinstance(seed, list) else 0
+    detail = (
+        f"none of the {supplied} entries in its `sandbox_seed` spec is a usable file "
+        f"(each needs a name and a kind from {sorted(_SEED_KINDS)})"
+        if supplied
+        else "its stored context carries no `sandbox_seed` spec at all, so setup either "
+        "predates per-assistant seed files or did not produce any"
+    )
+    raise SeedSpecError(
+        f"This assistant has no starting files to plant in /workspace/data: {detail}. "
+        "Re-run setup for it rather than answering from another assistant's data."
+    )
+
+
+def _seed_data(backend: Any, seed: list[dict] | None = None) -> None:
+    """Plant this assistant's starting files inside a freshly created VM.
+
+    `seed` is the assistant's own spec (`Context.sandbox_seed`). Raises
+    `SeedSpecError`, naming what was missing, when there is nothing usable to plant:
+    an assistant whose stored context carries no spec, or one whose spec is entirely
+    unusable, gets a visibly failed turn rather than somebody else's dataset (see
+    `SeedSpecError`). `_ensure_sandbox` lets that one through on purpose.
+
+    The VM round trip itself stays best-effort: the spec was fine, the platform was
+    not, and that is a retry rather than a wrong answer.
 
     Called only on the create path. It is a blocking VM round trip that begins with a
     pip install, so it must never sit on a turn that merely attached to a warm VM.
     """
+    script = seed_script_or_raise(seed)
     try:
-        script = render_seed_script(seed or []) or _SEED_SCRIPT
         backend.execute(script)
-    except Exception as exc:  # noqa: BLE001 - a seed failure must not fail the run
+    except Exception as exc:  # noqa: BLE001 - a VM/transport failure must not fail the run
         # Printed, not swallowed: an empty /workspace/data is reported by the model as
         # its data not being mounted, which reads as a platform fault rather than this.
         print(f"[sandbox] seeding failed: {type(exc).__name__}: {exc}")
@@ -855,6 +923,12 @@ def _ensure_sandbox(key: str, *, create: bool = True, seed: list[dict] | None = 
 
     `seed` is this assistant's starting files; it only matters on the call that creates
     the VM, and an attach reuses whatever the filesystem already holds.
+
+    `SeedSpecError` is the one failure that is NOT degraded to None. Every other
+    sandbox problem is the platform having a bad minute, which a retry fixes; a
+    missing seed spec is a misconfigured assistant, and answering it from a
+    StateBackend (or from a dataset that belongs to some other customer) is the
+    silent-wrong-answer this whole path exists to avoid.
     """
     cached = _SANDBOX_CACHE.get(key)
     now = time.monotonic()
@@ -862,6 +936,8 @@ def _ensure_sandbox(key: str, *, create: bool = True, seed: list[dict] | None = 
         return cached
     try:
         return _revalidate_or_acquire(key, cached, now, create=create, seed=seed)
+    except SeedSpecError:
+        raise
     except Exception:  # noqa: BLE001 - never hard-fail a run on sandbox trouble
         return None
 
@@ -921,10 +997,15 @@ def _get_or_create_sandbox(runtime) -> Any | None:
     if not _sandbox_enabled():
         return None
     seed = _ctx(runtime, "sandbox_seed")
+    spec = seed if isinstance(seed, list) else None
+    # Before the VM, not after it. See `seed_script_or_raise`: an assistant with no
+    # usable spec must fail the same way on every turn, rather than failing once and
+    # then quietly attaching to the empty VM that first turn left behind.
+    seed_script_or_raise(spec)
     key = _sandbox_key_from(
         _ctx(runtime, "sandbox_key"), _ctx(runtime, "agent_repo"), _ctx(runtime, "customer")
     )
-    return _ensure_sandbox(key, seed=seed if isinstance(seed, list) else None)
+    return _ensure_sandbox(key, seed=spec)
 
 
 def prewarm_sandbox(
@@ -940,13 +1021,18 @@ def prewarm_sandbox(
     exactly like the runtime (agent_repo → customer), so the first turn reattaches
     the same warm VM by name rather than creating a second one. Best-effort: a
     no-op when the sandbox is disabled/unavailable, and never raises.
+
+    Printed, not swallowed. This runs on a daemon thread with nobody to raise to, so
+    the log line is the only trace: without it a `SeedSpecError` here (an assistant
+    whose seed spec never made it into its context) looked exactly like a successful
+    pre-warm right up until the first question.
     """
     if not _sandbox_enabled():
         return
     try:
         _ensure_sandbox(_sandbox_key_from(sandbox_key, agent_repo, customer), seed=seed)
-    except Exception:  # noqa: BLE001 - provisioning must never fail on a warm-up
-        pass
+    except Exception as exc:  # noqa: BLE001 - provisioning must never fail on a warm-up
+        print(f"[sandbox] prewarm failed: {type(exc).__name__}: {exc}")
 
 
 # Context Hub backends are keyed by (repo, workspace) so a run's repeated filesystem
@@ -963,6 +1049,19 @@ def _ctxhub_backend(repo: str, ws: str | None) -> Any:
         backend = ContextHubBackend(repo, client=_ctxhub_client(ws))
         _CTXHUB_CACHE[key] = backend
     return backend
+
+
+class BackendSourceError(RuntimeError):
+    """A configured Context Hub repo could not be turned into a filesystem backend.
+
+    Typed so callers and tests can recognize it without reading its message (the
+    message is for the human in front of the SPA, and is free to change).
+
+    Same stance as `PromptSourceError`: an assistant whose context NAMES a repo asked
+    for that repo. Resolving it to a `StateBackend` (or to no `/skills/` route) leaves
+    a run whose prompt tells the model to consult its skills, and whose skills are not
+    there, which is indistinguishable from a customer who has none.
+    """
 
 
 def _resolve_backends(runtime) -> tuple[BackendProtocol, dict[str, BackendProtocol]]:
@@ -984,6 +1083,13 @@ def _resolve_backends(runtime) -> tuple[BackendProtocol, dict[str, BackendProtoc
       — its skills live under the agent repo's `/skills/` subtree, which can't be
       prefix-routed, so mount the whole repo as the default (no execute) rather than
       regress its skills. New assistants set `skills_repo` and get both.
+
+    What it does NOT degrade is a repo the assistant's context actually names: that
+    raises `BackendSourceError`. Note what is and is not in scope there —
+    `ContextHubBackend.__init__` performs no I/O (it stores the identifier and an
+    already-built client), so a Hub OUTAGE does not surface here at all; it surfaces
+    at the first `ls`/`read_file` through the backend. Only a client that cannot be
+    constructed reaches these handlers, which is a misconfiguration, not a bad minute.
     """
     skills_repo = _ctx(runtime, "skills_repo")
     agent_repo = _ctx(runtime, "agent_repo")
@@ -991,8 +1097,12 @@ def _resolve_backends(runtime) -> tuple[BackendProtocol, dict[str, BackendProtoc
     if agent_repo and not skills_repo:
         try:
             return _ctxhub_backend(agent_repo, ws), {}
-        except Exception:  # noqa: BLE001
-            return StateBackend(), {}
+        except Exception as exc:
+            raise BackendSourceError(
+                f"This assistant's whole filesystem is its Context Hub agent repo "
+                f"{agent_repo!r}, and no backend could be built for it: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
 
     sandbox = _get_or_create_sandbox(runtime)
     default: BackendProtocol = sandbox if sandbox is not None else StateBackend()
@@ -1000,8 +1110,13 @@ def _resolve_backends(runtime) -> tuple[BackendProtocol, dict[str, BackendProtoc
     if skills_repo:
         try:
             routes["/skills/"] = _ctxhub_backend(skills_repo, ws)
-        except Exception:  # noqa: BLE001 - skills are best-effort; the VM still works
-            routes = {}
+        except Exception as exc:
+            raise BackendSourceError(
+                f"This assistant's skills are its Context Hub repo {skills_repo!r}, mounted "
+                f"at /skills/, and no backend could be built for it: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+
     return default, routes
 
 
@@ -1076,29 +1191,36 @@ _SUBAGENTS: list[SubAgent] = [
 ]
 
 
+class DynamicSubagentsError(RuntimeError):
+    """`DYNAMIC_SUBAGENTS` is on but the dynamic-subagent stack could not be built.
+
+    Typed so callers and tests can recognize it without reading its message (the
+    message is for the operator who set the flag, and is free to change).
+    """
+
+
 def _dynamic_subagents_enabled() -> bool:
     return dynamic_subagents_enabled()
 
 
-def _rubric_middleware():
-    """`RubricMiddleware`, or None when it can't be constructed.
+def _rubric_middleware() -> RubricMiddleware:
+    """The `RubricMiddleware` that drives the SPA's goal pill.
 
-    Drives the SPA's goal pill: the client puts the user's `/goal` on the run as
-    `rubric`, and after each turn a grader model checks the transcript against it,
-    sending the agent back for another pass until it is satisfied (capped). Both of
-    its hooks no-op when no rubric is on the state, so an ordinary turn is
-    untouched — which is also why this is always on rather than env-gated.
+    The client puts the user's `/goal` on the run as `rubric`, and after each turn a
+    grader model checks the transcript against it, sending the agent back for another
+    pass until it is satisfied (capped). Both of its hooks no-op when no rubric is on
+    the state, so an ordinary turn is untouched — which is also why this is always on
+    rather than env-gated.
 
-    Guarded like the QuickJS extra: a deepagents without it must not break graph
-    load. Beta API (deepagents>=0.6.5).
+    NOT guarded, and not optional. `RubricMiddleware` is imported at the top of this
+    module from `deepagents`, which is pinned `>=0.7,<0.8` in `[project]
+    dependencies`, so a deepagents without it is a state the resolver cannot produce.
+    The guard that used to be here caught that impossible case and returned None,
+    which meant any OTHER failure (a bad `GOAL_MODEL`, say) built a graph whose goal
+    pill accepted a goal and then never graded it, with nothing anywhere saying why.
+    Let it raise: an unbuildable grader is a broken deployment.
     """
-    try:
-        # Optional beta API: an older deepagents must not break graph load.
-        from deepagents import RubricMiddleware  # noqa: PLC0415
-
-        return RubricMiddleware(model=goal_model(), max_iterations=goal_max_iterations())
-    except Exception:  # noqa: BLE001 - an optional capability, never a load failure
-        return None
+    return RubricMiddleware(model=goal_model(), max_iterations=goal_max_iterations())
 
 
 def _build_agent(model: str | None, checkpointer):
@@ -1129,26 +1251,38 @@ def _build_agent(model: str | None, checkpointer):
     # Goal grading (`/goal` in the SPA). First in the list so its `after_agent`
     # runs LAST — after hooks fire in reverse order, and this one is the gate that
     # decides whether the turn is finished at all. Inert without a `rubric`.
-    rubric = _rubric_middleware()
-    if rubric is not None:
-        middleware = cast("list[AgentMiddleware]", [rubric, *middleware])
+    middleware = [_rubric_middleware(), *middleware]
 
     # Dynamic subagents (opt-in): add the QuickJS interpreter middleware BEFORE
-    # ToolSelection (last), and register the subagents. Lazy + guarded so a missing
-    # extra can't break graph load; degrades to no subagents.
+    # ToolSelection, which must stay LAST so it keeps the final word on which tools
+    # reach the model. The import is function-local for COST, not safety:
+    # `langchain_quickjs` pulls a native quickjs-rs and costs ~430ms to import, which
+    # a deployment with DYNAMIC_SUBAGENTS off must not pay at every cold start (same
+    # reason as the fastmcp imports in mcp_servers.py).
     subagents = None
     if _dynamic_subagents_enabled():
         try:
-            # Optional extra: a missing one degrades to no subagents.
             from langchain_quickjs import CodeInterpreterMiddleware  # noqa: PLC0415
 
-            middleware = cast(
-                "list[AgentMiddleware]",
-                [*middleware[:-1], CodeInterpreterMiddleware(), middleware[-1]],
-            )
-            subagents = _SUBAGENTS
-        except Exception:  # noqa: BLE001 - never fail graph load on the optional extra
-            subagents = None
+            interpreter = CodeInterpreterMiddleware()
+        except Exception as exc:
+            # An OPT-IN capability, so silence is not an option: somebody set
+            # DYNAMIC_SUBAGENTS and would otherwise get an agent with no subagents,
+            # no error, and skills whose workflows tell it to fan work out to them.
+            # `langchain-quickjs` is a hard pin (>=0.3,<0.4), so this is a broken
+            # install or a bad build, and the operator who set the flag is the one
+            # who can act on it.
+            raise DynamicSubagentsError(
+                "DYNAMIC_SUBAGENTS is on, but the QuickJS code interpreter behind the "
+                f"dynamic subagents could not be built: {type(exc).__name__}: {exc}. "
+                "Unset DYNAMIC_SUBAGENTS to run without them."
+            ) from exc
+
+        middleware = cast(
+            "list[AgentMiddleware]",
+            [*middleware[:-1], interpreter, middleware[-1]],
+        )
+        subagents = _SUBAGENTS
 
     return create_deep_agent(
         model=llm,

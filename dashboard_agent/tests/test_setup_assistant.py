@@ -48,6 +48,18 @@ def _analysis(**over):
         "data_gap": "customer satisfaction scores",
         "gap_action": {"label": "CSAT", "question": "What's our CSAT trend?"},
         "theme": "dark",
+        # The assistant's starting data. Not optional: `prepare_assistant` refuses to
+        # build on an analysis that produced none, because there is no generic dataset
+        # to stand in for them any more.
+        "seed_files": [
+            {
+                "name": "returns.csv",
+                "kind": "csv",
+                "description": "Returns by SKU",
+                "columns": ["sku", "returned"],
+                "rows": [["A-1", "3"]],
+            }
+        ],
     }
     base.update(over)
     return base
@@ -491,6 +503,25 @@ def test_the_error_names_the_cause_and_says_nothing_was_created(rec, monkeypatch
         _prep(monkeypatch, failed)
     assert "529" in str(exc.value)
     assert "Nothing was created" in str(exc.value)
+
+
+def test_an_analysis_with_no_seed_files_stops_setup(rec, monkeypatch):
+    """The other half of the McKesson case: the data, not the personas.
+
+    A partial analysis can produce quick actions and then die before the seed files,
+    which clears the check above. That assistant used to be created and handed the
+    generic retail `sales.csv` at first-turn seeding, whatever its use case was; with
+    that fallback gone it would be created with an empty workspace instead. Refuse
+    here, where nothing has been created yet.
+    """
+    with pytest.raises(S.SeedSpecError, match="no starting data files"):
+        _prep(monkeypatch, _analysis(seed_files=[]))
+
+
+def test_the_seed_file_refusal_names_the_partial_failure(rec, monkeypatch):
+    with pytest.raises(S.SeedSpecError) as exc:
+        _prep(monkeypatch, _analysis(seed_files=[], error="ValidationError: seed_files"))
+    assert "seed_files" in str(exc.value) and "Nothing was created" in str(exc.value)
 
 
 def test_caller_supplied_actions_survive_a_failed_analysis(rec, monkeypatch):

@@ -749,10 +749,34 @@ def test_ensure_engine_job_enables_the_issues_agent_for_the_session():
 
 
 def test_ensure_engine_job_treats_already_enabled_as_success():
-    # Re-seeding a project that already has Engine on is a no-op, not a failure.
-    out = DT.ensure_engine_job(_EngineClient(fail=RuntimeError("409 Conflict")), "P")
+    # Re-seeding a project that already has Engine on is a no-op, not a failure. The
+    # SDK raises the API's 409 as this type, so that is what is tested.
+    out = DT.ensure_engine_job(
+        _EngineClient(fail=LangSmithConflictError("Conflict for /issues-agent")), "P"
+    )
     assert out["already_enabled"] is True
     assert "error" not in out
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "500 server error, request id 409ff1",  # a request id containing "409"
+        "502 from already-prod-3.internal",  # a host name containing "already"
+        "403 conflict resolution service unavailable",  # the word, unrelated
+    ],
+)
+def test_an_engine_failure_that_only_looks_like_a_conflict_is_reported(message):
+    """The old test matched "409"/"conflict"/"already" anywhere in the message.
+
+    "already" was the loosest of the six substring checks: a host name or a request id
+    satisfied it, and an Engine that was never enabled was reported as one that
+    already was. Engine stays a garnish (this must not raise), but a real refusal has
+    to reach the receipt.
+    """
+    out = DT.ensure_engine_job(_EngineClient(fail=RuntimeError(message)), "P")
+    assert "already_enabled" not in out
+    assert message in out["error"]
 
 
 def test_ensure_engine_job_reports_a_refusal_without_raising():
