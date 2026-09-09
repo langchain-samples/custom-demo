@@ -382,10 +382,19 @@ export function SelectItem({
   const selected = ctx.value === value;
   const label = typeof children === "string" ? children : value;
 
+  // Depend on the two callbacks, never on `ctx`. Both are `useCallback` with `[]` deps,
+  // so they are stable for the Select's life, while `ctx` is a `useMemo` over `labels` -
+  // the very state `register` writes. Depending on `ctx` makes this effect its own
+  // trigger: register writes `labels`, the new `labels` mints a new `ctx`, the changed
+  // dep runs the cleanup, `unregister` deletes the entry, and the re-run then finds the
+  // key absent so `register`'s "same label" guard cannot return the old Map. That is an
+  // unbounded commit-phase loop (React error #185), which blanked the page as soon as a
+  // Select mounted.
+  const { register, unregister } = ctx;
   useLayoutEffect(() => {
-    ctx.register(value, label);
-    return () => ctx.unregister(value);
-  }, [ctx, value, label]);
+    register(value, label);
+    return () => unregister(value);
+  }, [register, unregister, value, label]);
 
   return (
     <motion.li variants={ctx.reduce ? undefined : ITEM_VARIANTS}>
