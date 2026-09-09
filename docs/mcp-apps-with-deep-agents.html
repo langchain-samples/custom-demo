@@ -236,18 +236,6 @@
   }
 
   /* ---------- gotcha list ---------- */
-  .traps { display: grid; gap: 1px; background: var(--line-soft); border: 1px solid var(--line-soft); border-radius: 12px; overflow: hidden; max-width: 860px; margin-bottom: 22px; }
-  .trap { background: var(--bg-2); padding: 18px 20px; }
-  .trap h4 {
-    font-family: var(--mono);
-    font-weight: 400;
-    font-size: 13px;
-    margin: 0 0 7px;
-    color: var(--ink);
-    letter-spacing: -0.01em;
-  }
-  .trap p { margin: 0; font-size: 0.93rem; color: var(--ink-2); max-width: none; }
-  .trap .sym { color: var(--accent); margin-right: 8px; }
 
   .callout {
     border-left: 2px solid var(--accent);
@@ -678,70 +666,8 @@ answer = await ctx.elicit("Set the target allocation", response_type=Allocation)
 <pre><code>resume({ responses: { [first.key]: { action: <span class="s">"accept"</span>, content } } });</code></pre>
 </div>
 
-<h2><span class="n">06</span> The four that cost an hour each</h2>
-<div class="col">
-<p>
-  None of these fail loudly. Each one produces a plausible-looking system that is quietly wrong,
-  which is why they are worth the space.
-</p>
-</div>
 
-<div class="traps">
-  <div class="trap">
-    <h4><span class="sym">01</span>Elicitation content is flat</h4>
-    <p>
-      <code>ElicitResult.content</code> allows primitives only - string, number, boolean, string
-      list. A schema cannot ask for a nested object. Our rebalance app sends one number per sleeve
-      (<code>us_equity: 38.0</code>), not an <code>allocation</code> map; pydantic rejects the nested
-      version before it ever reaches the server. Flattening is also what keeps the generated-form
-      fallback usable.
-    </p>
-  </div>
-  <div class="trap">
-    <h4><span class="sym">02</span>App context goes on a property, never the schema root</h4>
-    <p>
-      An App needs to know what it is rendering, and the elicitation request is its only channel -
-      the iframe has no origin and cannot call anything. But the SDK normalizes
-      <code>requested_schema</code> and keeps only <code>type</code>, <code>properties</code> and
-      <code>required</code> at the root. Extras inside a property pass through untouched, nested
-      values and all. Put your context at the root and it vanishes with no error, and the app renders
-      empty.
-    </p>
-  </div>
-  <div class="trap">
-    <h4><span class="sym">03</span>A tiny image can kill the whole run</h4>
-    <p>
-      MCP tool results can carry image blocks, and <code>langchain.mcp</code> converts them to
-      LangChain image blocks, so the model can actually look at what was drawn. But a provider rejects an
-      undersized image with a 400 that ends the turn - we found it with a 1×1 test fixture, which
-      failed <em>after</em> the tool had already succeeded. Check the dimensions and drop the block
-      rather than risk the run.
-    </p>
-  </div>
-  <div class="trap">
-    <h4><span class="sym">04</span>Return bytes as a data URI, not a URL</h4>
-    <p>
-      A second app of ours captures a handwritten mark on a client document. Our first version served
-      it at a URL and told the model to embed that. Two problems: the model cannot retype 18,000
-      base64 characters into a document without corrupting them, and a URL makes the document depend
-      on the server still being up. Crop to the ink, flatten the antialiasing, and export at CSS
-      scale - it drops to a couple of KB, small enough to inline, and the document then prints,
-      survives, and needs no network.
-    </p>
-  </div>
-</div>
-
-<div class="col">
-<h3>And the one that is not your code</h3>
-<p>
-  If you tunnel a local MCP server for a demo, ngrok's free tier answers any request carrying a
-  browser User-Agent with an interstitial page instead of the resource. MCP calls sail through
-  (a client is not a browser); an <code>&lt;img&gt;</code> gets HTML and renders broken, and a tag
-  cannot send the header that opts out. Inline your images, or use a tunnel without an interstitial.
-</p>
-</div>
-
-<h2><span class="n">07</span> When to build one</h2>
+<h2><span class="n">06</span> When to build one</h2>
 <div class="col">
 <p>
   The test we settled on: <strong>could a generated form do this?</strong> If yes, skip it - the
