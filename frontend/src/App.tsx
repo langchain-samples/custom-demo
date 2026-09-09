@@ -1,17 +1,7 @@
 /**
- * App shell — wires the ported panes into the working two-pane layout:
- *
- *   header (large logo + display name from the active assistant's branding, gear)
- *   ┌─────────────── before any dashboard: single centered chat column ──────────┐
- *   │  ChatPanel                                                                  │
- *   └─────────────────────────────────────────────────────────────────────────── ┘
- *   ┌── once widgets exist: two columns (420px rail + 1fr) ──────────────────────┐
- *   │  ChatPanel  │  DashboardPane (widget canvas + one tab per HTML artifact)     │
- *   └─────────────────────────────────────────────────────────────────────────── ┘
- *
- * The gear opens the SettingsPanel Sheet. App owns the streamed-widget list, the
- * active-assistant branding, the send-guards (delegated to the settings handle),
- * and the conversation-reset key (bumped on assistant switch/create).
+ * Demo workbench shell. The assistant session owns selection and configuration;
+ * App owns the conversation, its outputs, and the inspector/editor visibility.
+ * Producing a widget or file opens the output pane beside the conversation.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -40,15 +30,14 @@ import { GraphInspector } from "@/components/GraphInspector";
 import type { ActivityState } from "@/lib/agentGraph";
 import { EvalPanel } from "@/components/EvalPanel";
 import { FileBrowser } from "@/components/FileBrowser";
-import { SettingsPanel, type SettingsHandle } from "@/components/SettingsPanel";
-import { getAssistantId } from "@/lib/config";
+import { SettingsPanel } from "@/components/SettingsPanel";
+import { useAssistantSession } from "@/lib/hooks/useAssistantSession";
 import { traceProject } from "@/lib/trace";
 import { applyTheme, getStoredTheme, setStoredTheme, type Theme } from "@/lib/theme";
 import { invalidateColorCache } from "@/lib/branding";
-import type { Assistant, RunContext, Widget } from "@/lib/api";
+import type { Widget } from "@/lib/api";
 import { getProjectUrl, readSandboxTextFile } from "@/lib/api";
 import type { SandboxTarget } from "@/lib/api";
-import { useAssistants } from "@/lib/queries";
 
 const DEFAULT_NAME = "Corebot";
 const DEFAULT_LOGO = "";
@@ -98,14 +87,8 @@ export default function App() {
       /* ignore */
     }
   }, [graphOpen]);
-  /**
-   * The same query SettingsPanel uses. react-query dedupes it to one request and one
-   * cache entry, which is what let a hand-rolled `onLoadedChange` callback - threaded
-   * from the panel through here into ChatPanel purely to say "the fetch finished" - be
-   * deleted outright.
-   */
-  const { isPending: assistantsPending } = useAssistants();
-  const [activeAssistant, setActiveAssistant] = useState<Assistant | null>(null);
+  const session = useAssistantSession(handleResetConversation);
+  const { activeAssistant, assistantsPending, getRunContext } = session;
   const [widgets, setWidgets] = useState<Widget[]>([]);
   // HTML files the agent wrote to /workspace/artifacts, keyed by path; each becomes a
   // tab beside the widget canvas. Cleared with the dashboard on reset.
@@ -168,7 +151,6 @@ export default function App() {
     }
   }, [resizing, chatWidth]);
 
-  const settingsRef = useRef<SettingsHandle>(null);
   /** Imperative handle voice mode drives (see VoiceButton). */
   const chatRef = useRef<ChatPanelHandle | null>(null);
 
@@ -254,54 +236,31 @@ export default function App() {
   // that brand's default) when one is selected, else flip the manual preference.
   const toggleTheme = () => {
     const next: Theme = effectiveTheme === "dark" ? "light" : "dark";
-    if (activeAssistant) settingsRef.current?.setTheme(next);
+    if (activeAssistant) session.editBranding({ theme: next });
     else setGlobalTheme(next);
   };
 
-  // Reflect the display name in the browser tab (mirrors applyConfig()).
   useEffect(() => {
     document.title = displayName;
   }, [displayName]);
 
-  // Reset the conversation + dashboard on assistant switch/create.
-  const handleResetConversation = () => {
+  function handleResetConversation() {
     setWidgets([]);
     setArtifacts({});
     setHasDashboard(false);
     setResetCounter((n) => n + 1);
-    // A live voice session restarts with it. Leaving it up would mean the model still
-    // remembers a conversation the AGENT no longer has - the thread is gone - so it would
-    // reference figures and claims that are no longer anywhere, and keep appending to a
-    // trace whose conversation ended. Restarting gives a new thread, a new Live session and
-    // a new `voice_session` trace, which is what "new chat" should mean on all three.
-    // Stopping also flushes the finished conversation's audio onto its own trace.
+    // A new chat needs a fresh agent thread and Live session; stopping flushes its audio trace.
     if (voice.running) {
       voice.stop();
       voice.start();
     }
-  };
+  }
 
-  // Per-run context, resolved fresh at send time from the settings handle.
-  const getRunContext = (): RunContext => settingsRef.current?.getRunContext() ?? {};
-
-  /**
-   * Open this assistant's LangSmith project: one place in the header that always
-   * leads to the traces, rather than only the per-answer link that appears once
-   * a turn has finished.
-   *
-   * The tab is opened synchronously and its location set after the lookup,
-   * because a popup opened inside an await is blocked.
-   *
-   * No `noopener` on THIS open, deliberately: it makes `window.open` return null by
-   * design, so the handle was always null, the blank tab was orphaned, and the
-   * fallback below opened the real URL in a second one. Two tabs per click, one of
-   * them about:blank. The opener reference is dropped from the child instead, which
-   * is what noopener was there for; the destination is our own LangSmith URL.
-   */
   const [langsmithError, setLangsmithError] = useState("");
   const openLangSmith = () => {
     const ctx = getRunContext();
-    const project = traceProject(activeAssistant, getAssistantId());
+    const project = traceProject(activeAssistant, session.selectedId);
+    // Open synchronously to avoid popup blocking, then drop the child's opener reference.
     const tab = window.open("about:blank", "_blank");
     if (tab) tab.opener = null;
     setLangsmithError("");
@@ -316,11 +275,9 @@ export default function App() {
       });
   };
 
-  // Send guard: block + open settings when a requirement is unmet. Mirrors the
-  // SPA's inline guards (assistant → workspace → system prompt), in that order.
+  // Readiness belongs to the session; opening Settings is the shell's response to a missing input.
   const guard = (): string | null => {
-    const guards = settingsRef.current?.getGuards();
-    if (!guards) return null;
+    const { guards } = session;
     if (!guards.hasAssistant) {
       setSettingsOpen(true);
       return "Pick or create an assistant in Settings before sending.";
@@ -336,16 +293,8 @@ export default function App() {
     return null;
   };
 
-  const assistantId = activeAssistant?.assistant_id ?? getAssistantId();
-  /**
-   * Which VM this assistant's files live in.
-   *
-   * Derived ONCE and shared, because it was written out twice in this file and the
-   * second copy silently fell behind when `sandbox_key` was introduced: the artifact
-   * re-read below kept asking for the VM keyed by customer name, so `edit_file`
-   * appeared to do nothing. The read landed on a different VM, `.catch` swallowed it,
-   * and the pane kept showing the streamed argument, which for an edit is a diff.
-   */
+  const assistantId = session.selectedId;
+  /** File browsing and artifact re-reads must target the same assistant-owned VM. */
   const sandboxTarget = useMemo<SandboxTarget>(
     () => ({
       sandbox_key: activeAssistant?.context?.sandbox_key || undefined,
@@ -639,11 +588,9 @@ export default function App() {
       />
 
       <SettingsPanel
-        ref={settingsRef}
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
-        onActiveAssistantChange={setActiveAssistant}
-        onResetConversation={handleResetConversation}
+        session={session}
       />
     </div>
   );

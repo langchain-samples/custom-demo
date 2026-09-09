@@ -537,7 +537,7 @@ def test_cleanup_deletes_the_evaluator_as_well_as_its_rule(monkeypatch):
         WC, "_delete_eval_rule", lambda _ws, rule_id: deleted.append(f"rule:{rule_id}")
     )
     monkeypatch.setattr(
-        WC, "_delete_judge_evaluator", lambda _ws, ev_id: deleted.append(f"evaluator:{ev_id}")
+        WC, "delete_judge_evaluator", lambda _ws, ev_id: deleted.append(f"evaluator:{ev_id}")
     )
 
     body = client.post(
@@ -555,7 +555,7 @@ def test_cleanup_skips_the_evaluator_for_assistants_that_never_got_one(monkeypat
     # report is what the falsy-handle guard is for.
     _install_client(monkeypatch, _FakeClient())
     called: list = []
-    monkeypatch.setattr(WC, "_delete_judge_evaluator", lambda *_a: called.append(1))
+    monkeypatch.setattr(WC, "delete_judge_evaluator", lambda *_a: called.append(1))
     body = client.post(
         "/cleanup", json={"workspace": WORKSPACE, "eval_evaluator_id": "", "project": "P"}
     ).json()

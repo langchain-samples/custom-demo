@@ -26,7 +26,7 @@ import {
   listTools,
   listWorkspaces,
 } from "@/lib/api";
-import type { Assistant, EvalTarget } from "@/lib/api";
+import type { EvalTarget } from "@/lib/api";
 
 /**
  * Every cache key in one place, so no call site hand-writes one. A typo in a key string
@@ -130,21 +130,6 @@ export function useDemoTrafficStatus(project: string, workspace: string | undefi
 export function useInvalidateAssistants() {
   const qc = useQueryClient();
   return () => qc.invalidateQueries({ queryKey: qk.assistants() });
-}
-
-/**
- * Patch ONE assistant into the cached list without refetching.
- *
- * The debounced branding and tool saves need exactly this. Do NOT invalidate instead:
- * that refetches the whole list on every 600ms save, which is why patching the cache
- * locally is deliberate.
- */
-export function useReplaceAssistantInCache() {
-  const qc = useQueryClient();
-  return (updated: Assistant) =>
-    qc.setQueryData(qk.assistants(), (list: Assistant[] | undefined) =>
-      (list ?? []).map((a) => (a.assistant_id === updated.assistant_id ? updated : a)),
-    );
 }
 
 /**

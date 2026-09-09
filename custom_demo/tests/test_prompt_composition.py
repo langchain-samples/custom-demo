@@ -15,6 +15,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 
 from custom_demo.core.ctx import Context
 from custom_demo.runtime import agent as A
+from custom_demo.runtime import backends as B
 
 _CAPTURED: dict = {}
 
@@ -45,7 +46,7 @@ def _capture(monkeypatch, context, *, mock_ctxhub=False):
     monkeypatch.setattr(A, "build_chat_model", lambda model_id: _RecordingModel())
     if mock_ctxhub:
         # Avoid the real Context Hub network: an in-state backend + a canned AGENTS.md.
-        monkeypatch.setattr(A, "_resolve_backends", lambda runtime: (StateBackend(), {}))
+        monkeypatch.setattr(B, "_resolve_backends", lambda runtime: (StateBackend(), {}))
         monkeypatch.setattr(A, "pull_agent_prompt", lambda repo, workspace=None: _AGENTS_MD)
 
     agent = A.build_agent()

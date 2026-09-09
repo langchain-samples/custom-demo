@@ -7,6 +7,8 @@ and the `ls_artifacts` cleanup manifest. Pure and fast — runs in CI, no API ke
 """
 
 import threading
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 import yaml
@@ -67,8 +69,29 @@ def _analysis(**over):
 
 @pytest.fixture
 def rec(monkeypatch):
-    """Mock the LLM + every network push; record what got pushed."""
-    calls = {"bundle": None, "agent_prompt": None}
+    """Mock external effects and finish background work before fixture teardown."""
+    effects = {
+        "prewarm_sandbox": Mock(),
+        "ensure_eval_dataset": Mock(return_value="acme-ds"),
+        "ensure_dataset_evaluator": Mock(
+            return_value={"rule_id": "", "evaluator_id": "", "error": ""}
+        ),
+        "tag_assistant_resources": Mock(return_value={}),
+    }
+    for name, effect in effects.items():
+        monkeypatch.setattr(S, name, effect)
+
+    class InlineThread:
+        def __init__(self, *, target, kwargs=None, daemon):
+            assert daemon is True
+            self.target = target
+            self.kwargs = kwargs or {}
+
+        def start(self):
+            self.target(**self.kwargs)
+
+    monkeypatch.setattr(S, "threading", SimpleNamespace(Thread=InlineThread))
+    calls: dict = {"bundle": None, "agent_prompt": None, "effects": effects}
     monkeypatch.setattr(
         S,
         "fetch_brand",
@@ -101,6 +124,49 @@ def _prep(monkeypatch, analysis, **payload_over):
     payload = {"workspace": "ws1", "customer": "Acme Co"}
     payload.update(payload_over)
     return S.prepare_assistant(payload)
+
+
+def test_setup_fixture_contains_every_external_effect(rec, monkeypatch):
+    assert S.threading is not threading
+    caller_thread = threading.get_ident()
+    tagged_on = []
+    effects = rec["effects"]
+    effects["tag_assistant_resources"].side_effect = lambda **kwargs: tagged_on.append(
+        threading.get_ident()
+    )
+
+    out = _prep(monkeypatch, _analysis())
+
+    effects["prewarm_sandbox"].assert_called_once_with(
+        sandbox_key=out["context"]["sandbox_key"],
+        agent_repo="acme-co-agent",
+        customer="Acme Co",
+        seed=out["context"]["sandbox_seed"],
+    )
+    effects["ensure_eval_dataset"].assert_called_once()
+    effects["ensure_dataset_evaluator"].assert_called_once()
+    effects["tag_assistant_resources"].assert_called_once()
+    assert tagged_on == [caller_thread]
+
+
+def test_tagging_uses_the_same_handles_as_cleanup(rec, monkeypatch):
+    targets = []
+    monkeypatch.setattr(
+        S, "tag_assistant_resources", lambda *, api_key, **kwargs: targets.append(kwargs)
+    )
+    out = _prep(monkeypatch, _analysis())
+    artifacts = out["metadata"]["ls_artifacts"]
+    assert targets == [
+        {
+            "customer": "Acme Co",
+            "workspace": artifacts["workspace"],
+            "project": artifacts["project"],
+            "dataset": artifacts["eval_dataset"],
+            "prompts": (),
+            "agents": (artifacts["agent_repo"], artifacts["skills_repo"]),
+            "evaluator_id": artifacts["eval_evaluator_id"],
+        }
+    ]
 
 
 # --- prompt storage ---

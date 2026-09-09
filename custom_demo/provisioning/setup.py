@@ -1,9 +1,8 @@
-"""Core logic for the deployed assistant-setup agent (Part 3).
+"""Prepare a customer-specific demo scenario and its resources.
 
-Keyless brand fetch (Logo.dev logo from the customer's domain + parse the site for
-an accent color), LLM-generated persona quick-actions, and prompt building/pushing.
-The graph node (setup_graph.py) calls these and returns a ready assistant payload
-(metadata + context); the SPA then creates the assistant from that payload.
+Brand discovery and customer analysis feed one DemoPlan. Provisioning applies that plan
+and records LangSmith handles for tagging and cleanup. The setup graph returns metadata
+and context; the browser publishes the assistant separately, without atomic rollback.
 """
 
 from __future__ import annotations
@@ -24,6 +23,7 @@ from langsmith.utils import LangSmithConflictError
 from pydantic import BaseModel, Field
 
 from custom_demo.config import load_env, sampling_kwargs, setup_model
+from custom_demo.core.demo import DemoPlan, LsArtifacts
 from custom_demo.provisioning.client import _ws_client, slugify
 from custom_demo.provisioning.evals import (
     ensure_dataset_evaluator,
@@ -32,7 +32,7 @@ from custom_demo.provisioning.evals import (
 )
 from custom_demo.provisioning.resource_tags import tag_assistant_resources
 from custom_demo.provisioning.traffic import annotation_queue_name, start_demo_traffic
-from custom_demo.runtime.agent import SeedSpecError, prewarm_sandbox
+from custom_demo.resources.sandbox import SeedSpecError, prewarm_sandbox
 from custom_demo.runtime.prompt import (
     DASHBOARD_SKILL_DESCRIPTION,
     DASHBOARD_SKILL_INSTRUCTIONS,
@@ -932,36 +932,129 @@ def build_demo_brief(
     return {"brief": brief, "flow": flow}
 
 
-def prepare_assistant(payload: dict) -> dict:
-    """Turn setup inputs into a ready assistant payload (metadata + context).
+def _selected_tools(payload: dict, analysis: dict) -> list[str]:
+    """Resolve caller or analysis picks against the catalogue and required defaults."""
+    if payload.get("enabled_tools"):
+        picked = set(payload["enabled_tools"]) & CATALOGUE_IDS
+    elif analysis.get("enabled_tools"):
+        picked = (set(analysis["enabled_tools"]) & CATALOGUE_IDS) - EXPLICIT_ONLY
+    else:
+        picked = set()
 
-    Inputs: workspace, customer, owner, industry, website, use_case, failure_mode
-    (or legacy `hallucination` bool), enabled_tools, voice, push_prompts. Does brand fetch
-    + LLM analysis (personas, data gap, tool selection) + optional prompt push, and
-    upserts the assistant's demo eval dataset (best-effort; see `provisioning/evals.py`).
-    Returns {name, display_name, accent, logo, actions, metadata, context, prompt_urls}.
+    return sorted(picked | set(DEFAULT_ENABLED))
+
+
+def _quick_actions(analysis: dict, actions: list, failure_mode: str) -> tuple[list, str]:
+    """Prioritize skill questions and return normalized actions with their planted gap."""
+    skill_actions = []
+    for skill in analysis.get("skills") or []:
+        question = skill.get("example_question")
+        if question:
+            label = skill.get("action_label") or skill["name"].replace("-", " ").title()
+            skill_actions.append({"label": label, "question": question})
+
+    base_actions = skill_actions + actions
+    planted_gap = ""
+    if failure_mode_needs_gap(failure_mode):
+        planted_gap = analysis.get("data_gap") or "year-over-year figures by segment"
+        gap_action = analysis.get("gap_action")
+        actions = base_actions[:2]
+        if gap_action and gap_action.get("question"):
+            actions = actions + [{**gap_action, "kind": "gap"}]
+    else:
+        actions = base_actions[:3]
+
+    return [{**a, "label": _persona_label(a.get("label", ""))} for a in actions], planted_gap
+
+
+def _brand_metadata(brand: dict, analysis: dict) -> dict:
+    """Resolve brand colors and fonts by source precedence for assistant display."""
+    fonts = brand.get("fonts") or {}
+    return {
+        "accent": brand["accent"]
+        or analysis.get("primary_color")
+        or brand["accent_scraped"]
+        or "#0072BC",
+        "accent2": brand["accent2"] or analysis.get("secondary_color") or "",
+        "brand_neutral": "",
+        "brand_tint": DEFAULT_BRAND_TINT,
+        "logo": brand["logo"],
+        "theme": analysis.get("theme") or "dark",
+        "font_heading": fonts.get("heading") or analysis.get("heading_font") or "",
+        "font_body": fonts.get("body") or analysis.get("body_font") or "",
+        "font_heading_fallback": analysis.get("heading_fallback") or DEFAULT_CURATED,
+        "font_body_fallback": analysis.get("body_fallback") or DEFAULT_CURATED,
+        "font_source": "google",
+    }
+
+
+def plan_demo(payload: dict, brand: dict, analysis: dict, *, sandbox_suffix: str) -> DemoPlan:
+    """Resolve a coherent scenario without provisioning resources or publishing an assistant.
+
+    The suffix is supplied by the caller so planning performs no randomness or I/O.
+    Validation and selection preserve the setup policies, including truthy tool overrides.
     """
-    workspace = payload["workspace"]
     customer = payload["customer"].strip()
-    owner = payload.get("owner", "")
-    use_case = str(payload.get("use_case") or "").strip()
-    # Named failure mode; legacy `hallucination` bool maps onto it.
     failure_mode = str(
         payload.get("failure_mode") or ("hallucination" if payload.get("hallucination") else "none")
     )
-    push = payload.get("push_prompts", True)
+    actions = list(payload.get("actions") or analysis.get("actions") or [])
+    # Refuse an unusable scenario before creating remote resources.
+    if analysis.get("error") and not actions:
+        raise RuntimeError(
+            "Setup could not analyze this customer, so the assistant would have been "
+            f"generic: {analysis['error']}. Nothing was created. Try again."
+        )
 
-    # CONCURRENT on purpose. These two are the same wall clock spent twice: `fetch_brand`
-    # is a Brandfetch call plus a scrape of the customer's site, `analyze_customer` is an
-    # LLM call, and neither reads the other's output (brand is not consumed until the
-    # accent is resolved, far below). Run serially they were simply added together.
-    # Threads rather than async because both are blocking HTTP, and this function is
-    # called from a sync route.
-    # `copy_context().run` so both jobs inherit this thread's contextvars. The setup
-    # graph wraps the run in a `tracing_context(project_name=...)`, which is a
-    # ContextVar, and a plain `pool.submit` starts the worker with a fresh context --
-    # so the analysis LLM call was invisible in the trace, on the one run where
-    # knowing why it failed mattered.
+    # Sample data must belong to this scenario; an unrelated default is not a fallback.
+    if not analysis.get("seed_files"):
+        raise SeedSpecError(
+            "Setup produced no starting data files for this customer, so the assistant "
+            "would have had an empty workspace and nothing to answer from"
+            + (f": {analysis['error']}" if analysis.get("error") else "")
+            + ". Nothing was created. Try again."
+        )
+
+    enabled_tools = _selected_tools(payload, analysis)
+    actions, planted_gap = _quick_actions(analysis, actions, failure_mode)
+    skills = list(analysis.get("skills") or [])
+    if "push_widget" in enabled_tools:
+        skills = [DASHBOARD_SKILL, *skills]
+
+    slug = slugify(customer)
+    return DemoPlan(
+        workspace=payload["workspace"],
+        customer=customer,
+        owner=payload.get("owner", ""),
+        industry=payload.get("industry") or analysis.get("industry") or "",
+        use_case=str(payload.get("use_case") or "").strip(),
+        failure_mode=failure_mode,
+        display_name=payload.get("display_name") or f"{customer} GPT",
+        slug=slug,
+        sandbox_key=f"{slug}-{sandbox_suffix}",
+        enabled_tools=enabled_tools,
+        seed_files=analysis["seed_files"],
+        skills=skills,
+        actions=actions,
+        planted_gap=planted_gap,
+        branding=_brand_metadata(brand, analysis),
+        push_prompts=bool(payload.get("push_prompts", True)),
+        demo_traffic=bool(payload.get("demo_traffic")),
+    )
+
+
+def prepare_assistant(payload: dict) -> dict:
+    """Analyze, plan and provision a demo; return the unchanged assistant creation payload.
+
+    Publication is separate: the SPA creates the assistant from this result. Resource
+    provisioning is not transactional, and optional evaluation/tagging work is best-effort.
+    """
+    if "workspace" not in payload:
+        raise KeyError("workspace")
+
+    customer = payload["customer"].strip()
+    use_case = str(payload.get("use_case") or "").strip()
+    # Independent blocking calls inherit this setup run's tracing context.
     with ThreadPoolExecutor(max_workers=2) as pool:
         brand_job = pool.submit(copy_context().run, fetch_brand, customer, payload.get("website"))
         analysis_job = pool.submit(
@@ -972,227 +1065,57 @@ def prepare_assistant(payload: dict) -> dict:
             payload.get("website"),
             use_case,
         )
-        # cast because `Context.run` is typed as returning its callable's TypeVar,
-        # which the checker cannot follow back through `submit`.
         brand = cast("dict", brand_job.result())
         analysis = cast("dict", analysis_job.result())
 
-    industry = payload.get("industry") or analysis.get("industry") or ""
-    actions = list(payload.get("actions") or analysis.get("actions") or [])
-    # Nothing has been created yet -- no prompt pushed, no dataset, no repo -- so this
-    # is the last point where failing is free. Without it, an analysis that came back
-    # empty produces a correctly branded assistant (Brandfetch runs in the other thread
-    # and is unaffected) with no personas, no skills, no seed files and no tool
-    # selection, which reads as a working demo. That is how a McKesson assistant whose
-    # analysis failed came to show quick actions about aid in Egypt, Iran and Canada,
-    # filled in from a stock fallback set in the SPA; SettingsPanel.tsx's
-    # DEFAULT_ACTIONS is empty for that reason, so such an assistant now shows no
-    # quick actions at all.
-    if analysis.get("error") and not actions:
-        raise RuntimeError(
-            "Setup could not analyze this customer, so the assistant would have been "
-            f"generic: {analysis['error']}. Nothing was created. Try again."
-        )
-
-    # Same gate, for the assistant's DATA. The seed files are its system of record,
-    # and there is no generic dataset to stand in for them (see
-    # `SeedSpecError`), so an assistant created without them has an empty
-    # /workspace/data and every question fails at the VM instead of here, where
-    # nothing has been created yet. This fires for a partial analysis too: one that
-    # produced quick actions and then died before the seed files passes the check
-    # above.
-    if not analysis.get("seed_files"):
-        raise SeedSpecError(
-            "Setup produced no starting data files for this customer, so the assistant "
-            "would have had an empty workspace and nothing to answer from"
-            + (f": {analysis['error']}" if analysis.get("error") else "")
-            + ". Nothing was created. Try again."
-        )
-
-    display_name = payload.get("display_name") or f"{customer} GPT"
-
-    slug = slugify(customer)
-    context: dict = {
-        "ls_workspace": workspace,
-        "customer": customer,
-        # Traces land in a project named for the customer. The SPA derives the same
-        # name (see traceProject()).
-        "ls_project": customer,
-    }
-    if industry:
-        context["industry"] = industry
-
-    # Tool selection: explicit caller override → the LLM's pick → DEFAULT_ENABLED.
-    # Union DEFAULT_ENABLED (push_widget) so a new assistant always
-    # keeps the always-on core plus data retrieval, then adds the optional picks.
-    # An explicit override is the USER's choice and is respected verbatim; the LLM's
-    # pick never auto-enables an explicit-only tool (the user must opt in themselves).
-    if payload.get("enabled_tools"):
-        picked = set(payload["enabled_tools"]) & CATALOGUE_IDS
-    elif analysis.get("enabled_tools"):
-        picked = (set(analysis["enabled_tools"]) & CATALOGUE_IDS) - EXPLICIT_ONLY
-    else:
-        picked = set()
-
-    context["enabled_tools"] = sorted(picked | set(DEFAULT_ENABLED))
-    # Starting files for the code-execution VM, in the formats THIS use case works with.
-    # Carried in the context (not just used at prewarm) so a VM created lazily on the
-    # first turn — or rebuilt after the old one was reaped — gets the same files.
-    if analysis.get("seed_files"):
-        context["sandbox_seed"] = analysis["seed_files"]
-
-    # This assistant's own VM name. Unique per assistant: don't derive it from the
-    # customer (agent_repo, else customer), or a second assistant for the same customer
-    # resolves to the FIRST one's VM, attaches to it and skips its own seed. Short
-    # random suffix rather than the assistant id, which does not exist yet:
-    # the SPA creates the assistant from this payload, and the prewarm below has to use
-    # the same name as the first turn will.
-    context["sandbox_key"] = f"{slug}-{secrets.token_hex(3)}"
+    plan = plan_demo(payload, brand, analysis, sandbox_suffix=secrets.token_hex(3))
+    context = plan.runtime_context()
+    artifacts = LsArtifacts(workspace=plan.workspace, project=plan.customer)
     prompt_urls: dict = {}
 
-    # Skills are UNIVERSAL: every assistant gets them. Assemble the LLM's per-customer
-    # workflow skills,
-    # plus the curated `dashboard` skill (the widget-building workflow) when
-    # push_widget is enabled. With the dashboard skill present the prompt points at
-    # it (dashboard="skill") instead of inlining the workflow.
-    skills = list(analysis.get("skills") or [])
-    dashboard_mode = "inline"
-    if "push_widget" in context["enabled_tools"]:
-        skills = [DASHBOARD_SKILL, *skills]
-        dashboard_mode = "skill"
+    if plan.push_prompts:
+        artifacts.skills_repo = push_skills_bundle(
+            plan.workspace, plan.slug, plan.customer, plan.skills
+        )
+        if artifacts.skills_repo:
+            context["skills_repo"] = artifacts.skills_repo
 
-    # Push all skills into ONE root-layout bundle repo, mounted at /skills/ for every
-    # assistant by `_resolve_backends`.
-    skills_repo = push_skills_bundle(workspace, slug, customer, skills) if push else ""
-    if skills_repo:
-        context["skills_repo"] = skills_repo
-
-    # The system prompt: customer-templated (failure_mode selects the clause), with
-    # the skills clause appended so the model consults its skills first.
     prompt_text = build_system_prompt(
-        customer, industry, failure_mode=failure_mode, use_case=use_case, dashboard=dashboard_mode
-    ) + (_SKILLS_CLAUSE if skills_repo else "")
-
-    # The prompt lives in a Context Hub agent repo, as that repo's AGENTS.md. One
-    # storage location, so "edit the prompt" means one thing to a presenter and the
-    # agent has one place to pull from.
-    if push:
-        repo = f"{slug}-agent"
-        prompt_urls["system"] = push_agent_prompt(workspace, repo, prompt_text)
-        context["agent_repo"] = repo
-
-    # Pre-warm the assistant's code-execution VM in the BACKGROUND, so the ~30s VM
-    # boot + data seed happens now (at provisioning) instead of blocking the user's
-    # first message. Fire-and-forget on a daemon thread so setup returns immediately;
-    # keyed like the runtime (agent_repo → customer) so the first turn reattaches the
-    # same warm VM. No-op when the sandbox is disabled/unavailable.
-    if push:
+        plan.customer,
+        plan.industry,
+        failure_mode=plan.failure_mode,
+        use_case=plan.use_case,
+        dashboard=plan.dashboard_mode,
+    ) + (_SKILLS_CLAUSE if artifacts.skills_repo else "")
+    if plan.push_prompts:
+        prompt_urls["system"] = push_agent_prompt(plan.workspace, plan.agent_repo, prompt_text)
+        artifacts.agent_repo = plan.agent_repo
+        context["agent_repo"] = artifacts.agent_repo
         threading.Thread(
             target=prewarm_sandbox,
             kwargs={
-                "sandbox_key": context.get("sandbox_key"),
-                "agent_repo": context.get("agent_repo"),
-                "customer": customer,
-                "seed": context.get("sandbox_seed"),
+                "sandbox_key": plan.sandbox_key,
+                "agent_repo": artifacts.agent_repo,
+                "customer": plan.customer,
+                "seed": plan.seed_files,
             },
             daemon=True,
         ).start()
 
-    # Quick actions. Every assistant has skills, so prefer skill-invoking
-    # questions (each skill's example_question) so clicking a quick action
-    # demonstrates a skill; fall back to the LLM's persona questions when the skills
-    # carry no example questions.
-    skill_actions = []
-    for sk in analysis.get("skills") or []:
-        q = sk.get("example_question")
-        if q:
-            # The LLM supplies a '<Persona>: <gist>' action_label per skill; fall
-            # back to the skill name (normalized below) if it's missing.
-            label = sk.get("action_label") or sk["name"].replace("-", " ").title()
-            skill_actions.append({"label": label, "question": q})
-
-    # Lead with skill-invoking actions (they demo a skill), then top up with the
-    # LLM's persona questions so there are always enough to fill the 2–3 slots.
-    base_actions = skill_actions + actions
-
-    # What the seeded files deliberately omit. Empty unless the failure mode
-    # plants one. Carried as a local rather than on the assistant's context:
-    # only the brief, the probe action and the eval example need it.
-    planted_gap = ""
-    if failure_mode_needs_gap(failure_mode):
-        # The mode fabricates over a planted gap. The gap is a fact genuinely ABSENT
-        # from the seeded files, NOT a topic an LLM was told to withhold, which is what
-        # makes the demo reliable: the agent has nowhere to read it from, so stating it
-        # is a real hallucination. It is not runtime config either - only the probe
-        # question and the eval example need it, and both carry it as data.
-        planted_gap = analysis.get("data_gap") or "year-over-year figures by segment"
-        gap_action = analysis.get("gap_action")
-        if gap_action and gap_action.get("question"):
-            # Tag the gap probe AT THE SOURCE. `provisioning/evals.py` has to know which quick
-            # action is the honesty example, and inferring it from list position holds
-            # only while there are two base actions in front of it — with a thin LLM
-            # analysis the probe lands at index 1, gets graded as "should answer with
-            # figures", and the fabricating baseline reads all-green with nothing left
-            # to fix on stage. The tag rides along in metadata.actions; the UI reads
-            # label/question and ignores it.
-            actions = base_actions[:2] + [{**gap_action, "kind": "gap"}]
-        else:
-            actions = base_actions[:2]
-    else:
-        # Clean assistant: all quick actions are grounded ("good").
-        actions = base_actions[:3]
-
-    # Guarantee every quick-action label reads as '<Persona>: <gist>' (the UI bolds
-    # the persona before the colon). Persona/gap actions arrive formatted; skill
-    # actions use the LLM's action_label; anything still missing the prefix is
-    # normalized here, so the format holds regardless of what the LLM returned.
-    actions = [{**a, "label": _persona_label(a.get("label", ""))} for a in actions]
-
-    # The assistant's demo eval dataset, in the CUSTOMER's workspace: one example per
-    # finalized quick action (the gap probe last, for a gap-planting failure mode), so
-    # the baseline experiment grades exactly what the presenter is about to click.
-    # Done here rather than in a route because this is where the workspace, the
-    # failure mode, the finalized actions and the data gap are all in hand — and where
-    # the `ls_artifacts` manifest that /cleanup cascades from is written.
-    # Best-effort by contract — ensure_eval_dataset returns "" on any
-    # LangSmith failure, and "" simply means this assistant has no eval panel.
-    eval_dataset = ""
-    eval_rule_id = ""
-    eval_evaluator_id = ""
-    eval_judge_prompt = ""
-    if push:
-        eval_dataset = ensure_eval_dataset(workspace, customer, failure_mode, actions, planted_gap)
-        # Attach the judge to that dataset, so the evaluator is configured in LangSmith
-        # (visible on the Evaluators page and the dataset's Evaluators tab) instead of
-        # living only as a Python function in this process. Also best-effort: a blank
-        # rule id means nothing was attached, and `run_experiment` falls back to grading
-        # in-process.
-        attached = ensure_dataset_evaluator(workspace, eval_dataset, customer)
-        eval_rule_id = attached["rule_id"]
-        eval_evaluator_id = attached["evaluator_id"]
+    if plan.push_prompts:
+        artifacts.eval_dataset = ensure_eval_dataset(
+            plan.workspace, plan.customer, plan.failure_mode, plan.actions, plan.planted_gap
+        )
+        attached = ensure_dataset_evaluator(plan.workspace, artifacts.eval_dataset, plan.customer)
+        artifacts.eval_rule_id = attached["rule_id"]
+        artifacts.eval_evaluator_id = attached["evaluator_id"]
         if attached["error"]:
-            # Printed, not raised. This attach failed on every assistant for the life of
-            # the feature and reported nothing, because the in-process fallback kept the
-            # panel looking healthy — so a silent failure here has form.
             print(f"[setup] eval evaluator not attached: {attached['error']}")
 
-        # The judge itself is a prompt-registry prompt in the customer's workspace, named
-        # deterministically from the dataset, so /cleanup can delete it without another
-        # round trip. Recorded only when the attach succeeded — otherwise there is
-        # nothing to delete and a blank entry keeps the cascade quiet.
-        if eval_rule_id:
-            eval_judge_prompt = judge_prompt_name(eval_dataset)
+        # The current cleanup contract records this prompt only after rule attachment.
+        if artifacts.eval_rule_id:
+            artifacts.eval_judge_prompt = judge_prompt_name(artifacts.eval_dataset)
 
-    # Tag everything this assistant just created with its own Application, so a workspace
-    # holding two dozen demos can be filtered down to one. Last, because it needs the names
-    # the steps above settled on. Threaded, because it is half a dozen HTTP round trips of
-    # pure bookkeeping and no one should wait on it: the receipt is reported by the setup
-    # graph rather than returned here.
-    #
-    # Best-effort by contract (see resource_tags): a workspace on a plan without resource
-    # tags, or a key without `workspaces:manage` to mint the value, leaves the assistant
-    # untagged and nothing else changes.
-    if push:
         threading.Thread(
             target=lambda: print(
                 "[setup] application tag: "
@@ -1201,147 +1124,44 @@ def prepare_assistant(payload: dict) -> dict:
                         api_key=os.getenv("LS_CROSS_WORKSPACE_KEY")
                         or os.getenv("LANGSMITH_API_KEY")
                         or "",
-                        workspace=workspace,
-                        customer=customer,
-                        project=context.get("ls_project", ""),
-                        dataset=eval_dataset,
-                        prompts=(eval_judge_prompt,) if eval_judge_prompt else (),
-                        agents=tuple(n for n in (context.get("agent_repo", ""), skills_repo) if n),
-                        evaluator_id=eval_evaluator_id,
+                        customer=plan.customer,
+                        **artifacts.tagging_targets(),
                     )
                 )
             ),
             daemon=True,
         ).start()
 
-    # A day of synthetic traffic in the assistant's trace project, so the LangSmith
-    # Monitoring and Insights tabs have something to show the moment the demo starts
-    # (otherwise every chart is empty and Insights has nothing to cluster). Threaded
-    # like the sandbox prewarm above: it runs several REAL agent turns to get seed
-    # traces and then ingests a few thousand backdated runs, which is minutes of work
-    # that setup must not wait on. Fire-and-forget and best-effort — failures are
-    # reported in the receipt rather than raised, and nothing downstream depends on it
-    # having succeeded.
-    #
-    # Via `start_demo_traffic` rather than a bare thread so this run registers where
-    # `POST /demo-traffic` and `GET /demo-traffic/status` look: the panel shows it as
-    # running, and a presenter clicking Generate mid-backfill is refused instead of
-    # doubling the traffic.
-    # Deterministic, so the manifest below can name the review queue the backfill will
-    # create minutes from now.
-    #
-    # OPT-IN (`demo_traffic` in the payload, default off). It is thousands of runs
-    # in the customer's own project, carrying a LangSmith cost estimate in the
-    # hundreds — a customer who was not told lands on a project full of traffic they
-    # never ran and a "$240" they think they owe. The Settings panel can still
-    # generate it later (`POST /demo-traffic`), so defaulting off defers it rather
-    # than losing it.
-    traffic_project = context.get("ls_project") or customer
-    queue_name = annotation_queue_name(traffic_project)
-    want_traffic = bool(payload.get("demo_traffic"))
-    if push and want_traffic:
+    # The queue is named before its optional background creation; cleanup tolerates absence.
+    artifacts.annotation_queue = annotation_queue_name(plan.customer)
+    if plan.push_prompts and plan.demo_traffic:
         start_demo_traffic(
-            workspace,
-            traffic_project,
+            plan.workspace,
+            plan.customer,
             context=context,
-            actions=actions,
-            data_gap=planted_gap,
-            customer=customer,
+            actions=plan.actions,
+            data_gap=plan.planted_gap,
+            customer=plan.customer,
         )
 
-    # Brand colors — priority: Brandfetch (accurate/current) → LLM known-brand
-    # guess → scraped site theme-color → default. Secondary drives the 2nd series.
-    accent = (
-        brand["accent"] or analysis.get("primary_color") or brand["accent_scraped"] or "#0072BC"
-    )
-    accent2 = brand["accent2"] or analysis.get("secondary_color") or ""
-    # Surface tint hue. Left BLANK on purpose so it follows the primary accent:
-    # a brand's "neutral" is nearly always a dark grey, and mixing dark grey into
-    # an already near-black panel is invisible — the tint has to carry the brand's
-    # actual hue to do anything. The field stays available as a manual override
-    # for the case it exists for: a primary so saturated it makes an ugly tint.
-    neutral = ""
-    # Fonts — Brandfetch (the brand's actual typefaces) beats the LLM's guess.
-    bf_fonts = brand.get("fonts") or {}
-    heading_font = bf_fonts.get("heading") or analysis.get("heading_font") or ""
-    body_font = bf_fonts.get("body") or analysis.get("body_font") or ""
-    metadata = {
-        "owner_name": owner,
-        "customer": customer,
-        "industry": industry,
-        "display_name": display_name,
-        "accent": accent,
-        "accent2": accent2,
-        "brand_neutral": neutral,
-        "brand_tint": DEFAULT_BRAND_TINT,
-        "logo": brand["logo"],
-        "actions": actions,
-        "theme": analysis.get("theme") or "dark",
-        "font_heading": heading_font,
-        "font_body": body_font,
-        "font_heading_fallback": analysis.get("heading_fallback") or DEFAULT_CURATED,
-        "font_body_fallback": analysis.get("body_fallback") or DEFAULT_CURATED,
-        "font_source": "google",
-        "failure_mode": failure_mode,
-        # Voice: only the prebuilt voice name lives here, set later in Settings. There
-        # is no `enabled` flag. Voice is deliberately NOT a per-assistant switch that
-        # also chooses the landing screen: one setting doing two unrelated jobs leaves
-        # most assistants mute for no reason anyone can name. Every assistant opens the
-        # same typing-first screen with a mic in the composer. Metadata rather than context
-        # because the agent knows nothing about voice: the whole feature is in the browser
-        # (see frontend/src/lib/voice.ts).
-        "voice": {},
-        # Manifest of LangSmith artifacts this assistant created, so deleting the
-        # assistant can cascade-delete them (see webapp.py /cleanup).
-        "ls_artifacts": {
-            "workspace": workspace,
-            "project": context.get("ls_project", ""),
-            "agent_repo": context.get("agent_repo", ""),
-            # The skills bundle is an agent-type repo → deleted via delete_agent, not
-            # delete_skill. `skills` remains for legacy per-skill repos; nothing populates it.
-            "skills_repo": skills_repo,
-            "skills": [],
-            # Per-assistant demo eval dataset ("" when it couldn't be created, or for
-            # an assistant provisioned before this feature existed).
-            "eval_dataset": eval_dataset,
-            # The run rule attaching the judge to that dataset. Deleting the dataset may
-            # not cascade to it, so /cleanup removes it explicitly rather than leaving an
-            # orphan evaluator in the customer's workspace.
-            "eval_rule_id": eval_rule_id,
-            # The workspace-level evaluator record the rule points at — the row on the
-            # Evaluators page. A separate object from the rule, so deleting the rule
-            # leaves it behind; /cleanup deletes both.
-            "eval_evaluator_id": eval_evaluator_id,
-            # The judge's prompt-registry prompt, which the evaluator references by handle.
-            # Also deleted by /cleanup — a reference from the evaluator is not what keeps
-            # the prompt alive, so removing only the rule would leave it behind.
-            "eval_judge_prompt": eval_judge_prompt,
-            # The human-review queue over this project's traffic. Recorded by NAME, not
-            # id: it is created on the backfill thread minutes after this metadata is
-            # written, and the name is deterministic (see `annotation_queue_name`).
-            # Unconditional, because the backfill is fire-and-forget — a name for a queue
-            # that never got created is a no-op in the cascade.
-            "annotation_queue": queue_name,
-        },
-    }
-    # Presenter brief + recommended flow, surfaced in a popup once setup finishes.
+    metadata = plan.metadata(artifacts)
     demo = build_demo_brief(
-        customer,
-        use_case,
-        actions,
-        context.get("enabled_tools"),
-        failure_mode,
-        planted_gap,
+        plan.customer,
+        plan.use_case,
+        plan.actions,
+        plan.enabled_tools,
+        plan.failure_mode,
+        plan.planted_gap,
     )
     metadata["demo_brief"] = demo["brief"]
     metadata["demo_flow"] = demo["flow"]
     return {
-        "name": customer,
-        "display_name": display_name,
-        "accent": accent,
-        "accent2": accent2,
-        "logo": brand["logo"],
-        "actions": actions,
+        "name": plan.customer,
+        "display_name": plan.display_name,
+        "accent": metadata["accent"],
+        "accent2": metadata["accent2"],
+        "logo": metadata["logo"],
+        "actions": plan.actions,
         "metadata": metadata,
         "context": context,
         "prompt_urls": prompt_urls,
