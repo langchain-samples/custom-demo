@@ -5,14 +5,9 @@ fallbacks (`agent_repo`, `customer`) resolve to the SAME VM for every assistant 
 a given customer, so a target that omits the key reaches a different VM than the
 agent is writing to.
 
-That is not hypothetical: the artifact re-read in App.tsx was a second, hand-written
-copy of the same object literal, it did not get the key when the key was introduced,
-and `edit_file` therefore appeared to do nothing. The read landed on the customer's
-older VM, its rejection was swallowed by design, and the pane kept rendering the
-streamed tool argument, which for an edit is a diff and not a document.
-
-Checked by source shape rather than by behavior because the failure is an omission
-at a call site, which no amount of testing the reader itself would catch.
+The source scan enforces the key at production call sites, not just in the file
+reader. Unit-test fixtures may deliberately omit it and are excluded by filename;
+all production sources remain subject to the same check.
 """
 
 from __future__ import annotations
@@ -29,10 +24,16 @@ FRONTEND = Path(__file__).resolve().parents[2] / "frontend" / "src"
 WINDOW = 8
 
 
-def _targets() -> list[tuple[Path, int, str]]:
-    """Every object literal that sets `agent_repo`, with its surrounding lines."""
+def _production_sources(root: Path) -> list[Path]:
+    """Select source files without treating unit-test fixtures as production targets."""
+    test_suffixes = (".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx")
+    return [path for path in sorted(root.rglob("*.ts*")) if not path.name.endswith(test_suffixes)]
+
+
+def _targets(root: Path = FRONTEND) -> list[tuple[Path, int, str]]:
+    """Every production literal that sets `agent_repo`, with its surrounding lines."""
     found = []
-    for path in sorted(FRONTEND.rglob("*.ts*")):
+    for path in _production_sources(root):
         lines = path.read_text(encoding="utf-8").splitlines()
         for i, line in enumerate(lines):
             if re.search(r"\bagent_repo\s*:", line):
@@ -54,3 +55,25 @@ def test_every_sandbox_target_carries_the_assistant_key(case):
         "resolves to the VM shared by every assistant of this customer rather than "
         "this assistant's own."
     )
+
+
+@pytest.mark.parametrize("suffix", [".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx"])
+@pytest.mark.parametrize("source_name", ["assistantSession.ts", "Presenter.tsx", "testHelpers.ts"])
+def test_fixture_exclusion_preserves_production_enforcement(tmp_path, suffix, source_name):
+    source = tmp_path / source_name
+    fixture = tmp_path / f"assistantSession{suffix}"
+    omitted_key = 'const target = { agent_repo: "acme-agent" };\n'
+    source.write_text(omitted_key, encoding="utf-8")
+    fixture.write_text(omitted_key, encoding="utf-8")
+
+    assert _production_sources(tmp_path) == [source]
+    cases = _targets(tmp_path)
+    assert cases == [(source, 1, omitted_key.rstrip())]
+    with pytest.raises(AssertionError, match="without `sandbox_key`"):
+        test_every_sandbox_target_carries_the_assistant_key(cases[0])
+
+    source.write_text(
+        'const target = { agent_repo: "acme-agent", sandbox_key: "acme-unique" };\n',
+        encoding="utf-8",
+    )
+    test_every_sandbox_target_carries_the_assistant_key(_targets(tmp_path)[0])

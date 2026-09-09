@@ -1,12 +1,8 @@
-"""Deployed assistant-setup graph (Part 3).
+"""Agent Server adapter for demo preparation, registered as `assistant_setup`.
 
-A second graph on the same Agent Server. Given setup inputs (workspace, customer,
-owner, industry, website, use_case, failure_mode, push_prompts), it fetches brand
-assets, generates persona quick-actions + an LLM tool selection, optionally pushes
-the agent's prompt to the workspace's Context Hub, and returns a ready assistant payload
-(`result`: metadata + context + prompt_urls). The SPA creates the assistant from it.
-
-Registered in langgraph.json as `assistant_setup`.
+The setup node delegates discovery, planning and resource provisioning to
+`prepare_assistant`, returning metadata, context and prompt URLs under `result`.
+The browser publishes that payload as an assistant in a separate operation.
 """
 
 from __future__ import annotations

@@ -3,7 +3,7 @@
 Conventions for writing code in this repo. One home per rule: this file holds what the
 checks fail on, the judgment they cannot make, and the names that must not change.
 **[AGENTS.md](AGENTS.md)** holds what exists and where to add it (repo map, runtime
-architecture, extension points, rough edges); read its section 6 first. That root
+architecture, extension points, rough edges); read sections 1 and 9 first. That root
 `AGENTS.md` is a developer-facing orientation doc and is **not** anyone's system prompt:
 an assistant's system prompt is the `AGENTS.md` inside its *Context Hub agent repo* (see
 `runtime/prompt.py`), a different file that happens to share the name. Do not edit one
@@ -49,10 +49,10 @@ The rest of `.github/workflows/ci.yml`, where every step is a gate:
 
 Conventions pinned by a contract test. Change the test if you mean to change the rule:
 
-- `test_cleanup_contract.py`: the `ls_artifacts` key set agrees across
-  `provisioning/setup.py`, `web/cleanup.py` and `frontend/src/lib/api.ts`.
-- `test_sandbox_target_contract.py`: every SPA literal setting `agent_repo` carries
-  `sandbox_key` beside it.
+- `test_cleanup_contract.py`: `core/demo.py:LsArtifacts`, the prepared manifest,
+  `web/cleanup.py` behavior and `frontend/src/lib/api.ts` agree on the ten-field contract.
+- `test_sandbox_target_contract.py`: every production SPA literal setting `agent_repo`
+  carries `sandbox_key` beside it; test/spec fixtures are excluded by a tested selector.
 - `test_tool_vocabulary.py`: every catalogue tool appears in every SPA map keyed by
   tool name.
 - `test_demo_prompt_contract.py`: one behavioural clause per prompt, and the README
@@ -107,13 +107,16 @@ on the attach path: its `pip install` blocks the turn inside a middleware with n
 ### Shape
 
 - **No fat nestings.** An `if:` followed by a screen of indented lines is the smell.
-  Guard clauses, early returns, extracted siblings. `web/sandbox.py`'s `sandbox_file`
-  was a 143-line body inside one `try:`; it is 34 lines with a 4-line largest block,
-  once the `try` became `web/errors.py`'s `@route_error` decorator and the arms became
-  `_media_page`, `_text_page` and `_placeholder`.
-- **Pydantic models, not `list[dict]`.** `runtime/widgets.py` is the reference;
-  `provisioning/traffic.py:seed_questions(actions: list[dict] | None) -> list[dict]` is
-  the outstanding counterexample. Do not add another.
+  Guard clauses, early returns, extracted siblings. `web/sandbox.py:sandbox_file`
+  keeps HTTP dispatch separate from `_media_page`, `_text_page` and `_placeholder`;
+  `web/errors.py` supplies `@route_error`. VM acquisition belongs to
+  `resources/sandbox.py`, not another branch inside the route.
+- **Pydantic models, not `list[dict]`, for new input/output schemas.**
+  `runtime/widgets.py` is the reference. Internal compatibility projections are not new
+  validation boundaries: `core/demo.py:DemoPlan` retains accepted action/skill/seed
+  fields losslessly, and `LsArtifacts` accepts legacy empty/null handles. Do not use
+  those exceptions to bypass validation for new inputs or discard extension fields
+  by revalidating existing records through a narrower schema.
 - **Dot notation where the attribute is declared on the class.** Keep `getattr` only
   where the shape genuinely varies, and say which reason applies. `core/ctx.py` is the
   worked example: `Context` is a pydantic `BaseModel` there and `get_ctx(runtime)`
@@ -154,8 +157,8 @@ Renaming any of these breaks state that already exists on a server or in a brows
 - **`dashboard_agent`, the graph KEY in `langgraph.json`.** Every existing assistant is
   bound to that `graph_id`, and `frontend/src/lib/config.ts:GRAPH_ID` repeats it. The
   Python package may be renamed. The graph key may not.
-- **`dashboardWorkspace`**, the localStorage key in `SettingsPanel.tsx`. Renaming it
-  makes every user re-pick their workspace.
+- **`dashboardWorkspace`**, the localStorage key in `frontend/src/lib/assistantSession.ts`.
+  Renaming it makes every user re-pick their workspace.
 - **`dashboard-agent-*` LangSmith dataset names** and the **`da-`** experiment prefix
   beside them, both in `evals/run.py`. They exist server-side already.
 

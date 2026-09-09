@@ -175,11 +175,10 @@ def parse_enabled(raw: Any) -> set[str] | None:
 
 
 def allowed_tool_names(raw: Any) -> set[str]:
-    """Resolve the catalogue tools this run may use.
+    """Resolve catalogue selection plus always-on capabilities for this run.
 
-    Unset → `DEFAULT_ENABLED`, which is exactly the pre-catalogue behaviour
-    (`push_widget`), so assistants created before this feature are unaffected. Otherwise: the selection, narrowed to known ids, plus the
-    always-on ones — enforced here, server-side, not just in the UI.
+    Unset uses `DEFAULT_ENABLED`. An explicit selection is narrowed to known IDs and
+    unioned with `ALWAYS_ON`, so an empty selection disables only optional tools.
     """
     parsed = parse_enabled(raw)
     if parsed is None:

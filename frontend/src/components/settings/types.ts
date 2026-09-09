@@ -1,83 +1,17 @@
-/**
- * Shared shapes for the settings panel sub-parts. The `PanelConfig` mirrors the
- * editable fields of the original SPA's `dashboardConfig`, split into branding
- * (persisted to the assistant's metadata) and agent config (per-run context).
- */
-import type { McpServerConfig, QuickAction, ToolSpec } from "@/lib/api";
-import type { Theme } from "@/lib/theme";
+/** Shared presentation types and styles for assistant settings. */
+import type { ToolSpec } from "@/lib/api";
 
-export type { QuickAction };
+export type { QuickAction } from "@/lib/api";
 
-/** All editable panel fields for the active assistant. */
-export interface PanelConfig {
-  /**
-   * Prebuilt Live API voice for spoken replies (`metadata.voice.voice_name`). Empty means
-   * the house default (see `DEFAULT_VOICE`). Every assistant can be spoken to, so this
-   * always applies.
-   */
-  voiceName: string;
-  /** LangSmith workspace id (trace routing + workspace-scoped prompts). */
-  lsWorkspace: string;
-  /** Branding: display name shown in the header. */
-  name: string;
-  /** Branding: accent hex (drives --brand-primary). */
-  accent: string;
-  /** Branding: optional secondary hex (drives the 2nd chart series). */
-  accent2: string;
-  /** Branding: hue that tints surfaces ("" = follow the primary accent). */
-  brandNeutral: string;
-  /** Branding: surface tint strength, 0–20 (percent). 0 = the plain grey shell. */
-  brandTint: number;
-  /** Branding: emoji or image URL. */
-  logo: string;
-  /** Branding: quick-action presets shown in the chat pane. */
-  actions: QuickAction[];
-  /** Branding: brand-appropriate default theme (light/dark). */
-  theme: Theme;
-  /** Branding: Google Fonts family for headings ("" = use the bundled fallback). */
-  fontHeading: string;
-  /** Branding: bundled family headings fall back to. */
-  fontHeadingFallback: string;
-  /** Branding: Google Fonts family for body text. */
-  fontBody: string;
-  /** Branding: bundled family body text falls back to. */
-  fontBodyFallback: string;
-  /** Branding: "curated" never contacts the font CDN. */
-  fontSource: "google" | "curated";
-  /**
-   * Agent config: the Context Hub agent repo whose AGENTS.md is the system
-   * prompt. The only prompt source there is; "" leaves the agent on its
-   * built-in fallback prompt.
-   */
-  agentRepo: string;
-  /** Agent config: `context.model` id, "" for the deployment default. */
-  model: string;
-  /**
-   * Agent config: catalogue tool ids this assistant exposes. `null` means the
-   * assistant has no saved selection (backend defaults apply); `[]` means every
-   * optional tool is off. The two are NOT interchangeable.
-   */
-  enabledTools: string[] | null;
-  /**
-   * Agent config: remote MCP servers this assistant connects to. Unlike
-   * `enabledTools`, an empty list is simply "none connected" - there is no
-   * unset/empty distinction to preserve.
-   */
-  mcpServers: McpServerConfig[];
-}
-
-/** Shared field-label typography (uppercase micro-label), matching the SPA. */
+/** Shared field-label typography. */
 export const LABEL_CLS =
   "text-[11px] font-bold uppercase tracking-[0.03em] text-muted-foreground";
 
-/** Inline hint suffix styling (lower-case, muted). */
+/** Inline hint suffix styling. */
 export const HINT_CLS =
   "text-[10px] font-normal normal-case tracking-normal text-muted-foreground";
 
-/**
- * The tool catalogue's own defaults — what an untouched selection resolves to.
- * Shared so the create form and the settings toggles agree on "unset".
- */
+/** The catalogue owns defaults for an untouched tool selection. */
 export function defaultEnabled(specs: ToolSpec[]): string[] {
   return specs.filter((s) => s.default_on || s.always_on).map((s) => s.id);
 }

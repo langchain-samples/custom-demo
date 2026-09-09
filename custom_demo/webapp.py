@@ -5,6 +5,6 @@ see that package's docstring. This file stays because `http.app` in langgraph.js
 points at it by path, and the deployment fails to start if that stops resolving.
 """
 
-from custom_demo.web import app
+from custom_demo.web.routes import app
 
 __all__ = ["app"]

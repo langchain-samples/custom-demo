@@ -1,12 +1,8 @@
-"""Per-run configuration, and how to read it off a LangGraph runtime.
+"""Assistant execution configuration supplied through the LangGraph runtime.
 
-`Context` lives in `core/` rather than beside `build_agent`, because both the
-middleware in `runtime/agent.py` and the tools in `runtime/tools/` read it, and
-an accessor next to `build_agent` would make `custom_demo.runtime.tools`
-import back into the module that already imports it. `core/` imports nothing
-from the rest of the package, so the class is reachable from anywhere with no
-cycle. `runtime.agent` re-exports it, and `create_deep_agent` takes it as
-`context_schema`.
+`Context` describes configuration, not checkpointed conversation state or VM ownership.
+Middleware, tools and backend adapters share this dependency-free domain boundary.
+`runtime.agent` re-exports it and registers it as the graph's `context_schema`.
 """
 
 from __future__ import annotations
@@ -44,7 +40,7 @@ class Context(BaseModel):
     # shape from working into a hard failure on every turn.
     enabled_tools: list[str] | str | None = None
     sandbox_seed: list[dict] | None = None  # files to plant in the VM (see render_seed_script)
-    sandbox_key: str = ""  # this assistant's own VM name (see _sandbox_key_from)
+    sandbox_key: str = ""  # assistant VM identity resolved by resources/sandbox.py
     # Remote MCP servers this assistant connects to: [{id?, label, url, token?, headers?}].
     # Their tools are discovered per run and namespaced `{id}_{tool}` (mcp_servers.py).
     mcp_servers: list[dict] | None = None

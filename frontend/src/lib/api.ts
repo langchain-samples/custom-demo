@@ -332,19 +332,15 @@ export interface SetupInput {
   demo_traffic?: boolean;
   /** Capabilities the new assistant starts with; editable afterwards. */
   enabled_tools?: string[];
-  /**
-   * Voice mode: adds the mic button on this assistant. OPT-IN, and never inferred from
-   * the use case. Lands in the assistant's metadata rather than its runtime context,
-   * because the agent knows nothing about voice (see lib/voice.ts).
-   */
+  /** Legacy input ignored by setup. Every assistant supports voice; Settings saves its voice name. */
   voice?: { voice_name?: string };
 }
 
-/** Prepared payload the assistant_setup graph returns. */
+/** Prepared resources and configuration; the browser must still create the assistant. */
 export interface SetupResult {
   context?: RunContext & Record<string, unknown>;
   metadata?: AssistantMetadata;
-  prompt_urls?: string[];
+  prompt_urls?: { system?: string };
   [key: string]: unknown;
 }
 
