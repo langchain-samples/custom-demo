@@ -87,13 +87,13 @@ def simulate(runtime: ToolRuntime, role: str, shape: str, instruction: str) -> s
         f"{role} You are standing in for a real system in a live product demo for "
         f"{_who(runtime)}.\n\n"
         "Invent specific, plausible, internally consistent content tailored to that "
-        "organization — their real product lines, teams, regions, systems and "
+        "organization: their real product lines, teams, regions, systems and "
         "terminology, never generic placeholders. Reply with STRICT JSON only: no "
         "prose, no markdown, no code fences.\n\n"
         # Without this the model dates everything to its training cutoff, which
         # reads as stale in a live demo.
         f"TODAY'S DATE IS {date.today().isoformat()}. Any date you produce must be "
-        "relative to that — never an earlier year.\n\n"
+        "relative to that, never an earlier year.\n\n"
         f"Reply with exactly this shape:\n{shape}"
     )
     model_id = simulated_model()
@@ -156,12 +156,12 @@ def ask_user(question: str, options: list[str]) -> str:
     Use when the request is ambiguous or needs information only the user has
     (which time range? which product? which account?). Pauses the run
     (human-in-the-loop) and returns the option they picked as a string. Prefer
-    asking over guessing when a single question removes the ambiguity — then
+    asking over guessing when a single question removes the ambiguity, then
     continue with the answer.
 
     `options` are the answers to choose between: 2-5 short, mutually exclusive
     labels (a few words each, no numbering). They are the ONLY answers offered,
-    so they must cover the realistic cases — add an escape hatch such as
+    so they must cover the realistic cases: add an escape hatch such as
     "Something else" when they might not. Never ask for a value only the user
     can type (an account number, a specific date): ask a choosable question
     instead, or look it up.
@@ -184,7 +184,7 @@ def ask_user(question: str, options: list[str]) -> str:
 def draft_email(purpose: str, runtime: ToolRuntime, recipient: str = "", tone: str = "") -> str:
     """Draft an email for the user to review and send.
 
-    Use when the user wants to communicate something — share a finding, escalate
+    Use when the user wants to communicate something: share a finding, escalate
     an issue, brief a colleague or follow up with a customer.
 
     `purpose` should say what the email needs to achieve, and include the concrete
@@ -194,7 +194,7 @@ def draft_email(purpose: str, runtime: ToolRuntime, recipient: str = "", tone: s
     (e.g. "formal", "brief", "warm").
 
     This tool INCLUDES the approval step. The user reviews and edits the draft in
-    the UI, and the tool only returns once they have approved it — so the result
+    the UI, and the tool only returns once they have approved it, so the result
     you get back (`status: "approved_by_user"`) is final. It may differ from what
     was generated; the user's version is the real one.
 
@@ -202,11 +202,11 @@ def draft_email(purpose: str, runtime: ToolRuntime, recipient: str = "", tone: s
     sent, received, or delivered. It is approved and ready to send.
 
     Returns JSON {to, cc, subject, body, status}. In your written answer:
-      - report it as APPROVED, e.g. "Approved and ready to send to <to> —
+      - report it as APPROVED, e.g. "Approved and ready to send to <to>:
         <subject>." One or two lines.
       - do NOT say it is "ready for your review", "drafted for approval", or
-        "let me know if you'd like any edits" — they have already reviewed and
-        edited it. Asking again is wrong and annoying.
+        "let me know if you'd like any edits". They have already reviewed and
+        edited it, so asking again is wrong and annoying.
       - do NOT reproduce the email body; it is already displayed above.
     """
 

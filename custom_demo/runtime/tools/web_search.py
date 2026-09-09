@@ -74,7 +74,7 @@ def _shape(raw: dict) -> str:
 def web_search(query: str) -> str:
     """Search the web for external context and citable sources.
 
-    Use for context that would not appear in internal data — market conditions,
+    Use for context that would not appear in internal data: market conditions,
     competitors, regulation, public news. Cite what you use in your answer.
 
     Returns JSON {results:[{title, url, snippet, published}]}.

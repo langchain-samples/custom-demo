@@ -43,8 +43,9 @@ The rest of `.github/workflows/ci.yml`, where every step is a gate:
   every `custom_demo/tests/*.js` under plain node from the repo root.
 - No em-dashes. `frontend/scripts/check-no-emdash.mjs` scans `frontend/src` (code
   comments exempt), `README.md`, `AGENTS.md`, `CLAUDE.md`, `docs/` and `evals/*.md`.
-  `test_prompt_prose.py` scans Python string literals in the five modules whose text
-  reaches a model or a user. Use commas, colons, parentheses, or " - ".
+  `test_prompt_prose.py` scans Python string literals under `custom_demo/`, tests
+  excluded, and also the docstring of any `@tool` function, which is the description
+  the model reads. Use commas, colons, parentheses, or " - ".
 
 Conventions pinned by a contract test. Change the test if you mean to change the rule:
 

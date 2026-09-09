@@ -73,7 +73,7 @@ TOOL_REGISTRY: tuple[ToolSpec, ...] = (
         guidance=(
             "Use `draft_email` when the user wants to communicate a finding. It "
             "includes its own approval step, so the result is the user's OWN "
-            "approved version — report it in one line as approved and ready to "
+            "approved version. Report it in one line as approved and ready to "
             "send, never claim it has been delivered, never ask for review or "
             "offer edits, and do not repeat the email body."
         ),
@@ -94,7 +94,7 @@ TOOL_REGISTRY: tuple[ToolSpec, ...] = (
             "needs information only the user has; wait for their answer before proceeding. Don't "
             "ask about things you can look up or reasonably assume. It is MULTIPLE CHOICE: always "
             'pass 2-5 short, mutually exclusive `options` (plus an escape hatch like "Something '
-            'else" when they may not cover it) — the user can only pick one of them, so never '
+            'else" when they may not cover it). The user can only pick one of them, so never '
             "ask for a value they would have to type."
         ),
     ),
@@ -108,7 +108,7 @@ TOOL_REGISTRY: tuple[ToolSpec, ...] = (
             "Use `web_search` for context that would not be in internal data "
             "(market conditions, competitors, public news). Results are real, so "
             "cite the URLs you use. If it returns an error, say search was "
-            "unavailable — never substitute remembered or invented sources."
+            "unavailable, and never substitute remembered or invented sources."
         ),
     ),
 )

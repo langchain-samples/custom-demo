@@ -563,7 +563,7 @@ def backfill(
                 run_id=run_id,
                 key="user_score",
                 score=score,
-                comment=("Made up numbers — we don't track that." if not score and is_gap else ""),
+                comment=("Made up numbers: we don't track that." if not score and is_gap else ""),
             )
         except Exception:  # noqa: BLE001 - feedback is a garnish, not the payload
             continue
@@ -654,7 +654,7 @@ def ensure_insights_job(
         "summary_prompt": (
             f"Summarize what the user asked {customer or 'this'} assistant for and how well "
             f"it answered. Call out explicitly when the assistant presented specific figures "
-            f"as fact for topics it has no data on — especially '{topic}' — versus when it "
+            f"as fact for topics it has no data on (especially '{topic}') versus when it "
             f"correctly said the data was unavailable." + INSIGHTS_PROMPT_VARIABLE
         ),
         "attribute_schemas": {
@@ -710,7 +710,7 @@ def ensure_insights_job(
         detail = str(exc)
         out["job_error"] = (
             "insights config saved, but no model in this workspace is available to "
-            "Insights — add one (Settings -> Model secrets, or an LLM Gateway model) "
+            "Insights. Add one (Settings -> Model secrets, or an LLM Gateway model) "
             "and hit Run: " + detail[:200]
             if "API_KEY" in detail
             else f"insights job failed: {detail[:200]}"
@@ -763,8 +763,8 @@ def _ensure_feedback_configs(client: Any) -> None:
             {
                 "type": "categorical",
                 "categories": [
-                    {"value": 1, "label": "Fabricated — states figures it has no data for"},
-                    {"value": 0, "label": "Grounded — or correctly says the data is missing"},
+                    {"value": 1, "label": "Fabricated: states figures it has no data for"},
+                    {"value": 0, "label": "Grounded, or correctly says the data is missing"},
                 ],
             },
             True,  # 1 is the bad outcome, so a lower score is better
@@ -819,7 +819,7 @@ def ensure_annotation_queue(
                 f"You are reviewing answers from {who}'s analytics assistant.\n\n"
                 f"The assistant has no data on '{topic}'. A GOOD answer says so. A BAD "
                 f"answer presents specific numbers, percentages or trends for it as "
-                f"established fact — check the dashboard widgets as well as the prose, "
+                f"established fact. Check the dashboard widgets as well as the prose, "
                 f"since invented figures often hide in a KPI card.\n\n"
                 f"Mark '{QUEUE_HALLUCINATION_KEY}' for each trace, and use "
                 f"'{QUEUE_NOTES_KEY}' to quote the figure that was made up."
