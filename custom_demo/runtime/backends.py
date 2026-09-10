@@ -95,7 +95,8 @@ class DynamicBackend(CompositeBackend):
     The graph serves many assistants, so default/routes must not capture one run's
     resources at construction. deepagents also reads default to decide whether to
     expose execute. Outside a run the adapter provides a StateBackend, allowing
-    graph construction without acquiring infrastructure.
+    graph construction without acquiring infrastructure. Both shapes of "outside a
+    run" count: no runtime at all, and a runtime carrying no context.
     """
 
     artifacts_root = "/"
@@ -107,6 +108,20 @@ class DynamicBackend(CompositeBackend):
         try:
             runtime = get_runtime()
         except Exception:  # noqa: BLE001 - graph construction has no active runtime
+            return StateBackend(), {}
+
+        # A runtime in hand does not mean a run is in flight, so this second guard is
+        # load-bearing. Agent Server loads graphs through `run_in_executor`, which copies
+        # the caller's contextvars into the worker thread, so `get_runtime()` can succeed
+        # during graph load with no assistant behind it and no context. Resolving from
+        # there reaches `seed_script_or_raise(None)`, whose refusal is right for a real
+        # turn and fatal here: it leaves `build_agent`, the graph fails to load, and every
+        # container exits on startup. Off a run nothing was asked for, so a plain state
+        # default is the honest answer rather than a substitution.
+        #
+        # `getattr` because the runtime object's own shape varies, the same reason
+        # `core/ctx.py:get_ctx` reads `.context` that way.
+        if getattr(runtime, "context", None) is None:
             return StateBackend(), {}
 
         return _resolve_backends(runtime)

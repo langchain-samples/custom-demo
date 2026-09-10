@@ -22,7 +22,8 @@ The spec:
 - Caching: `_resolve_backends` runs per model/tool call, so N calls create ONE VM,
   seed ONCE.
 - `DynamicBackend` off a run (build/import/tests) falls back to plain state, so graph
-  load never fails.
+  load never fails. Both shapes of "off a run" count: no runtime at all, and a runtime
+  that a copied contextvar config produced during graph load, carrying no context.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ import pytest
 from deepagents.backends import CompositeBackend, LangSmithSandbox, StateBackend
 from deepagents.backends.protocol import FileDownloadResponse, FileInfo, LsResult
 from deepagents.middleware.filesystem import supports_execution
+from langchain_core.runnables.config import var_child_runnable_config
 
 from custom_demo.core.ctx import Context
 from custom_demo.resources import sandbox as S
@@ -245,6 +247,30 @@ def test_dynamic_backend_offrun_falls_back_to_state():
     assert isinstance(backend.default, StateBackend)
     assert backend.routes == {}
     assert supports_execution(backend) is False
+
+
+def test_dynamic_backend_offrun_with_a_runnable_config_falls_back_to_state(monkeypatch):
+    """Graph load survives a contextvar config left behind by the loader thread.
+
+    Agent Server imports graphs through `run_in_executor`, which copies the caller's
+    contextvars into the worker thread. `get_runtime()` then SUCCEEDS during graph load
+    while carrying no context, which is not the raising case above. With sandbox
+    credentials configured, resolving from that runtime reached
+    `seed_script_or_raise(None)`, and its refusal left `build_agent`: the graph failed to
+    load and every container exited on startup, taking the whole deployment down while
+    the control plane still reported it READY.
+    """
+    monkeypatch.setattr(S, "sandbox_enabled", lambda: True)
+    # Reset on the way out: a contextvar set here otherwise stays set for every test that
+    # runs after it in this process, silently turning their "off a run" into this one.
+    token = var_child_runnable_config.set({"configurable": {}})
+    try:
+        backend = B.DynamicBackend()
+        assert isinstance(backend.default, StateBackend)
+        assert backend.routes == {}
+        assert supports_execution(backend) is False
+    finally:
+        var_child_runnable_config.reset(token)
 
 
 # --- pre-warm at provisioning: create+seed up front so the first chat is warm ---
