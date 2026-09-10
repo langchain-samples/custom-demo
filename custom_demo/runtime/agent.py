@@ -1143,8 +1143,9 @@ class DynamicBackend(CompositeBackend):
     live properties (not `__init__` attributes), so a single shared instance serves
     every assistant. Because deepagents keys `supports_execution()` off `.default`,
     the `execute` tool is offered iff THIS run resolved a sandbox VM — matching the
-    pre-0.7 per-run behavior. Off a run (build/import/tests) `get_runtime()` raises and
-    we fall back to a plain `StateBackend`, so construction and graph load never fail.
+    pre-0.7 per-run behavior. Off a run (build/import/tests) there is either no runtime
+    or a runtime carrying no context, and both fall back to a plain `StateBackend`, so
+    construction and graph load never fail.
     """
 
     artifacts_root = "/"
@@ -1158,6 +1159,20 @@ class DynamicBackend(CompositeBackend):
         try:
             runtime = get_runtime()
         except Exception:  # noqa: BLE001 - off a run (build/tests): safe default
+            return StateBackend(), {}
+
+        # A runtime in hand does not mean a run is in flight, so this second guard is
+        # load-bearing. Agent Server loads graphs through `run_in_executor`, which copies
+        # the caller's contextvars into the worker thread, so `get_runtime()` can succeed
+        # during graph load with no assistant behind it and no context. Resolving from
+        # there reaches `seed_script_or_raise(None)`, whose refusal is right for a real
+        # turn and fatal here: it leaves `build_agent`, the graph fails to load, and every
+        # container exits on startup. Off a run nothing was asked for, so a plain state
+        # default is the honest answer rather than a substitution.
+        #
+        # `getattr` because the runtime object's own shape varies, the same reason
+        # `core/ctx.py:get_ctx` reads `.context` that way.
+        if getattr(runtime, "context", None) is None:
             return StateBackend(), {}
 
         return _resolve_backends(runtime)
