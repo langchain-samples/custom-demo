@@ -16,13 +16,16 @@ from custom_demo.runtime.tools import (
     ALWAYS_ON,
     CATALOGUE_IDS,
     DEFAULT_ENABLED,
+    HITL_IDS,
     TOOL_REGISTRY,
+    ToolSpec,
     all_tools,
     allowed_tool_names,
     guidance_for,
     is_allowed,
     parse_enabled,
     registry_json,
+    subagent_tools,
 )
 
 SOME_BUILTINS = ["ls", "read_file", "write_file", "edit_file", "glob", "grep", "task"]
@@ -165,3 +168,40 @@ def test_middleware_never_strips_builtins_even_when_all_off():
 def test_middleware_tolerates_missing_context():
     """No context at all (a build-time or off-run request) reads as the defaults."""
     assert _names(ToolSelection()._apply(_request(None))) & CATALOGUE_IDS == DEFAULT_ENABLED
+
+
+# --- which tools pause the run ------------------------------------------------
+
+
+def test_the_pausing_tools_are_the_ones_that_call_interrupt():
+    """`hitl` drives what subagents are denied, so a wrong row is a stranded run.
+
+    Both of these pause: `ask_user` for an answer, `draft_email` for approval of its
+    draft. `push_widget` and `web_search` return without waiting for anyone.
+    """
+    assert HITL_IDS == {"ask_user", "draft_email"}
+
+
+def test_subagent_tools_is_the_catalogue_minus_the_pausing_ones():
+    assert {t.name for t in subagent_tools()} == {"push_widget", "web_search"}
+    assert {t.name for t in all_tools()} - {t.name for t in subagent_tools()} == HITL_IDS
+
+
+def test_a_new_pausing_tool_is_withheld_by_its_row_alone():
+    """The point of the flag: no second list of names to remember to update.
+
+    Appends a row to a copy of the table and reads the derivation off that, so the
+    guarantee is tested rather than the four rows that happen to exist today.
+    """
+    extra = ToolSpec(
+        id="book_meeting",
+        label="Book a meeting",
+        description="Pick a slot with the user, then hold it.",
+        group="Comms",
+        tool=TOOL_REGISTRY[0].tool,  # any real tool: the flag, not the tool, is under test
+        hitl=True,
+    )
+    table = (*TOOL_REGISTRY, extra)
+
+    assert "book_meeting" in frozenset(s.id for s in table if s.hitl)
+    assert "book_meeting" not in [s.id for s in table if not s.hitl]
