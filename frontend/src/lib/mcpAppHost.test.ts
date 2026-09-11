@@ -39,6 +39,7 @@ function host(
     onReadResource?: (uri: string) => Promise<unknown[]>;
     onMessage?: (text: string) => void;
     onModelContext?: (c: Record<string, unknown>) => void;
+    toolInputSchema?: Record<string, unknown>;
   } = {},
 ) {
   const target = view();
@@ -48,6 +49,7 @@ function host(
     toolName: "meridian_sign_document",
     toolArguments: { account_id: "MW-10241", document: "IPS amendment" },
     toolResult: RESULT,
+    toolInputSchema: overrides.toolInputSchema,
     onToolCall,
     onHeight,
     onReadResource: overrides.onReadResource,
@@ -77,9 +79,13 @@ describe("the handshake", () => {
     expect(result).toBeTruthy();
     const ctx = result.hostContext as Record<string, unknown>;
     expect(result.protocolVersion).toBe(PROTOCOL_VERSION);
-    // The View needs the tool's name to call it back. Only the name: we do not
-    // hold its declared schema, and a made-up one is worse than an absent one.
-    expect((ctx.toolInfo as { tool: { name: string } }).tool.name).toBe("meridian_sign_document");
+    // A COMPLETE `Tool`. `inputSchema` is required by that type and the official
+    // app SDK validates the initialize result against it, so leaving it out is
+    // not a cautious partial answer: Excalidraw's app rejected the handshake
+    // with `path: ["hostContext","toolInfo","tool","inputSchema"]`.
+    const tool = (ctx.toolInfo as { tool: Record<string, unknown> }).tool;
+    expect(tool.name).toBe("meridian_sign_document");
+    expect(tool.inputSchema).toEqual({ type: "object" });
     expect(ctx.displayMode).toBe("inline");
     // Flexible height, which is the mode that pairs with size-changed below.
     expect(ctx.containerDimensions).toEqual({ maxHeight: 640 });
@@ -102,6 +108,15 @@ describe("the handshake", () => {
 
     const params = result?.params as Record<string, unknown>;
     expect(params.structuredContent).toEqual(RESULT.structuredContent);
+  });
+
+  it("passes the server's real schema through when there is one", () => {
+    const schema = { type: "object", properties: { elements: { type: "string" } } };
+    const { target, from } = host({ toolInputSchema: schema });
+    from({ jsonrpc: "2.0", id: 1, method: "ui/initialize", params: {} });
+    const got = reply(target.sent, 1)?.result as Record<string, unknown> | undefined;
+    const ctx = got?.hostContext as Record<string, unknown>;
+    expect((ctx.toolInfo as { tool: { inputSchema: unknown } }).tool.inputSchema).toEqual(schema);
   });
 
   it("ignores anything that did not come from its own View", () => {

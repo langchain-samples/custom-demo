@@ -370,6 +370,16 @@ async def read_app(servers: tuple[McpServer, ...], tool_name: str) -> dict[str, 
                 "resource_uri": uri,
                 "mime_type": getattr(item, "mime_type", None) or "text/html",
                 "html": text,
+                # The tool's own JSON Schema, carried through for the host to put
+                # in `hostContext.toolInfo.tool`. NOT optional: `Tool` requires
+                # `inputSchema`, and the official app SDK validates the
+                # initialize result, so a host that omits it is rejected by every
+                # app built on that SDK (Excalidraw's says
+                # `path: ["hostContext","toolInfo","tool","inputSchema"]`).
+                # The adapter keeps the server's schema verbatim on `args_schema`.
+                "input_schema": tool.args_schema
+                if isinstance(tool.args_schema, dict)
+                else {"type": "object"},
             }
 
     # A `ui://` URI that resolves to nothing readable is a server bug, and the

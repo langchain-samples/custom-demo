@@ -42,7 +42,8 @@ function AppFrame({
   toolResult,
   servers,
   html,
-}: McpAppCardProps & { html: string }) {
+  inputSchema,
+}: McpAppCardProps & { html: string; inputSchema?: Record<string, unknown> }) {
   const ref = useRef<HTMLIFrameElement | null>(null);
   const [height, setHeight] = useState(320);
 
@@ -51,6 +52,7 @@ function AppFrame({
       toolName,
       toolArguments,
       toolResult,
+      toolInputSchema: inputSchema,
       // Clamped here rather than in the host: the ceiling is this card's layout,
       // and it is the same number the host advertises as maxHeight.
       onHeight: (h) => setHeight(Math.min(Math.max(h, 160), 640)),
@@ -64,7 +66,7 @@ function AppFrame({
       window.removeEventListener("message", onMessage);
       host.teardown(view(), "The app was closed.");
     };
-  }, [toolName, toolArguments, toolResult, servers]);
+  }, [toolName, toolArguments, toolResult, servers, inputSchema]);
 
   return (
     <iframe
@@ -88,20 +90,22 @@ function AppFrame({
  */
 export function McpAppCard(props: McpAppCardProps) {
   const { toolName, servers } = props;
-  const [html, setHtml] = useState<string | null>(null);
+  const [app, setApp] = useState<{ html: string; input_schema?: Record<string, unknown> } | null>(
+    null,
+  );
 
   useEffect(() => {
     let live = true;
     if (!toolName || !servers.length) return;
     void fetchMcpApp(servers, toolName).then((found) => {
-      if (live) setHtml(found?.html ?? null);
+      if (live) setApp(found ? { html: found.html, input_schema: found.input_schema } : null);
     });
     return () => {
       live = false;
     };
   }, [toolName, servers]);
 
-  if (!html) return null;
+  if (!app) return null;
 
   const label = toolName.includes("_") ? toolName.split("_").slice(1).join("_") : toolName;
   return (
@@ -110,7 +114,7 @@ export function McpAppCard(props: McpAppCardProps) {
         <IconApps size={13} />
         {label}
       </div>
-      <AppFrame {...props} html={html} />
+      <AppFrame {...props} html={app.html} inputSchema={app.input_schema} />
     </div>
   );
 }

@@ -210,6 +210,14 @@ export interface McpAppResource {
   resource_uri: string;
   mime_type: string;
   html: string;
+  /**
+   * The tool's own JSON Schema, for `hostContext.toolInfo.tool.inputSchema`.
+   *
+   * Required, not decorative: `Tool` declares `inputSchema`, and the official
+   * app SDK validates the initialize result against that type, so an app built
+   * on it refuses a host that leaves it out.
+   */
+  input_schema?: Record<string, unknown>;
 }
 
 /** One selectable capability, from GET /tools (the backend registry). */

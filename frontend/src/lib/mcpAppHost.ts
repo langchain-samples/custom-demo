@@ -60,6 +60,15 @@ export interface McpAppHostConfig {
   toolArguments: Record<string, unknown>;
   /** Its result, which is the data the app draws. */
   toolResult: McpToolResult;
+  /**
+   * Its JSON Schema, for `hostContext.toolInfo.tool`.
+   *
+   * `Tool` declares `inputSchema` as required, and the official app SDK
+   * validates the initialize result, so omitting it is not a modest partial
+   * answer: an app built on that SDK rejects the handshake outright. Excalidraw
+   * reports it as `path: ["hostContext","toolInfo","tool","inputSchema"]`.
+   */
+  toolInputSchema?: Record<string, unknown>;
   /** Proxy a `tools/call` the view made. Rejects with the reason on refusal. */
   onToolCall?: (name: string, args: Record<string, unknown>) => Promise<McpToolResult>;
   /** The View's reported content height, in pixels. */
@@ -157,9 +166,15 @@ export function createMcpAppHost(config: McpAppHostConfig): McpAppHost {
       ...(config.onReadResource ? { serverResources: {} } : {}),
     },
     hostContext: {
-      // Only the name. We know which tool this app belongs to, but not its
-      // declared schema, and a made-up one would be worse than an absent one.
-      toolInfo: { tool: { name: config.toolName } },
+      // A complete `Tool`. `{type: "object"}` only when the server published no
+      // schema at all, which is still a valid empty object schema rather than an
+      // invention: the alternative is a handshake the app refuses.
+      toolInfo: {
+        tool: {
+          name: config.toolName,
+          inputSchema: config.toolInputSchema ?? { type: "object" },
+        },
+      },
       theme: document.documentElement.classList.contains("dark") ? "dark" : "light",
       styles: { variables: themeVariables() },
       displayMode: "inline",
