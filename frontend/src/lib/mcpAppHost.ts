@@ -1,5 +1,5 @@
 /**
- * The host half of MCP Apps (SEP-1865), for one paused tool call.
+ * The host half of MCP Apps (SEP-1865), for one tool call that ships a UI.
  *
  * A server can ship a `ui://` HTML resource bound to a tool, and a host that
  * understands the extension renders it in a sandboxed iframe and talks to it in
@@ -14,18 +14,18 @@
  *   Host -> View   ui/notifications/tool-input    the arguments the tool was called with
  *   Host -> View   ui/notifications/tool-result   the result of this leg of the call
  *   View -> Host   ui/notifications/size-changed  the content resized
- *   View -> Host   tools/call                     the answer, as a fresh call
+ *   View -> Host   tools/call, resources/read     proxied to the app's server
  *   Host -> View   ui/resource-teardown           before the frame goes away
  *
- * WHY A TOOL RESULT CARRIES A QUESTION. Our tools pause. Under SEP-2322 a tool
- * that needs input returns an `InputRequiredResult` naming what it wants, and
- * the client re-calls the same tool with `inputResponses` attached. That is an
- * ordinary tool result and an ordinary tool call, so composing the two SEPs
- * needs no message of our own, and an app written against either one works
- * here. We hand the answer to LangGraph rather than to the MCP server directly,
- * because the paused call belongs to the agent's run: proxying a View's
- * `tools/call` on to the server is exactly what SEP-1865 asks a host to do, and
- * for us the route there runs through resuming the interrupt.
+ * The tool finishes first, and its result is what the app draws. When a person
+ * does something in the app it submits by CALLING A TOOL, normally one the
+ * server marked `visibility: ["app"]` so the model cannot call it. The host
+ * proxies that call, which is what SEP-1865 asks of it; `POST /mcp/call` is
+ * where the same-server and open-to-apps rules are enforced, because a view is
+ * server-authored HTML and nothing it sends is trusted.
+ *
+ * There is no pause in any of this. Elicitation is a different extension for a
+ * different problem, and an MCP App does not need it.
  *
  * ONE DEVIATION, DELIBERATE. SEP-1865 says a web host MUST wrap the View in a
  * different-origin sandbox proxy, so that the View can hold `allow-same-origin`
@@ -36,7 +36,11 @@
  * this page's storage. The cost is that a third-party app needing
  * `allow-same-origin` will not work here.
  */
-import type { JsonSchema, McpElicitationRequest, McpElicitationResponse } from "@/lib/api";
+/** A tool result as the host hands it to a view. */
+export interface McpToolResult {
+  structuredContent?: unknown;
+  content?: unknown[];
+}
 
 /** The MCP Apps protocol revision this host implements. */
 export const PROTOCOL_VERSION = "2026-01-26";
@@ -50,14 +54,14 @@ interface RpcMessage {
 }
 
 export interface McpAppHostConfig {
-  /** The paused tool, whose name the View must use when it calls back. */
+  /** The tool whose app this is. Its name scopes every call the view makes. */
   toolName: string;
-  /** The arguments it was called with, replayed to the View and back to us. */
+  /** The arguments it was called with, replayed to the View. */
   toolArguments: Record<string, unknown>;
-  /** The question this leg of the call returned. */
-  request: McpElicitationRequest;
-  /** The View's answer, ready to resume the run with. */
-  onAnswer: (response: McpElicitationResponse) => void;
+  /** Its result, which is the data the app draws. */
+  toolResult: McpToolResult;
+  /** Proxy a `tools/call` the view made. Rejects with the reason on refusal. */
+  onToolCall?: (name: string, args: Record<string, unknown>) => Promise<McpToolResult>;
   /** The View's reported content height, in pixels. */
   onHeight: (height: number) => void;
   /**
@@ -120,48 +124,8 @@ function themeVariables(): Record<string, string> {
   return out;
 }
 
-/**
- * The question, in the shape a tool result carries it on the wire.
- *
- * `inputRequests` keyed by the server's own key, each an `elicitation/create`
- * request, is the SEP-2322 form. camelCase because that is the wire spelling;
- * `langchain.mcp` hands us the snake_case one, so this converts back.
- */
-function inputRequiredResult(request: McpElicitationRequest) {
-  return {
-    resultType: "input_required",
-    inputRequests: {
-      [request.key]: {
-        method: "elicitation/create",
-        params: {
-          mode: "form",
-          message: request.message,
-          requestedSchema: (request.requested_schema ?? {}) as JsonSchema,
-        },
-      },
-    },
-  };
-}
-
-/** Read the answer out of a View's `tools/call`, or null if it carries none. */
-function answerFrom(
-  params: Record<string, unknown>,
-  key: string,
-): McpElicitationResponse | null {
-  const responses = (params.inputResponses ?? params.input_responses) as
-    | Record<string, McpElicitationResponse>
-    | undefined;
-  if (!responses) return null;
-  // Keyed by the server's own key, but an app that answers the only question it
-  // was given without echoing the key is answering unambiguously, so take the
-  // single entry rather than failing the resume over a spelling.
-  const answer = responses[key] ?? Object.values(responses)[0];
-  return answer && typeof answer === "object" ? answer : null;
-}
-
-/** An MCP Apps host bound to one paused tool call. */
+/** An MCP Apps host bound to one tool call. */
 export function createMcpAppHost(config: McpAppHostConfig): McpAppHost {
-  let answered = false;
 
   const post = (view: Window | null, message: Record<string, unknown>) => {
     view?.postMessage({ jsonrpc: "2.0", ...message }, "*");
@@ -193,8 +157,8 @@ export function createMcpAppHost(config: McpAppHostConfig): McpAppHost {
       ...(config.onReadResource ? { serverResources: {} } : {}),
     },
     hostContext: {
-      // Only the name. We know which tool paused, but not its declared schema,
-      // and a made-up one would be worse than an absent one.
+      // Only the name. We know which tool this app belongs to, but not its
+      // declared schema, and a made-up one would be worse than an absent one.
       toolInfo: { tool: { name: config.toolName } },
       theme: document.documentElement.classList.contains("dark") ? "dark" : "light",
       styles: { variables: themeVariables() },
@@ -213,36 +177,36 @@ export function createMcpAppHost(config: McpAppHostConfig): McpAppHost {
   /** Hand the View the call it is rendering, in the order the spec requires. */
   const sendCall = (view: Window | null) => {
     notify(view, "ui/notifications/tool-input", { arguments: config.toolArguments });
-    notify(view, "ui/notifications/tool-result", inputRequiredResult(config.request));
+    notify(view, "ui/notifications/tool-result", {
+      structuredContent: config.toolResult.structuredContent ?? {},
+      content: config.toolResult.content ?? [],
+    });
   };
 
-  const onToolsCall = (view: Window | null, id: string | number, params: Record<string, unknown>) => {
-    if (params.name && params.name !== config.toolName) {
-      // The spec lets a View call any app-visible tool on its own server, which
-      // for us would mean starting a second call while this one is paused. Say
-      // so rather than dropping it: a silent no-op leaves the app waiting on a
-      // promise that never settles.
-      fail(view, id, `This host only proxies calls to the paused tool (${config.toolName}).`);
+  const onToolsCall = (
+    view: Window | null,
+    id: string | number,
+    params: Record<string, unknown>,
+  ) => {
+    const name = String(params.name ?? "");
+    if (!config.onToolCall) {
+      fail(view, id, "This host does not proxy tool calls from an app.");
+      return;
+    }
+    if (!name) {
+      fail(view, id, "tools/call needs a name.");
       return;
     }
 
-    const answer = answerFrom(params, config.request.key);
-    if (!answer) {
-      fail(view, id, "A tools/call from an app must carry inputResponses for the paused question.");
-      return;
-    }
-    if (answered) {
-      fail(view, id, "This tool call has already been answered.");
-      return;
-    }
-
-    answered = true;
-    config.onAnswer(answer);
-    // The real result belongs to the agent's next step, which outlives this
-    // frame, so acknowledge the handoff rather than inventing tool output.
-    reply(view, id, {
-      content: [{ type: "text", text: "Answer accepted. The paused tool call is resuming." }],
-    });
+    const args = (params.arguments ?? {}) as Record<string, unknown>;
+    // Async, so the reply comes later. The refusal path answers too: the app is
+    // holding a promise open and a dropped request is a button that hangs.
+    void config
+      .onToolCall(name, args)
+      .then((result) => reply(view, id, { ...result, isError: false }))
+      .catch((err: unknown) =>
+        fail(view, id, err instanceof Error ? err.message : String(err)),
+      );
   };
 
   const handleMessage = (event: MessageEvent, view: Window | null) => {

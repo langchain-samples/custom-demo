@@ -42,7 +42,7 @@
 
 <div class="row">
   <button type="button" class="primary" id="submit">Save this plan</button>
-  <button type="button" id="cancel">Cancel</button>
+  <button type="button" id="reset">Reset</button>
 </div>
 
 <script>
@@ -60,6 +60,8 @@
       { name: "Aggressive",   mu: 0.072, sd: 0.175 },
     ];
 
+    var accountId = "";
+    var defaultAge = 65;
     var state = { currentAge: 45, balance: 250000, goal: 2000000, currency: "$" };
     var els = {
       age: document.getElementById("age"),
@@ -200,26 +202,49 @@
     });
     window.addEventListener("resize", render);
 
-    document.getElementById("cancel").addEventListener("click", McpApp.cancel);
-
-    document.getElementById("submit").addEventListener("click", function () {
-      McpApp.submit({
-        retirement_age: Number(els.age.value),
-        monthly_contribution: Number(els.cont.value),
-        risk_level: RISK[Number(els.risk.value)].name,
-      });
+    // Reset, not Cancel. Nothing is waiting on this app: the tool call finished
+    // before the app was rendered, so there is no pause to back out of.
+    document.getElementById("reset").addEventListener("click", function () {
+      els.age.value = String(defaultAge);
+      render();
     });
 
-    McpApp.onInit(function (request) {
-      if (request.message) document.getElementById("msg").textContent = request.message;
-      // On a property, not the schema root: the SDK drops unknown root keys.
-      var schema = request.requested_schema || {};
-      var ctx = ((schema.properties || {}).retirement_age || {})["x-app"] || {};
+    document.getElementById("submit").addEventListener("click", function () {
+      // `submit_goal_plan` is `visibility: ["app"]`: the plan is three slider
+      // positions a person chose, and this app is its only caller.
+      McpApp.call("submit_goal_plan", {
+        account_id: accountId,
+        plan: {
+          retirement_age: Number(els.age.value),
+          monthly_contribution: Number(els.cont.value),
+          risk_level: RISK[Number(els.risk.value)].name,
+        },
+      })
+        .then(function (res) {
+          var out = (res && res.structuredContent) || {};
+          document.getElementById("msg").textContent = out.error
+            ? out.error
+            : "Plan saved: retire at " + out.retirement_age + ".";
+        })
+        .catch(function (err) {
+          document.getElementById("msg").textContent = "Could not save: " + err.message;
+        });
+    });
+
+    McpApp.onInit(function (result) {
+      // The tool's own result is the data to draw.
+      var ctx = result.data || {};
+      accountId = ctx.account_id || "";
+      if (ctx.household) {
+        document.getElementById("msg").textContent =
+          ctx.household + ": goal " + Math.round(Number(ctx.goal || 0) / 1000) + "k";
+      }
       state.currentAge = Number(ctx.current_age || state.currentAge);
       state.balance = Number(ctx.balance || state.balance);
       state.goal = Number(ctx.goal || state.goal);
       els.age.min = String(state.currentAge + 1);
-      els.age.value = String(Math.max(state.currentAge + 1, Number(ctx.default_age || 65)));
+      defaultAge = Math.max(state.currentAge + 1, Number(ctx.default_age || 65));
+      els.age.value = String(defaultAge);
       render();
     });
 

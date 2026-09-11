@@ -292,7 +292,7 @@
   handwritten mark, five sliders that must total 100%, or a hold-to-confirm on an order that moves
   money.
   <strong>MCP Apps</strong> are the answer to that: a tool declares a <code>ui://</code> resource,
-  the server serves HTML, and the host renders it while the tool call is paused.
+  the server serves HTML, and the host renders it once the tool call returns.
 </p>
 
 <p>
@@ -469,39 +469,41 @@ answer = await ctx.elicit("Set the target allocation", response_type=Allocation)
 </figure>
 
 <div class="col">
-<p>A guard tool is an ordinary tool that can return one extra type:</p>
+<p>
+  Two tools, and the split is the whole idea. One opens the app and returns what it draws. The
+  other receives what the person did, and is marked so that only the app may call it.
+</p>
 </div>
 
 <p class="filename">server.py</p>
 <pre><code><span class="k">@mcp</span>.tool(app=AppConfig(resource_uri=<span class="s">"ui://meridian/rebalance.html"</span>))
-<span class="k">def</span> <span class="f">propose_rebalance</span>(account_id: str, ctx: Context) -&gt; dict | InputRequiredResult:
-    <span class="s">"""Propose a rebalance and let the advisor set the target allocation."""</span>
-    account = lookup(account_id)            <span class="c"># cheap: this repeats every round</span>
+<span class="k">def</span> <span class="f">propose_rebalance</span>(account_id: str) -&gt; dict:
+    <span class="s">"""Open the rebalance app on an account."""</span>
+    <span class="c"># The result IS the render data. Nothing else happens here: a tool that</span>
+    <span class="c"># both opened an app and acted would let the model rebalance by looking.</span>
+    <span class="k">return</span> rebalance_view(lookup(account_id))
 
-    answer = answer_for(ctx, <span class="s">"rebalance"</span>)
-    <span class="k">if</span> answer <span class="k">is</span> <span class="k">None</span>:                    <span class="c"># round 1 - ask, do nothing else</span>
-        <span class="k">return</span> ask(<span class="s">"rebalance"</span>, f<span class="s">"Set the target allocation for {account.name}"</span>,
-                   allocation_schema(account))
 
-    <span class="k">if</span> answer.action != <span class="s">"accept"</span>:        <span class="c"># declined or cancelled</span>
-        <span class="k">return</span> {<span class="s">"status"</span>: <span class="s">"not_rebalanced"</span>}
-
-    <span class="k">return</span> place_trades(account, answer.content)      <span class="c"># round 2 - the real work</span></code></pre>
-
-<p class="filename">elicit.py - the two helpers, in full</p>
-<pre><code><span class="k">def</span> <span class="f">ask</span>(key: str, message: str, schema: dict) -&gt; InputRequiredResult:
-    <span class="k">return</span> InputRequiredResult(input_requests={
-        key: ElicitRequest(params=ElicitRequestFormParams(
-            message=message, requested_schema=schema))})
-
-<span class="k">def</span> <span class="f">answer_for</span>(ctx: Context, key: str) -&gt; ElicitResult | <span class="k">None</span>:
-    <span class="k">return</span> (ctx.input_responses <span class="k">or</span> {}).get(key)</code></pre>
+<span class="k">@mcp</span>.tool(app=AppConfig(resource_uri=<span class="s">"ui://meridian/rebalance.html"</span>,
+                        visibility=[<span class="s">"app"</span>]))
+<span class="k">def</span> <span class="f">submit_rebalance</span>(account_id: str, allocation: dict[str, float]) -&gt; dict:
+    <span class="s">"""Submit the allocation the advisor set in the app."""</span>
+    <span class="k">return</span> place_trades(lookup(account_id), allocation)</code></pre>
 
 <div class="col">
 <p>
-  That is the entire server-side protocol. <code>AppConfig(resource_uri=...)</code> in the decorator
-  is the only line that makes it an <em>App</em> rather than a plain elicitation - it stamps
-  <code>_meta.ui.resourceUri</code> on the tool.
+  <code>visibility=["app"]</code> is the load-bearing line. It keeps <code>submit_rebalance</code>
+  out of the model's tool list entirely, which a host MUST honour, and the reason is the point of
+  the app: an allocation is where a person left five sliders. A model that can call the submit tool
+  can skip the person.
+</p>
+<p>
+  Note what is <em>absent</em>. No pause, no <code>ctx</code>, no schema, and no round two. The
+  allocation is also a nested object again, which an elicitation answer cannot carry: its content
+  allows primitives only, so the same data previously had to be flattened to one key per sleeve.
+  Render context needed a hiding place too, hung off a schema property because the SDK silently
+  drops unknown schema root keys. An ordinary result has neither problem, and both workarounds were
+  deleted rather than ported.
 </p>
 </div>
 

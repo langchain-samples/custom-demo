@@ -80,7 +80,7 @@
 
 <div class="row">
   <button type="button" class="primary" id="confirm"><span id="confirm-label">Hold to submit</span><i id="fill"></i></button>
-  <button type="button" id="cancel">Cancel</button>
+  <button type="button" id="cancel">Reset quantity</button>
 </div>
 <div class="muted" style="font-size: 10.5px; margin-top: 6px">
   Press and hold to place the order. Estimates exclude taxes and are not a quote.
@@ -95,6 +95,8 @@
     // dialog: the hold is the confirmation, not a decoration.
     var HOLD_MS = 900;
 
+    var accountId = "";
+    var defaultQty = 0;
     var order = { side: "BUY", symbol: "-", name: "", last: 0, currency: "$", fee: 0, max_qty: 0 };
     var els = {
       qty: document.getElementById("qty"),
@@ -188,13 +190,29 @@
       endHold();
       els.confirm.disabled = true;
       els.label.textContent = "Submitting...";
-      McpApp.submit({
-        quantity: Number(els.qty.value),
-        order_type: orderType(),
-        limit_price: orderType() === "limit" ? Number(els.limit.value) : null,
-        time_in_force: els.tif.value,
-        confirmed: true,
-      });
+      // `submit_trade` is `visibility: ["app"]`, and here that matters most: the
+      // hold-to-confirm gesture IS the authorisation for a real order.
+      McpApp.call("submit_trade", {
+        account_id: accountId,
+        symbol: order.symbol,
+        side: order.side.toLowerCase(),
+        ticket: {
+          quantity: Number(els.qty.value),
+          order_type: orderType(),
+          limit_price: orderType() === "limit" ? Number(els.limit.value) : null,
+          time_in_force: els.tif.value,
+          confirmed: true,
+        },
+      })
+        .then(function (res) {
+          var out = (res && res.structuredContent) || {};
+          document.getElementById("msg").textContent = out.error
+            ? out.error
+            : "Order " + out.order_id + " " + out.status + ".";
+        })
+        .catch(function (err) {
+          document.getElementById("msg").textContent = "Could not place: " + err.message;
+        });
     }
 
     els.confirm.addEventListener("pointerdown", beginHold);
@@ -202,13 +220,16 @@
       els.confirm.addEventListener(e, endHold);
     });
 
-    document.getElementById("cancel").addEventListener("click", McpApp.cancel);
+    // Nothing is waiting on this app, so there is no pause to back out of.
+    document.getElementById("cancel").addEventListener("click", function () {
+      els.qty.value = String(defaultQty);
+    });
 
-    McpApp.onInit(function (request) {
-      if (request.message) document.getElementById("msg").textContent = request.message;
-      // On a property, not the schema root: the SDK drops unknown root keys.
-      var schema = request.requested_schema || {};
-      var ctx = ((schema.properties || {}).quantity || {})["x-app"] || {};
+    McpApp.onInit(function (result) {
+      // The tool's own result is the quote and position to draw.
+      var ctx = result.data || {};
+      accountId = ctx.account_id || "";
+      if (ctx.household) document.getElementById("msg").textContent = ctx.household;
       order.side = String(ctx.side || "BUY").toUpperCase();
       order.symbol = ctx.symbol || "-";
       order.name = ctx.name || "";
@@ -222,7 +243,10 @@
       document.getElementById("symbol").textContent = order.symbol;
       document.getElementById("name").textContent = order.name;
       document.getElementById("last").textContent = order.last ? "last " + money(order.last) : "";
-      if (ctx.default_qty) els.qty.value = String(ctx.default_qty);
+      if (ctx.default_qty) {
+        defaultQty = Number(ctx.default_qty);
+        els.qty.value = String(defaultQty);
+      }
       els.limit.value = order.last ? order.last.toFixed(2) : "";
       render();
     });

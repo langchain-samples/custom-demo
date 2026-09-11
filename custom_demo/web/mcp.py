@@ -1,8 +1,9 @@
-"""Remote MCP servers (`POST /mcp/probe`, `POST /mcp/app`, `POST /mcp/resource`).
+"""Remote MCP servers (`/mcp/probe`, `/mcp/app`, `/mcp/resource`, `/mcp/call`).
 
-Three questions the SPA cannot answer itself, because a browser cannot speak
-MCP: does this connection string work, does the tool a run is paused on ship its
-own UI, and what is behind a URI that app asked the host to read. All take the
+Four questions the SPA cannot answer itself, because a browser cannot speak
+MCP: does this connection string work, does a tool ship its own UI, what is
+behind a URI that app asked the host to read, and will we make a call on its
+behalf. All take the
 server list in the body rather than reading it off the assistant, matching how
 /sandbox-files takes its keys: the SPA is the thing that holds the draft config,
 and Settings has to validate a URL before it is saved.
@@ -12,7 +13,13 @@ from __future__ import annotations
 
 from starlette.responses import JSONResponse
 
-from custom_demo.runtime.mcp_servers import parse_servers, probe, read_app, read_app_resource
+from custom_demo.runtime.mcp_servers import (
+    call_app_tool,
+    parse_servers,
+    probe,
+    read_app,
+    read_app_resource,
+)
 
 
 def _mcp_servers_from(payload: dict):
@@ -89,4 +96,42 @@ async def mcp_resource(request):
     try:
         return JSONResponse({"contents": await read_app_resource(servers, tool_name, uri)})
     except Exception as exc:  # noqa: BLE001 - the app needs the reason, not a blank render
+        return JSONResponse({"error": f"{type(exc).__name__}: {exc}"[:300]}, status_code=502)
+
+
+async def mcp_call(request):
+    """Make a tool call on behalf of an MCP App (`tools/call` from a View).
+
+    How a result-bound app submits what a person did: the server publishes a
+    tool marked `visibility: ["app"]` and its app calls it. SEP-1865 has the host
+    proxy that, and `call_app_tool` is where the two rules live, both refusals
+    rather than filters: same server as the app's own tool, and the target must
+    be open to apps.
+
+    A refusal is a 403 with the reason, because the app is blocked on a JSON-RPC
+    response and a silent failure looks to the person like a button that does
+    nothing.
+    """
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001 - a malformed body is a client error, not a crash
+        return JSONResponse({"error": "expected a JSON body"}, status_code=400)
+
+    app_tool = str(payload.get("app_tool") or "").strip()
+    target = str(payload.get("name") or "").strip()
+    arguments = payload.get("arguments")
+    servers = _mcp_servers_from(payload)
+    if not app_tool or not target or not servers:
+        return JSONResponse(
+            {"error": "app_tool, name and servers are all required"}, status_code=400
+        )
+
+    if not isinstance(arguments, dict):
+        arguments = {}
+
+    try:
+        return JSONResponse(await call_app_tool(servers, app_tool, target, arguments))
+    except (PermissionError, LookupError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=403)
+    except Exception as exc:  # noqa: BLE001 - the app needs the reason, not a dead button
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"[:300]}, status_code=502)

@@ -14,20 +14,15 @@
  * `custom_demo/tests/signature_app_test.js`.
  */
 import { describe, expect, it, vi } from "vitest";
-import { createMcpAppHost, PROTOCOL_VERSION } from "./mcpAppHost";
-import type { McpElicitationRequest, McpElicitationResponse } from "./api";
+import { createMcpAppHost, PROTOCOL_VERSION, type McpToolResult } from "./mcpAppHost";
 
-/** One elicitation request as it rides a tool result on the wire. */
-interface WireRequest {
-  method: string;
-  params: { message: string; requestedSchema: unknown };
-}
-
-const REQUEST: McpElicitationRequest = {
-  key: "signature",
-  message: "Sign for FL-4501.",
-  mode: "form",
-  requested_schema: { type: "object", properties: { signed_by: { type: "string" } } },
+/** What `sign_document` returns: the label the pad draws itself from. */
+const RESULT = {
+  structuredContent: {
+    account_id: "MW-10241",
+    household: "Whitfield Family Trust",
+    document: "IPS amendment",
+  },
 };
 
 /** A stand-in for the iframe's contentWindow that records what it is sent. */
@@ -40,20 +35,20 @@ function view() {
 /** Build a host plus its View, wired the way the card wires them. */
 function host(
   overrides: {
-    onAnswer?: (r: McpElicitationResponse) => void;
+    onToolCall?: (name: string, args: Record<string, unknown>) => Promise<McpToolResult>;
     onReadResource?: (uri: string) => Promise<unknown[]>;
     onMessage?: (text: string) => void;
     onModelContext?: (c: Record<string, unknown>) => void;
   } = {},
 ) {
   const target = view();
-  const onAnswer = vi.fn(overrides.onAnswer ?? (() => {}));
+  const onToolCall = vi.fn(overrides.onToolCall ?? (async () => ({})));
   const onHeight = vi.fn();
   const bridge = createMcpAppHost({
     toolName: "meridian_sign_document",
-    toolArguments: { document_id: "FL-4501" },
-    request: REQUEST,
-    onAnswer,
+    toolArguments: { account_id: "MW-10241", document: "IPS amendment" },
+    toolResult: RESULT,
+    onToolCall,
     onHeight,
     onReadResource: overrides.onReadResource,
     onMessage: overrides.onMessage,
@@ -62,7 +57,7 @@ function host(
   /** Deliver one JSON-RPC message as if the View had posted it. */
   const from = (msg: Record<string, unknown>, source: unknown = target.win) =>
     bridge.handleMessage({ data: msg, source } as MessageEvent, target.win);
-  return { bridge, target, onAnswer, onHeight, from };
+  return { bridge, target, onToolCall, onHeight, from };
 }
 
 /** The first message the host sent with this method. */
@@ -90,23 +85,23 @@ describe("the handshake", () => {
     expect(ctx.containerDimensions).toEqual({ maxHeight: 640 });
   });
 
-  it("hands over the paused call once the View confirms initialization", () => {
+  it("hands over the call once the View confirms initialization", () => {
     const { target, from } = host();
     from({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
 
     const input = sent(target.sent, "ui/notifications/tool-input");
     const result = sent(target.sent, "ui/notifications/tool-result");
     expect(input).toBeTruthy();
-    expect((input!.params as { arguments: unknown }).arguments).toEqual({ document_id: "FL-4501" });
+    expect((input!.params as { arguments: unknown }).arguments).toEqual({
+      account_id: "MW-10241",
+      document: "IPS amendment",
+    });
+    // Input first, then result. The spec requires that order, and an app that
+    // renders from arguments while waiting would otherwise see them late.
+    expect(target.sent.indexOf(input!)).toBeLessThan(target.sent.indexOf(result!));
 
-    // The question travels as an ordinary tool result, because under SEP-2322
-    // that is what a tool needing input returns.
     const params = result?.params as Record<string, unknown>;
-    expect(params.resultType).toBe("input_required");
-    const asked = (params.inputRequests as Record<string, WireRequest>).signature;
-    expect(asked.method).toBe("elicitation/create");
-    expect(asked.params.message).toBe("Sign for FL-4501.");
-    expect(asked.params.requestedSchema).toEqual(REQUEST.requested_schema);
+    expect(params.structuredContent).toEqual(RESULT.structuredContent);
   });
 
   it("ignores anything that did not come from its own View", () => {
@@ -122,61 +117,64 @@ describe("the handshake", () => {
   });
 });
 
-describe("answering the question", () => {
-  it("resumes the run with the response the app sent", () => {
-    const { target, onAnswer, from } = host();
+describe("proxying what the app calls", () => {
+  it("forwards a tools/call and replies with the result", async () => {
+    const onToolCall = vi.fn(async () => ({ structuredContent: { reference: "MW-DOC-1" } }));
+    const { target, from } = host({ onToolCall });
     from({
       jsonrpc: "2.0",
       id: 7,
       method: "tools/call",
-      params: {
-        name: "meridian_sign_document",
-        arguments: { document_id: "FL-4501" },
-        inputResponses: { signature: { action: "accept", content: { signed_by: "Grace" } } },
-      },
+      params: { name: "meridian_submit_signature", arguments: { signed_by: "Grace" } },
     });
 
-    expect(onAnswer).toHaveBeenCalledWith({ action: "accept", content: { signed_by: "Grace" } });
-    // The call is acknowledged, or the app is left awaiting a promise forever.
-    expect(reply(target.sent, 7)?.result).toBeTruthy();
+    expect(onToolCall).toHaveBeenCalledWith("meridian_submit_signature", { signed_by: "Grace" });
+    await vi.waitFor(() => {
+      const got = reply(target.sent, 7)?.result as Record<string, unknown> | undefined;
+      expect(got?.structuredContent).toEqual({ reference: "MW-DOC-1" });
+    });
   });
 
-  it("refuses a call aimed at any tool but the paused one", () => {
-    const { target, onAnswer, from } = host();
+  it("hands a refusal back as the reason, not as silence", async () => {
+    const onToolCall = vi.fn(async () => {
+      throw new Error("meridian_list_accounts is not open to apps");
+    });
+    const { target, from } = host({ onToolCall });
     from({
       jsonrpc: "2.0",
       id: 8,
       method: "tools/call",
-      params: { name: "meridian_confirm_trade", inputResponses: { signature: { action: "accept" } } },
+      params: { name: "meridian_list_accounts", arguments: {} },
     });
 
-    expect(onAnswer).not.toHaveBeenCalled();
-    // An error, not silence: a dropped request hangs the app.
-    const refusal = reply(target.sent, 8)?.error as { message: string } | undefined;
-    expect(refusal?.message).toMatch(/paused tool/i);
+    // A dropped request is a button that hangs, which is worse than a refusal.
+    await vi.waitFor(() => {
+      const e = reply(target.sent, 8)?.error as { message: string } | undefined;
+      expect(e?.message).toMatch(/not open to apps/);
+    });
   });
 
-  it("refuses a second answer to a question already answered", () => {
-    const { target, onAnswer, from } = host();
-    const call = (id: number) =>
-      from({
-        jsonrpc: "2.0",
-        id,
-        method: "tools/call",
-        params: { name: "meridian_sign_document", inputResponses: { signature: { action: "accept" } } },
-      });
-    call(1);
-    call(2);
-
-    expect(onAnswer).toHaveBeenCalledTimes(1);
-    expect(reply(target.sent, 2)?.error).toBeTruthy();
+  it("refuses a call when no proxy is wired", () => {
+    const { target, from } = host({ onToolCall: undefined });
+    // The default stub in `host` is a proxy, so build one without it.
+    const bare = createMcpAppHost({
+      toolName: "t",
+      toolArguments: {},
+      toolResult: {},
+      onHeight: () => {},
+    });
+    bare.handleMessage(
+      { data: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "x" } }, source: target.win } as MessageEvent,
+      target.win,
+    );
+    expect(reply(target.sent, 1)?.error).toBeTruthy();
+    void from;
   });
 
-  it("refuses a call that carries no answer at all", () => {
-    const { target, onAnswer, from } = host();
-    from({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "meridian_sign_document" } });
-    expect(onAnswer).not.toHaveBeenCalled();
-    expect(reply(target.sent, 3)?.error).toBeTruthy();
+  it("refuses a call with no name", () => {
+    const { target, from } = host();
+    from({ jsonrpc: "2.0", id: 9, method: "tools/call", params: {} });
+    expect(reply(target.sent, 9)?.error).toBeTruthy();
   });
 });
 

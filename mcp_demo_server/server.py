@@ -65,7 +65,7 @@ from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse, Response
 
 from mcp_demo_server.apps import render_app
-from mcp_demo_server.elicit import answer_for, ask, attach_context
+from mcp_demo_server.elicit import answer_for, ask
 from mcp_demo_server.images import inline_budget, png_bytes, renderable
 
 # How long a client may serve `tools/list` from its cache before re-asking. Short
@@ -347,108 +347,88 @@ def schedule_review(
 # --------------------------------------------------------------------------- #
 
 
-def _rebalance_schema(account: Account) -> dict[str, Any]:
-    """The approval schema for one account: one weight per sleeve, plus approval.
+def _rebalance_view(account: Account) -> dict[str, Any]:
+    """What the rebalance app needs to draw itself.
 
-    Built by hand rather than from a model because MCP elicitation content is
-    FLAT - `ElicitResult.content` allows only primitives, so a nested
-    `allocation` object cannot come back over the wire. One property per sleeve
-    also means the generated-form fallback still works on a host with no MCP
-    Apps support.
-
-    The `x-` keys carry what the app needs to render this account. They sit on a
-    property and are passed to the host verbatim, which is how an app gets its
-    context without a second round trip.
+    Plain nested data, returned as the tool's own result. An app gets it through
+    `ui/notifications/tool-result` and reads `structuredContent`, which is the
+    ordinary MCP Apps route: presentation data travels as the result, not as
+    anything bolted onto a schema.
     """
-    schema: dict[str, Any] = {
-        "type": "object",
-        "properties": {
-            **{
-                s.key: {
-                    "type": "number",
-                    "title": s.label,
-                    "minimum": 0,
-                    "maximum": 100,
-                    "description": f"{s.label} weight, percent (policy {s.target:.1f}%).",
-                }
-                for s in account.sleeves
-            },
-            "approved": {
-                "type": "boolean",
-                "title": "Approved",
-                "description": "True once the advisor has approved the trades.",
-            },
-        },
-        "required": [s.key for s in account.sleeves] + ["approved"],
+    return {
+        "account_id": account.id,
+        "household": account.household,
+        "portfolio_value": account.value,
+        "tax_rate": account.tax_rate,
+        "sleeves": [
+            {
+                "key": s.key,
+                "label": s.label,
+                "weight": s.weight,
+                "target": s.target,
+                "unrealized_gain_pct": s.unrealized_gain_pct,
+            }
+            for s in account.sleeves
+        ],
     }
-    return attach_context(
-        schema,
-        "approved",
-        {
-            "sleeves": [
-                {
-                    "key": s.key,
-                    "label": s.label,
-                    "weight": s.weight,
-                    "target": s.target,
-                    "unrealized_gain_pct": s.unrealized_gain_pct,
-                }
-                for s in account.sleeves
-            ],
-            "portfolio_value": account.value,
-            "tax_rate": account.tax_rate,
-        },
-    )
 
 
 @mcp.tool(app=AppConfig(resource_uri=REBALANCE_URI, prefers_border=False))
 def propose_rebalance(
     account_id: Annotated[str, Field(description="The account to rebalance.")],
-    ctx: Context,
-) -> dict[str, Any] | InputRequiredResult:
-    """Propose a rebalance and let the advisor set the target allocation.
+) -> dict[str, Any]:
+    """Open the rebalance app on an account, so the advisor can set the allocation.
 
     This tool renders its own UI: a host that supports MCP Apps shows allocation
     sliders for every sleeve, constrained to total 100%, with drift from policy
     and estimated tax drag updating as they move. Call it with only the account
     id. Do NOT propose weights yourself, ask which sleeves to change, or describe
-    the trades first: the advisor sets them in the app and the resulting trade
-    set comes back as the result.
+    the trades first: the advisor sets them in the app, which submits them.
+
+    The result is the account's current allocation, which is what the app draws.
+    The trades come back separately, when the advisor submits.
     """
     account = _account(account_id)
     if account is None:
         return _unknown(account_id)
 
-    answer = answer_for(ctx, "rebalance")
-    if answer is None:
-        return ask(
-            "rebalance",
-            f"{account.household} ({account.id}), ${account.value:,.0f}. "
-            "Set the target allocation.",
-            _rebalance_schema(account),
-        )
+    return _rebalance_view(account)
 
-    if answer.action != "accept":
-        return {"status": "not_rebalanced", "reason": f"The advisor {answer.action}ed."}
 
-    content = answer.content or {}
-    allocation = {
+@mcp.tool(app=AppConfig(resource_uri=REBALANCE_URI, visibility=["app"]))
+def submit_rebalance(
+    account_id: Annotated[str, Field(description="The account being rebalanced.")],
+    allocation: Annotated[
+        dict[str, float], Field(description="Target weight per sleeve key, percent.")
+    ],
+) -> dict[str, Any]:
+    """Submit the allocation the advisor set in the rebalance app.
+
+    `visibility: ["app"]` keeps this out of the model's tool list: the weights
+    come from a person moving sliders, and a model guessing at them is the thing
+    the app exists to prevent. Only `propose_rebalance`'s app may call it.
+    """
+    account = _account(account_id)
+    if account is None:
+        return _unknown(account_id)
+
+    weights = {
         # `v` is bound once so the isinstance guard below and the float() above apply
-        # to the SAME value. Calling .get() twice read as unnarrowed to the checker,
-        # and meant a sleeve whose value changed between the two calls could convert
+        # to the SAME value. Reading the dict twice read as unnarrowed to the checker,
+        # and meant a sleeve whose value changed between the two reads could convert
         # something the guard had approved in a different form.
         s.key: float(v)
         for s in account.sleeves
-        for v in (content.get(s.key, s.weight),)
+        for v in (allocation.get(s.key, s.weight),)
         if isinstance(v, (int, float))
     }
-    total = sum(allocation.values())
+    total = sum(weights.values())
     if abs(total - 100.0) > 0.5:
         return {"error": f"Allocation totals {total:.1f}%, not 100%. Nothing was submitted."}
 
     by_key = {s.key: s for s in account.sleeves}
     trades, tax = [], 0.0
-    for key, weight in allocation.items():
+    for key, weight in weights.items():
         sleeve = by_key.get(key)
         if sleeve is None:
             continue
@@ -478,7 +458,7 @@ def propose_rebalance(
         "trade_count": len(trades),
         "estimated_tax": round(tax, 2),
         "residual_drift": round(
-            sum(abs(allocation.get(s.key, s.weight) - s.target) for s in account.sleeves), 1
+            sum(abs(weights.get(s.key, s.weight) - s.target) for s in account.sleeves), 1
         ),
         "submitted_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
@@ -495,43 +475,45 @@ class GoalPlan(BaseModel):
 @mcp.tool(app=AppConfig(resource_uri=PROJECTION_URI, prefers_border=False))
 def project_goal(
     account_id: Annotated[str, Field(description="The account whose goal to model.")],
-    ctx: Context,
-) -> dict[str, Any] | InputRequiredResult:
-    """Model progress toward an account's goal and capture the chosen plan.
+) -> dict[str, Any]:
+    """Open the goal app on an account, so the advisor can model a plan.
 
-    This tool renders its own UI: a host that supports MCP Apps shows sliders for
-    retirement age, monthly contribution and risk, with a projection band that
-    redraws as they move. Call it with only the account id. Do NOT invent a
-    contribution or a return assumption and do NOT describe a projection in
-    text: the advisor explores it in the app, and the plan they settle on comes
-    back as the result.
+    This tool renders its own UI: a host that supports MCP Apps shows retirement
+    age, contribution and risk as sliders, with a projection band that redraws
+    live. The maths runs inside the app, because a round trip per pixel would
+    make it feel dead. Call it with only the account id and do NOT propose a plan
+    yourself: the advisor settles one in the app, which submits it.
+
+    The result is where the account stands today, which is what the app draws.
     """
     account = _account(account_id)
     if account is None:
         return _unknown(account_id)
 
-    answer = answer_for(ctx, "plan")
-    if answer is None:
-        schema = attach_context(
-            GoalPlan.model_json_schema(),
-            "retirement_age",
-            {
-                "current_age": account.current_age,
-                "balance": account.value,
-                "goal": account.goal,
-                "default_age": max(account.current_age + 1, 65),
-            },
-        )
-        return ask(
-            "plan",
-            f"{account.household}: ${account.value:,.0f} today, goal ${account.goal:,.0f}.",
-            schema,
-        )
+    return {
+        "account_id": account.id,
+        "household": account.household,
+        "current_age": account.current_age,
+        "balance": account.value,
+        "goal": account.goal,
+        "default_age": max(account.current_age + 1, 65),
+    }
 
-    if answer.action != "accept":
-        return {"status": "no_plan", "reason": f"The advisor {answer.action}ed."}
 
-    plan = GoalPlan.model_validate(answer.content or {})
+@mcp.tool(app=AppConfig(resource_uri=PROJECTION_URI, visibility=["app"]))
+def submit_goal_plan(
+    account_id: Annotated[str, Field(description="The account the plan belongs to.")],
+    plan: GoalPlan,
+) -> dict[str, Any]:
+    """Save the plan the advisor settled on in the goal app.
+
+    App-only: the plan is three slider positions a person chose, and the app is
+    the only thing that knows where they ended up.
+    """
+    account = _account(account_id)
+    if account is None:
+        return _unknown(account_id)
+
     record = {
         "account_id": account.id,
         "household": account.household,
@@ -561,16 +543,17 @@ def confirm_trade(
     account_id: Annotated[str, Field(description="The account to trade in.")],
     symbol: Annotated[str, Field(description="Ticker to trade, e.g. AAPL.")],
     side: Annotated[Literal["buy", "sell"], Field(description="Direction of the order.")],
-    ctx: Context,
-) -> dict[str, Any] | InputRequiredResult:
-    """Place an order, confirmed by the advisor on a real ticket.
+) -> dict[str, Any]:
+    """Open an order ticket, for the advisor to confirm.
 
     This tool renders its own UI: a host that supports MCP Apps shows an order
     ticket with a quantity stepper, market/limit, time in force, an estimated
     total, and a hold-to-confirm button. Call it with the account, symbol and
     side only. Do NOT ask the user to confirm in chat and do NOT decide the
     quantity yourself: the ticket is the confirmation, and an order only exists
-    once it comes back from there.
+    once the ticket submits it.
+
+    The result is the quote and position the ticket is drawn from.
     """
     account = _account(account_id)
     if account is None:
@@ -582,33 +565,42 @@ def confirm_trade(
         return {"error": f"{symbol!r} is not held in {account.id}. Held: {known}."}
 
     name, last, held_qty = holding
+    return {
+        "account_id": account.id,
+        "household": account.household,
+        "side": side.upper(),
+        "symbol": symbol.strip().upper(),
+        "name": name,
+        "last": last,
+        "fee": 4.95,
+        # A sale cannot exceed the position; a purchase is uncapped here.
+        "max_qty": held_qty if side == "sell" else 0,
+        "default_qty": min(100, held_qty) if side == "sell" else 100,
+    }
 
-    answer = answer_for(ctx, "ticket")
-    if answer is None:
-        schema = attach_context(
-            TradeTicket.model_json_schema(),
-            "quantity",
-            {
-                "side": side.upper(),
-                "symbol": symbol.strip().upper(),
-                "name": name,
-                "last": last,
-                "fee": 4.95,
-                # A sale cannot exceed the position; a purchase is uncapped here.
-                "max_qty": held_qty if side == "sell" else 0,
-                "default_qty": min(100, held_qty) if side == "sell" else 100,
-            },
-        )
-        return ask(
-            "ticket",
-            f"{side.upper()} {symbol.strip().upper()} in {account.household} ({account.id}).",
-            schema,
-        )
 
-    if answer.action != "accept":
-        return {"status": "not_placed", "reason": f"The advisor {answer.action}ed the ticket."}
+@mcp.tool(app=AppConfig(resource_uri=TRADE_URI, visibility=["app"]))
+def submit_trade(
+    account_id: Annotated[str, Field(description="The account to trade in.")],
+    symbol: Annotated[str, Field(description="Ticker being traded.")],
+    side: Annotated[Literal["buy", "sell"], Field(description="Direction of the order.")],
+    ticket: TradeTicket,
+) -> dict[str, Any]:
+    """Place the order the advisor confirmed on the ticket.
 
-    ticket = TradeTicket.model_validate(answer.content or {})
+    App-only, and this is the one where it matters most: the hold-to-confirm
+    gesture IS the authorisation. A model able to call this could place an order
+    by deciding it had been confirmed.
+    """
+    account = _account(account_id)
+    if account is None:
+        return _unknown(account_id)
+
+    holding = account.holdings.get(symbol.strip().upper())
+    if holding is None:
+        return {"error": f"{symbol!r} is not held in {account.id}. Nothing placed."}
+
+    _, last, held_qty = holding
     if side == "sell" and ticket.quantity > held_qty:
         return {"error": f"Cannot sell {ticket.quantity}; only {held_qty} held. Nothing placed."}
 
@@ -653,25 +645,50 @@ def _document_reference(account_id: str, document: str) -> str:
 def sign_document(
     account_id: Annotated[str, Field(description="The account the document belongs to.")],
     document: Annotated[str, Field(description="What is being signed, e.g. 'IPS amendment'.")],
-    ctx: Context,
-    # ToolResult because the countersigned document comes back as TWO content
-    # blocks, text plus the image, which is what lets the model see the signature.
-) -> dict[str, Any] | InputRequiredResult | ToolResult:
-    """Capture a client's wet signature on an advisory document.
+) -> dict[str, Any]:
+    """Open a signature pad for a client to sign an advisory document.
 
     This tool renders its own UI: a host that supports MCP Apps shows a signature
-    pad at `ui://meridian/signature.html` while the call is paused. Never ask the
-    client to type a signature, describe one, or supply `signed_by` yourself: the
-    pad collects all of it and the signed record comes back as the result.
+    pad at `ui://meridian/signature.html`. Never ask the client to type a
+    signature, describe one, or supply `signed_by` yourself: the pad collects all
+    of it and submits the signed record.
 
-    The result carries the signature two ways. You are shown the drawn signature
-    as an IMAGE, so you can describe or check it. And `signature_data_uri` is a
-    complete `data:image/png;base64,...` value of a few KB: copy it verbatim into
-    `<img src="{signature_data_uri}" alt="Client signature">` to put it in a
-    document, which then needs no network at all - it renders offline, prints to
-    PDF, and still shows the signature after this server has gone away. Copy
-    every character; do not truncate it, do not abbreviate it with an ellipsis,
-    and do not invent one.
+    The result is what the pad needs to label itself. The signed document, with
+    the image, comes back when the pad submits.
+    """
+    account = _account(account_id)
+    if account is None:
+        return _unknown(account_id)
+
+    return {
+        "account_id": account.id,
+        "household": account.household,
+        "document": document,
+        "reference": _document_reference(account.id, document),
+    }
+
+
+@mcp.tool(app=AppConfig(resource_uri=SIGNATURE_URI, visibility=["app"]))
+def submit_signature(
+    account_id: Annotated[str, Field(description="The account the document belongs to.")],
+    document: Annotated[str, Field(description="What was signed.")],
+    capture: SignatureCapture,
+    # ToolResult because the countersigned document comes back as TWO content
+    # blocks, text plus the image, which is what lets the model see the signature.
+) -> dict[str, Any] | ToolResult:
+    """Record a drawn signature against a document.
+
+    App-only, and the reason is the strongest of the four: a wet signature is a
+    wet signature. A model that could call this could sign on a client's behalf.
+
+    The result carries the signature two ways. The model is shown the drawn
+    signature as an IMAGE, so it can describe or check it. And
+    `signature_data_uri` is a complete `data:image/png;base64,...` value of a few
+    KB: copy it verbatim into `<img src="{signature_data_uri}" alt="Client
+    signature">` to put it in a document, which then needs no network at all - it
+    renders offline, prints to PDF, and still shows the signature after this
+    server has gone away. Copy every character; do not truncate it, do not
+    abbreviate it with an ellipsis, and do not invent one.
 
     `signature_url` is the same image over HTTP, for when `signature_data_uri` is
     null because the signature was too large to inline. Prefer the data URI
@@ -681,18 +698,6 @@ def sign_document(
     if account is None:
         return _unknown(account_id)
 
-    answer = answer_for(ctx, "signature")
-    if answer is None:
-        return ask(
-            "signature",
-            f"{document} for {account.household} ({account.id}).",
-            SignatureCapture.model_json_schema(),
-        )
-
-    if answer.action != "accept":
-        return {"status": "unsigned", "reason": f"The client {answer.action}ed."}
-
-    capture = SignatureCapture.model_validate(answer.content or {})
     png = png_bytes(capture.signature)
     reference = _document_reference(account.id, document)
     # The bytes stay here. They are served over `signature_url` and shown to the

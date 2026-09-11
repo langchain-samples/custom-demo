@@ -38,7 +38,7 @@
 <div class="row">
   <button type="button" class="primary" id="submit">Approve rebalance</button>
   <button type="button" id="reset">Reset to policy</button>
-  <button type="button" id="cancel">Cancel</button>
+  <button type="button" id="reset">Reset to current</button>
 </div>
 
 <script>
@@ -49,6 +49,7 @@
     // current weight, the policy target, and the dollars behind it, which is
     // what turns a slider move into a trade rather than a number.
     var sleeves = [];
+    var accountId = "";
     var portfolioValue = 0;
     var taxRate = 0;
 
@@ -175,26 +176,45 @@
       render();
     });
 
-    document.getElementById("cancel").addEventListener("click", McpApp.cancel);
+    // Reset, not Cancel. Nothing is waiting on this app: the tool call finished
+    // before the app was rendered, so there is no pause to back out of. Putting
+    // the sliders back where the portfolio actually sits is the useful action.
+    document.getElementById("reset").addEventListener("click", function () {
+      build();
+    });
 
     submit.addEventListener("click", function () {
       if (submit.disabled) return;
       submit.disabled = true;
       var w = weights();
-      // Flat, one key per sleeve: MCP elicitation content allows primitives
-      // only, so a nested allocation object would be rejected on the wire.
-      var content = { approved: true };
-      sleeves.forEach(function (s, i) { content[s.key] = Number(w[i].toFixed(2)); });
-      McpApp.submit(content);
+      var allocation = {};
+      sleeves.forEach(function (s, i) { allocation[s.key] = Number(w[i].toFixed(2)); });
+      // `submit_rebalance` is `visibility: ["app"]` on the server, so this app is
+      // the only caller it has. Nesting is fine here: this is an ordinary tool
+      // call, not an elicitation answer restricted to primitives.
+      McpApp.call("submit_rebalance", { account_id: accountId, allocation: allocation })
+        .then(function (res) {
+          var out = (res && res.structuredContent) || {};
+          document.getElementById("msg").textContent = out.error
+            ? out.error
+            : "Submitted " + (out.trade_count || 0) + " trades for " + accountId + ".";
+          if (out.error) submit.disabled = false;
+        })
+        .catch(function (err) {
+          document.getElementById("msg").textContent = "Could not submit: " + err.message;
+          submit.disabled = false;
+        });
     });
 
-    McpApp.onInit(function (request) {
-      if (request.message) document.getElementById("msg").textContent = request.message;
-      // The server puts the account's real sleeves on the schema, so the app
-      // renders whatever portfolio it was called for rather than a fixed list.
-      // On a property, not the schema root: the SDK drops unknown root keys.
-      var schema = request.requested_schema || {};
-      var ctx = ((schema.properties || {}).approved || {})["x-app"] || {};
+    McpApp.onInit(function (result) {
+      // The tool's own result is the data to draw, so the app renders whatever
+      // portfolio it was called for rather than a fixed list.
+      var ctx = result.data || {};
+      accountId = ctx.account_id || "";
+      var who = document.getElementById("msg");
+      if (ctx.household) {
+        who.textContent = ctx.household + " (" + accountId + ")";
+      }
       var meta = ctx.sleeves || [];
       portfolioValue = Number(ctx.portfolio_value || 0);
       taxRate = Number(ctx.tax_rate || 0);

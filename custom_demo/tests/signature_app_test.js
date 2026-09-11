@@ -8,10 +8,11 @@
  * forever.
  *
  * The harness below is a minimal MCP Apps host, because the contract under test
- * is SEP-1865: the app opens with `ui/initialize`, is handed the paused call
+ * is SEP-1865: the app opens with `ui/initialize`, is handed the finished call
  * over `ui/notifications/tool-input` and `ui/notifications/tool-result`, and
- * answers with a `tools/call` carrying `inputResponses`. Pinning those names
- * here is what keeps the app renderable by any host, not only ours.
+ * submits by calling `submit_signature`, which the server marks
+ * `visibility: ["app"]`. Pinning those names here is what keeps the app
+ * renderable by any host, not only ours.
  *
  * A Node test rather than a vitest one because it needs `node:fs` and `jsdom`
  * directly, and the app's tsconfig has neither in scope (the same reason
@@ -45,8 +46,8 @@ async function ok(name, fn) {
   console.log("  ok -", name);
 }
 
-/** The key the server asks its signature question under (see server.py). */
-const KEY = "signature";
+/** The app-only tool the pad submits to (see server.py). */
+const SUBMIT = "submit_signature";
 
 /** What the host answers `ui/initialize` with. */
 function initializeResult(theme) {
@@ -123,17 +124,18 @@ function mount(dataUri, theme) {
 const sent = (posted, method) => posted.find((m) => m.method === method);
 
 /**
- * Hand the app the paused call, the way a host does once the handshake is done.
+ * Hand the app the finished call, the way a host does after the handshake.
  *
- * A tool that needs input returns an `InputRequiredResult` (SEP-2322), so the
- * question arrives as an ordinary tool result rather than a message of its own.
+ * `sign_document` returns the document's label and reference; the pad draws
+ * itself from that. There is no pause and no question: this is an ordinary
+ * result, delivered on the ordinary notification.
  */
-function ask(dom, message, schema) {
+function deliver(dom, document_) {
   dom.window.postMessage(
     {
       jsonrpc: "2.0",
       method: "ui/notifications/tool-input",
-      params: { arguments: { document_id: "FL-4501" } },
+      params: { arguments: { account_id: "MW-10241", document: document_ || "IPS amendment" } },
     },
     "*",
   );
@@ -142,12 +144,11 @@ function ask(dom, message, schema) {
       jsonrpc: "2.0",
       method: "ui/notifications/tool-result",
       params: {
-        resultType: "input_required",
-        inputRequests: {
-          [KEY]: {
-            method: "elicitation/create",
-            params: { mode: "form", message: message || "", requestedSchema: schema || {} },
-          },
+        structuredContent: {
+          account_id: "MW-10241",
+          household: "Whitfield Family Trust",
+          document: document_ || "IPS amendment",
+          reference: "MW-DOC-04417",
         },
       },
     },
@@ -155,10 +156,10 @@ function ask(dom, message, schema) {
   );
 }
 
-/** The answer the app sent back, as the host receives it. */
+/** What the pad submitted, as the host receives it. */
 function answered(posted) {
-  const call = posted.find((m) => m.method === "tools/call");
-  return call ? (call.params.inputResponses || {})[KEY] : undefined;
+  const call = posted.find((m) => m.method === "tools/call" && m.params.name === SUBMIT);
+  return call ? call.params.arguments.capture : undefined;
 }
 
 /** postMessage is queued, not synchronous: let the queue drain. */
@@ -236,12 +237,15 @@ function name(dom, value) {
     assert.strictEqual(typeof size.params.width, "number");
   });
 
-  await ok("shows the server's own question once the host sends it", async () => {
+  await ok("titles itself from the tool's own result", async () => {
     const { dom, doc } = mount();
     await flush();
-    ask(dom, "Signature for FL-4501, 9 pallets.");
+    deliver(dom, "IPS amendment");
     await flush();
-    assert.strictEqual(doc.getElementById("msg").textContent, "Signature for FL-4501, 9 pallets.");
+    // The app titles itself from the result, naming the document and the household.
+    const shown = doc.getElementById("msg").textContent;
+    assert.ok(shown.includes("IPS amendment"), shown);
+    assert.ok(shown.includes("Whitfield Family Trust"), shown);
   });
 
   await ok("follows the host into dark mode", async () => {
@@ -262,7 +266,7 @@ function name(dom, value) {
   await ok("posts back exactly the keys the tool's schema asks for", async () => {
     const { dom, doc, posted } = mount();
     await flush();
-    ask(dom, "Sign for FL-4501.");
+    deliver(dom);
     await flush();
     sign(dom);
     name(dom, "Grace Achieng");
@@ -271,29 +275,28 @@ function name(dom, value) {
 
     const call = posted.find((m) => m.method === "tools/call");
     assert.ok(call, "nothing was submitted");
-    // Answering is a fresh call to the SAME tool with the SAME arguments, which
-    // is what SEP-2322 has a client do to resume a paused one.
-    assert.strictEqual(call.params.name, "meridian_sign_document");
-    assert.deepStrictEqual({ ...call.params.arguments }, { document_id: "FL-4501" });
+    // An ordinary tool call to the app-only tool, carrying what the person did.
+    assert.strictEqual(call.params.name, SUBMIT);
+    assert.strictEqual(call.params.arguments.account_id, "MW-10241");
+    assert.strictEqual(call.params.arguments.document, "IPS amendment");
 
     const submitted = answered(posted);
-    assert.strictEqual(submitted.action, "accept");
     // These three are `SignatureCapture` on the server. A rename on either side
-    // fails validation on resume, and the paused run never continues.
-    assert.deepStrictEqual(Object.keys(submitted.content).sort(), [
+    // fails validation, and the signature is lost after it was drawn.
+    assert.deepStrictEqual(Object.keys(submitted).sort(), [
       "signature",
       "signed_at",
       "signed_by",
     ]);
-    assert.ok(submitted.content.signature.startsWith("data:image/png;base64,"));
-    assert.strictEqual(submitted.content.signed_by, "Grace Achieng");
-    assert.ok(!Number.isNaN(Date.parse(submitted.content.signed_at)));
+    assert.ok(submitted.signature.startsWith("data:image/png;base64,"));
+    assert.strictEqual(submitted.signed_by, "Grace Achieng");
+    assert.ok(!Number.isNaN(Date.parse(submitted.signed_at)));
   });
 
   await ok("exports only the ink, not the whole pad", async () => {
     const { dom, doc, draws } = mount();
     await flush();
-    ask(dom);
+    deliver(dom);
     await flush();
     sign(dom);
     name(dom, "Grace Achieng");
@@ -313,7 +316,7 @@ function name(dom, value) {
     // should work down the ladder instead of sending the first thing it made.
     const { dom, doc, draws, posted } = mount("data:image/png;base64," + "A".repeat(12000));
     await flush();
-    ask(dom);
+    deliver(dom);
     await flush();
     signWide(dom);
     name(dom, "Grace Achieng");
@@ -331,13 +334,13 @@ function name(dom, value) {
     assert.ok(widths[widths.length - 1] < widths[0], `never shrank: ${widths.join(", ")}`);
     // Over budget at every size, it still sends one rather than nothing: a
     // rough signature beats a document with no signature on it.
-    assert.ok(answered(posted).content.signature);
+    assert.ok(answered(posted).signature);
   });
 
   await ok("sends the first encoding when it already fits", async () => {
     const { dom, doc, draws } = mount();
     await flush();
-    ask(dom);
+    deliver(dom);
     await flush();
     signWide(dom);
     name(dom, "Grace Achieng");
@@ -346,14 +349,13 @@ function name(dom, value) {
     assert.strictEqual(draws.length, 1, "a signature under budget should not be re-encoded");
   });
 
-  await ok("lets the recipient back out, as a cancel on the same question", async () => {
-    const { dom, doc, posted } = mount();
+  await ok("offers no way to back out, because nothing is waiting on it", async () => {
+    const { doc } = mount();
     await flush();
-    ask(dom);
-    await flush();
-    doc.getElementById("cancel").click();
-    await flush();
-    assert.deepStrictEqual({ ...answered(posted) }, { action: "cancel" });
+    // The tool call finished before this app was rendered. A Cancel button would
+    // be a promise the app cannot keep, so Clear is the only way back.
+    assert.strictEqual(doc.getElementById("cancel"), null);
+    assert.ok(doc.getElementById("clear"), "the pad still needs a way to redraw");
   });
 
   await ok("clears a stroke, so a bad signature can be redrawn rather than sent", async () => {
