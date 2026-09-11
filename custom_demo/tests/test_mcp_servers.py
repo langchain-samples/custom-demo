@@ -326,6 +326,8 @@ _BALANCED = {
     "approved": True,
 }
 
+_BALANCED_ALLOCATION = {k: v for k, v in _BALANCED.items() if k != "approved"}
+
 _SLOT = {
     "review_date": "2026-10-14",
     "window": "morning",
@@ -345,6 +347,7 @@ def test_the_demo_server_advertises_exactly_the_tools_it_has(meridian):
         "get_account",
         "schedule_review",
         "propose_rebalance",
+        "submit_rebalance",
         "project_goal",
         "confirm_trade",
         "sign_document",
@@ -439,18 +442,25 @@ def test_a_refused_ask_books_nothing(meridian, action: _Action, status: str):
 # ---------------------------------------------------------------------------
 
 
-def test_an_app_gets_its_render_context_on_a_property(meridian):
-    """The context has to survive the wire, and only property extras do.
+def _call(client, tool: str, args: dict):
+    """One ordinary tool call. Returns the result."""
 
-    The SDK strips unknown ROOT keys off `requested_schema`. This is the test
-    that catches someone moving the context back there, where it vanishes with
-    no error and the app renders empty.
+    async def go():
+        async with client as c:
+            return await c.call_tool(tool, args)
+
+    return asyncio.run(go())
+
+
+def test_an_app_gets_its_render_context_as_the_tool_result(meridian):
+    """Presentation data travels as the result, which is the ordinary Apps route.
+
+    Nothing is bolted onto a schema and nothing is flattened: the app reads
+    `structuredContent` off `ui/notifications/tool-result`. This is the test that
+    catches someone moving the context somewhere an app cannot reach.
     """
-    schema, _ = _rounds(
-        meridian, "propose_rebalance", {"account_id": "MW-10241"}, "rebalance", _BALANCED
-    )
-    assert "x-app" not in schema, "context at the schema root is dropped in transit"
-    context = schema["properties"]["approved"]["x-app"]
+    result = _call(meridian, "propose_rebalance", {"account_id": "MW-10241"})
+    context = result.structured_content
     assert [s["label"] for s in context["sleeves"]] == [
         "US equity",
         "Intl equity",
@@ -459,31 +469,51 @@ def test_an_app_gets_its_render_context_on_a_property(meridian):
         "Cash",
     ]
     assert context["portfolio_value"] == 4_820_000
+    assert context["account_id"] == "MW-10241"
 
 
-def test_the_rebalance_schema_is_flat(meridian):
-    """One number per sleeve, because elicitation content allows only primitives.
+def test_opening_the_rebalance_app_submits_nothing(meridian):
+    """The tool that opens an app must not also act.
 
-    A nested `allocation` object is rejected by `ElicitResult` before it ever
-    reaches the server, so the schema cannot ask for one.
+    `propose_rebalance` draws the sliders; the trades exist only once a person
+    has moved them and `submit_rebalance` is called. A tool that did both would
+    let the model rebalance a portfolio by looking at it.
     """
-    schema, _ = _rounds(
-        meridian, "propose_rebalance", {"account_id": "MW-10241"}, "rebalance", _BALANCED
-    )
-    kinds = {k: v["type"] for k, v in schema["properties"].items()}
-    assert kinds == {
-        "us_equity": "number",
-        "intl_equity": "number",
-        "fixed_income": "number",
-        "alternatives": "number",
-        "cash": "number",
-        "approved": "boolean",
-    }
+    result = _call(meridian, "propose_rebalance", {"account_id": "MW-10241"})
+    assert "trades" not in result.structured_content
+    assert "status" not in result.structured_content
 
 
-def test_an_approved_rebalance_comes_back_as_trades(meridian):
-    _, result = _rounds(
-        meridian, "propose_rebalance", {"account_id": "MW-10241"}, "rebalance", _BALANCED
+def test_the_submit_tool_is_the_apps_alone(meridian):
+    """`visibility: ["app"]` is what keeps the model from guessing the weights.
+
+    The whole reason the app exists is that an allocation comes from a person
+    moving sliders. A model that can call the submit tool can skip that.
+    """
+
+    async def go():
+        async with meridian as c:
+            return {
+                t.name: ((t.meta or {}).get("ui") or {}).get("visibility")
+                for t in await c.list_tools()
+            }
+
+    visibility = asyncio.run(go())
+    assert visibility["submit_rebalance"] == ["app"]
+    # The tool that opens the app stays callable by the model, or nothing starts.
+    assert visibility.get("propose_rebalance") is None
+
+
+def test_a_submitted_allocation_comes_back_as_trades(meridian):
+    """The allocation is NESTED, which is the simplification the normal flow buys.
+
+    An elicitation answer allows primitives only, so the same data once had to be
+    flattened to one key per sleeve. An ordinary tool call has no such limit.
+    """
+    result = _call(
+        meridian,
+        "submit_rebalance",
+        {"account_id": "MW-10241", "allocation": _BALANCED_ALLOCATION},
     )
     record = result.structured_content
     assert record["status"] == "approved"
@@ -496,12 +526,13 @@ def test_an_approved_rebalance_comes_back_as_trades(meridian):
 
 
 def test_an_allocation_that_is_not_a_portfolio_is_refused(meridian):
-    _, result = _rounds(
+    result = _call(
         meridian,
-        "propose_rebalance",
-        {"account_id": "MW-10241"},
-        "rebalance",
-        {**_BALANCED, "us_equity": 80.0},
+        "submit_rebalance",
+        {
+            "account_id": "MW-10241",
+            "allocation": {**_BALANCED_ALLOCATION, "us_equity": 80.0},
+        },
     )
     assert "not 100%" in result.structured_content["error"]
     assert "Nothing was submitted" in result.structured_content["error"]

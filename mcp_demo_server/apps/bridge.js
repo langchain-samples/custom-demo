@@ -18,13 +18,21 @@
  *   View -> Host   ui/notifications/size-changed  whenever the content resizes
  *   View -> Host   tools/call                     the answer, as a fresh call
  *
- * WHY A TOOL RESULT CARRIES A QUESTION. These tools pause: under SEP-2322 a tool
- * that needs input returns an `InputRequiredResult` naming what it wants, and
- * the client re-calls the same tool with `inputResponses` attached. That is an
- * ordinary tool result, so it reaches the View through the ordinary
- * `ui/notifications/tool-result`, and the answer goes back through the ordinary
- * `tools/call`. Composing the two SEPs needs no message of our own, which is the
- * point: an app written against this file is an app any MCP Apps host can run.
+ * TWO WAYS A TOOL RESULT REACHES AN APP, and this file handles both.
+ *
+ * 1. ORDINARY, and how MCP Apps normally works. The tool finishes, its result
+ *    carries the data to render, and the app submits by CALLING A TOOL, usually
+ *    one the server marked `visibility: ["app"]` so only the app may call it.
+ *    That is `McpApp.call`.
+ * 2. A QUESTION. Under SEP-2322 a tool that needs input mid-call returns an
+ *    `InputRequiredResult` instead, and the client re-calls the same tool with
+ *    `inputResponses` attached. That is `McpApp.submit`. There is no elicitation
+ *    message in SEP-1865 and none is needed: the question rides the ordinary
+ *    result and the answer rides the ordinary call.
+ *
+ * `onInit` is handed whichever arrived, so an app knows which it is looking at
+ * without inspecting the wire. Either way nothing here is ours: an app written
+ * against this file is an app any MCP Apps host can run.
  *
  * An app uses it like this, and never sees the JSON-RPC:
  *
@@ -214,27 +222,38 @@ window.McpApp = (function () {
   };
 
   /**
-   * The result of this leg of the call, which for a pausing tool is the question.
+   * The result of the call: either the data to render, or a question.
    *
-   * `inputRequests` is the SEP-2322 wire shape: one entry per question, keyed by
-   * the server's own key, each an `elicitation/create` request. The key has to
-   * travel back with the answer, so it is kept beside the params. Only the first
-   * is rendered: an app is bound to one tool and answers one question, and a
-   * host with no app falls back to a generated form for the rest.
+   * `inputRequests` is what tells the two apart. It is the SEP-2322 wire shape,
+   * one entry per question keyed by the server's own key, each an
+   * `elicitation/create` request; the key has to travel back with the answer, so
+   * it is kept beside the params. Only the first is rendered, because an app is
+   * bound to one tool and answers one question.
+   *
+   * With no `inputRequests` this is an ordinary finished result, and
+   * `structuredContent` is the data the app draws. That is the common case.
    */
   onNotify["ui/notifications/tool-result"] = function (params) {
     var requests = params.inputRequests || params.input_requests;
-    if (!requests) return;
-    var keys = Object.keys(requests);
-    if (!keys.length) return;
-    var entry = requests[keys[0]] || {};
-    var elicit = entry.params || {};
+    if (requests && Object.keys(requests).length) {
+      var key = Object.keys(requests)[0];
+      var elicit = (requests[key] || {}).params || {};
+      question = {
+        asked: true,
+        key: key,
+        message: elicit.message || "",
+        // Both spellings, because the wire form is camelCase and a host that has
+        // already normalized the payload hands over the snake_case one.
+        requested_schema: elicit.requestedSchema || elicit.requested_schema || {},
+      };
+      maybeRender();
+      return;
+    }
+
     question = {
-      key: keys[0],
-      message: elicit.message || "",
-      // Both spellings, because the wire form is camelCase and a host that has
-      // already normalized the payload hands over the snake_case one.
-      requested_schema: elicit.requestedSchema || elicit.requested_schema || {},
+      asked: false,
+      data: params.structuredContent || {},
+      content: params.content || [],
     };
     maybeRender();
   };
@@ -338,6 +357,17 @@ window.McpApp = (function () {
       wired = true;
       maybeRender();
       reportSize();
+    },
+    /**
+     * Call a tool on this app's own server.
+     *
+     * How a result-bound app submits: the server publishes a tool marked
+     * `visibility: ["app"]`, invisible to the model, and the app calls it. The
+     * host proxies it, which is exactly what SEP-1865 asks a host to do with a
+     * View's `tools/call`.
+     */
+    call: function (name, args) {
+      return request("tools/call", { name: name, arguments: args || {} });
     },
     /** Ask the host to open a link, which a sandboxed frame cannot do itself. */
     openLink: function (url) {

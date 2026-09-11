@@ -347,108 +347,88 @@ def schedule_review(
 # --------------------------------------------------------------------------- #
 
 
-def _rebalance_schema(account: Account) -> dict[str, Any]:
-    """The approval schema for one account: one weight per sleeve, plus approval.
+def _rebalance_view(account: Account) -> dict[str, Any]:
+    """What the rebalance app needs to draw itself.
 
-    Built by hand rather than from a model because MCP elicitation content is
-    FLAT - `ElicitResult.content` allows only primitives, so a nested
-    `allocation` object cannot come back over the wire. One property per sleeve
-    also means the generated-form fallback still works on a host with no MCP
-    Apps support.
-
-    The `x-` keys carry what the app needs to render this account. They sit on a
-    property and are passed to the host verbatim, which is how an app gets its
-    context without a second round trip.
+    Plain nested data, returned as the tool's own result. An app gets it through
+    `ui/notifications/tool-result` and reads `structuredContent`, which is the
+    ordinary MCP Apps route: presentation data travels as the result, not as
+    anything bolted onto a schema.
     """
-    schema: dict[str, Any] = {
-        "type": "object",
-        "properties": {
-            **{
-                s.key: {
-                    "type": "number",
-                    "title": s.label,
-                    "minimum": 0,
-                    "maximum": 100,
-                    "description": f"{s.label} weight, percent (policy {s.target:.1f}%).",
-                }
-                for s in account.sleeves
-            },
-            "approved": {
-                "type": "boolean",
-                "title": "Approved",
-                "description": "True once the advisor has approved the trades.",
-            },
-        },
-        "required": [s.key for s in account.sleeves] + ["approved"],
+    return {
+        "account_id": account.id,
+        "household": account.household,
+        "portfolio_value": account.value,
+        "tax_rate": account.tax_rate,
+        "sleeves": [
+            {
+                "key": s.key,
+                "label": s.label,
+                "weight": s.weight,
+                "target": s.target,
+                "unrealized_gain_pct": s.unrealized_gain_pct,
+            }
+            for s in account.sleeves
+        ],
     }
-    return attach_context(
-        schema,
-        "approved",
-        {
-            "sleeves": [
-                {
-                    "key": s.key,
-                    "label": s.label,
-                    "weight": s.weight,
-                    "target": s.target,
-                    "unrealized_gain_pct": s.unrealized_gain_pct,
-                }
-                for s in account.sleeves
-            ],
-            "portfolio_value": account.value,
-            "tax_rate": account.tax_rate,
-        },
-    )
 
 
 @mcp.tool(app=AppConfig(resource_uri=REBALANCE_URI, prefers_border=False))
 def propose_rebalance(
     account_id: Annotated[str, Field(description="The account to rebalance.")],
-    ctx: Context,
-) -> dict[str, Any] | InputRequiredResult:
-    """Propose a rebalance and let the advisor set the target allocation.
+) -> dict[str, Any]:
+    """Open the rebalance app on an account, so the advisor can set the allocation.
 
     This tool renders its own UI: a host that supports MCP Apps shows allocation
     sliders for every sleeve, constrained to total 100%, with drift from policy
     and estimated tax drag updating as they move. Call it with only the account
     id. Do NOT propose weights yourself, ask which sleeves to change, or describe
-    the trades first: the advisor sets them in the app and the resulting trade
-    set comes back as the result.
+    the trades first: the advisor sets them in the app, which submits them.
+
+    The result is the account's current allocation, which is what the app draws.
+    The trades come back separately, when the advisor submits.
     """
     account = _account(account_id)
     if account is None:
         return _unknown(account_id)
 
-    answer = answer_for(ctx, "rebalance")
-    if answer is None:
-        return ask(
-            "rebalance",
-            f"{account.household} ({account.id}), ${account.value:,.0f}. "
-            "Set the target allocation.",
-            _rebalance_schema(account),
-        )
+    return _rebalance_view(account)
 
-    if answer.action != "accept":
-        return {"status": "not_rebalanced", "reason": f"The advisor {answer.action}ed."}
 
-    content = answer.content or {}
-    allocation = {
+@mcp.tool(app=AppConfig(resource_uri=REBALANCE_URI, visibility=["app"]))
+def submit_rebalance(
+    account_id: Annotated[str, Field(description="The account being rebalanced.")],
+    allocation: Annotated[
+        dict[str, float], Field(description="Target weight per sleeve key, percent.")
+    ],
+) -> dict[str, Any]:
+    """Submit the allocation the advisor set in the rebalance app.
+
+    `visibility: ["app"]` keeps this out of the model's tool list: the weights
+    come from a person moving sliders, and a model guessing at them is the thing
+    the app exists to prevent. Only `propose_rebalance`'s app may call it.
+    """
+    account = _account(account_id)
+    if account is None:
+        return _unknown(account_id)
+
+    weights = {
         # `v` is bound once so the isinstance guard below and the float() above apply
-        # to the SAME value. Calling .get() twice read as unnarrowed to the checker,
-        # and meant a sleeve whose value changed between the two calls could convert
+        # to the SAME value. Reading the dict twice read as unnarrowed to the checker,
+        # and meant a sleeve whose value changed between the two reads could convert
         # something the guard had approved in a different form.
         s.key: float(v)
         for s in account.sleeves
-        for v in (content.get(s.key, s.weight),)
+        for v in (allocation.get(s.key, s.weight),)
         if isinstance(v, (int, float))
     }
-    total = sum(allocation.values())
+    total = sum(weights.values())
     if abs(total - 100.0) > 0.5:
         return {"error": f"Allocation totals {total:.1f}%, not 100%. Nothing was submitted."}
 
     by_key = {s.key: s for s in account.sleeves}
     trades, tax = [], 0.0
-    for key, weight in allocation.items():
+    for key, weight in weights.items():
         sleeve = by_key.get(key)
         if sleeve is None:
             continue
@@ -478,7 +458,7 @@ def propose_rebalance(
         "trade_count": len(trades),
         "estimated_tax": round(tax, 2),
         "residual_drift": round(
-            sum(abs(allocation.get(s.key, s.weight) - s.target) for s in account.sleeves), 1
+            sum(abs(weights.get(s.key, s.weight) - s.target) for s in account.sleeves), 1
         ),
         "submitted_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
