@@ -87,8 +87,14 @@ mcp = FastMCP(
     instructions=(
         "Meridian is the advisory platform of record: household accounts, model "
         "portfolios, order entry and client documents. Look positions and prices "
-        "up here rather than estimating them, and never place or amend an order "
-        "without going through `confirm_trade`."
+        "up here rather than estimating them.\n\n"
+        "`propose_rebalance`, `project_goal`, `confirm_trade` and `sign_document` "
+        "OPEN AN INTERACTIVE APP. Each returns only the data that app draws, and "
+        "no work has happened when it returns. Call them with the account (plus "
+        "symbol and side, or the document name) and nothing else. Do not propose "
+        "an allocation, a plan, a quantity or a signature yourself, and do not "
+        "ask for one in chat: an advisor sets it in the app, the app submits it, "
+        "and that submission is the record. Say that the app is open and wait."
     ),
     version="1.0.0",
     # `public` because the catalogue is identical for every caller — there is no
