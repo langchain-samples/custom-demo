@@ -807,6 +807,12 @@ answer = await ctx.elicit("Set the target allocation", response_type=Allocation)
     HTML, got something wrong.
   </p>
   <p>
+    If you would rather watch than read, Burke Holland's
+    <a href="https://www.youtube.com/watch?v=r3UkKVE3gtk"><strong>Let's learn about MCP
+    Apps</strong></a> walks through the extension on video, which is a gentler entry than the spec
+    text for a first pass.
+  </p>
+  <p>
     For a sense of what is actually shipping, Reclaim's
     <a href="https://reclaim.ai/blog/top-mcp-apps"><strong>Top 16 MCP Apps</strong></a> is the most
     useful roundup we found: Zillow's pannable map, Canva's editable deck, Figma's FigJam diagrams,
@@ -821,8 +827,8 @@ answer = await ctx.elicit("Set the target allocation", response_type=Allocation)
     runs locally and exists to exercise the whole surface, including resources that deliberately
     serve the wrong MIME type so you find out how strict your host really is.
     <a href="https://github.com/excalidraw/excalidraw-mcp"><strong>Excalidraw</strong></a> is the
-    real thing, hosted at <a href="https://mcp.excalidraw.com/mcp"><code>mcp.excalidraw.com/mcp</code></a>
-    and needing no account: one tool for the model, three marked
+    real thing, hosted at <code>mcp.excalidraw.com/mcp</code> and needing no account (a POST
+    endpoint, not a page: open it in a browser and it answers 405): one tool for the model, three marked
     <code>visibility: ["app"]</code> for its own widget. Pointing our host at it is what taught us
     we were handing those three to the model, which the spec forbids.
   </p>
