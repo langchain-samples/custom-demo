@@ -1,147 +1,310 @@
 /**
- * The look every MCP App in this server shares.
+ * The look every MCP App in this server shares: Windows 95.
  *
- * Injected at serve time next to bridge.js (see apps.py). An app is rendered in
- * an iframe inside the host's chat, so it has to read as part of that page
- * rather than as an embedded website.
+ * Injected at serve time next to bridge.js (see apps.py), around the window
+ * chrome `render_app` wraps each app in.
  *
- * Every token below is `var(<standardized>, <our default>)`. The outer names are
- * the CSS custom properties from the Theming section of SEP-1865, which a host
- * sets on the root during the `ui/initialize` handshake; the fallback is what an
- * app looks like when the host sends nothing, or only some of them. The spec
- * asks Views to carry their own defaults for exactly this reason, so the app is
- * coherent in a host that does no theming at all.
+ * WHY A PERIOD SKIN, AND NOT THE HOST'S THEME. An app is server-authored HTML
+ * running in an iframe with an opaque origin, and the single most important
+ * thing a person watching a demo can understand is that this pane came from
+ * somewhere else. An app styled to blend into the chat is a better *product*
+ * and a worse *explanation*: it hides the boundary the whole extension is
+ * about. 1995 is unmistakably not a 2026 React app, so nobody has to be told.
+ *
+ * SEP-1865 lets a host offer its palette as CSS custom properties during the
+ * `ui/initialize` handshake, and ours does (`themeVariables` in
+ * frontend/src/lib/mcpAppHost.ts). Those variables land on the root and this
+ * stylesheet deliberately ignores every one of them. That is a View's choice to
+ * make: the spec has hosts *offer* theming, not require that a View take it.
+ * bridge.js still applies what arrives, because it is the client an app author
+ * would copy and their app will probably want it.
+ *
+ * The palette is the 16-colour VGA set Windows 95 actually shipped. Do not
+ * "improve" it with a softer grey or a rounded corner: the value here is that it
+ * looks like a different machine, and every step toward the host's design system
+ * is a step back toward the confusion this exists to prevent.
  */
 
 :root {
   color-scheme: light;
-  --bg: var(--color-background-primary, #ffffff);
-  --panel: var(--color-background-secondary, #f6f7f9);
-  --ink: var(--color-text-primary, #14161a);
-  --muted: var(--color-text-secondary, #6b7280);
-  --border: var(--color-border-primary, #e4e6ea);
-  /* The standardized set has no brand or accent token. Inverse is where a
-     high-contrast primary action surface belongs, so that is what a primary
-     button here picks up. */
-  --accent: var(--color-background-inverse, #2f6feb);
-  --accent-fg: var(--color-text-inverse, #ffffff);
-  --up: var(--color-text-success, #0f8a5f);
-  --down: var(--color-text-danger, #c2410c);
-  --round: var(--border-radius-md, 8px);
-  --face: var(--font-sans, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif);
-}
-[data-theme="dark"] {
-  color-scheme: dark;
-  --bg: var(--color-background-primary, #16181d);
-  --panel: var(--color-background-secondary, #1e2127);
-  --ink: var(--color-text-primary, #f2f3f5);
-  --muted: var(--color-text-secondary, #9aa1ad);
-  --border: var(--color-border-primary, #2c3038);
-  --up: var(--color-text-success, #34d399);
-  --down: var(--color-text-danger, #fb923c);
+
+  /* The VGA sixteen, by their real names. */
+  --w95-face: #c0c0c0;
+  --w95-light: #dfdfdf;
+  --w95-hilite: #ffffff;
+  --w95-shadow: #808080;
+  --w95-dkshadow: #000000;
+  --w95-navy: #000080;
+  --w95-teal: #008080;
+  --w95-green: #008000;
+  --w95-maroon: #800000;
+  --w95-desktop: #008080;
+
+  /* The tokens the apps and their canvases already read, repointed. Keeping the
+     names is what lets four apps and two <canvas> renderers change era without
+     touching a line of their own code. */
+  --bg: var(--w95-face);
+  --panel: var(--w95-face);
+  --ink: var(--w95-dkshadow);
+  --muted: #3f3f3f;
+  --border: var(--w95-shadow);
+  --accent: var(--w95-navy);
+  --accent-fg: var(--w95-hilite);
+  --up: var(--w95-green);
+  --down: var(--w95-maroon);
+  /* Nothing was rounded in 1995. Existing `border-radius: var(--round)` rules
+     become square by changing this one value. */
+  --round: 0;
+  --face: "MS Sans Serif", Tahoma, Verdana, Geneva, sans-serif;
 }
 
 * { box-sizing: border-box; }
 
+/*
+ * The desktop the window sits on. Teal because that was the default, and
+ * because a sliver of it around the frame is what makes the pane read as a
+ * window rather than as a grey div.
+ */
 body {
   margin: 0;
-  padding: 12px;
-  background: var(--bg);
+  padding: 5px;
+  background: var(--w95-desktop);
   color: var(--ink);
-  font: 13px/1.45 var(--face);
+  /* 11px is the real MS Sans Serif UI size. Anti-aliasing off where a browser
+     will honour it, because the bitmap font never had any. */
+  font: 11px/1.35 var(--face);
+  -webkit-font-smoothing: none;
 }
 
-.msg { margin: 0 0 10px; font-size: 13px; }
+/*
+ * The two bevels everything is built from.
+ *
+ * A Win95 edge is TWO rings, not one: an outer light/dark pair and an inner
+ * one, which is what gives it depth rather than looking like a 2px grey
+ * outline. Raised is light outside, dark inside-bottom; sunken is the same
+ * thing inverted. Every control below is one of these two.
+ */
+.raised {
+  border: 2px solid;
+  border-color: var(--w95-light) var(--w95-dkshadow) var(--w95-dkshadow) var(--w95-light);
+  box-shadow: inset 1px 1px 0 var(--w95-hilite), inset -1px -1px 0 var(--w95-shadow);
+}
+.sunken {
+  border: 2px solid;
+  border-color: var(--w95-shadow) var(--w95-hilite) var(--w95-hilite) var(--w95-shadow);
+  box-shadow: inset 1px 1px 0 var(--w95-dkshadow), inset -1px -1px 0 var(--w95-light);
+}
+
+/* ------------------------------ The window ------------------------------ */
+
+.win {
+  background: var(--w95-face);
+  border: 2px solid;
+  border-color: var(--w95-light) var(--w95-dkshadow) var(--w95-dkshadow) var(--w95-light);
+  box-shadow: inset 1px 1px 0 var(--w95-hilite), inset -1px -1px 0 var(--w95-shadow);
+  padding: 2px;
+}
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 2px 0 3px;
+  background: var(--w95-navy);
+  color: var(--w95-hilite);
+  font-weight: 700;
+  /* No gradient. That arrived with Windows 98 and is the single most common
+     tell in a fake Win95 skin. */
+}
+
+.title {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/*
+ * Minimize, maximize, close.
+ *
+ * DECORATIVE, and `aria-hidden` so a screen reader is not told about three
+ * buttons that do nothing. There is no message in SEP-1865 for a view asking to
+ * be dismissed, and inventing one would undo the point of speaking the standard
+ * (see mcp_demo_server/apps/bridge.js). A box that looks pressable and is not
+ * would be worse than chrome that plainly is not interactive, so these have no
+ * hover or active state at all.
+ */
+.tbtns { display: flex; gap: 2px; }
+.tbtn {
+  width: 16px;
+  height: 14px;
+  background: var(--w95-face);
+  border: 1px solid;
+  border-color: var(--w95-hilite) var(--w95-dkshadow) var(--w95-dkshadow) var(--w95-hilite);
+  color: var(--w95-dkshadow);
+  font: 700 9px/12px var(--face);
+  text-align: center;
+  cursor: default;
+  user-select: none;
+}
+
+/* The client area, sunken into the frame the way a document window's is. */
+.client {
+  background: var(--w95-face);
+  padding: 8px;
+}
+
+/* --------------------------- Text and layout ---------------------------- */
+
+.msg { margin: 0 0 8px; }
 
 .lbl {
   display: block;
-  margin-bottom: 4px;
-  font-size: 10.5px;
+  margin-bottom: 3px;
   font-weight: 700;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  color: var(--muted);
+  color: var(--ink);
+  /* Not uppercase and not letter-spaced: a Win95 field label was sentence case
+     in the same face as everything else. */
 }
 
-.row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.row { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
 .spacer { flex: 1; }
 .muted { color: var(--muted); }
 .num { font-variant-numeric: tabular-nums; }
 
+/* ------------------------------- Controls ------------------------------- */
+
 input[type="text"], input[type="number"], select {
   width: 100%;
-  padding: 7px 9px;
-  border: 1px solid var(--border);
-  border-radius: var(--round);
-  background: var(--bg);
+  padding: 3px 4px;
+  background: var(--w95-hilite);
   color: var(--ink);
   font: inherit;
+  border: 2px solid;
+  border-color: var(--w95-shadow) var(--w95-hilite) var(--w95-hilite) var(--w95-shadow);
+  box-shadow: inset 1px 1px 0 var(--w95-dkshadow), inset -1px -1px 0 var(--w95-light);
+  border-radius: 0;
 }
 
+/*
+ * The focus ring is a dotted inset rectangle, which is what Windows drew.
+ * Keeping a visible focus indicator at all is not negotiable for a form someone
+ * signs, so this is the period-correct version rather than no ring.
+ */
 input:focus-visible, button:focus-visible, select:focus-visible, canvas:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: 1px dotted var(--w95-dkshadow);
+  outline-offset: -4px;
 }
 
 button {
-  border-radius: var(--round);
-  border: 1px solid var(--border);
-  background: transparent;
+  min-width: 68px;
+  padding: 4px 10px;
+  background: var(--w95-face);
   color: var(--ink);
-  padding: 6px 11px;
   font: inherit;
-  font-weight: 500;
-  cursor: pointer;
+  cursor: default;
+  border: 2px solid;
+  border-color: var(--w95-light) var(--w95-dkshadow) var(--w95-dkshadow) var(--w95-light);
+  box-shadow: inset 1px 1px 0 var(--w95-hilite), inset -1px -1px 0 var(--w95-shadow);
+  border-radius: 0;
 }
-button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
-button[disabled] { opacity: 0.5; cursor: not-allowed; }
+/* Pressed inverts the bevel AND nudges the label a pixel down-right, which is
+   the detail that makes a button feel physical rather than merely recoloured. */
+button:active:not([disabled]) {
+  border-color: var(--w95-shadow) var(--w95-hilite) var(--w95-hilite) var(--w95-shadow);
+  box-shadow: inset 1px 1px 0 var(--w95-dkshadow), inset -1px -1px 0 var(--w95-light);
+  padding: 5px 9px 3px 11px;
+}
+/* The default button wears an extra dark ring, not a colour: Win95 had no
+   filled primary button, so `.primary` earns emphasis the period way. */
+button.primary { outline: 1px solid var(--w95-dkshadow); outline-offset: 0; font-weight: 700; }
+/* Greyed text with a white shadow under it, exactly as a disabled Win95 label
+   was drawn. `opacity` would be the modern shortcut and looks wrong. */
+button[disabled] {
+  color: var(--w95-shadow);
+  text-shadow: 1px 1px 0 var(--w95-hilite);
+  cursor: default;
+}
 
-/* A slider that looks the same in both engines, since the app is judged on stage. */
+/*
+ * A trackbar. Sunken groove, rectangular raised thumb, no rounding anywhere.
+ * Both engines are styled explicitly because the app is judged on a projector.
+ */
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--border);
+  height: 18px;
+  background: transparent;
   outline: none;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  background: var(--w95-face);
+  border: 2px solid;
+  border-color: var(--w95-shadow) var(--w95-hilite) var(--w95-hilite) var(--w95-shadow);
 }
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 15px;
-  height: 15px;
-  border-radius: 50%;
-  background: var(--accent);
-  cursor: grab;
-  border: 2px solid var(--bg);
-  box-shadow: 0 0 0 1px var(--border);
+  width: 11px;
+  height: 20px;
+  margin-top: -10px;
+  border-radius: 0;
+  background: var(--w95-face);
+  border: 2px solid;
+  border-color: var(--w95-light) var(--w95-dkshadow) var(--w95-dkshadow) var(--w95-light);
+  box-shadow: inset 1px 1px 0 var(--w95-hilite), inset -1px -1px 0 var(--w95-shadow);
+  cursor: default;
+}
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  background: var(--w95-face);
+  border: 2px solid;
+  border-color: var(--w95-shadow) var(--w95-hilite) var(--w95-hilite) var(--w95-shadow);
 }
 input[type="range"]::-moz-range-thumb {
-  width: 15px;
-  height: 15px;
-  border-radius: 50%;
-  background: var(--accent);
-  cursor: grab;
-  border: 2px solid var(--bg);
+  width: 11px;
+  height: 20px;
+  border-radius: 0;
+  background: var(--w95-face);
+  border: 2px solid;
+  border-color: var(--w95-light) var(--w95-dkshadow) var(--w95-dkshadow) var(--w95-light);
+  cursor: default;
 }
+
+/* -------------------------- Tables and panels --------------------------- */
 
 table { width: 100%; border-collapse: collapse; }
-th, td { padding: 4px 6px; text-align: left; }
-th { font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); }
+th, td { padding: 2px 5px; text-align: left; }
+/* A column header was a raised button, because it was clickable. */
+th {
+  background: var(--w95-face);
+  font-weight: 700;
+  border: 1px solid;
+  border-color: var(--w95-hilite) var(--w95-shadow) var(--w95-shadow) var(--w95-hilite);
+}
 td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
 
+/* A group box: sunken panel, the standard container for related fields. */
 .card {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--panel);
-  padding: 10px;
+  background: var(--w95-face);
+  padding: 7px;
+  border: 2px solid;
+  border-color: var(--w95-shadow) var(--w95-hilite) var(--w95-hilite) var(--w95-shadow);
+  box-shadow: inset 1px 1px 0 var(--w95-dkshadow), inset -1px -1px 0 var(--w95-light);
+  border-radius: 0;
 }
 
+/* A warning reads as one without colour, so it keeps working in the maroon the
+   VGA palette actually had rather than a modern red. */
 .warn {
-  border: 1px solid var(--down);
-  border-radius: var(--round);
-  padding: 6px 8px;
-  font-size: 11.5px;
+  background: var(--w95-face);
   color: var(--down);
+  font-weight: 700;
+  padding: 5px 7px;
+  border: 2px solid;
+  border-color: var(--w95-shadow) var(--w95-hilite) var(--w95-hilite) var(--w95-shadow);
+  border-radius: 0;
 }

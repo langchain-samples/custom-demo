@@ -343,6 +343,15 @@ include `"app"` in its visibility. A view is server-authored HTML, so nothing it
 trusted. `ui/message` and `ui/update-model-context` are accepted only when the surface
 wires a handler, and answered with an explicit error otherwise.
 
+**A server's own `instructions` reach the prompt.** `_discover` reads them off the
+initialize result in the same pass as the tools (`instructions_for`, cached on the same
+fingerprint), and `_mcp_note` renders them per server after the tool list. The nesting in
+`_discover` is load-bearing: `MCPAdapter(group)` alone leaves `group.clients[...].instructions`
+empty, so entering the group around the adapter is what stops the guidance being silently lost
+while the tools come back fine. Remote tool descriptions are passed **whole**, not clipped: the
+old 160-character first-line summary was cutting the cautions off every MCP tool, and a remote
+server's description is not ours to summarise.
+
 **App-only tools are kept from the model.** `_meta.ui.visibility: ["app"]` means a tool
 its own App may call and the agent may not, and the host rule is a MUST, so
 `model_visible` filters them in `_discover`. Excalidraw's server

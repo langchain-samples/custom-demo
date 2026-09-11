@@ -379,7 +379,18 @@ def _rebalance_view(account: Account) -> dict[str, Any]:
     }
 
 
-@mcp.tool(app=AppConfig(resource_uri=REBALANCE_URI, prefers_border=False))
+@mcp.tool(
+    app=AppConfig(resource_uri=REBALANCE_URI, prefers_border=False),
+    # ChatGPT's loading states, from the OpenAI Apps SDK rather than
+    # SEP-1865, which has no equivalent. `meta` is passed to the host
+    # verbatim, so one argument makes the same tool render nicely in
+    # ChatGPT and in a spec host. Ignored by anything that does not
+    # look for them.
+    meta={
+        "openai/toolInvocation/invoking": "Opening the rebalance app...",
+        "openai/toolInvocation/invoked": "Rebalance app ready",
+    },
+)
 def propose_rebalance(
     account_id: Annotated[str, Field(description="The account to rebalance.")],
 ) -> dict[str, Any]:
@@ -478,7 +489,18 @@ class GoalPlan(BaseModel):
     risk_level: str = Field(description="Risk posture, e.g. Balanced.")
 
 
-@mcp.tool(app=AppConfig(resource_uri=PROJECTION_URI, prefers_border=False))
+@mcp.tool(
+    app=AppConfig(resource_uri=PROJECTION_URI, prefers_border=False),
+    # ChatGPT's loading states, from the OpenAI Apps SDK rather than
+    # SEP-1865, which has no equivalent. `meta` is passed to the host
+    # verbatim, so one argument makes the same tool render nicely in
+    # ChatGPT and in a spec host. Ignored by anything that does not
+    # look for them.
+    meta={
+        "openai/toolInvocation/invoking": "Modelling the goal...",
+        "openai/toolInvocation/invoked": "Goal app ready",
+    },
+)
 def project_goal(
     account_id: Annotated[str, Field(description="The account whose goal to model.")],
 ) -> dict[str, Any]:
@@ -544,7 +566,18 @@ class TradeTicket(BaseModel):
     confirmed: bool = Field(description="True once the advisor has held to confirm.")
 
 
-@mcp.tool(app=AppConfig(resource_uri=TRADE_URI, prefers_border=False))
+@mcp.tool(
+    app=AppConfig(resource_uri=TRADE_URI, prefers_border=False),
+    # ChatGPT's loading states, from the OpenAI Apps SDK rather than
+    # SEP-1865, which has no equivalent. `meta` is passed to the host
+    # verbatim, so one argument makes the same tool render nicely in
+    # ChatGPT and in a spec host. Ignored by anything that does not
+    # look for them.
+    meta={
+        "openai/toolInvocation/invoking": "Pricing the order...",
+        "openai/toolInvocation/invoked": "Order ticket ready",
+    },
+)
 def confirm_trade(
     account_id: Annotated[str, Field(description="The account to trade in.")],
     symbol: Annotated[str, Field(description="Ticker to trade, e.g. AAPL.")],
@@ -647,7 +680,18 @@ def _document_reference(account_id: str, document: str) -> str:
     return f"MW-DOC-{int(digest[:8], 16) % 100000:05d}"
 
 
-@mcp.tool(app=AppConfig(resource_uri=SIGNATURE_URI, prefers_border=False))
+@mcp.tool(
+    app=AppConfig(resource_uri=SIGNATURE_URI, prefers_border=False),
+    # ChatGPT's loading states, from the OpenAI Apps SDK rather than
+    # SEP-1865, which has no equivalent. `meta` is passed to the host
+    # verbatim, so one argument makes the same tool render nicely in
+    # ChatGPT and in a spec host. Ignored by anything that does not
+    # look for them.
+    meta={
+        "openai/toolInvocation/invoking": "Opening the signature pad...",
+        "openai/toolInvocation/invoked": "Signature pad ready",
+    },
+)
 def sign_document(
     account_id: Annotated[str, Field(description="The account the document belongs to.")],
     document: Annotated[str, Field(description="What is being signed, e.g. 'IPS amendment'.")],

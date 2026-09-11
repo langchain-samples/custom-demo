@@ -174,6 +174,52 @@ def test_visibility_defaults_let_a_tool_be_used_by_both():
     assert m.model_visible(ordinary) and m.app_callable(ordinary)
 
 
+def test_instructions_are_cached_beside_the_tools(monkeypatch):
+    """One discovery fills both, so guidance costs no extra round trip.
+
+    `awrap_model_call` fires on every model call, so reading `instructions` on
+    its own connection would be a round trip per call, which is the thing the
+    tools cache exists to avoid.
+    """
+    calls = 0
+
+    async def once(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return [_tool("srv_thing")], {"srv": "Call get_project before updating one."}
+
+    monkeypatch.setattr(m, "_discover", once)
+    servers = m.parse_servers([{"label": "Srv", "url": "https://x/mcp"}])
+    m.invalidate(servers)
+
+    asyncio.run(m.load_tools(servers))
+    assert m.instructions_for(servers) == {"srv": "Call get_project before updating one."}
+    # Served from the same cache, so no second connection.
+    asyncio.run(m.load_tools(servers))
+    assert calls == 1
+
+
+def test_instructions_are_empty_for_a_server_with_nothing_to_say(monkeypatch):
+    """Most servers publish none, Excalidraw included, and that is not an error."""
+
+    async def quiet(*_args, **_kwargs):
+        return [_tool("srv_thing")], {}
+
+    monkeypatch.setattr(m, "_discover", quiet)
+    servers = m.parse_servers([{"label": "Srv", "url": "https://y/mcp"}])
+    m.invalidate(servers)
+    asyncio.run(m.load_tools(servers))
+    assert m.instructions_for(servers) == {}
+
+
+def test_invalidate_drops_instructions_too():
+    """Stale guidance outliving a token change would be worse than none."""
+    servers = m.parse_servers([{"label": "Srv", "url": "https://z/mcp"}])
+    m._INSTRUCTIONS[m.fingerprint(servers)] = {"srv": "old"}
+    m.invalidate()
+    assert m.instructions_for(servers) == {}
+
+
 def test_read_app_resource_shapes_text_and_binary_blocks_for_the_wire(monkeypatch):
     """An app gets `resources/read` back in the shape the spec puts on the wire.
 
@@ -272,7 +318,8 @@ def test_load_tools_serves_a_second_call_from_cache(monkeypatch):
     async def once(*_args, **_kwargs):
         nonlocal calls
         calls += 1
-        return [_tool("x_tool")]
+        # `_discover` returns tools AND what each server said, in one pass.
+        return [_tool("x_tool")], {}
 
     monkeypatch.setattr(m, "_discover", once)
     servers = m.parse_servers([{"label": "Cached", "url": "https://x/mcp"}])

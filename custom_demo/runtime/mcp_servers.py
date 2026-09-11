@@ -51,6 +51,10 @@ CONNECT_TIMEOUT_SECONDS = mcp_timeout_seconds()
 
 _SLUG = re.compile(r"[^a-z0-9]+")
 
+# Each server set's `instructions`, by the same fingerprint the tools are cached
+# under, so editing a URL or a token re-reads both together.
+_INSTRUCTIONS: dict[str, dict[str, str]] = {}
+
 
 @dataclass(frozen=True)
 class McpServer:
@@ -216,10 +220,11 @@ async def load_tools(
             return hit[1] if include_app_only else [t for t in hit[1] if model_visible(t)]
 
         try:
-            tools = await asyncio.wait_for(
+            tools, said = await asyncio.wait_for(
                 _discover(servers, refresh=refresh),
                 timeout=CONNECT_TIMEOUT_SECONDS,
             )
+            _INSTRUCTIONS[key] = said
         except Exception as exc:  # noqa: BLE001 - a bad server degrades the turn, never fails it
             _log(
                 f"tool discovery failed for {[s.id for s in servers]}: {type(exc).__name__}: {exc}"
@@ -233,15 +238,52 @@ async def load_tools(
         return tools if include_app_only else [t for t in tools if model_visible(t)]
 
 
-async def _discover(servers: tuple[McpServer, ...], *, refresh: bool) -> list[Any]:
-    """One real discovery pass: connect, list, adapt. Every tool, unfiltered."""
+async def _discover(
+    servers: tuple[McpServer, ...], *, refresh: bool
+) -> tuple[list[Any], dict[str, str]]:
+    """One real discovery pass: connect, list, adapt, and read what each server says.
+
+    Both results come from the same connection on purpose. `awrap_model_call`
+    fires on every model call, so a second pass just for `instructions` would be
+    a round trip per call, which is the thing this module exists to avoid.
+    """
     # Local like `build_group`'s: keeps the mcp client stack off graph load.
     from langchain.mcp import MCPAdapter  # noqa: PLC0415
 
-    async with MCPAdapter(build_group(servers)) as adapter:
+    group = build_group(servers)
+    # The group is entered HERE, with the adapter working inside it, and that
+    # nesting is load-bearing: `MCPAdapter(group)` alone leaves
+    # `group.clients[...].instructions` empty, so the guidance would silently be
+    # lost while the tools came back fine. One connection still, not two.
+    async with group, MCPAdapter(group) as adapter:
         # `use` reads the client-side cache when the server's TTL hint says it is
         # still fresh; `refresh` is what the SPA's "reload tools" button sends.
-        return await adapter.list_tools(cache_mode="refresh" if refresh else "use")
+        tools = await adapter.list_tools(cache_mode="refresh" if refresh else "use")
+        # `instructions` is declared on the client, and `clients` is keyed by the
+        # id we namespaced the tools with, so the two line up by construction.
+        said = {
+            str(sid): client.instructions.strip()
+            for sid, client in group.clients.items()
+            if isinstance(client.instructions, str) and client.instructions.strip()
+        }
+
+    return tools, said
+
+
+def instructions_for(servers: tuple[McpServer, ...]) -> dict[str, str]:
+    """Each server's `instructions`, by server id, from the last discovery.
+
+    A server returns this in its initialize result, and it is the only place it
+    can say how its tools relate to each other: a tool description covers one
+    tool, while "call get_project before updating one" or "these four open a UI
+    and do no work" is a statement about the set. A host that drops it makes the
+    server work around it, which is why Excalidraw ships a `read_me` tool.
+
+    Reads the cache `load_tools` filled, so it costs nothing and must be called
+    after it. Empty until then, and empty for a server with nothing to say,
+    which is most of them.
+    """
+    return dict(_INSTRUCTIONS.get(fingerprint(servers), {}))
 
 
 def app_callable(tool: Any) -> bool:
@@ -287,6 +329,7 @@ def invalidate(servers: tuple[McpServer, ...] | None = None) -> None:
     """Drop cached tools, for one server set or all of them."""
     if servers is None:
         _TOOLS.clear()
+        _INSTRUCTIONS.clear()
         return
 
     _TOOLS.pop(fingerprint(servers), None)
@@ -302,7 +345,7 @@ async def probe(servers: tuple[McpServer, ...]) -> dict[str, Any]:
         single = (server,)
         entry: dict[str, Any] = {**server.redacted(), "ok": False, "tools": []}
         try:
-            tools = await asyncio.wait_for(
+            tools, said = await asyncio.wait_for(
                 _discover(single, refresh=True), timeout=CONNECT_TIMEOUT_SECONDS
             )
             entry["ok"] = True
@@ -314,8 +357,10 @@ async def probe(servers: tuple[McpServer, ...]) -> dict[str, Any]:
                 }
                 for t in tools
             ]
-            # A successful probe is a fresh discovery; let the agent reuse it.
+            # A successful probe is a fresh discovery; let the agent reuse both
+            # halves of it rather than reconnecting on the next turn.
             _TOOLS[fingerprint(single)] = (time.monotonic() + TOOLS_TTL_SECONDS, tools)
+            _INSTRUCTIONS[fingerprint(single)] = said
         except TimeoutError:
             entry["error"] = f"no response within {CONNECT_TIMEOUT_SECONDS:.0f}s"
         except Exception as exc:  # noqa: BLE001 - the message is the whole point of a probe

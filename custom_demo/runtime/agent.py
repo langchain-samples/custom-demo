@@ -51,7 +51,7 @@ from custom_demo.config import (
     scoped_client,
 )
 from custom_demo.core.ctx import Context, get_ctx
-from custom_demo.runtime.mcp_servers import load_tools, parse_servers
+from custom_demo.runtime.mcp_servers import instructions_for, load_tools, parse_servers
 from custom_demo.runtime.mocking import enable_mocking
 from custom_demo.runtime.prompt import ARTIFACT_NOTE, FALLBACK_PROMPT, pull_agent_prompt
 from custom_demo.runtime.tools import (
@@ -304,16 +304,32 @@ def _mcp_note(runtime) -> str:
         owner = next(
             (label for sid, label in servers.items() if tool.name.startswith(f"{sid}_")), ""
         )
-        summary = (tool.description or "").strip().split("\n")[0][:160]
+        # The WHOLE description, not a first line clipped to 160 characters. That
+        # clip was silently cutting the back half off every remote tool, which is
+        # where the cautions live: `propose_rebalance` opens with "Open the
+        # rebalance app" and only later says not to propose weights. A remote
+        # server's description is not ours to summarise.
+        summary = (tool.description or "").strip()
         lines.append(f"- `{tool.name}`{f' ({owner})' if owner else ''}: {summary}")
 
     names = ", ".join(sorted(servers.values())) or "a connected MCP server"
-    return (
+    note = (
         f"\n\nCONNECTED SYSTEMS ({names}). These tools reach the customer's own live systems "
         "through MCP. Prefer them over your local data files for anything they cover, and never "
         "invent a "
         "value one of them could return (a tracking id, a status, a date):\n" + "\n".join(lines)
     )
+
+    # A server's own `instructions` last, so it qualifies the tools just listed.
+    # This is the only place a server can say how its tools RELATE to each other
+    # ("call get_project before updating one"), which no single tool description
+    # can express, and a host that drops it makes the server work around it.
+    said = instructions_for(_mcp_parse(get_ctx(runtime).mcp_servers))
+    for server_id, text in sorted(said.items()):
+        label = servers.get(server_id, server_id)
+        note += f"\n\n{label.upper()} SAYS (the server's own instructions, follow them):\n{text}"
+
+    return note
 
 
 def _mcp_parse(raw: Any):
