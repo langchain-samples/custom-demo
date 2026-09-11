@@ -56,7 +56,15 @@ function initializeResult(theme) {
     hostInfo: { name: "test-host", version: "1.0.0" },
     hostCapabilities: { serverTools: {} },
     hostContext: {
-      toolInfo: { tool: { name: "meridian_sign_document" } },
+      // `inputSchema` is REQUIRED on `Tool`, and the SDK validates this result.
+      // Leaving it out makes the app refuse the handshake, which is exactly the
+      // bug a real third-party app caught in our host.
+      toolInfo: {
+        tool: {
+          name: "meridian_sign_document",
+          inputSchema: { type: "object", properties: { document: { type: "string" } } },
+        },
+      },
       theme: theme || "light",
       displayMode: "inline",
       containerDimensions: { maxHeight: 640 },
@@ -84,6 +92,23 @@ function mount(dataUri, theme) {
     pretendToBeVisual: true,
     url: "https://artifact.invalid/",
     beforeParse(window) {
+      // The SDK logs every frame at debug level, which buries the test output.
+      window.console.debug = () => {};
+      // jsdom has no ResizeObserver, and the SDK's `autoResize` uses one to
+      // report height. Stub it: the app must still load without one.
+      window.ResizeObserver = class {
+        constructor(cb) {
+          this.cb = cb;
+        }
+        // Fire once on observe, standing in for the initial measurement a real
+        // one delivers. Without it the SDK's autoResize never reports a height
+        // and the app looks like it forgot to.
+        observe(target) {
+          setTimeout(() => this.cb([{ target, contentRect: { width: 320, height: 240 } }], this), 0);
+        }
+        unobserve() {}
+        disconnect() {}
+      };
       // jsdom has no 2D canvas. Stub only what the pad touches, so a drawn
       // stroke is observable without a native canvas build.
       window.HTMLCanvasElement.prototype.getContext = () => ({
@@ -99,25 +124,29 @@ function mount(dataUri, theme) {
         putImageData() {},
       });
       window.HTMLCanvasElement.prototype.toDataURL = () => uri();
-      Object.defineProperty(window, "parent", {
-        configurable: true,
-        value: {
-          postMessage(msg) {
-            posted.push(msg);
-            // The only thing a host must do for the app to get going: answer the
-            // handshake. Everything after it is driven by the tests.
-            if (msg.method === "ui/initialize") {
-              window.postMessage(
-                { jsonrpc: "2.0", id: msg.id, result: initializeResult(theme) },
-                "*",
-              );
-            }
-          },
+      // The SDK's transport only accepts messages whose `event.source` is the
+      // parent it posts to. `window.postMessage` cannot set that, so the host
+      // stub dispatches a MessageEvent itself, which is what a browser does
+      // when a parent posts into a child frame.
+      const host = {
+        postMessage(msg) {
+          posted.push(msg);
+          // The only thing a host must do for the app to get going: answer the
+          // handshake. Everything after it is driven by the tests.
+          if (msg.method === "ui/initialize") {
+            reply(window, host, { jsonrpc: "2.0", id: msg.id, result: initializeResult(theme) });
+          }
         },
-      });
+      };
+      Object.defineProperty(window, "parent", { configurable: true, value: host });
     },
   });
-  return { dom, posted, draws, doc: dom.window.document };
+  return { dom, posted, draws, doc: dom.window.document, host: () => dom.window.parent };
+}
+
+/** Deliver a message to the view the way a parent window does. */
+function reply(window, source, data) {
+  window.dispatchEvent(new window.MessageEvent("message", { data, source }));
 }
 
 /** Find the first message the app sent with this JSON-RPC method. */
@@ -131,15 +160,15 @@ const sent = (posted, method) => posted.find((m) => m.method === method);
  * result, delivered on the ordinary notification.
  */
 function deliver(dom, document_) {
-  dom.window.postMessage(
+  const src = dom.window.parent;
+  reply(dom.window, src, 
     {
       jsonrpc: "2.0",
       method: "ui/notifications/tool-input",
       params: { arguments: { account_id: "MW-10241", document: document_ || "IPS amendment" } },
     },
-    "*",
   );
-  dom.window.postMessage(
+  reply(dom.window, src, 
     {
       jsonrpc: "2.0",
       method: "ui/notifications/tool-result",
@@ -152,7 +181,6 @@ function deliver(dom, document_) {
         },
       },
     },
-    "*",
   );
 }
 
@@ -228,13 +256,16 @@ function name(dom, value) {
     assert.strictEqual(done.id, undefined, "a notification must not carry an id");
   });
 
-  await ok("reports the height it needs, or the host clips it", async () => {
+  await ok("leaves sizing to the SDK rather than hand-rolling it", async () => {
     const { posted } = mount();
     await flush();
-    const size = sent(posted, "ui/notifications/size-changed");
-    assert.ok(size, "no size-changed notification");
-    assert.strictEqual(typeof size.params.height, "number");
-    assert.strictEqual(typeof size.params.width, "number");
+    // The SDK reports height through a ResizeObserver (`autoResize`, on by
+    // default), so the app sends no size notification of its own. Whether that
+    // observer fires is not testable here: jsdom has no layout, every element
+    // measures 0, and the SDK correctly sends nothing when nothing changed.
+    // What IS ours is not duplicating it.
+    const ours = posted.filter((m) => m.method === "ui/notifications/size-changed");
+    assert.strictEqual(ours.length, 0, "the app should not send its own size notifications");
   });
 
   await ok("titles itself from the tool's own result", async () => {

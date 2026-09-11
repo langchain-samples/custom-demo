@@ -331,12 +331,15 @@ handlers. `AppBridge` takes an MCP `Client` to forward `tools/call` and `resourc
 is `null`, because the browser has no MCP client, so those two are answered through
 `POST /mcp/call` and `POST /mcp/resource`.
 
-The guest half (`mcp_demo_server/apps/bridge.js`) is still hand-written vanilla JS, because an
-app is inlined into an origin-less iframe where bundling React is not free (ours are ~32KB;
-Excalidraw's is 432KB). That asymmetry is the risk `custom_demo/tests/mcp_app_conformance_test.js`
-covers: it parses what `bridge.js` actually sends with the SDK's own schemas. Two hand-written
-halves can agree with each other and disagree with the spec forever, which is precisely what
-`clientInfo` (where `ui/initialize` requires `appInfo`) did until the SDK refused it.
+The guest half runs on the same SDK. `mcp_demo_server/apps/src/bridge.src.js` imports `App` and
+`apps/build.sh` bundles it to `apps/bridge.js`, which `apps.py` inlines. **The bundle is committed**
+(the server is Python and cannot run esbuild at serve time) and
+`custom_demo/tests/mcp_app_conformance_test.js` fails if it drifts from its source, so rebuild and
+commit whenever the source changes. Cost: an app is ~618KB, against ~32KB hand-rolled and
+Excalidraw's 432KB. That is what MCP Apps cost, because an origin-less iframe can fetch nothing.
+
+Sizing is `autoResize`, on by default, so an app never sends `ui/notifications/size-changed`
+itself. `McpApp.resize()` is retained as a no-op for app files that call it.
 
     app  -> host   ui/initialize, then ui/notifications/initialized
     host -> app    McpUiInitializeResult (theme, styles, toolInfo, containerDimensions)

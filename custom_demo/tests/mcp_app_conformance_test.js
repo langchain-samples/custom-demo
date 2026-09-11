@@ -1,98 +1,75 @@
-/* Our hand-written MCP App view, checked against the SDK's own schemas.
+/* The committed view bundle is current, and built from the SDK.
  *
- * The HOST is the official SDK's now (frontend/src/lib/mcpAppHost.ts wraps
- * `AppBridge`), but the VIEW is still ours: mcp_demo_server/apps/bridge.js is
- * vanilla JS inlined into an origin-less iframe, where bundling React is not
- * free. That leaves one gap nothing else covers.
+ * Both halves of MCP Apps now run on `@modelcontextprotocol/ext-apps`: the host
+ * in frontend/src/lib/mcpAppHost.ts, and the view in mcp_demo_server/apps,
+ * where `src/bridge.src.js` is bundled by `build.sh` into `bridge.js`.
  *
- * When BOTH halves are hand-written they can agree with each other and disagree
- * with the spec, silently, forever. That is not hypothetical: bridge.js sent
- * `clientInfo` where `ui/initialize` requires `appInfo`, our old hand-written
- * host never validated it, and the pair worked perfectly right up until a
- * conformant host refused the handshake.
+ * The bundle is committed because the server is Python and cannot run esbuild
+ * at serve time, which means it can go stale against its source with nothing to
+ * notice. That is what this checks.
  *
- * So this parses what bridge.js actually sends using the schemas the SDK
- * publishes. It reads the real file rather than a copy, because a copy would
- * drift in exactly the way this exists to catch.
- *
- * A Node test rather than a vitest one for the same reason as its neighbours:
- * it needs `node:fs`, which the app's tsconfig does not have in scope.
+ * The handshake itself needs no test any more. It used to: when both halves
+ * were hand-written they agreed with each other and disagreed with the spec for
+ * weeks, sending `clientInfo` where `ui/initialize` requires `appInfo`. The SDK
+ * builds that message now, and signature_app_test.js drives a real app through
+ * a real handshake against it.
  *
  * Run: node custom_demo/tests/mcp_app_conformance_test.js
  */
 const assert = require("node:assert");
+const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 const ROOT = path.join(__dirname, "..", "..");
-const BRIDGE = fs.readFileSync(
-  path.join(ROOT, "mcp_demo_server", "apps", "bridge.js"),
-  "utf8",
-);
-const SDK = path.join(
-  ROOT, "frontend", "node_modules", "@modelcontextprotocol", "ext-apps",
-  "dist", "src", "app-bridge.js",
-);
+const APPS = path.join(ROOT, "mcp_demo_server", "apps");
+const BUNDLE = path.join(APPS, "bridge.js");
 
 let passed = 0;
-async function ok(name, fn) {
-  await fn();
+function ok(name, fn) {
+  fn();
   passed++;
   console.log("  ok -", name);
 }
 
-/** The literal object bridge.js passes to `request("ui/initialize", ...)`. */
-function initializeParams(version) {
-  const body = /request\("ui\/initialize",\s*\{([\s\S]*?)\n {2}\}\)/.exec(BRIDGE);
-  assert.ok(body, "could not find the ui/initialize call in bridge.js");
-  const src = body[1]
-    .replace(/\/\/[^\n]*/g, "")
-    .replace(/PROTOCOL_VERSION/g, JSON.stringify(version));
-  return Function(`"use strict"; return ({${src}});`)();
-}
+console.log("MCP App view bundle");
 
-(async () => {
-  console.log("MCP App conformance (our view vs the SDK's schemas)");
-  const sdk = await import(SDK);
-  const version = sdk.SUPPORTED_PROTOCOL_VERSIONS[0];
-
-  await ok("opens a handshake the SDK accepts", async () => {
-    const parsed = sdk.McpUiInitializeRequestSchema.safeParse({
-      method: "ui/initialize",
-      params: initializeParams(version),
-    });
-    // `appInfo`, not `clientInfo`. Getting this wrong broke nothing locally and
-    // would have broken every app against a conformant host.
-    assert.ok(parsed.success, JSON.stringify(parsed.error && parsed.error.issues));
-  });
-
-  await ok("declares a protocol version the SDK supports", async () => {
-    const declared = /var PROTOCOL_VERSION = "([^"]+)"/.exec(BRIDGE)[1];
-    assert.ok(
-      sdk.SUPPORTED_PROTOCOL_VERSIONS.includes(declared),
-      `${declared} is not in ${JSON.stringify(sdk.SUPPORTED_PROTOCOL_VERSIONS)}`,
-    );
-  });
-
-  await ok("declares the display modes it can handle, which is a MUST", async () => {
-    const caps = initializeParams(version).appCapabilities || {};
-    // A host may not move a view into a mode absent from this list, so an empty
-    // one silently forfeits fullscreen.
-    assert.ok((caps.availableDisplayModes || []).length > 0);
-  });
-
-  await ok("sends size updates under the name the SDK listens for", async () => {
-    // A renamed notification is invisible: the frame simply never resizes.
-    assert.ok(BRIDGE.includes(sdk.SIZE_CHANGED_METHOD), sdk.SIZE_CHANGED_METHOD);
-  });
-
-  await ok("reads the tool result under the name the SDK sends", async () => {
-    assert.ok(BRIDGE.includes(sdk.TOOL_RESULT_METHOD), sdk.TOOL_RESULT_METHOD);
-    assert.ok(BRIDGE.includes(sdk.TOOL_INPUT_METHOD), sdk.TOOL_INPUT_METHOD);
-  });
-
-  console.log(`\n${passed} passed`);
-})().catch((err) => {
-  console.error(err);
-  process.exit(1);
+ok("is committed, so the Python server can serve it without a build", () => {
+  assert.ok(fs.existsSync(BUNDLE), "bridge.js is missing: run mcp_demo_server/apps/build.sh");
+  assert.ok(fs.statSync(BUNDLE).size > 100_000, "bridge.js looks unbundled");
 });
+
+ok("says it is generated, so nobody edits it by hand", () => {
+  assert.match(fs.readFileSync(BUNDLE, "utf8").slice(0, 200), /GENERATED by apps\/build\.sh/);
+});
+
+ok("exposes the surface the four app files call", () => {
+  const src = fs.readFileSync(path.join(APPS, "src", "bridge.src.js"), "utf8");
+  // A rename here is invisible until an app calls a method that is gone.
+  for (const method of ["onInit", "call", "read", "openLink", "ready"]) {
+    assert.match(src, new RegExp(`\\b${method}\\s*\\(`), `McpApp.${method} is missing`);
+  }
+});
+
+ok("is current with its source", () => {
+  // The one failure mode a committed artifact has. Rebuild into a temp file and
+  // compare: a mismatch means someone changed the source and did not run
+  // build.sh, and the server would keep serving the old client.
+  const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "mcpapp-")), "bridge.js");
+  execFileSync(
+    "npx",
+    ["--prefix", path.join(ROOT, "frontend"), "esbuild", "src/bridge.src.js",
+     "--bundle", "--format=iife", "--minify", "--target=es2020", `--outfile=${out}`,
+     "--banner:js=/* GENERATED by apps/build.sh from src/bridge.src.js. Do not edit. */"],
+    { cwd: APPS, env: { ...process.env, NODE_PATH: path.join(ROOT, "frontend", "node_modules") },
+      stdio: "pipe" },
+  );
+  assert.strictEqual(
+    fs.readFileSync(out, "utf8"),
+    fs.readFileSync(BUNDLE, "utf8"),
+    "bridge.js is stale: run mcp_demo_server/apps/build.sh and commit the result",
+  );
+});
+
+console.log(`\n${passed} passed`);
