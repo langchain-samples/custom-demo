@@ -829,6 +829,37 @@ export async function fetchMcpApp(
   }
 }
 
+/** One content block from a resource an MCP App asked the host to read. */
+export interface McpResourceContent {
+  uri: string;
+  mimeType?: string | null;
+  text?: string;
+  blob?: string;
+}
+
+/**
+ * Read a resource for an MCP App (POST /mcp/resource).
+ *
+ * The app is blocked on a JSON-RPC response while this is in flight, so a
+ * failure throws rather than resolving empty: the app needs to be told, and
+ * `mcpAppHost` turns the rejection into the JSON-RPC error the app is waiting
+ * for. That is the opposite of `fetchMcpApp`, where null is an ordinary answer.
+ */
+export async function fetchMcpResource(
+  servers: McpServerConfig[],
+  toolName: string,
+  uri: string,
+): Promise<McpResourceContent[]> {
+  const res = await fetch(`${getApiBase()}/mcp/resource`, {
+    method: "POST",
+    headers: apiHeaders(),
+    body: JSON.stringify({ servers, tool_name: toolName, uri }),
+  });
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(String(d?.error || `resources/read failed (${res.status})`));
+  return Array.isArray(d.contents) ? (d.contents as McpResourceContent[]) : [];
+}
+
 /** List Context Hub agent repos for a workspace (GET /agents). Empty on failure. */
 export async function listAgents(workspace?: string): Promise<string[]> {
   try {

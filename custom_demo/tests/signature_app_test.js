@@ -1,11 +1,17 @@
-/* Node test for the MCP App's own postMessage contract (mcp_demo_server/signature_app.html).
+/* Node test for the MCP App's own wire contract (mcp_demo_server/apps/signature.html).
  *
  * This is the one seam nothing else can reach. The signature pad is HTML the MCP
  * SERVER ships; the SPA renders it inside a sandboxed iframe, so no TypeScript
- * checks it, and vitest cannot execute a srcdoc. If the app's message names or
- * its content keys drift from what `McpElicitationCard` sends and what the
- * `collect_signature` tool's `requested_schema` asks for, nothing fails loudly:
- * the run just stays paused forever.
+ * checks it, and vitest cannot execute a srcdoc. If the app's messages or its
+ * content keys drift from what a host sends and what the `sign_document` tool's
+ * `requested_schema` asks for, nothing fails loudly: the run just stays paused
+ * forever.
+ *
+ * The harness below is a minimal MCP Apps host, because the contract under test
+ * is SEP-1865: the app opens with `ui/initialize`, is handed the paused call
+ * over `ui/notifications/tool-input` and `ui/notifications/tool-result`, and
+ * answers with a `tools/call` carrying `inputResponses`. Pinning those names
+ * here is what keeps the app renderable by any host, not only ours.
  *
  * A Node test rather than a vitest one because it needs `node:fs` and `jsdom`
  * directly, and the app's tsconfig has neither in scope (the same reason
@@ -39,15 +45,34 @@ async function ok(name, fn) {
   console.log("  ok -", name);
 }
 
+/** The key the server asks its signature question under (see server.py). */
+const KEY = "signature";
+
+/** What the host answers `ui/initialize` with. */
+function initializeResult(theme) {
+  return {
+    protocolVersion: "2026-01-26",
+    hostInfo: { name: "test-host", version: "1.0.0" },
+    hostCapabilities: { serverTools: {} },
+    hostContext: {
+      toolInfo: { tool: { name: "meridian_sign_document" } },
+      theme: theme || "light",
+      displayMode: "inline",
+      containerDimensions: { maxHeight: 640 },
+    },
+  };
+}
+
 /**
- * Load the app with its script running.
+ * Load the app with its script running, behind a stub host.
  *
  * The stubs go in through `beforeParse` because the app's script runs during
- * parsing and captures the canvas context on the way. Posts are collected off
- * the window rather than by replacing `window.parent`: jsdom aliases `parent` to
- * the window itself for a top-level document, and will not let us reassign it.
+ * parsing and opens the handshake on the way. `window.parent` is replaced so the
+ * app's messages land on the host stub rather than back on its own listener:
+ * jsdom aliases `parent` to the window itself for a top-level document, which
+ * would otherwise let the app answer its own `ui/initialize`.
  */
-function mount(dataUri) {
+function mount(dataUri, theme) {
   const posted = [];
   const draws = [];
   // What the stubbed canvas encodes to. Long enough to blow the budget when a
@@ -73,15 +98,67 @@ function mount(dataUri) {
         putImageData() {},
       });
       window.HTMLCanvasElement.prototype.toDataURL = () => uri();
-      window.addEventListener("message", (event) => {
-        const data = event.data;
-        if (data && typeof data.type === "string" && data.type.startsWith("mcp-app:")) {
-          posted.push(data);
-        }
+      Object.defineProperty(window, "parent", {
+        configurable: true,
+        value: {
+          postMessage(msg) {
+            posted.push(msg);
+            // The only thing a host must do for the app to get going: answer the
+            // handshake. Everything after it is driven by the tests.
+            if (msg.method === "ui/initialize") {
+              window.postMessage(
+                { jsonrpc: "2.0", id: msg.id, result: initializeResult(theme) },
+                "*",
+              );
+            }
+          },
+        },
       });
     },
   });
   return { dom, posted, draws, doc: dom.window.document };
+}
+
+/** Find the first message the app sent with this JSON-RPC method. */
+const sent = (posted, method) => posted.find((m) => m.method === method);
+
+/**
+ * Hand the app the paused call, the way a host does once the handshake is done.
+ *
+ * A tool that needs input returns an `InputRequiredResult` (SEP-2322), so the
+ * question arrives as an ordinary tool result rather than a message of its own.
+ */
+function ask(dom, message, schema) {
+  dom.window.postMessage(
+    {
+      jsonrpc: "2.0",
+      method: "ui/notifications/tool-input",
+      params: { arguments: { document_id: "FL-4501" } },
+    },
+    "*",
+  );
+  dom.window.postMessage(
+    {
+      jsonrpc: "2.0",
+      method: "ui/notifications/tool-result",
+      params: {
+        resultType: "input_required",
+        inputRequests: {
+          [KEY]: {
+            method: "elicitation/create",
+            params: { mode: "form", message: message || "", requestedSchema: schema || {} },
+          },
+        },
+      },
+    },
+    "*",
+  );
+}
+
+/** The answer the app sent back, as the host receives it. */
+function answered(posted) {
+  const call = posted.find((m) => m.method === "tools/call");
+  return call ? (call.params.inputResponses || {})[KEY] : undefined;
 }
 
 /** postMessage is queued, not synchronous: let the queue drain. */
@@ -128,33 +205,47 @@ function name(dom, value) {
 (async () => {
   console.log("signature app (MCP App) contract");
 
-  await ok("announces itself so the host knows to send the request", async () => {
+  await ok("opens the SEP-1865 handshake without being prompted", async () => {
     const { posted } = mount();
     await flush();
-    assert.ok(posted.some((m) => m.type === "mcp-app:ready"));
+    const hello = sent(posted, "ui/initialize");
+    assert.ok(hello, "the app never sent ui/initialize");
+    assert.strictEqual(hello.jsonrpc, "2.0");
+    assert.strictEqual(hello.params.protocolVersion, "2026-01-26");
+    // Declaring display modes is a MUST: a host may not move a View into a mode
+    // it never claimed.
+    // Spread first: these objects come from the jsdom realm, so their prototypes
+    // are not the ones deepStrictEqual compares against.
+    assert.deepStrictEqual([...hello.params.appCapabilities.availableDisplayModes], ["inline"]);
   });
 
-  await ok("asks the host for the height it needs", async () => {
+  await ok("confirms the handshake so the host may start sending", async () => {
     const { posted } = mount();
     await flush();
-    const resize = posted.find((m) => m.type === "mcp-app:resize");
-    assert.ok(resize, "no resize message");
-    assert.strictEqual(typeof resize.height, "number");
+    const done = sent(posted, "ui/notifications/initialized");
+    assert.ok(done, "the app never confirmed initialization");
+    assert.strictEqual(done.id, undefined, "a notification must not carry an id");
+  });
+
+  await ok("reports the height it needs, or the host clips it", async () => {
+    const { posted } = mount();
+    await flush();
+    const size = sent(posted, "ui/notifications/size-changed");
+    assert.ok(size, "no size-changed notification");
+    assert.strictEqual(typeof size.params.height, "number");
+    assert.strictEqual(typeof size.params.width, "number");
   });
 
   await ok("shows the server's own question once the host sends it", async () => {
     const { dom, doc } = mount();
-    dom.window.postMessage(
-      { type: "mcp-app:init", request: { message: "Signature for FL-4501, 9 pallets." } },
-      "*",
-    );
+    await flush();
+    ask(dom, "Signature for FL-4501, 9 pallets.");
     await flush();
     assert.strictEqual(doc.getElementById("msg").textContent, "Signature for FL-4501, 9 pallets.");
   });
 
   await ok("follows the host into dark mode", async () => {
-    const { dom, doc } = mount();
-    dom.window.postMessage({ type: "mcp-app:init", request: {}, theme: "dark" }, "*");
+    const { doc } = mount(undefined, "dark");
     await flush();
     assert.strictEqual(doc.documentElement.getAttribute("data-theme"), "dark");
   });
@@ -170,13 +261,23 @@ function name(dom, value) {
 
   await ok("posts back exactly the keys the tool's schema asks for", async () => {
     const { dom, doc, posted } = mount();
+    await flush();
+    ask(dom, "Sign for FL-4501.");
+    await flush();
     sign(dom);
     name(dom, "Grace Achieng");
     doc.getElementById("submit").click();
     await flush();
 
-    const submitted = posted.find((m) => m.type === "mcp-app:submit");
-    assert.ok(submitted, "nothing was submitted");
+    const call = posted.find((m) => m.method === "tools/call");
+    assert.ok(call, "nothing was submitted");
+    // Answering is a fresh call to the SAME tool with the SAME arguments, which
+    // is what SEP-2322 has a client do to resume a paused one.
+    assert.strictEqual(call.params.name, "meridian_sign_document");
+    assert.deepStrictEqual({ ...call.params.arguments }, { document_id: "FL-4501" });
+
+    const submitted = answered(posted);
+    assert.strictEqual(submitted.action, "accept");
     // These three are `SignatureCapture` on the server. A rename on either side
     // fails validation on resume, and the paused run never continues.
     assert.deepStrictEqual(Object.keys(submitted.content).sort(), [
@@ -191,6 +292,9 @@ function name(dom, value) {
 
   await ok("exports only the ink, not the whole pad", async () => {
     const { dom, doc, draws } = mount();
+    await flush();
+    ask(dom);
+    await flush();
     sign(dom);
     name(dom, "Grace Achieng");
     doc.getElementById("submit").click();
@@ -208,6 +312,9 @@ function name(dom, value) {
     // Every width encodes to 12KB here, over the 10KB budget, so the export
     // should work down the ladder instead of sending the first thing it made.
     const { dom, doc, draws, posted } = mount("data:image/png;base64," + "A".repeat(12000));
+    await flush();
+    ask(dom);
+    await flush();
     signWide(dom);
     name(dom, "Grace Achieng");
     doc.getElementById("submit").click();
@@ -224,11 +331,14 @@ function name(dom, value) {
     assert.ok(widths[widths.length - 1] < widths[0], `never shrank: ${widths.join(", ")}`);
     // Over budget at every size, it still sends one rather than nothing: a
     // rough signature beats a document with no signature on it.
-    assert.ok(posted.find((m) => m.type === "mcp-app:submit").content.signature);
+    assert.ok(answered(posted).content.signature);
   });
 
   await ok("sends the first encoding when it already fits", async () => {
     const { dom, doc, draws } = mount();
+    await flush();
+    ask(dom);
+    await flush();
     signWide(dom);
     name(dom, "Grace Achieng");
     doc.getElementById("submit").click();
@@ -236,11 +346,14 @@ function name(dom, value) {
     assert.strictEqual(draws.length, 1, "a signature under budget should not be re-encoded");
   });
 
-  await ok("lets the recipient back out, which the host turns into a cancel", async () => {
-    const { doc, posted } = mount();
+  await ok("lets the recipient back out, as a cancel on the same question", async () => {
+    const { dom, doc, posted } = mount();
+    await flush();
+    ask(dom);
+    await flush();
     doc.getElementById("cancel").click();
     await flush();
-    assert.ok(posted.some((m) => m.type === "mcp-app:cancel"));
+    assert.deepStrictEqual({ ...answered(posted) }, { action: "cancel" });
   });
 
   await ok("clears a stroke, so a bad signature can be redrawn rather than sent", async () => {

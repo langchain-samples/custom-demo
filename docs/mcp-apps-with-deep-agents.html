@@ -645,15 +645,69 @@ answer = await ctx.elicit("Set the target allocation", response_type=Allocation)
   ? &lt;iframe srcDoc={app.html} sandbox=<span class="s">"allow-scripts"</span> /&gt;   <span class="c">// scripts only. never allow-same-origin</span>
   : &lt;SchemaForm schema={first.requested_schema} onSubmit={accept} /&gt;;</code></pre>
 
-<p class="filename">the postMessage contract - four messages, that is the whole protocol</p>
-<pre><code><span class="c">// host → app</span>
-{ type: <span class="s">"mcp-app:init"</span>, request, theme, accent }
+<p>
+  The conversation with that iframe is not yours to invent. <strong>SEP-1865</strong>, the MCP Apps
+  extension, went final on 2026-01-26 and fixes it: JSON-RPC 2.0 over <code>postMessage</code>, with
+  the app acting as an MCP client and the host as the server it connects to. Write your own message
+  names and your app renders in exactly one host, yours.
+</p>
+
+<p class="filename">the SEP-1865 handshake, as the app sees it</p>
+<pre><code><span class="c">// app → host, on load</span>
+{ jsonrpc: <span class="s">"2.0"</span>, id: 1, method: <span class="s">"ui/initialize"</span>,
+  params: { protocolVersion: <span class="s">"2026-01-26"</span>, appCapabilities: {…} } }
+
+<span class="c">// host → app: theme, sizing, and which tool is paused</span>
+{ jsonrpc: <span class="s">"2.0"</span>, id: 1, result: { hostContext: { theme, styles, toolInfo } } }
 
 <span class="c">// app → host</span>
-{ type: <span class="s">"mcp-app:ready"</span> }                <span class="c">// once, on load</span>
-{ type: <span class="s">"mcp-app:resize"</span>, height }        <span class="c">// or it gets clipped</span>
-{ type: <span class="s">"mcp-app:submit"</span>, content }       <span class="c">// must match requested_schema</span>
-{ type: <span class="s">"mcp-app:cancel"</span> }</code></pre>
+{ method: <span class="s">"ui/notifications/initialized"</span> }
+{ method: <span class="s">"ui/notifications/size-changed"</span>, params: { width, height } }
+
+<span class="c">// host → app: the call it is rendering</span>
+{ method: <span class="s">"ui/notifications/tool-input"</span>,  params: { arguments } }
+{ method: <span class="s">"ui/notifications/tool-result"</span>, params: {…} }</code></pre>
+
+<p>
+  Which leaves the interesting question: the app has to send an <em>answer</em>, and SEP-1865 has no
+  elicitation message. Not an oversight so much as a different starting assumption. An app there
+  renders a finished tool result, and when it needs to do something it calls a tool.
+</p>
+
+<p>
+  That turns out to be exactly what a paused call already is. Under <strong>SEP-2322</strong> a tool
+  that needs input does not hold a socket open, it <em>returns</em>: an
+  <code>InputRequiredResult</code> naming what it wants, which the client answers by calling the same
+  tool again with <code>inputResponses</code> attached. So the question is an ordinary tool result,
+  and the answer is an ordinary tool call. Compose the two SEPs and there is nothing left to invent.
+</p>
+
+<p class="filename">the question arrives as a result; the answer goes back as a call</p>
+<pre><code><span class="c">// host → app  (ui/notifications/tool-result)</span>
+{ resultType: <span class="s">"input_required"</span>,
+  inputRequests: { rebalance: { method: <span class="s">"elicitation/create"</span>,
+                                params: { message, requestedSchema } } } }
+
+<span class="c">// app → host  (a plain tools/call, which the host proxies onward)</span>
+{ method: <span class="s">"tools/call"</span>,
+  params: { name: <span class="s">"meridian_propose_rebalance"</span>, arguments,
+            inputResponses: { rebalance: { action: <span class="s">"accept"</span>, content } } } }</code></pre>
+
+<p>
+  For us the host proxies that call by resuming the LangGraph interrupt, because the paused call
+  belongs to the agent's run rather than to the browser. That is still ordinary host behaviour: the
+  spec has a host receive a view's <code>tools/call</code> and forward it to the server, and our
+  route there happens to run through the agent.
+</p>
+
+<p>
+  One deviation, and it is worth naming rather than glossing. SEP-1865 says a <em>web</em> host MUST
+  wrap the view in a different-origin sandbox proxy, so a view can hold
+  <code>allow-same-origin</code> without holding the host's origin. This SPA is served from one
+  origin and has nowhere to put a second, so it renders the view directly and never grants
+  <code>allow-same-origin</code> at all. Stricter than the proxy it replaces, not looser, but the
+  cost is real: an app that needs same-origin will not run here.
+</p>
 
 <div class="col">
 <p>

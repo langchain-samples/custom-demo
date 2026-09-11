@@ -110,8 +110,9 @@ mismatch looked like a bug, it is not one. Leave it.
 **The agent** (`agent.py`, built by `deepagents.create_deep_agent`):
 - **Tools come from two independent sources.** deepagents *always* installs its own - the
   filesystem set (`ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `delete`) and
-  `task` - because `FilesystemMiddleware` is unconditional and a default general-purpose
-  subagent is auto-added. There is no `write_todos`: deepagents only installs langchain's
+  `task` - because `FilesystemMiddleware` is unconditional and there is always at least one
+  subagent (`_subagent_specs`, which names `general-purpose` itself rather than letting
+  deepagents append its own). There is no `write_todos`: deepagents only installs langchain's
   `TodoListMiddleware` in its OpenAI-Codex profile, which `create_deep_agent` does not use.
   `execute` is in that set as well, because the agent's default backend is a code-execution
   sandbox VM (see **Code execution** below). On top of those sits **our catalogue**
@@ -220,7 +221,7 @@ model with per-criterion feedback until the grader is satisfied. Three things ma
 | id | group | notes |
 |---|---|---|
 | `push_widget` | Dashboard | `always_on` - the dashboard depends on it |
-| `draft_email` | Comms | simulated draft, rendered as a chat card |
+| `draft_email` | Comms | HITL: simulated draft, then pauses via `interrupt()` for the user's approval, rendered as a chat card |
 | `web_search` | Research | REAL results via the Tavily API; returns an error (never invented results) if `TAVILY_API_KEY` is unset |
 | `ask_user` | Interaction | HITL: pauses via `interrupt()` to ask the user a multiple-choice question (model supplies the `options`), resumes with the option they pick (renders a question card) |
 
@@ -239,6 +240,16 @@ model-call time (`request.override(tools=…)` - the same mechanism deepagents u
 - `[]` means "every optional tool off" and is NOT the same as unset. Three layers must agree
   (`parse_enabled`, `resolveRunContext`, the PATCH) or turning everything off silently
   restores the defaults.
+
+`ToolSelection` and the `run_limit` caps govern the MAIN agent only: neither reaches inside a
+`task` subagent, whose tools are fixed when the graph is built. What bounds a subagent is its
+own `tools` list, which `runtime/agent.py:_subagent_specs` stamps on every spec from
+`subagent_tools()`, the catalogue minus its `hitl` rows. A spec that omitted the key would
+inherit the main agent's whole set, `ask_user` included, and a subagent that pauses hangs the
+run (see **Human-in-the-loop** below), so the key is stamped centrally rather than written into
+each literal. `general-purpose` is declared in that same list because deepagents appends its
+own, built from the main agent's tools, whenever the caller names none; declaring it replaces
+that copy and re-declares `skills`, which an inline spec only mounts if it asks for.
 
 `draft_email` is the one simulated tool: `simulate()` in `tools/simulated.py` makes a single
 fast-LLM call that writes customer-tailored content from `context.customer`/`industry`. Add
@@ -298,10 +309,45 @@ drawn signature, which no schema-generated form can collect. While the run is pa
 POSTs `/mcp/app` with the paused `tool_name`, the deployment resolves the tool's `resourceUri`
 and reads the resource over MCP, and the card renders that HTML in an iframe **sandboxed to
 `allow-scripts` only** - no `allow-same-origin`, so server-authored HTML cannot touch our origin,
-cookies or storage. It talks to us solely over `postMessage`:
+cookies or storage.
 
-    in   mcp-app:init    {request, theme, accent}
-    out  mcp-app:ready | mcp-app:resize {height} | mcp-app:submit {content} | mcp-app:cancel
+The conversation with it is **SEP-1865**, JSON-RPC 2.0 over `postMessage`, with the app as MCP
+client and the host as its server. Guest half in `mcp_demo_server/apps/bridge.js`, host half in
+`frontend/src/lib/mcpAppHost.ts`:
+
+    app  -> host   ui/initialize, then ui/notifications/initialized
+    host -> app    McpUiInitializeResult (theme, styles, toolInfo, containerDimensions)
+    host -> app    ui/notifications/tool-input, then ui/notifications/tool-result
+    app  -> host   ui/notifications/size-changed
+    app  -> host   tools/call            the answer
+    app  -> host   resources/read        proxied via POST /mcp/resource
+    app  -> host   ui/open-link, ui/request-display-mode, ping
+    host -> app    ui/resource-teardown  before the frame goes
+
+`ui/message` and `ui/update-model-context` are answered with a JSON-RPC **error**
+saying why: this frame renders during a PAUSED tool call, and nothing can enter the
+conversation until the pause resolves. Accepting and dropping them would leave an app
+believing it had spoken. Both become available if an app is ever rendered for a
+*completed* call.
+
+**App-only tools are kept from the model.** `_meta.ui.visibility: ["app"]` means a tool
+its own App may call and the agent may not, and the host rule is a MUST, so
+`model_visible` filters them in `_discover`. Excalidraw's server
+(`https://mcp.excalidraw.com/mcp`, no auth) is the live case: `create_view` is the
+model's, `save_checkpoint` / `read_checkpoint` / `export_to_excalidraw` are the app's.
+It also sends `_meta.ui.resourceUri` and the deprecated flat `_meta["ui/resourceUri"]`
+together, which is why `app_uri` reads both and prefers the former.
+
+There is no elicitation message in SEP-1865, and none is needed. SEP-2322 makes a pause an
+ordinary *result* (`InputRequiredResult`) answered by an ordinary *call* to the same tool with
+`inputResponses`, so the question rides `ui/notifications/tool-result` and the answer rides
+`tools/call`. Our host proxies that call by resuming the LangGraph interrupt. **Do not add a
+message of our own here**: an app that needs one stops being renderable by any other host, which
+is the entire point of predeclaring a `ui://` resource.
+
+One deviation, deliberate: SEP-1865 says a web host MUST put a different-origin sandbox proxy in
+front of the view. We serve from one origin, so we render the view directly and never grant
+`allow-same-origin`. Stricter than the proxy, but an app requiring same-origin will not run here.
 
 The signed result is **multimodal**, which is the other half of making an App useful. The tool
 returns a text block (the record, including a `signature_url`) AND an image block of the drawn
@@ -355,6 +401,14 @@ Two things to know before touching it:
   output and fall straight through to the answered interrupt.
 - The run body uses `stream_mode: ["messages", "updates"]`, and a resume sends `command`
   **instead of** `input` - sending both duplicates the user turn.
+
+**Only the main agent may pause.** `interrupt()` suspends the whole graph and its resume value is
+delivered to the top-level turn, and `ChatPanel` renders the card for that turn alone, so a
+subagent has no route to the user: it hangs the run on a question nobody is asked and the
+orchestration above it never resumes, leaving whatever narration preceded the pause as the final
+answer. Rows that pause carry `hitl=True` in the catalogue and `subagent_tools()` withholds them,
+which is the whole enforcement, so a new pausing capability needs that flag on its row and
+nothing else.
 
 **Trace project** is `<client>-corebot-demo` (`frontend/src/lib/trace.ts`, mirrored by
 `prepare_assistant`). Suffixed so demo traces are obvious in a shared workspace and can't
@@ -592,10 +646,6 @@ Implementation notes, each of which is load-bearing:
 
 ## 5. Known rough edges (verified, not speculation)
 
-- **`ToolSelection` does not reach inside `task`.** The auto-added general-purpose subagent gets
-  its own middleware list that excludes ours, so an enabled `task` hands the subagent the
-  unfiltered tool set. Documented, not closed - closing it means hand-reconstructing deepagents'
-  `gp_middleware` and coupling to its internals.
 - **Stored Hub prompts never learn about newly enabled tools** (they are written once at setup).
   The runtime `AVAILABLE CAPABILITIES` note appended by `_hub_system_prompt` is the mitigation.
 - **Google Fonts is the app's first third-party asset** and there is no CSP anywhere. Mitigated

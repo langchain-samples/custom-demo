@@ -108,6 +108,104 @@ def test_app_uri_reads_the_mcp_apps_metadata():
     assert m.app_uri(tool) == "ui://a/b.html"
 
 
+def test_app_uri_reads_the_deprecated_flat_key():
+    """A server on the extension's earlier spelling still renders its app.
+
+    SEP-1865 deprecates `_meta["ui/resourceUri"]` but keeps it until GA. Ignoring
+    it would show a generic form for a server that does ship a UI, with nothing
+    anywhere saying why.
+    """
+    tool = SimpleNamespace(
+        metadata={"mcp": {"tool": {"_meta": {"ui/resourceUri": "ui://a/b.html"}}}}
+    )
+    assert m.app_uri(tool) == "ui://a/b.html"
+
+
+def _tool(name, visibility=None):
+    """A discovered tool carrying the MCP provenance the adapter attaches."""
+    ui = {} if visibility is None else {"visibility": visibility}
+    return SimpleNamespace(name=name, metadata={"mcp": {"tool": {"_meta": {"ui": ui}}}})
+
+
+@pytest.mark.parametrize(
+    ("visibility", "seen"),
+    [
+        (None, True),
+        (["model", "app"], True),
+        (["model"], True),
+        # The MUST: a tool the server published to its App alone.
+        (["app"], False),
+        # Junk is not a reason to hide a working tool.
+        ("model", True),
+    ],
+)
+def test_model_visible_hides_only_the_app_only_tools(visibility, seen):
+    """SEP-1865 forbids putting an app-only tool in the agent's tool list.
+
+    Excalidraw is the live case: `create_view` is for the model, while
+    `save_checkpoint` and friends are `visibility: ["app"]`. Handing those to the
+    model invites it to call a tool meant for the App's own bookkeeping.
+    """
+    assert m.model_visible(_tool("t", visibility)) is seen
+
+
+def test_read_app_resource_shapes_text_and_binary_blocks_for_the_wire(monkeypatch):
+    """An app gets `resources/read` back in the shape the spec puts on the wire.
+
+    The app is blocked on a JSON-RPC response, and `mcpAppHost` forwards whatever
+    is here straight into it, so the key names matter: camelCase `mimeType`, and
+    `text` or `blob` but never both.
+    """
+
+    async def fake_read(servers, tool_name, uri):
+        return [
+            SimpleNamespace(
+                uri="tips://a", mime_type="application/json", text='{"k":1}', blob=None
+            ),
+            SimpleNamespace(uri="tips://b", mime_type="image/png", text=None, blob="QUJD"),
+        ]
+
+    monkeypatch.setattr(m, "_read_uri", fake_read)
+    got = asyncio.run(m.read_app_resource((), "srv_tool", "tips://a"))
+
+    assert got == [
+        {"uri": "tips://a", "mimeType": "application/json", "text": '{"k":1}'},
+        {"uri": "tips://b", "mimeType": "image/png", "blob": "QUJD"},
+    ]
+
+
+def test_read_app_resource_raises_rather_than_returning_nothing(monkeypatch):
+    """A failed read must reach the app as a reason, not as an empty render.
+
+    `read_app` returns None on failure because the caller falls back to a
+    generated form. There is no fallback for a resource an app asked for: it is
+    holding a promise open, so the error has to propagate.
+    """
+
+    async def boom(servers, tool_name, uri):
+        raise RuntimeError("that server refused the read")
+
+    monkeypatch.setattr(m, "_read_uri", boom)
+    with pytest.raises(RuntimeError, match="refused the read"):
+        asyncio.run(m.read_app_resource((), "srv_tool", "tips://a"))
+
+
+def test_app_uri_prefers_the_current_key_when_a_server_sends_both():
+    tool = SimpleNamespace(
+        metadata={
+            "mcp": {
+                "tool": {
+                    "_meta": {
+                        "ui": {"resourceUri": "ui://a/new.html"},
+                        "ui/resourceUri": "ui://a/old.html",
+                    }
+                }
+            }
+        }
+    )
+    assert m.app_uri(tool) == "ui://a/new.html"
+
+
 @pytest.mark.parametrize(
     "metadata",
     [

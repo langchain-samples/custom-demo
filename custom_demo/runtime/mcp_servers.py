@@ -227,14 +227,38 @@ async def load_tools(servers: tuple[McpServer, ...], *, refresh: bool = False) -
 
 
 async def _discover(servers: tuple[McpServer, ...], *, refresh: bool) -> list[Any]:
-    """One real discovery pass: connect, list, adapt."""
+    """One real discovery pass: connect, list, adapt, drop the app-only tools."""
     # Local like `build_group`'s: keeps the mcp client stack off graph load.
     from langchain.mcp import MCPAdapter  # noqa: PLC0415
 
     async with MCPAdapter(build_group(servers)) as adapter:
         # `use` reads the client-side cache when the server's TTL hint says it is
         # still fresh; `refresh` is what the SPA's "reload tools" button sends.
-        return await adapter.list_tools(cache_mode="refresh" if refresh else "use")
+        tools = await adapter.list_tools(cache_mode="refresh" if refresh else "use")
+
+    return [t for t in tools if model_visible(t)]
+
+
+def model_visible(tool: Any) -> bool:
+    """Whether the agent is allowed to see this tool.
+
+    MCP Apps (SEP-1865) lets a server mark a tool `_meta.ui.visibility: ["app"]`,
+    meaning only its own App may call it, and the rule for a host is a MUST: a
+    tool whose visibility omits `"model"` is kept out of the agent's tool list.
+    Excalidraw's server is the worked example, publishing `create_view` to the
+    model and `save_checkpoint` / `read_checkpoint` / `export_to_excalidraw` to
+    the app alone.
+
+    Defaults to visible. Omitting the key means `["model", "app"]`, which is
+    every ordinary tool on every server that has never heard of the extension.
+    """
+    meta = (tool.metadata or {}).get("mcp") or {}
+    ui = (((meta.get("tool") or {}).get("_meta") or {}).get("ui")) or {}
+    visibility = ui.get("visibility")
+    if not isinstance(visibility, list):
+        return True
+
+    return "model" in visibility
 
 
 def invalidate(servers: tuple[McpServer, ...] | None = None) -> None:
@@ -283,12 +307,18 @@ async def probe(servers: tuple[McpServer, ...]) -> dict[str, Any]:
 def app_uri(tool: Any) -> str | None:
     """The `ui://` resource an MCP App tool renders, or None for an ordinary tool.
 
-    The MCP Apps extension stamps `_meta.ui.resourceUri` on the tool, and the
-    adapter carries the tool's MCP provenance through on `metadata["mcp"]`.
+    MCP Apps (SEP-1865) stamps `_meta.ui.resourceUri` on the tool, and the adapter
+    carries the tool's MCP provenance through on `metadata["mcp"]`.
+
+    The flat `_meta["ui/resourceUri"]` is the extension's earlier spelling. The
+    spec deprecates it but keeps it until GA, so a server built against a 2025
+    SDK still sends it, and reading only the nested one would render that
+    server's app as a generic form with no indication why.
     """
     meta = (tool.metadata or {}).get("mcp") or {}
-    ui = ((meta.get("tool") or {}).get("_meta") or {}).get("ui") or {}
-    uri = ui.get("resourceUri")
+    tool_meta = (meta.get("tool") or {}).get("_meta") or {}
+    ui = tool_meta.get("ui") or {}
+    uri = ui.get("resourceUri") or tool_meta.get("ui/resourceUri")
     return str(uri) if isinstance(uri, str) and uri.startswith("ui://") else None
 
 
@@ -309,11 +339,7 @@ async def read_app(servers: tuple[McpServer, ...], tool_name: str) -> dict[str, 
     if uri is None:
         return None
 
-    group = build_group(servers)
-    async with group:
-        route = await group.resolve_tool(tool_name)
-        result = await route.client.read_resource(uri)
-
+    result = await _read_uri(servers, tool_name, uri)
     for item in result:
         text = getattr(item, "text", None)
         if isinstance(text, str) and text.strip():
@@ -328,6 +354,52 @@ async def read_app(servers: tuple[McpServer, ...], tool_name: str) -> dict[str, 
     # caller renders the generic form. Say so rather than returning a blank page.
     _log(f"{tool_name} declares {uri} but the resource carried no text")
     return None
+
+
+async def _read_uri(servers: tuple[McpServer, ...], tool_name: str, uri: str) -> list[Any]:
+    """Read one resource from the server `tool_name` came from.
+
+    Resolving through the group rather than picking a member is what binds the
+    read to that one server: an app may read its own server's resources and
+    nothing else, which is the boundary SEP-1865 draws for `resources/read`.
+    """
+    group = build_group(servers)
+    async with group:
+        route = await group.resolve_tool(tool_name)
+        return await route.client.read_resource(uri)
+
+
+async def read_app_resource(
+    servers: tuple[McpServer, ...], tool_name: str, uri: str
+) -> list[dict[str, Any]]:
+    """Contents of `uri`, for an MCP App that asked the host to read it.
+
+    An app runs in an origin-less iframe and cannot fetch anything itself, so
+    `resources/read` is the only way it can reach its own server's data. The
+    reference app uses it to load notes; ours do not need it yet, but a host that
+    refuses it cannot render a third-party app that does.
+
+    Returns one entry per content block, text or base64 blob, in the JSON shape
+    `resources/read` puts on the wire. Raises rather than returning empty if the
+    read fails: the app is waiting on a JSON-RPC response and a silent empty list
+    would render as an app with no data and no reason why.
+    """
+    out: list[dict[str, Any]] = []
+    for item in await _read_uri(servers, tool_name, uri):
+        entry: dict[str, Any] = {
+            "uri": str(getattr(item, "uri", uri)),
+            "mimeType": getattr(item, "mime_type", None),
+        }
+        text = getattr(item, "text", None)
+        blob = getattr(item, "blob", None)
+        if isinstance(text, str):
+            entry["text"] = text
+        elif blob is not None:
+            entry["blob"] = blob if isinstance(blob, str) else str(blob)
+
+        out.append(entry)
+
+    return out
 
 
 def _log(message: str) -> None:
