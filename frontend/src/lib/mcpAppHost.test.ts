@@ -40,6 +40,8 @@ function host(
     onMessage?: (text: string) => void;
     onModelContext?: (c: Record<string, unknown>) => void;
     toolInputSchema?: Record<string, unknown>;
+    displayModes?: string[];
+    onDisplayMode?: (mode: string) => void;
   } = {},
 ) {
   const target = view();
@@ -50,6 +52,8 @@ function host(
     toolArguments: { account_id: "MW-10241", document: "IPS amendment" },
     toolResult: RESULT,
     toolInputSchema: overrides.toolInputSchema,
+    displayModes: overrides.displayModes,
+    onDisplayMode: overrides.onDisplayMode,
     onToolCall,
     onHeight,
     onReadResource: overrides.onReadResource,
@@ -218,17 +222,63 @@ describe("the rest of the surface", () => {
     open.mockRestore();
   });
 
-  it("returns the display mode it actually granted", () => {
+  it("declines a mode this surface cannot do, and says which one it kept", () => {
     const { target, from } = host();
+    from({ jsonrpc: "2.0", id: 4, method: "ui/request-display-mode", params: { mode: "pip" } });
+    // Returning the RESULTING mode is a MUST, which is what lets a View rely on
+    // the answer instead of assuming it got what it asked for.
+    expect(reply(target.sent, 4)?.result).toEqual({ mode: "inline" });
+  });
+
+  it("grants fullscreen when both sides can do it", () => {
+    const onDisplayMode = vi.fn();
+    const { target, from } = host({ displayModes: ["inline", "fullscreen"], onDisplayMode });
     from({
       jsonrpc: "2.0",
-      id: 4,
-      method: "ui/request-display-mode",
-      params: { mode: "fullscreen" },
+      id: 1,
+      method: "ui/initialize",
+      params: { appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] } },
     });
-    // The card has room for inline only, and the spec wants the resulting mode
-    // returned whether or not it changed.
-    expect(reply(target.sent, 4)?.result).toEqual({ mode: "inline" });
+    from({ jsonrpc: "2.0", id: 5, method: "ui/request-display-mode", params: { mode: "fullscreen" } });
+
+    expect(reply(target.sent, 5)?.result).toEqual({ mode: "fullscreen" });
+    expect(onDisplayMode).toHaveBeenCalledWith("fullscreen");
+  });
+
+  it("refuses a mode the View never declared it could handle", () => {
+    const onDisplayMode = vi.fn();
+    const { target, from } = host({ displayModes: ["inline", "fullscreen"], onDisplayMode });
+    // A host MUST NOT move a View into a mode absent from its capabilities,
+    // however willing the host is.
+    from({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "ui/initialize",
+      params: { appCapabilities: { availableDisplayModes: ["inline"] } },
+    });
+    from({ jsonrpc: "2.0", id: 6, method: "ui/request-display-mode", params: { mode: "fullscreen" } });
+
+    expect(reply(target.sent, 6)?.result).toEqual({ mode: "inline" });
+    expect(onDisplayMode).not.toHaveBeenCalled();
+  });
+
+  it("advertises every mode the surface supports", () => {
+    const { target, from } = host({ displayModes: ["inline", "fullscreen"] });
+    from({ jsonrpc: "2.0", id: 1, method: "ui/initialize", params: {} });
+    const got = reply(target.sent, 1)?.result as Record<string, unknown> | undefined;
+    const ctx = got?.hostContext as Record<string, unknown>;
+    // A View MUST check this before asking, so understating it is what makes a
+    // button like Excalidraw's Edit sit there doing nothing.
+    expect(ctx.availableDisplayModes).toEqual(["inline", "fullscreen"]);
+  });
+
+  it("notifies the View when the HOST changes the mode", () => {
+    const { bridge, target } = host({ displayModes: ["inline", "fullscreen"] });
+    bridge.setDisplayMode(target.win, "fullscreen");
+    const note = sent(target.sent, "ui/notifications/host-context-changed");
+    // Pressing Escape is the host's decision, and the app has to hear about it
+    // to put its own chrome back.
+    expect((note?.params as { displayMode: string }).displayMode).toBe("fullscreen");
   });
 
   it("answers an unsupported method rather than dropping it", () => {

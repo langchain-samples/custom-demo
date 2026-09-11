@@ -86,6 +86,15 @@ export interface McpAppHostConfig {
   onMessage?: (text: string) => void;
   /** Replace the context the View contributes to the next turn. */
   onModelContext?: (context: Record<string, unknown>) => void;
+  /**
+   * Display modes this surface can actually put the View into.
+   *
+   * Advertised to the View, and the ceiling on what a request can be granted.
+   * Defaults to inline only, which is what a card with a fixed height can do.
+   */
+  displayModes?: string[];
+  /** The View got a new display mode. Move it, then the host notifies it. */
+  onDisplayMode?: (mode: string) => void;
 }
 
 export interface McpAppHost {
@@ -93,6 +102,12 @@ export interface McpAppHost {
   handleMessage: (event: MessageEvent, view: Window | null) => void;
   /** Ask the View to shut down before the frame is dropped. */
   teardown: (view: Window | null, reason: string) => void;
+  /**
+   * Tell the View its display mode changed, when the HOST is the one changing
+   * it (a person pressing Escape out of fullscreen, say). The View's own
+   * requests are answered inline and notified for free.
+   */
+  setDisplayMode: (view: Window | null, mode: string) => void;
 }
 
 /**
@@ -135,6 +150,13 @@ function themeVariables(): Record<string, string> {
 
 /** An MCP Apps host bound to one tool call. */
 export function createMcpAppHost(config: McpAppHostConfig): McpAppHost {
+  /** What this surface can do. */
+  const supported = config.displayModes ?? ["inline"];
+  /** What the View said IT can do, from `ui/initialize`. Null until it speaks. */
+  let appModes: string[] | null = null;
+  /** Where the View is now. */
+  let mode = supported.includes("inline") ? "inline" : supported[0];
+
 
   const post = (view: Window | null, message: Record<string, unknown>) => {
     view?.postMessage({ jsonrpc: "2.0", ...message }, "*");
@@ -177,8 +199,8 @@ export function createMcpAppHost(config: McpAppHostConfig): McpAppHost {
       },
       theme: document.documentElement.classList.contains("dark") ? "dark" : "light",
       styles: { variables: themeVariables() },
-      displayMode: "inline",
-      availableDisplayModes: ["inline"],
+      displayMode: mode,
+      availableDisplayModes: supported,
       // Flexible height: the View decides, up to a ceiling, and tells us through
       // `ui/notifications/size-changed`.
       containerDimensions: { maxHeight: 640 },
@@ -245,9 +267,17 @@ export function createMcpAppHost(config: McpAppHostConfig): McpAppHost {
     }
 
     switch (msg.method) {
-      case "ui/initialize":
+      case "ui/initialize": {
+        // The View's own capabilities cap what we may ever switch it to: a host
+        // MUST NOT move a View into a mode it never claimed.
+        const caps = params.appCapabilities as
+          | { availableDisplayModes?: unknown }
+          | undefined;
+        const declared = caps?.availableDisplayModes;
+        appModes = Array.isArray(declared) ? declared.map(String) : null;
         reply(view, msg.id, initializeResult());
         return;
+      }
       case "tools/call":
         onToolsCall(view, msg.id, params);
         return;
@@ -264,11 +294,24 @@ export function createMcpAppHost(config: McpAppHostConfig): McpAppHost {
         reply(view, msg.id, {});
         return;
       }
-      case "ui/request-display-mode":
-        // Inline is the only mode this card has room for, and the spec wants the
-        // resulting mode returned whether or not it changed.
-        reply(view, msg.id, { mode: "inline" });
+      case "ui/request-display-mode": {
+        const wanted = String(params.mode ?? "");
+        // Grantable only if BOTH sides can do it. `appModes` being null means
+        // the View declared nothing, which the spec lets a host decline; we
+        // allow it, because a View that asks for a mode is claiming it can
+        // handle the mode it asked for.
+        const allowed =
+          supported.includes(wanted) && (appModes === null || appModes.includes(wanted));
+        if (allowed && wanted !== mode) {
+          mode = wanted;
+          config.onDisplayMode?.(mode);
+        }
+
+        // The RESULTING mode either way, which is a MUST, and is why a View can
+        // rely on the answer instead of assuming it got what it asked for.
+        reply(view, msg.id, { mode });
         return;
+      }
       case "resources/read": {
         const uri = String(params.uri ?? "");
         if (!config.onReadResource) {
@@ -333,6 +376,13 @@ export function createMcpAppHost(config: McpAppHostConfig): McpAppHost {
     }
   };
 
+  const setDisplayMode = (view: Window | null, next: string) => {
+    if (!supported.includes(next) || next === mode) return;
+    mode = next;
+    config.onDisplayMode?.(mode);
+    notify(view, "ui/notifications/host-context-changed", { displayMode: mode });
+  };
+
   const teardown = (view: Window | null, reason: string) => {
     // A request, not a notification: the spec has the host wait for the View to
     // acknowledge so it can save what the person typed. We do not block the
@@ -340,5 +390,5 @@ export function createMcpAppHost(config: McpAppHostConfig): McpAppHost {
     post(view, { id: `teardown-${Date.now()}`, method: "ui/resource-teardown", params: { reason } });
   };
 
-  return { handleMessage, teardown };
+  return { handleMessage, teardown, setDisplayMode };
 }

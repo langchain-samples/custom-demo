@@ -14,8 +14,8 @@
  * the server's HTML has no route to this page's origin, cookies or storage. The
  * conversation with it is SEP-1865, in `lib/mcpAppHost.ts`.
  */
-import { useEffect, useRef, useState } from "react";
-import { IconApps } from "@tabler/icons-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { IconApps, IconX } from "@tabler/icons-react";
 import {
   callMcpAppTool,
   fetchMcpApp,
@@ -35,7 +35,26 @@ export interface McpAppCardProps {
   servers: McpServerConfig[];
 }
 
-/** The app's own frame, once its HTML has been read. */
+/**
+ * The tool's own name, without the `{server}_` prefix.
+ *
+ * That prefix is ours, added by the ClientGroup so a remote `search` cannot
+ * collide with our own. The person reading the card cares which tool ran, not
+ * how we avoided a name collision.
+ */
+function toolLabel(toolName: string): string {
+  return toolName.includes("_") ? toolName.split("_").slice(1).join("_") : toolName;
+}
+
+/**
+ * The app's own frame, once its HTML has been read.
+ *
+ * Fullscreen is a CSS change on a wrapper that is ALREADY in the tree, never a
+ * move. Re-parenting the iframe (into a portal, say) reloads the document and
+ * throws away whatever the person had done in it, which for a drawing app is
+ * the whole of their work. So the element never moves and the tree shape never
+ * changes: the exit bar is always rendered and merely `hidden` when inline.
+ */
 function AppFrame({
   toolName,
   toolArguments,
@@ -45,39 +64,84 @@ function AppFrame({
   inputSchema,
 }: McpAppCardProps & { html: string; inputSchema?: Record<string, unknown> }) {
   const ref = useRef<HTMLIFrameElement | null>(null);
+  const host = useRef<ReturnType<typeof createMcpAppHost> | null>(null);
   const [height, setHeight] = useState(320);
+  const [mode, setMode] = useState("inline");
 
   useEffect(() => {
-    const host = createMcpAppHost({
+    host.current = createMcpAppHost({
       toolName,
       toolArguments,
       toolResult,
       toolInputSchema: inputSchema,
-      // Clamped here rather than in the host: the ceiling is this card's layout,
-      // and it is the same number the host advertises as maxHeight.
+      // Clamped here rather than in the host: the ceiling is this card's
+      // layout, and it is the same number the host advertises as maxHeight.
       onHeight: (h) => setHeight(Math.min(Math.max(h, 160), 640)),
       onToolCall: (name, args) => callMcpAppTool(servers, toolName, name, args),
       onReadResource: (uri) => fetchMcpResource(servers, toolName, uri),
+      // Excalidraw's Edit button asks for exactly this. Declining it, which is
+      // all a host advertising inline-only can do, is why that button did
+      // nothing.
+      displayModes: ["inline", "fullscreen"],
+      // `setMode` is stable, so granting a mode never rebuilds the host and so
+      // never reloads the app.
+      onDisplayMode: setMode,
     });
     const view = () => ref.current?.contentWindow ?? null;
-    const onMessage = (event: MessageEvent) => host.handleMessage(event, view());
+    const onMessage = (event: MessageEvent) => host.current?.handleMessage(event, view());
     window.addEventListener("message", onMessage);
     return () => {
       window.removeEventListener("message", onMessage);
-      host.teardown(view(), "The app was closed.");
+      host.current?.teardown(view(), "The app was closed.");
+      host.current = null;
     };
   }, [toolName, toolArguments, toolResult, servers, inputSchema]);
 
+  /** Leave fullscreen, and tell the app so it can put its own chrome back. */
+  const collapse = useCallback(() => {
+    host.current?.setDisplayMode(ref.current?.contentWindow ?? null, "inline");
+    setMode("inline");
+  }, []);
+
+  useEffect(() => {
+    if (mode !== "fullscreen") return;
+    // Escape is what a person reaches for, and the app cannot hear the key once
+    // focus has left its frame.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") collapse();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mode, collapse]);
+
+  const full = mode === "fullscreen";
   return (
-    <iframe
-      ref={ref}
-      title={`MCP app for ${toolName}`}
-      srcDoc={html}
-      // See the note above: allow-same-origin must never be added here.
-      sandbox="allow-scripts"
-      className="w-full rounded-lg border border-border bg-background"
-      style={{ height }}
-    />
+    <div className={full ? "fixed inset-0 z-50 flex flex-col gap-2 bg-background p-3" : "contents"}>
+      <div hidden={!full} className="flex items-center gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          {toolLabel(toolName)}
+        </span>
+        <span className="flex-1" />
+        <button
+          type="button"
+          onClick={collapse}
+          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[12px] hover:bg-panel"
+        >
+          <IconX size={13} /> Exit (Esc)
+        </button>
+      </div>
+      <iframe
+        ref={ref}
+        title={`MCP app for ${toolName}`}
+        srcDoc={html}
+        // See the note above: allow-same-origin must never be added here.
+        sandbox="allow-scripts"
+        className={`w-full rounded-lg border border-border bg-background${
+          full ? " min-h-0 flex-1" : ""
+        }`}
+        style={full ? undefined : { height }}
+      />
+    </div>
   );
 }
 
@@ -107,12 +171,15 @@ export function McpAppCard(props: McpAppCardProps) {
 
   if (!app) return null;
 
-  const label = toolName.includes("_") ? toolName.split("_").slice(1).join("_") : toolName;
   return (
-    <div className="flex animate-in flex-col gap-2 rounded-xl border border-brand/40 bg-panel-2 p-3 duration-200 fade-in slide-in-from-bottom-1">
+    // `fade-in` only, deliberately: `slide-in-from-bottom-1` animates a
+    // transform, and a transformed ancestor becomes the containing block for
+    // `position: fixed`, which would trap the fullscreen overlay inside this
+    // card. Opacity creates no containing block.
+    <div className="flex animate-in flex-col gap-2 rounded-xl border border-brand/40 bg-panel-2 p-3 duration-200 fade-in">
       <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-brand">
         <IconApps size={13} />
-        {label}
+        {toolLabel(toolName)}
       </div>
       <AppFrame {...props} html={app.html} inputSchema={app.input_schema} />
     </div>
