@@ -35,9 +35,9 @@ def ask(key: str, message: str, schema: dict[str, Any]) -> InputRequiredResult:
         key: How the answer comes back in `ctx.input_responses`, and what the
             host resumes against. It has to stay stable across rounds.
         message: The prompt a person reads.
-        schema: JSON schema the answer must satisfy. Passed to the host verbatim,
-            so `x-` extension keys on it are how an MCP App receives the context
-            it needs to render without a second round trip.
+        schema: JSON schema the answer must satisfy. Passed to the host
+            verbatim, and restricted: the SDK normalizes it to the elicitation
+            form, which allows primitives only.
     """
     return InputRequiredResult(
         input_requests={
@@ -46,27 +46,6 @@ def ask(key: str, message: str, schema: dict[str, Any]) -> InputRequiredResult:
             )
         }
     )
-
-
-def attach_context(schema: dict[str, Any], anchor: str, context: dict[str, Any]) -> dict[str, Any]:
-    """Hang an MCP App's render context off one property of `schema`.
-
-    An App needs to know what it is rendering - which sleeves, whose account,
-    what the last price was - and the elicitation request is the only channel it
-    gets, since the iframe has no origin and cannot call anything itself.
-
-    It goes on a PROPERTY, not the schema root, and that is not a style choice:
-    the SDK normalizes `requested_schema` to the restricted elicitation form and
-    silently drops unknown ROOT keys (only `type`, `properties` and `required`
-    survive), while extras inside a property are passed through untouched,
-    nested values and all. Putting it at the root loses it with no error, and the
-    app renders empty.
-
-    `anchor` should be a property that always exists, so the context cannot go
-    missing with an optional field.
-    """
-    schema.setdefault("properties", {}).setdefault(anchor, {})["x-app"] = context
-    return schema
 
 
 def answer_for(ctx: Context, key: str) -> ElicitResult | None:

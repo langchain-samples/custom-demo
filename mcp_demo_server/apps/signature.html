@@ -46,7 +46,6 @@
 </div>
 <div class="row">
   <button type="button" class="primary" id="submit" disabled>Confirm</button>
-  <button type="button" id="cancel">Cancel</button>
 </div>
 
 <script>
@@ -55,6 +54,8 @@
 
     var canvas = document.getElementById("canvas");
     var pad = document.getElementById("pad");
+    var accountId = "";
+    var documentName = "";
     var who = document.getElementById("who");
     var submit = document.getElementById("submit");
     var ctx = canvas.getContext("2d");
@@ -246,25 +247,42 @@
       refresh();
     });
 
-    document.getElementById("cancel").addEventListener("click", McpApp.cancel);
 
     submit.addEventListener("click", function () {
       if (submit.disabled) return;
       submit.disabled = true;
       // Keys are exactly the elicitation's requested_schema properties: the host
       // forwards this object to the server as the accept content.
-      McpApp.submit({
-        signature: exportSignature(),
-        signed_by: who.value.trim(),
-        signed_at: new Date().toISOString(),
-      });
+      // `submit_signature` is `visibility: ["app"]`: a wet signature is a wet
+      // signature, and a model able to call this could sign for a client.
+      McpApp.call("submit_signature", {
+        account_id: accountId,
+        document: documentName,
+        capture: {
+          signature: exportSignature(),
+          signed_by: who.value.trim(),
+          signed_at: new Date().toISOString(),
+        },
+      })
+        .then(function (res) {
+          var out = (res && res.structuredContent) || {};
+          document.getElementById("msg").textContent = out.error
+            ? out.error
+            : "Signed, reference " + out.reference + ".";
+        })
+        .catch(function (err) {
+          document.getElementById("msg").textContent = "Could not sign: " + err.message;
+        });
     });
 
-    McpApp.onInit(function (request) {
-      if (request.message) document.getElementById("msg").textContent = request.message;
-      var props = (request.requested_schema || {}).properties || {};
-      if (props.signed_by && props.signed_by.description) {
-        who.placeholder = props.signed_by.description;
+    McpApp.onInit(function (result) {
+      // The tool's own result names the document being signed.
+      var ctx = result.data || {};
+      accountId = ctx.account_id || "";
+      documentName = ctx.document || "";
+      if (documentName) {
+        document.getElementById("msg").textContent =
+          documentName + " for " + (ctx.household || accountId);
       }
       fit();
     });

@@ -311,6 +311,18 @@ and reads the resource over MCP, and the card renders that HTML in an iframe **s
 `allow-scripts` only** - no `allow-same-origin`, so server-authored HTML cannot touch our origin,
 cookies or storage.
 
+**The four apps use the ORDINARY flow, which has no pause in it.** A tool returns the data its
+app draws (`propose_rebalance` -> the current allocation), and the app submits by calling a second
+tool marked `visibility: ["app"]` (`submit_rebalance`). Each pair is model-visible opener plus
+app-only submitter. Do not reintroduce elicitation here: `attach_context` and the flattened
+one-key-per-sleeve schema existed only to work around it, and both are deleted.
+
+Apps render in `frontend/src/components/chat/McpAppCard.tsx`, on a **finished** tool call, pushed
+as an `AppItem` from `ChatPanel`'s tool-result branch. `McpElicitationCard` is the generic
+schema-driven form only, for a server that elicits without an app (`schedule_review`), and must
+stay that way: nothing can enter the conversation mid-interrupt, so an app there could not call a
+tool or send a message.
+
 The conversation with it is **SEP-1865**, JSON-RPC 2.0 over `postMessage`, with the app as MCP
 client and the host as its server. Guest half in `mcp_demo_server/apps/bridge.js`, host half in
 `frontend/src/lib/mcpAppHost.ts`:
@@ -319,16 +331,17 @@ client and the host as its server. Guest half in `mcp_demo_server/apps/bridge.js
     host -> app    McpUiInitializeResult (theme, styles, toolInfo, containerDimensions)
     host -> app    ui/notifications/tool-input, then ui/notifications/tool-result
     app  -> host   ui/notifications/size-changed
-    app  -> host   tools/call            the answer
+    app  -> host   tools/call            proxied via POST /mcp/call
     app  -> host   resources/read        proxied via POST /mcp/resource
     app  -> host   ui/open-link, ui/request-display-mode, ping
     host -> app    ui/resource-teardown  before the frame goes
 
-`ui/message` and `ui/update-model-context` are answered with a JSON-RPC **error**
-saying why: this frame renders during a PAUSED tool call, and nothing can enter the
-conversation until the pause resolves. Accepting and dropping them would leave an app
-believing it had spoken. Both become available if an app is ever rendered for a
-*completed* call.
+`POST /mcp/call` enforces both of the spec's rules on a view's `tools/call`, as refusals
+rather than filters: the target must be on the **same server** as the app's own tool
+(compared on `ToolRoute.server_name`, not by parsing the `{server}_` prefix), and it must
+include `"app"` in its visibility. A view is server-authored HTML, so nothing it sends is
+trusted. `ui/message` and `ui/update-model-context` are accepted only when the surface
+wires a handler, and answered with an explicit error otherwise.
 
 **App-only tools are kept from the model.** `_meta.ui.visibility: ["app"]` means a tool
 its own App may call and the agent may not, and the host rule is a MUST, so

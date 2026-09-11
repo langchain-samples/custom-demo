@@ -860,6 +860,30 @@ export async function fetchMcpResource(
   return Array.isArray(d.contents) ? (d.contents as McpResourceContent[]) : [];
 }
 
+/**
+ * Call a tool for an MCP App (POST /mcp/call).
+ *
+ * `appToolName` is the tool whose app is asking, which is what the deployment
+ * checks the target against: same server, and open to apps. Throws on refusal,
+ * because the app is blocked on a JSON-RPC response and a dead button is the
+ * worst possible answer.
+ */
+export async function callMcpAppTool(
+  servers: McpServerConfig[],
+  appToolName: string,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<{ structuredContent?: unknown; isError?: boolean }> {
+  const res = await fetch(`${getApiBase()}/mcp/call`, {
+    method: "POST",
+    headers: apiHeaders(),
+    body: JSON.stringify({ servers, app_tool: appToolName, name, arguments: args }),
+  });
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(String(d?.error || `tools/call failed (${res.status})`));
+  return d as { structuredContent?: unknown; isError?: boolean };
+}
+
 /** List Context Hub agent repos for a workspace (GET /agents). Empty on failure. */
 export async function listAgents(workspace?: string): Promise<string[]> {
   try {

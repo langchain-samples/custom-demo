@@ -32,6 +32,7 @@ import { PROSE_CLS } from "@/lib/markdown";
 import { isHtmlArtifactPath } from "@/lib/artifacts";
 import { ReviewCard } from "@/components/chat/ReviewCard";
 import { McpElicitationCard } from "@/components/chat/McpElicitationCard";
+import { McpAppCard } from "@/components/chat/McpAppCard";
 import { Button } from "@/components/motion/button";
 import { ToolChip, type ChipData } from "@/components/chat/ToolChip";
 import { ToolChipGroup } from "@/components/chat/ToolChipGroup";
@@ -257,6 +258,40 @@ interface FeedbackItem {
   /** Workspace the run traced to — feedback must target the same tenant. */
   workspace?: string;
 }
+/**
+ * A tool result's structured half, recovered from the serialized text.
+ *
+ * MCP structured content reaches the stream already stringified into the tool
+ * message, so an app that reads `structuredContent` needs it parsed back.
+ * Returns undefined for anything that is not a JSON object, which is the honest
+ * answer: text-only results have no structured half to hand over.
+ */
+function parseStructured(text: string): Record<string, unknown> | undefined {
+  if (!text.trim().startsWith("{")) return undefined;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * An MCP App for a tool call that finished.
+ *
+ * Separate from ReviewItem because it is not a pause: the run has moved on, and
+ * the app interacts by calling tools rather than by answering anything. The card
+ * renders nothing when the tool ships no UI, which is most of them.
+ */
+interface AppItem {
+  kind: "app";
+  id: string;
+  toolName: string;
+  toolArgs: Record<string, unknown>;
+  toolResult: { structuredContent?: unknown; content?: unknown[] };
+}
 /** A tool paused the run for human review; resolved by resuming the thread. */
 interface ReviewItem {
   kind: "review";
@@ -274,7 +309,14 @@ interface ReviewItem {
   /** Cleared once approved, so the editor collapses to a read-only card. */
   done: boolean;
 }
-type Item = UserItem | ActivityItem | SubagentItem | AssistantItem | FeedbackItem | ReviewItem;
+type Item =
+  | UserItem
+  | ActivityItem
+  | SubagentItem
+  | AssistantItem
+  | FeedbackItem
+  | ReviewItem
+  | AppItem;
 
 /* ------------------------------- Goals ---------------------------------- */
 
@@ -622,6 +664,11 @@ export default function ChatPanel({
     let interrupt: ReviewInterrupt | null = null;
     // Every tool call's arguments this turn, by tool name, latest frame wins.
     const argsByTool: Record<string, Record<string, unknown>> = {};
+    // `{server}_` for each connected MCP server, which is how a remote tool is
+    // told from a local one without a lookup per call.
+    const mcpToolPrefixes = mcpServers
+      .filter((srv) => !!srv.id)
+      .map((srv) => `${srv.id}_`);
 
     const syncChips = () =>
       patchItem(activityId, (it) =>
@@ -790,6 +837,26 @@ export default function ChatPanel({
         if (cid && chipMap[cid]) {
           chipMap[cid] = { ...chipMap[cid], result: contentToText(msg.content) };
           syncChips();
+        }
+        // An MCP tool may ship its own UI, bound to this result. Only MCP tools
+        // are considered, by the `{server}_{tool}` prefix the ClientGroup adds,
+        // so a local tool never costs a lookup. The card itself renders nothing
+        // when the tool has no app, which is the common case.
+        const name = msg.name || "";
+        if (mcpToolPrefixes.some((p) => name.startsWith(p))) {
+          const text = contentToText(msg.content);
+          setItems((prev) => [
+            ...prev,
+            {
+              kind: "app",
+              id: nextId(),
+              toolName: name,
+              toolArgs: argsByTool[name] || {},
+              // MCP structured content reaches us serialized in the tool
+              // message, so parse it back. A non-object result is content only.
+              toolResult: { structuredContent: parseStructured(text), content: [] },
+            },
+          ]);
         }
       }
     };
@@ -1771,7 +1838,6 @@ function ItemView({
       return (
         <McpElicitationCard
           review={item.review}
-          toolArguments={item.toolArgs}
           busy={busy}
           servers={mcpServers}
           onApprove={(v) => onApproveReview?.(item.id, v)}
@@ -1783,6 +1849,16 @@ function ItemView({
         review={item.review}
         busy={busy}
         onApprove={(v) => onApproveReview?.(item.id, v)}
+      />
+    );
+  }
+  if (item.kind === "app") {
+    return (
+      <McpAppCard
+        toolName={item.toolName}
+        toolArguments={item.toolArgs}
+        toolResult={item.toolResult}
+        servers={mcpServers}
       />
     );
   }

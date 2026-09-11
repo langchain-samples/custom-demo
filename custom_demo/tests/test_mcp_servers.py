@@ -149,6 +149,31 @@ def test_model_visible_hides_only_the_app_only_tools(visibility, seen):
     assert m.model_visible(_tool("t", visibility)) is seen
 
 
+@pytest.mark.parametrize(
+    ("visibility", "callable_by_app"),
+    [
+        # Omitted means ["model", "app"], so an ordinary tool is callable.
+        (None, True),
+        (["model", "app"], True),
+        (["app"], True),
+        # The MUST: a host rejects an app calling a tool not opened to apps.
+        (["model"], False),
+    ],
+)
+def test_app_callable_refuses_only_what_the_server_closed_to_apps(visibility, callable_by_app):
+    assert m.app_callable(_tool("t", visibility)) is callable_by_app
+
+
+def test_visibility_defaults_let_a_tool_be_used_by_both():
+    """The two rules are independent, and both default to permitted.
+
+    Getting this backwards would either hide every ordinary tool from the model
+    or refuse every app call, and neither failure is visible until a demo.
+    """
+    ordinary = _tool("t", None)
+    assert m.model_visible(ordinary) and m.app_callable(ordinary)
+
+
 def test_read_app_resource_shapes_text_and_binary_blocks_for_the_wire(monkeypatch):
     """An app gets `resources/read` back in the shape the spec puts on the wire.
 
@@ -247,7 +272,7 @@ def test_load_tools_serves_a_second_call_from_cache(monkeypatch):
     async def once(*_args, **_kwargs):
         nonlocal calls
         calls += 1
-        return [SimpleNamespace(name="x_tool")]
+        return [_tool("x_tool")]
 
     monkeypatch.setattr(m, "_discover", once)
     servers = m.parse_servers([{"label": "Cached", "url": "https://x/mcp"}])
@@ -349,8 +374,11 @@ def test_the_demo_server_advertises_exactly_the_tools_it_has(meridian):
         "propose_rebalance",
         "submit_rebalance",
         "project_goal",
+        "submit_goal_plan",
         "confirm_trade",
+        "submit_trade",
         "sign_document",
+        "submit_signature",
     }
 
 
@@ -538,58 +566,79 @@ def test_an_allocation_that_is_not_a_portfolio_is_refused(meridian):
     assert "Nothing was submitted" in result.structured_content["error"]
 
 
-def test_a_goal_plan_is_saved_against_the_account(meridian):
-    schema, result = _rounds(
-        meridian,
-        "project_goal",
-        {"account_id": "MW-10388"},
-        "plan",
-        {"retirement_age": 62, "monthly_contribution": 3000, "risk_level": "Growth"},
-    )
-    context = schema["properties"]["retirement_age"]["x-app"]
+def test_the_goal_app_is_drawn_from_where_the_account_stands(meridian):
+    context = _call(meridian, "project_goal", {"account_id": "MW-10388"}).structured_content
     assert context["current_age"] == 45
     assert context["goal"] == 2_000_000
-    record = result.structured_content
+    # A projection cannot start before the client is older than they are now.
+    assert context["default_age"] > context["current_age"]
+
+
+def test_a_goal_plan_is_saved_against_the_account(meridian):
+    record = _call(
+        meridian,
+        "submit_goal_plan",
+        {
+            "account_id": "MW-10388",
+            "plan": {
+                "retirement_age": 62,
+                "monthly_contribution": 3000,
+                "risk_level": "Growth",
+            },
+        },
+    ).structured_content
     assert record["status"] == "saved"
     assert record["years_to_goal"] == 17
 
 
-def test_a_confirmed_ticket_becomes_an_order(meridian):
-    schema, result = _rounds(
+def test_the_ticket_is_drawn_from_the_quote_and_the_position(meridian):
+    context = _call(
         meridian,
         "confirm_trade",
         {"account_id": "MW-10241", "symbol": "AAPL", "side": "sell"},
-        "ticket",
-        {
-            "quantity": 500,
-            "order_type": "limit",
-            "limit_price": 230.0,
-            "time_in_force": "gtc",
-            "confirmed": True,
-        },
-    )
-    context = schema["properties"]["quantity"]["x-app"]
+    ).structured_content
     # The ticket needs the position to stop the advisor overselling it.
     assert context["max_qty"] == 4200
     assert context["last"] == 227.14
-    order = result.structured_content
+
+
+def test_a_confirmed_ticket_becomes_an_order(meridian):
+    order = _call(
+        meridian,
+        "submit_trade",
+        {
+            "account_id": "MW-10241",
+            "symbol": "AAPL",
+            "side": "sell",
+            "ticket": {
+                "quantity": 500,
+                "order_type": "limit",
+                "limit_price": 230.0,
+                "time_in_force": "gtc",
+                "confirmed": True,
+            },
+        },
+    ).structured_content
     assert order["status"] == "accepted"
     assert order["estimated_principal"] == 500 * 230.0
 
 
 def test_an_order_cannot_sell_more_than_is_held(meridian):
     """The app blocks it, and so does the server: the app is not the boundary."""
-    _, result = _rounds(
+    result = _call(
         meridian,
-        "confirm_trade",
-        {"account_id": "MW-10241", "symbol": "AAPL", "side": "sell"},
-        "ticket",
+        "submit_trade",
         {
-            "quantity": 99_999,
-            "order_type": "market",
-            "limit_price": None,
-            "time_in_force": "day",
-            "confirmed": True,
+            "account_id": "MW-10241",
+            "symbol": "AAPL",
+            "side": "sell",
+            "ticket": {
+                "quantity": 99_999,
+                "order_type": "market",
+                "limit_price": None,
+                "time_in_force": "day",
+                "confirmed": True,
+            },
         },
     )
     assert "only 4200 held" in result.structured_content["error"]
@@ -657,23 +706,21 @@ def _data_uri(png: bytes) -> str:
     return "data:image/png;base64," + base64.b64encode(png).decode()
 
 
-def _sign(client, document: str, signature: str, action: _Action = "accept"):
-    """Both rounds of `sign_document`, with the pad handing over `signature`."""
-    _, result = _rounds(
+def _sign(client, document: str, signature: str):
+    """What the pad does when someone signs: one call to the app-only tool."""
+    return _call(
         client,
-        "sign_document",
-        {"account_id": "MW-10241", "document": document},
-        "signature",
-        None
-        if action != "accept"
-        else {
-            "signature": signature,
-            "signed_by": "Dana Whitfield",
-            "signed_at": "2026-09-07T14:02:00Z",
+        "submit_signature",
+        {
+            "account_id": "MW-10241",
+            "document": document,
+            "capture": {
+                "signature": signature,
+                "signed_by": "Dana Whitfield",
+                "signed_at": "2026-09-07T14:02:00Z",
+            },
         },
-        action,
     )
-    return result
 
 
 def test_a_signature_comes_back_as_an_image_and_a_url(meridian):
@@ -727,9 +774,20 @@ def test_a_signature_the_pad_mangled_is_recorded_without_promising_an_image(meri
     assert record["signature_data_uri"] is None
 
 
-def test_a_declined_signature_leaves_the_document_unsigned(meridian):
-    record = _sign(meridian, "Fee schedule", "", action="decline").structured_content
-    assert record["status"] == "unsigned"
+def test_opening_the_pad_signs_nothing(meridian):
+    """The tool that opens the pad must not also sign.
+
+    It hands over the document's label and its stable reference so the pad can
+    title itself. A signature exists only once a person has drawn one and
+    `submit_signature` is called.
+    """
+    context = _call(
+        meridian, "sign_document", {"account_id": "MW-10241", "document": "Fee schedule"}
+    ).structured_content
+    assert context["document"] == "Fee schedule"
+    assert context["reference"].startswith("MW-DOC-")
+    assert "status" not in context
+    assert "signature_url" not in context
 
 
 def test_the_signature_png_is_served_over_http(meridian):

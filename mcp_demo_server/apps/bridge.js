@@ -16,28 +16,25 @@
  *   Host -> View   ui/notifications/tool-input    the arguments the tool was called with
  *   Host -> View   ui/notifications/tool-result   the result of this leg of the call
  *   View -> Host   ui/notifications/size-changed  whenever the content resizes
- *   View -> Host   tools/call                     the answer, as a fresh call
+ *   View -> Host   tools/call                     the submission, to an app-only tool
  *
- * TWO WAYS A TOOL RESULT REACHES AN APP, and this file handles both.
+ * HOW AN APP GETS ITS DATA AND SENDS ITS ANSWER, both of them ordinary.
  *
- * 1. ORDINARY, and how MCP Apps normally works. The tool finishes, its result
- *    carries the data to render, and the app submits by CALLING A TOOL, usually
- *    one the server marked `visibility: ["app"]` so only the app may call it.
- *    That is `McpApp.call`.
- * 2. A QUESTION. Under SEP-2322 a tool that needs input mid-call returns an
- *    `InputRequiredResult` instead, and the client re-calls the same tool with
- *    `inputResponses` attached. That is `McpApp.submit`. There is no elicitation
- *    message in SEP-1865 and none is needed: the question rides the ordinary
- *    result and the answer rides the ordinary call.
+ * The tool finishes, and its result carries what the app draws: that arrives on
+ * `ui/notifications/tool-result` and `onInit` is handed the `structuredContent`.
+ * The app submits by CALLING A TOOL, one the server marked
+ * `visibility: ["app"]` so the model cannot call it and only the app can. That
+ * is `McpApp.call`, and the host proxies it like any other `tools/call`.
  *
- * `onInit` is handed whichever arrived, so an app knows which it is looking at
- * without inspecting the wire. Either way nothing here is ours: an app written
- * against this file is an app any MCP Apps host can run.
+ * There is no pause anywhere in this. Elicitation is a different extension
+ * solving a different problem, and an MCP App does not need it: nothing here is
+ * ours, so an app written against this file is an app any MCP Apps host can
+ * run.
  *
  * An app uses it like this, and never sees the JSON-RPC:
  *
- *   McpApp.onInit(function (request) { ...render from request... });
- *   McpApp.submit({ approved: true });
+ *   McpApp.onInit(function (result) { ...draw from result.data... });
+ *   McpApp.call("submit_thing", { ...what the person chose... });
  *   McpApp.ready();
  *
  * Everything is inline and dependency-free: the iframe has no origin, so there
@@ -62,9 +59,9 @@ window.McpApp = (function () {
   var render = null;
   /** Whether the app has finished wiring its DOM and called `ready`. */
   var wired = false;
-  /** The question to render, once `ui/notifications/tool-result` has brought it. */
-  var question = null;
-  /** Whether `render` has already been handed the question. */
+  /** The data to render, once `ui/notifications/tool-result` has brought it. */
+  var result = null;
+  /** Whether `render` has already been handed the result. */
   var rendered = false;
 
   /** The paused tool's name, from `hostContext.toolInfo`. */
@@ -198,17 +195,17 @@ window.McpApp = (function () {
   }
 
   /**
-   * Hand the question to the app, once both halves are ready.
+   * Hand the result to the app, once both halves are ready.
    *
    * The two arrive in either order: the host sends the result as soon as the
    * handshake finishes, while the app calls `ready` when its own DOM is wired.
    * Whichever lands second triggers the render, and it only ever happens once.
    */
   function maybeRender() {
-    if (rendered || !wired || !render || !question) return;
+    if (rendered || !wired || !render || !result) return;
     rendered = true;
     try {
-      render(question, hostContext);
+      render(result, hostContext);
     } catch (err) {
       // A broken app must still let the person out of the pause, or the run is
       // stuck with no way to answer it.
@@ -222,36 +219,14 @@ window.McpApp = (function () {
   };
 
   /**
-   * The result of the call: either the data to render, or a question.
+   * The finished result, which is the data the app draws.
    *
-   * `inputRequests` is what tells the two apart. It is the SEP-2322 wire shape,
-   * one entry per question keyed by the server's own key, each an
-   * `elicitation/create` request; the key has to travel back with the answer, so
-   * it is kept beside the params. Only the first is rendered, because an app is
-   * bound to one tool and answers one question.
-   *
-   * With no `inputRequests` this is an ordinary finished result, and
-   * `structuredContent` is the data the app draws. That is the common case.
+   * `structuredContent` is the shaped half and what an app should read;
+   * `content` is the block list the model sees. Both are handed over, because a
+   * server may put something in one and not the other.
    */
   onNotify["ui/notifications/tool-result"] = function (params) {
-    var requests = params.inputRequests || params.input_requests;
-    if (requests && Object.keys(requests).length) {
-      var key = Object.keys(requests)[0];
-      var elicit = (requests[key] || {}).params || {};
-      question = {
-        asked: true,
-        key: key,
-        message: elicit.message || "",
-        // Both spellings, because the wire form is camelCase and a host that has
-        // already normalized the payload hands over the snake_case one.
-        requested_schema: elicit.requestedSchema || elicit.requested_schema || {},
-      };
-      maybeRender();
-      return;
-    }
-
-    question = {
-      asked: false,
+    result = {
       data: params.structuredContent || {},
       content: params.content || [],
     };
@@ -263,7 +238,7 @@ window.McpApp = (function () {
   };
 
   onNotify["ui/notifications/tool-cancelled"] = function () {
-    question = null;
+    result = null;
   };
 
   // The host waits for this response before dropping the frame, which is what
@@ -275,34 +250,6 @@ window.McpApp = (function () {
   onRequest["ping"] = function () {
     return {};
   };
-
-  /**
-   * Answer the question by calling the tool again.
-   *
-   * This is the whole of SEP-2322's client side: the same tool, the same
-   * arguments, plus `inputResponses` keyed by the question the server asked. The
-   * host proxies it to the server exactly as it would any other `tools/call`
-   * from a View.
-   */
-  function answer(response) {
-    if (!question) {
-      // Nothing to answer means the host never delivered the tool result, so the
-      // person is looking at a form that cannot submit. Say so: a quiet return
-      // here leaves the run paused with no sign of why.
-      console.error("mcp app has no question to answer: the host sent no tool result");
-      return Promise.resolve({});
-    }
-
-    var responses = {};
-    responses[question.key] = response;
-    return request("tools/call", {
-      name: toolName,
-      arguments: toolArguments,
-      inputResponses: responses,
-    }).catch(function (err) {
-      console.error("mcp app failed to answer", err);
-    });
-  }
 
   // The handshake starts as soon as this script runs, which is before the app's
   // own markup has parsed. That is deliberate: the host context (theme, sizing)
@@ -339,20 +286,8 @@ window.McpApp = (function () {
       render = fn;
       maybeRender();
     },
-    /** Accept: answer the question and let the tool finish. */
-    submit: function (content) {
-      return answer({ action: "accept", content: content });
-    },
-    /** Back out of the call entirely. */
-    cancel: function () {
-      return answer({ action: "cancel" });
-    },
-    /** Answer this round without content, leaving the tool to decide. */
-    decline: function () {
-      return answer({ action: "decline" });
-    },
     resize: reportSize,
-    /** The app's DOM is wired and it can be handed the question. */
+    /** The app's DOM is wired and it can be handed the result. */
     ready: function () {
       wired = true;
       maybeRender();

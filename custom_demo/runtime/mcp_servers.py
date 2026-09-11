@@ -182,8 +182,15 @@ _TOOLS: dict[str, tuple[float, list[Any]]] = {}
 _LOCKS: dict[str, asyncio.Lock] = {}
 
 
-async def load_tools(servers: tuple[McpServer, ...], *, refresh: bool = False) -> list[Any]:
+async def load_tools(
+    servers: tuple[McpServer, ...], *, refresh: bool = False, include_app_only: bool = False
+) -> list[Any]:
     """Adapted LangChain tools for `servers`, cached for `TOOLS_TTL_SECONDS`.
+
+    App-only tools are dropped unless `include_app_only`, because the agent must
+    not see them (see `model_visible`). The cache holds every tool the server
+    published and the filter runs on the way out, so the one caller that needs
+    them, `call_app_tool` proxying for an app, does not force a second discovery.
 
     Never raises: a server that is down, tunnelled to nothing, or refusing the
     token yields no tools and leaves the rest of the agent working. The SPA's
@@ -198,7 +205,7 @@ async def load_tools(servers: tuple[McpServer, ...], *, refresh: bool = False) -
     if not refresh:
         hit = _TOOLS.get(key)
         if hit and hit[0] > now:
-            return hit[1]
+            return hit[1] if include_app_only else [t for t in hit[1] if model_visible(t)]
 
     lock = _LOCKS.setdefault(key, asyncio.Lock())
     async with lock:
@@ -206,7 +213,7 @@ async def load_tools(servers: tuple[McpServer, ...], *, refresh: bool = False) -
         # should use what it produced, not load again.
         hit = _TOOLS.get(key)
         if not refresh and hit and hit[0] > time.monotonic():
-            return hit[1]
+            return hit[1] if include_app_only else [t for t in hit[1] if model_visible(t)]
 
         try:
             tools = await asyncio.wait_for(
@@ -223,20 +230,37 @@ async def load_tools(servers: tuple[McpServer, ...], *, refresh: bool = False) -
             return []
 
         _TOOLS[key] = (time.monotonic() + TOOLS_TTL_SECONDS, tools)
-        return tools
+        return tools if include_app_only else [t for t in tools if model_visible(t)]
 
 
 async def _discover(servers: tuple[McpServer, ...], *, refresh: bool) -> list[Any]:
-    """One real discovery pass: connect, list, adapt, drop the app-only tools."""
+    """One real discovery pass: connect, list, adapt. Every tool, unfiltered."""
     # Local like `build_group`'s: keeps the mcp client stack off graph load.
     from langchain.mcp import MCPAdapter  # noqa: PLC0415
 
     async with MCPAdapter(build_group(servers)) as adapter:
         # `use` reads the client-side cache when the server's TTL hint says it is
         # still fresh; `refresh` is what the SPA's "reload tools" button sends.
-        tools = await adapter.list_tools(cache_mode="refresh" if refresh else "use")
+        return await adapter.list_tools(cache_mode="refresh" if refresh else "use")
 
-    return [t for t in tools if model_visible(t)]
+
+def app_callable(tool: Any) -> bool:
+    """Whether an MCP App on the same server may call this tool.
+
+    Defaults to True, because an omitted `visibility` means `["model", "app"]`.
+    """
+    ui = _ui_meta(tool)
+    visibility = ui.get("visibility")
+    if not isinstance(visibility, list):
+        return True
+
+    return "app" in visibility
+
+
+def _ui_meta(tool: Any) -> dict[str, Any]:
+    """The `_meta.ui` block the adapter carried through, or an empty one."""
+    meta = (tool.metadata or {}).get("mcp") or {}
+    return (((meta.get("tool") or {}).get("_meta") or {}).get("ui")) or {}
 
 
 def model_visible(tool: Any) -> bool:
@@ -252,9 +276,7 @@ def model_visible(tool: Any) -> bool:
     Defaults to visible. Omitting the key means `["model", "app"]`, which is
     every ordinary tool on every server that has never heard of the extension.
     """
-    meta = (tool.metadata or {}).get("mcp") or {}
-    ui = (((meta.get("tool") or {}).get("_meta") or {}).get("ui")) or {}
-    visibility = ui.get("visibility")
+    visibility = _ui_meta(tool).get("visibility")
     if not isinstance(visibility, list):
         return True
 
@@ -354,6 +376,58 @@ async def read_app(servers: tuple[McpServer, ...], tool_name: str) -> dict[str, 
     # caller renders the generic form. Say so rather than returning a blank page.
     _log(f"{tool_name} declares {uri} but the resource carried no text")
     return None
+
+
+async def call_app_tool(
+    servers: tuple[McpServer, ...], app_tool: str, target: str, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    """Call `target` on behalf of the MCP App bound to `app_tool`.
+
+    How a result-bound app submits: the server publishes a tool marked
+    `visibility: ["app"]`, invisible to the model, and its app calls it. SEP-1865
+    has the host proxy that, which is what this is.
+
+    Two limits, both from the spec, and both enforced here rather than trusted to
+    the app. The target must live on the SAME server the app's own tool came from,
+    which resolving through the group gives us. And it must include `"app"` in its
+    visibility: a host MUST reject an app calling a tool the server did not open
+    to apps, or server-authored HTML could drive any tool the connection can
+    reach.
+
+    Raises on refusal. The app is holding a promise open, so it needs the reason.
+    """
+    tools = await load_tools(servers, include_app_only=True)
+    by_name = {t.name: t for t in tools}
+    if app_tool not in by_name:
+        raise LookupError(f"{app_tool} is not a tool on any connected server")
+
+    wanted = by_name.get(target)
+    if wanted is None:
+        raise LookupError(f"{target} is not a tool on any connected server")
+
+    if not app_callable(wanted):
+        raise PermissionError(
+            f"{target} is not open to apps: its visibility does not include 'app'"
+        )
+
+    group = build_group(servers)
+    async with group:
+        # `ToolRoute` carries the server and the tool's own upstream name, which
+        # is what the prefix is hiding. Comparing `server_name` is how the
+        # same-server rule is enforced without parsing namespaced strings.
+        opener = await group.resolve_tool(app_tool)
+        route = await group.resolve_tool(target)
+        if opener.server_name != route.server_name:
+            raise PermissionError(
+                f"{app_tool} may not call {target}: they are on different servers"
+            )
+
+        result = await route.client.call_tool(route.upstream_name, arguments)
+
+    return {
+        "structuredContent": getattr(result, "structured_content", None),
+        "isError": bool(getattr(result, "is_error", False)),
+    }
 
 
 async def _read_uri(servers: tuple[McpServer, ...], tool_name: str, uri: str) -> list[Any]:

@@ -6,53 +6,37 @@
  * so it reaches us exactly like our own HITL pauses do, and answering it resumes
  * the run: the server re-runs the tool with the answer attached and carries on.
  *
- * Two ways to render the same pause:
+ * The UI is a form built from the request's JSON schema. Every MCP server gets
+ * that for free, which is what matters: elicitation is a protocol feature any
+ * server may use, and most ship no UI at all.
  *
- * 1. **The server's own UI.** If the paused tool is an MCP App, it declares a
- *    `ui://` HTML resource. We fetch that HTML (the deployment reads it over MCP
- *    for us) and run it in a sandboxed iframe. That is the only way to collect
- *    something a form cannot express, like a drawn signature.
- * 2. **A generic form**, built from the request's JSON schema. Every MCP server
- *    gets this for free, which matters because most ship no UI at all.
- *
- * The app is a real MCP App: the conversation with it is SEP-1865, JSON-RPC 2.0
- * over `postMessage`, and it lives in `lib/mcpAppHost.ts`. Nothing the app sends
- * is trusted beyond being shaped into the elicitation answer, which the server
- * itself has to validate against the schema it asked for.
- *
- * The iframe is sandboxed to `allow-scripts` ONLY. No `allow-same-origin`, so the
- * server's HTML has no access to this page's origin, cookies, or storage.
+ * An MCP App is a different thing and renders elsewhere, in `McpAppCard`. Apps
+ * are bound to a tool RESULT, so they appear once a call has finished, whereas
+ * this card exists only while one is paused. Do not put an app here: nothing can
+ * enter the conversation mid-interrupt, so an app that called a tool or sent a
+ * message would be talking into a run that cannot hear it.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { IconPlugConnected, IconExternalLink } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  fetchMcpApp,
-  fetchMcpResource,
   type JsonSchema,
   type McpElicitationRequest,
   type McpElicitationResponse,
   type McpServerConfig,
   type ReviewInterrupt,
 } from "@/lib/api";
-import { createMcpAppHost } from "@/lib/mcpAppHost";
 
 const LABEL = "text-[11px] font-bold uppercase tracking-[0.03em] text-muted-foreground";
 
 interface Props {
   review: ReviewInterrupt;
   busy?: boolean;
-  /** MCP servers on the active assistant, needed to read the paused tool's app. */
+  /** MCP servers on the active assistant, used to name the one that is asking. */
   servers: McpServerConfig[];
-  /**
-   * Arguments the paused tool was called with. An app is handed them over
-   * `ui/notifications/tool-input` and sends them back with its answer, because
-   * answering is a fresh call to the same tool (SEP-2322).
-   */
-  toolArguments?: Record<string, unknown>;
   /** Resume the run. The value is the `{responses: {...}}` the adapter expects. */
   onApprove: (value: Record<string, unknown>) => void;
 }
@@ -207,118 +191,20 @@ function SchemaForm({
   );
 }
 
-/* --------------------------- The server's own UI -------------------------- */
-
-/**
- * The server's own HTML, rendered as an MCP App.
- *
- * Everything about the conversation with it lives in `lib/mcpAppHost.ts`, which
- * speaks SEP-1865 over JSON-RPC. This component owns the frame and its height,
- * which is all a React component should need to know about a foreign document.
- */
-function AppFrame({
-  request,
-  toolName,
-  toolArguments,
-  servers,
-  html,
-  busy,
-  onAnswer,
-}: {
-  request: McpElicitationRequest;
-  toolName: string;
-  toolArguments: Record<string, unknown>;
-  servers: McpServerConfig[];
-  html: string;
-  busy?: boolean;
-  onAnswer: (response: McpElicitationResponse) => void;
-}) {
-  const ref = useRef<HTMLIFrameElement | null>(null);
-  const [height, setHeight] = useState(300);
-
-  useEffect(() => {
-    const host = createMcpAppHost({
-      toolName,
-      toolArguments,
-      request,
-      onAnswer,
-      // Clamped here rather than in the host: the ceiling is this card's
-      // layout, and it is the same number the host advertises as maxHeight.
-      onHeight: (h) => setHeight(Math.min(Math.max(h, 160), 640)),
-      // The app cannot fetch: it has no origin. The deployment reads on its
-      // behalf, from the one server its tool came from.
-      onReadResource: (uri) => fetchMcpResource(servers, toolName, uri),
-      // `ui/message` and `ui/update-model-context` are deliberately NOT wired
-      // here. This frame renders during a PAUSED tool call, and nothing can
-      // enter the conversation until the pause resolves, so the host answers
-      // both with an error saying exactly that rather than accepting and
-      // dropping them.
-    });
-    const view = () => ref.current?.contentWindow ?? null;
-    const onMessage = (event: MessageEvent) => host.handleMessage(event, view());
-    window.addEventListener("message", onMessage);
-    return () => {
-      window.removeEventListener("message", onMessage);
-      host.teardown(view(), "The pause was resolved.");
-    };
-  }, [request, toolName, toolArguments, servers, onAnswer]);
-
-  return (
-    <div className="flex flex-col gap-2">
-      <iframe
-        ref={ref}
-        title="MCP app"
-        srcDoc={html}
-        // Scripts only. Without allow-same-origin the frame is its own opaque
-        // origin, so the server's HTML cannot touch this page or its storage.
-        // See the deviation note in lib/mcpAppHost.ts for why there is no
-        // sandbox proxy in front of it.
-        sandbox="allow-scripts"
-        className="w-full rounded-lg border border-border bg-background"
-        style={{ height }}
-      />
-      {busy && <span className="text-[11px] text-muted-foreground">Sending to the server…</span>}
-    </div>
-  );
-}
-
 /* --------------------------------- Shell --------------------------------- */
 
 export function McpElicitationCard({
   review,
   busy,
   servers,
-  toolArguments,
   onApprove,
 }: Props) {
   // Memoized so `answer` below keeps a stable identity across renders.
   const requests = useMemo(() => review.requests || [], [review]);
   const toolName = String(review.tool_name || "");
-  const [app, setApp] = useState<{ html: string } | null>(null);
-  // Stable identity, or the app host would be rebuilt on every render.
-  const args = useMemo(() => toolArguments ?? {}, [toolArguments]);
-  const [looking, setLooking] = useState(true);
-
-  // Only the first request gets a custom UI: an MCP App is bound to the tool, so
-  // it answers the tool's question, and a second one in the same round would have
-  // nothing to render. In practice a round carries one.
+  // Only the first request is rendered. A round carries one in practice, and the
+  // rest are declined below so the resume is still complete.
   const first: McpElicitationRequest | undefined = requests[0];
-
-  useEffect(() => {
-    let live = true;
-    if (!toolName || !servers.length) {
-      setLooking(false);
-      return;
-    }
-    void fetchMcpApp(servers, toolName).then((found) => {
-      if (!live) return;
-      setApp(found ? { html: found.html } : null);
-      setLooking(false);
-    });
-    return () => {
-      live = false;
-    };
-  }, [toolName, servers]);
 
   const answer = useCallback(
     (response: McpElicitationResponse) => {
@@ -335,11 +221,6 @@ export function McpElicitationCard({
   if (!first) return null;
 
   const server = servers.find((s) => !!s.id && toolName.startsWith(`${s.id}_`));
-  // When the server ships a UI it owns the presentation, including the prompt:
-  // the app is handed `request.message` on init and renders it itself. Printing
-  // it here too showed the same sentence twice. Held back while the app lookup
-  // is still in flight, so it does not flash in and out on the way.
-  const ownsPresentation = first.mode !== "url" && (looking || !!app);
 
   return (
     <div className="flex animate-in flex-col gap-2.5 rounded-xl border border-brand/40 bg-panel-2 p-3 duration-200 fade-in slide-in-from-bottom-1">
@@ -351,7 +232,7 @@ export function McpElicitationCard({
         </span>
       </div>
 
-      {first.message && !ownsPresentation && (
+      {first.message && (
         <p className="m-0 text-sm leading-relaxed text-foreground">{first.message}</p>
       )}
 
@@ -374,18 +255,6 @@ export function McpElicitationCard({
             </Button>
           </div>
         </div>
-      ) : looking ? (
-        <div className="h-6 text-[12px] text-muted-foreground">Loading the tool's interface…</div>
-      ) : app ? (
-        <AppFrame
-          request={first}
-          toolName={toolName}
-          toolArguments={args}
-          servers={servers}
-          html={app.html}
-          busy={busy}
-          onAnswer={answer}
-        />
       ) : (
         <SchemaForm
           request={first}
