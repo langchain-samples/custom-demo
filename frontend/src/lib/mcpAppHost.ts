@@ -1,57 +1,39 @@
 /**
  * The host half of MCP Apps (SEP-1865), for one tool call that ships a UI.
  *
- * A server can ship a `ui://` HTML resource bound to a tool, and a host that
- * understands the extension renders it in a sandboxed iframe and talks to it in
- * JSON-RPC 2.0 over `postMessage`. The View acts as an MCP client; we are the
- * server it connects to, proxying to the real one. This module is that server,
- * kept out of the card so the React component stays about layout.
+ * Built on `@modelcontextprotocol/ext-apps`, the extension's official SDK. Its
+ * `AppBridge` is the host end of the protocol and `PostMessageTransport` carries
+ * JSON-RPC to the iframe, so the wire format, version negotiation and the
+ * ordering rules are the SDK's problem rather than ours.
  *
- * The sequence, all of it standard:
+ * WHY THE SDK RATHER THAN OUR OWN. This was hand-written first, and a real
+ * third-party app found three conformance bugs our own tests could not, because
+ * our demo server happened to avoid every one of them: a `hostContext.toolInfo`
+ * missing the required `inputSchema`, app-only tools handed to the model, and a
+ * display-mode request declined because we never negotiated. Each was a rule we
+ * had read and still got wrong. The SDK encodes them once.
  *
- *   View -> Host   ui/initialize                  answered with McpUiInitializeResult
- *   View -> Host   ui/notifications/initialized
- *   Host -> View   ui/notifications/tool-input-partial  arguments, still streaming
- *   Host -> View   ui/notifications/tool-input    the complete arguments, once
- *   Host -> View   ui/notifications/tool-result   the finished result
- *   View -> Host   ui/notifications/size-changed  the content resized
- *   View -> Host   tools/call, resources/read     proxied to the app's server
- *   Host -> View   ui/resource-teardown           before the frame goes away
+ * WHAT REMAINS OURS, and why it cannot be the SDK's. `AppBridge` takes an MCP
+ * `Client` to forward the app's `tools/call` and `resources/read` to. We have no
+ * client in the browser: the app's iframe has an opaque origin and no network,
+ * and the only MCP connection lives in the deployment. So the client is `null`
+ * and those two arrive as handlers, answered through `POST /mcp/call` and
+ * `POST /mcp/resource`, where the same-server and open-to-apps rules are
+ * enforced. A view is server-authored HTML; nothing it sends is trusted.
  *
- * The tool finishes first, and its result is what the app draws. When a person
- * does something in the app it submits by CALLING A TOOL, normally one the
- * server marked `visibility: ["app"]` so the model cannot call it. The host
- * proxies that call, which is what SEP-1865 asks of it; `POST /mcp/call` is
- * where the same-server and open-to-apps rules are enforced, because a view is
- * server-authored HTML and nothing it sends is trusted.
- *
- * There is no pause in any of this. Elicitation is a different extension for a
- * different problem, and an MCP App does not need it.
- *
- * ONE DEVIATION, DELIBERATE. SEP-1865 says a web host MUST wrap the View in a
- * different-origin sandbox proxy, so that the View can hold `allow-same-origin`
- * without holding the host's origin. We serve the SPA from a single origin and
- * have nowhere to put that second one, so we render the View directly with
- * `allow-scripts` and never `allow-same-origin`. That is stricter than the
- * proxy it replaces, not looser: the frame has an opaque origin and no route to
- * this page's storage. The cost is that a third-party app needing
- * `allow-same-origin` will not work here.
+ * ONE DEVIATION, DELIBERATE. SEP-1865 says a web host MUST wrap the view in a
+ * different-origin sandbox proxy, so a view can hold `allow-same-origin`
+ * without holding the host's origin. We serve the SPA from one origin and have
+ * nowhere to put a second, so we render the view directly with `allow-scripts`
+ * and never `allow-same-origin`. Stricter than the proxy it replaces, but an app
+ * needing same-origin will not run here.
  */
+import { AppBridge, PostMessageTransport } from "@modelcontextprotocol/ext-apps/app-bridge";
+
 /** A tool result as the host hands it to a view. */
 export interface McpToolResult {
   structuredContent?: unknown;
   content?: unknown[];
-}
-
-/** The MCP Apps protocol revision this host implements. */
-export const PROTOCOL_VERSION = "2026-01-26";
-
-/** A JSON-RPC 2.0 message, as far as this bridge needs to read one. */
-interface RpcMessage {
-  jsonrpc?: string;
-  id?: string | number;
-  method?: string;
-  params?: Record<string, unknown>;
 }
 
 export interface McpAppHostConfig {
@@ -60,70 +42,45 @@ export interface McpAppHostConfig {
   /**
    * Its JSON Schema, for `hostContext.toolInfo.tool`.
    *
-   * `Tool` declares `inputSchema` as required, and the official app SDK
-   * validates the initialize result, so omitting it is not a modest partial
-   * answer: an app built on that SDK rejects the handshake outright. Excalidraw
-   * reports it as `path: ["hostContext","toolInfo","tool","inputSchema"]`.
+   * `Tool` declares `inputSchema` as required and the SDK validates the
+   * initialize result, so omitting it is not a cautious partial answer: an app
+   * built on that SDK rejects the handshake outright.
    */
   toolInputSchema?: Record<string, unknown>;
   /** Proxy a `tools/call` the view made. Rejects with the reason on refusal. */
   onToolCall?: (name: string, args: Record<string, unknown>) => Promise<McpToolResult>;
-  /** The View's reported content height, in pixels. */
-  onHeight: (height: number) => void;
-  /**
-   * Read a resource for the View (`resources/read`).
-   *
-   * Optional because the capability is advertised only when it is wired: an
-   * origin-less iframe cannot fetch, so a View that needs data has no route but
-   * this one, and a host that claims the capability and then refuses is worse
-   * than one that never claimed it.
-   */
+  /** Read a resource for the view, since an origin-less frame cannot fetch. */
   onReadResource?: (uri: string) => Promise<unknown[]>;
-  /** Put the View's text into the conversation (`ui/message`). */
+  /** Put the view's text into the conversation (`ui/message`). */
   onMessage?: (text: string) => void;
-  /** Replace the context the View contributes to the next turn. */
+  /** Replace the context the view contributes to the next turn. */
   onModelContext?: (context: Record<string, unknown>) => void;
-  /**
-   * Display modes this surface can actually put the View into.
-   *
-   * Advertised to the View, and the ceiling on what a request can be granted.
-   * Defaults to inline only, which is what a card with a fixed height can do.
-   */
+  /** The view's reported content height, in pixels. */
+  onHeight: (height: number) => void;
+  /** Display modes this surface can put the view into. Inline only by default. */
   displayModes?: string[];
-  /** The View got a new display mode. Move it, then the host notifies it. */
+  /** The view got a new display mode. Move it, then the host notifies it. */
   onDisplayMode?: (mode: string) => void;
 }
 
 export interface McpAppHost {
-  /** Feed every window message here. Anything not from `view` is ignored. */
-  handleMessage: (event: MessageEvent, view: Window | null) => void;
-  /**
-   * The tool's arguments as they stand.
-   *
-   * Call it as often as they change. While `final` is false each call is a
-   * `ui/notifications/tool-input-partial`, which is how an app draws itself
-   * progressively instead of appearing all at once when the tool returns.
-   * `final: true` sends the one `ui/notifications/tool-input` and closes the
-   * partial stream for good, which the spec requires.
-   */
-  setToolInput: (view: Window | null, args: Record<string, unknown>, final: boolean) => void;
-  /** The finished result. Ordered after `tool-input`, which the spec requires. */
-  setToolResult: (view: Window | null, result: McpToolResult) => void;
-  /** Ask the View to shut down before the frame is dropped. */
-  teardown: (view: Window | null, reason: string) => void;
-  /**
-   * Tell the View its display mode changed, when the HOST is the one changing
-   * it (a person pressing Escape out of fullscreen, say). The View's own
-   * requests are answered inline and notified for free.
-   */
-  setDisplayMode: (view: Window | null, mode: string) => void;
+  /** Attach to a live iframe and run the handshake. */
+  connect: (view: Window) => Promise<void>;
+  /** The tool's arguments as they stand. `final` closes the partial stream. */
+  setToolInput: (args: Record<string, unknown>, final: boolean) => void;
+  /** The finished result. */
+  setToolResult: (result: McpToolResult) => void;
+  /** Tell the view its mode changed, when the HOST is the one changing it. */
+  setDisplayMode: (mode: string) => void;
+  /** Ask the view to shut down before the frame is dropped. */
+  teardown: (reason: string) => void;
 }
 
 /**
  * The subset of the standardized theme variables we can answer honestly.
  *
  * Keys are from the Theming section of SEP-1865; values are the SPA tokens they
- * come from. Only variables we actually have are sent: the spec has Views fall
+ * come from. Only variables we actually have are sent: the spec has views fall
  * back to their own defaults for anything omitted, so a partial set degrades
  * cleanly and an invented one would not.
  *
@@ -159,310 +116,142 @@ function themeVariables(): Record<string, string> {
 
 /** An MCP Apps host bound to one tool call. */
 export function createMcpAppHost(config: McpAppHostConfig): McpAppHost {
-  /** What this surface can do. */
   const supported = config.displayModes ?? ["inline"];
-  /** What the View said IT can do, from `ui/initialize`. Null until it speaks. */
-  let appModes: string[] | null = null;
-  /** Where the View is now. */
   let mode = supported.includes("inline") ? "inline" : supported[0];
 
-
-  const post = (view: Window | null, message: Record<string, unknown>) => {
-    view?.postMessage({ jsonrpc: "2.0", ...message }, "*");
+  const hostContext = {
+    // A COMPLETE `Tool`. `{type: "object"}` only when the server published no
+    // schema at all, which is a valid empty object schema rather than an
+    // invention: the alternative is a handshake the app refuses.
+    toolInfo: {
+      tool: {
+        name: config.toolName,
+        inputSchema: config.toolInputSchema ?? { type: "object" },
+      },
+    },
+    theme: document.documentElement.classList.contains("dark") ? "dark" : "light",
+    styles: { variables: themeVariables() },
+    displayMode: mode,
+    availableDisplayModes: supported,
+    // Flexible height: the view decides, up to a ceiling, and tells us through
+    // `ui/notifications/size-changed`.
+    containerDimensions: { maxHeight: 640 },
+    locale: navigator.language,
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    userAgent: "custom-demos-spa",
+    platform: "web",
   };
 
-  const notify = (view: Window | null, method: string, params: Record<string, unknown>) => {
-    post(view, { method, params });
-  };
-
-  const reply = (view: Window | null, id: string | number, result: Record<string, unknown>) => {
-    post(view, { id, result });
-  };
-
-  const fail = (view: Window | null, id: string | number, message: string) => {
-    post(view, { id, error: { code: -32000, message } });
-  };
-
-  /** The initialize result: who we are, what we support, and the host's look. */
-  const initializeResult = () => ({
-    protocolVersion: PROTOCOL_VERSION,
-    hostInfo: { name: "custom-demos-spa", version: "1.0.0" },
-    hostCapabilities: {
+  const bridge = new AppBridge(
+    // No MCP client: the browser has none, so the two proxied methods are
+    // answered by the handlers below instead of being forwarded by the SDK.
+    null,
+    { name: "custom-demos-spa", version: "1.0.0" },
+    {
       openLinks: {},
-      serverTools: {},
       logging: {},
-      // Advertised only when the caller wired a reader. The spec has Views check
-      // capabilities before relying on a method, so claiming this without one
-      // would send an app down a path that can only fail.
+      ...(config.onToolCall ? { serverTools: {} } : {}),
       ...(config.onReadResource ? { serverResources: {} } : {}),
     },
-    hostContext: {
-      // A complete `Tool`. `{type: "object"}` only when the server published no
-      // schema at all, which is still a valid empty object schema rather than an
-      // invention: the alternative is a handshake the app refuses.
-      toolInfo: {
-        tool: {
-          name: config.toolName,
-          inputSchema: config.toolInputSchema ?? { type: "object" },
-        },
-      },
-      theme: document.documentElement.classList.contains("dark") ? "dark" : "light",
-      styles: { variables: themeVariables() },
-      displayMode: mode,
-      availableDisplayModes: supported,
-      // Flexible height: the View decides, up to a ceiling, and tells us through
-      // `ui/notifications/size-changed`.
-      containerDimensions: { maxHeight: 640 },
-      locale: navigator.language,
-      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      userAgent: "custom-demos-spa",
-      platform: "web",
+    { hostContext: hostContext as never },
+  );
+
+  bridge.onsizechange = ({ height }) => {
+    if (typeof height === "number") config.onHeight(height);
+  };
+
+  bridge.oncalltool = async (params) => {
+    if (!config.onToolCall) throw new Error("This host does not proxy tool calls from an app.");
+    const result = await config.onToolCall(
+      String(params.name),
+      (params.arguments ?? {}) as Record<string, unknown>,
+    );
+    return {
+      content: (result.content ?? []) as never,
+      structuredContent: result.structuredContent as never,
+      isError: false,
+    };
+  };
+
+  bridge.onreadresource = async (params) => {
+    if (!config.onReadResource) throw new Error("This host does not proxy resources/read.");
+    return { contents: (await config.onReadResource(String(params.uri))) as never };
+  };
+
+  bridge.onopenlink = async (params) => {
+    const url = String(params.url ?? "");
+    // Only the schemes a link can safely be. `javascript:` in particular would
+    // run in THIS page, which is the whole thing the sandbox prevents.
+    if (!/^https?:\/\//i.test(url)) throw new Error("Only http and https links can be opened.");
+    window.open(url, "_blank", "noopener,noreferrer");
+    return {};
+  };
+
+  bridge.onrequestdisplaymode = async (params) => {
+    const wanted = String(params.mode ?? "");
+    // The SDK already refuses a mode the view never declared. This is the other
+    // half: a mode THIS surface cannot do. Either way the resulting mode is
+    // returned, which is what lets a view rely on the answer.
+    if (supported.includes(wanted) && wanted !== mode) {
+      mode = wanted;
+      config.onDisplayMode?.(mode);
+    }
+
+    return { mode: mode as "inline" | "fullscreen" | "pip" };
+  };
+
+  bridge.onupdatemodelcontext = async (params) => {
+    if (!config.onModelContext) throw new Error("This host does not carry model context.");
+    // Each call REPLACES the last, per the spec, so the handler is handed the
+    // whole thing rather than a delta to merge.
+    config.onModelContext({
+      content: params.content,
+      structuredContent: params.structuredContent,
+    });
+    return {};
+  };
+
+  bridge.onmessage = async (params) => {
+    // The honest refusal. An app rendered for a PAUSED call cannot put a turn
+    // into the conversation, and saying so beats accepting and dropping it.
+    if (!config.onMessage) throw new Error("This host cannot accept a message right now.");
+    const text = String((params.content as { text?: string })?.text ?? "").trim();
+    if (!text) throw new Error("ui/message needs content.text.");
+    config.onMessage(text);
+    return {};
+  };
+
+  return {
+    connect: async (view: Window) => {
+      // Host end: post to the frame, accept only from the frame. A sandbox with
+      // no allow-same-origin has an opaque origin, so matching the source window
+      // is the only identification available, and the SDK does it for us.
+      await bridge.connect(new PostMessageTransport(view, view));
     },
-  });
-
-  /*
-   * The call arrives in pieces, and the spec fixes their order: any number of
-   * `tool-input-partial`, then exactly one `tool-input`, then `tool-result`.
-   *
-   * The View may finish its handshake at any point in that sequence, so this
-   * keeps the latest of each and flushes whatever it holds once the View says
-   * it is ready. Sending before then is not allowed, and dropping what arrived
-   * early would leave an app waiting for input it already missed.
-   */
-  let ready = false;
-  // The latest arguments are KEPT, not consumed: a result arriving mid-stream
-  // has to be preceded by a `tool-input`, and that has to carry the last thing
-  // we knew rather than an empty object.
-  let latestArgs: Record<string, unknown> | null = null;
-  let argsDirty = false;
-  let argsAreFinal = false;
-  let inputSent = false;
-  let pendingResult: McpToolResult | null = null;
-  let resultSent = false;
-
-  const flush = (view: Window | null) => {
-    if (!ready) return;
-
-    if (!inputSent) {
-      // A result settles the arguments whatever the caller last said: there
-      // will be no more partials, and `tool-input` is required before it.
-      if (pendingResult) argsAreFinal = true;
-
-      if (argsAreFinal) {
-        notify(view, "ui/notifications/tool-input", { arguments: latestArgs ?? {} });
-        inputSent = true;
-        argsDirty = false;
-      } else if (argsDirty) {
-        notify(view, "ui/notifications/tool-input-partial", { arguments: latestArgs ?? {} });
-        argsDirty = false;
-      }
-    }
-
-    // `tool-input` is required BEFORE `tool-result`, so a result that arrives
-    // while the arguments are still streaming waits its turn rather than
-    // reaching the app out of order.
-    if (pendingResult && inputSent && !resultSent) {
-      notify(view, "ui/notifications/tool-result", {
-        structuredContent: pendingResult.structuredContent ?? {},
-        content: pendingResult.content ?? [],
+    setToolInput: (args, final) => {
+      // The SDK enforces the ordering the spec fixes: partials before the one
+      // `tool-input`, and none after it.
+      void (final
+        ? bridge.sendToolInput({ arguments: args })
+        : bridge.sendToolInputPartial({ arguments: args }));
+    },
+    setToolResult: (result) => {
+      void bridge.sendToolResult({
+        content: (result.content ?? []) as never,
+        structuredContent: result.structuredContent as never,
       });
-      resultSent = true;
-      pendingResult = null;
-    }
+    },
+    setDisplayMode: (next: string) => {
+      if (!supported.includes(next) || next === mode) return;
+      mode = next;
+      config.onDisplayMode?.(next);
+      void bridge.sendHostContextChange({ displayMode: next as "inline" | "fullscreen" | "pip" });
+    },
+    teardown: (reason: string) => {
+      // A request, not a notification: the spec has the host wait for the view
+      // to acknowledge so it can save what the person typed. We do not block the
+      // unmount on it, but sending it is what gives a view the chance.
+      void bridge.teardownResource({ reason }).catch(() => {});
+    },
   };
-
-  const setToolInput = (
-    view: Window | null,
-    args: Record<string, unknown>,
-    final: boolean,
-  ) => {
-    // Once the complete arguments have gone out, a later partial would be a
-    // regression to a half-built value. The spec says stop, so stop.
-    if (inputSent) return;
-    latestArgs = args;
-    argsDirty = true;
-    argsAreFinal = final;
-    flush(view);
-  };
-
-  const setToolResult = (view: Window | null, result: McpToolResult) => {
-    if (resultSent) return;
-    pendingResult = result;
-    flush(view);
-  };
-
-  const onToolsCall = (
-    view: Window | null,
-    id: string | number,
-    params: Record<string, unknown>,
-  ) => {
-    const name = String(params.name ?? "");
-    if (!config.onToolCall) {
-      fail(view, id, "This host does not proxy tool calls from an app.");
-      return;
-    }
-    if (!name) {
-      fail(view, id, "tools/call needs a name.");
-      return;
-    }
-
-    const args = (params.arguments ?? {}) as Record<string, unknown>;
-    // Async, so the reply comes later. The refusal path answers too: the app is
-    // holding a promise open and a dropped request is a button that hangs.
-    void config
-      .onToolCall(name, args)
-      .then((result) => reply(view, id, { ...result, isError: false }))
-      .catch((err: unknown) =>
-        fail(view, id, err instanceof Error ? err.message : String(err)),
-      );
-  };
-
-  const handleMessage = (event: MessageEvent, view: Window | null) => {
-    // A sandbox without allow-same-origin has an opaque origin, so every message
-    // arrives as "null" and origin cannot identify it. Match the frame's own
-    // window, which no other document can forge.
-    if (!view || event.source !== view) return;
-    const msg = (event.data ?? {}) as RpcMessage;
-    if (msg.jsonrpc !== "2.0" || !msg.method) return;
-    const params = msg.params ?? {};
-
-    if (msg.id === undefined) {
-      if (msg.method === "ui/notifications/initialized") {
-        ready = true;
-        flush(view);
-      }
-      else if (msg.method === "ui/notifications/size-changed") {
-        const height = params.height;
-        if (typeof height === "number") config.onHeight(height);
-      }
-      // `notifications/message` is the View's log channel. Nothing to do with it
-      // here, and a notification takes no reply.
-      return;
-    }
-
-    switch (msg.method) {
-      case "ui/initialize": {
-        // The View's own capabilities cap what we may ever switch it to: a host
-        // MUST NOT move a View into a mode it never claimed.
-        const caps = params.appCapabilities as
-          | { availableDisplayModes?: unknown }
-          | undefined;
-        const declared = caps?.availableDisplayModes;
-        appModes = Array.isArray(declared) ? declared.map(String) : null;
-        reply(view, msg.id, initializeResult());
-        return;
-      }
-      case "tools/call":
-        onToolsCall(view, msg.id, params);
-        return;
-      case "ui/open-link": {
-        const url = String(params.url ?? "");
-        // Only the schemes a link can safely be. `javascript:` in particular
-        // would run in THIS page, which is the whole thing the sandbox prevents.
-        if (!/^https?:\/\//i.test(url)) {
-          fail(view, msg.id, "Only http and https links can be opened.");
-          return;
-        }
-
-        window.open(url, "_blank", "noopener,noreferrer");
-        reply(view, msg.id, {});
-        return;
-      }
-      case "ui/request-display-mode": {
-        const wanted = String(params.mode ?? "");
-        // Grantable only if BOTH sides can do it. `appModes` being null means
-        // the View declared nothing, which the spec lets a host decline; we
-        // allow it, because a View that asks for a mode is claiming it can
-        // handle the mode it asked for.
-        const allowed =
-          supported.includes(wanted) && (appModes === null || appModes.includes(wanted));
-        if (allowed && wanted !== mode) {
-          mode = wanted;
-          config.onDisplayMode?.(mode);
-        }
-
-        // The RESULTING mode either way, which is a MUST, and is why a View can
-        // rely on the answer instead of assuming it got what it asked for.
-        reply(view, msg.id, { mode });
-        return;
-      }
-      case "resources/read": {
-        const uri = String(params.uri ?? "");
-        if (!config.onReadResource) {
-          fail(view, msg.id, "This host does not proxy resources/read.");
-          return;
-        }
-        if (!uri) {
-          fail(view, msg.id, "resources/read needs a uri.");
-          return;
-        }
-
-        // Async, so the reply comes later. The View is holding a promise open
-        // and a dropped request would hang it, which is why the rejection path
-        // answers too.
-        void config
-          .onReadResource(uri)
-          .then((contents) => reply(view, msg.id as string | number, { contents }))
-          .catch((err: unknown) =>
-            fail(view, msg.id as string | number, err instanceof Error ? err.message : String(err)),
-          );
-        return;
-      }
-      case "ui/message": {
-        const content = params.content as { text?: string } | undefined;
-        const text = String(content?.text ?? "").trim();
-        if (!config.onMessage) {
-          // The honest refusal. An app rendered for a PAUSED tool call cannot
-          // put a turn into the conversation: the run is interrupted and the
-          // only thing that moves it is the elicitation answer. Saying so beats
-          // accepting the message and dropping it.
-          fail(view, msg.id, "This host cannot accept a message while a tool call is paused.");
-          return;
-        }
-        if (!text) {
-          fail(view, msg.id, "ui/message needs content.text.");
-          return;
-        }
-
-        config.onMessage(text);
-        reply(view, msg.id, {});
-        return;
-      }
-      case "ui/update-model-context":
-        if (!config.onModelContext) {
-          fail(view, msg.id, "This host does not carry model context from an app.");
-          return;
-        }
-
-        // Each call REPLACES the last, per the spec, so the handler is handed
-        // the whole thing rather than a delta to merge.
-        config.onModelContext({
-          content: params.content,
-          structuredContent: params.structuredContent,
-        });
-        reply(view, msg.id, {});
-        return;
-      case "ping":
-        reply(view, msg.id, {});
-        return;
-      default:
-        fail(view, msg.id, `Unsupported method: ${msg.method}`);
-    }
-  };
-
-  const setDisplayMode = (view: Window | null, next: string) => {
-    if (!supported.includes(next) || next === mode) return;
-    mode = next;
-    config.onDisplayMode?.(mode);
-    notify(view, "ui/notifications/host-context-changed", { displayMode: mode });
-  };
-
-  const teardown = (view: Window | null, reason: string) => {
-    // A request, not a notification: the spec has the host wait for the View to
-    // acknowledge so it can save what the person typed. We do not block the
-    // unmount on it, but sending it is what gives a View the chance.
-    post(view, { id: `teardown-${Date.now()}`, method: "ui/resource-teardown", params: { reason } });
-  };
-
-  return { handleMessage, teardown, setDisplayMode, setToolInput, setToolResult };
 }

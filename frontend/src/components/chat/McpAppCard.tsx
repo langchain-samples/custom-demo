@@ -78,7 +78,7 @@ function AppFrame({
   const [mode, setMode] = useState("inline");
 
   useEffect(() => {
-    host.current = createMcpAppHost({
+    const bridge = createMcpAppHost({
       toolName,
       toolInputSchema: inputSchema,
       // Clamped here rather than in the host: the ceiling is this card's
@@ -94,11 +94,15 @@ function AppFrame({
       // never reloads the app.
       onDisplayMode: setMode,
     });
-    const onMessage = (event: MessageEvent) => host.current?.handleMessage(event, view());
-    window.addEventListener("message", onMessage);
+    host.current = bridge;
+    // The SDK's transport owns the message listener now, so the only wiring
+    // left is handing it the frame once. NOT on `onLoad`: the app opens its
+    // handshake as soon as its inline script runs, which is before load fires,
+    // and a transport attached late would miss `ui/initialize` entirely.
+    const win = ref.current?.contentWindow;
+    if (win) void bridge.connect(win).catch(() => {});
     return () => {
-      window.removeEventListener("message", onMessage);
-      host.current?.teardown(view(), "The app was closed.");
+      bridge.teardown("The app was closed.");
       host.current = null;
     };
     // Deliberately NOT keyed on the arguments or the result. Those change on
@@ -107,21 +111,18 @@ function AppFrame({
     // sit there talking to a host that had forgotten it.
   }, [toolName, servers, inputSchema]);
 
-  const view = () => ref.current?.contentWindow ?? null;
-
-  // Feed the call in as it arrives. The host holds anything that lands before
-  // the app has finished its handshake and flushes it then.
+  // Feed the call in as it arrives.
   useEffect(() => {
-    host.current?.setToolInput(view(), toolArguments, !streaming);
+    host.current?.setToolInput(toolArguments, !streaming);
   }, [toolArguments, streaming]);
 
   useEffect(() => {
-    if (toolResult) host.current?.setToolResult(view(), toolResult);
+    if (toolResult) host.current?.setToolResult(toolResult);
   }, [toolResult]);
 
   /** Leave fullscreen, and tell the app so it can put its own chrome back. */
   const collapse = useCallback(() => {
-    host.current?.setDisplayMode(ref.current?.contentWindow ?? null, "inline");
+    host.current?.setDisplayMode("inline");
     setMode("inline");
   }, []);
 

@@ -1,438 +1,195 @@
 // @vitest-environment jsdom
 /**
- * The host half of MCP Apps, checked against the message names SEP-1865 fixes.
+ * Our half of the MCP Apps host: everything the SDK does not decide.
  *
- * These names are a contract with software we did not write: a third-party app
- * rendered here, and our own apps rendered in someone else's host. A rename on
- * either side does not fail loudly, it just leaves a blank iframe and a run
- * paused forever, so the wire form is pinned here rather than inferred from the
- * one app we happen to ship.
+ * `AppBridge` now owns the wire format, version negotiation and message
+ * ordering, so re-testing those would be testing someone else's library. What
+ * is still ours, and what these cover, is the host context we hand it, which
+ * capabilities we claim, and how each handler answers, including the refusals.
  *
- * The View is a plain object rather than a real iframe: `handleMessage` matches
- * on `event.source`, and jsdom cannot run a srcdoc anyway. The app's own half of
- * this conversation is exercised for real in
- * `custom_demo/tests/signature_app_test.js`.
+ * The bridge is mocked rather than driven over a real `postMessage`: the
+ * handlers are the unit under test, and calling them directly says more than
+ * asserting on frames. The app's own half is exercised for real against a built
+ * app in `custom_demo/tests/signature_app_test.js`.
  */
-import { describe, expect, it, vi } from "vitest";
-import { createMcpAppHost, PROTOCOL_VERSION, type McpToolResult } from "./mcpAppHost";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-/** What `sign_document` returns: the label the pad draws itself from. */
-const RESULT = {
-  structuredContent: {
-    account_id: "MW-10241",
-    household: "Whitfield Family Trust",
-    document: "IPS amendment",
+const built = vi.hoisted(() => ({ current: null as null | Record<string, unknown> }));
+
+vi.mock("@modelcontextprotocol/ext-apps/app-bridge", () => ({
+  PostMessageTransport: class {},
+  AppBridge: class {
+    // Plain assignment, not parameter properties: this repo compiles with
+    // `erasableSyntaxOnly`, which forbids the shorthand.
+    client: unknown;
+    info: unknown;
+    capabilities: Record<string, unknown>;
+    options: { hostContext: Record<string, unknown> };
+    constructor(
+      client: unknown,
+      info: unknown,
+      capabilities: Record<string, unknown>,
+      options: { hostContext: Record<string, unknown> },
+    ) {
+      this.client = client;
+      this.info = info;
+      this.capabilities = capabilities;
+      this.options = options;
+      built.current = this as unknown as Record<string, unknown>;
+    }
+    connect = vi.fn(async () => {});
+    sendToolInput = vi.fn(async () => {});
+    sendToolInputPartial = vi.fn(async () => {});
+    sendToolResult = vi.fn(async () => {});
+    sendHostContextChange = vi.fn(async () => {});
+    teardownResource = vi.fn(async () => ({}));
   },
-};
+}));
 
-/** A stand-in for the iframe's contentWindow that records what it is sent. */
-function view() {
-  const sent: Record<string, unknown>[] = [];
-  const win = { postMessage: (m: Record<string, unknown>) => void sent.push(m) };
-  return { win: win as unknown as Window, sent };
+const { createMcpAppHost } = await import("./mcpAppHost");
+
+type Cfg = Parameters<typeof createMcpAppHost>[0];
+
+function host(overrides: Partial<Cfg> = {}) {
+  const api = createMcpAppHost({ toolName: "meridian_sign_document", onHeight: () => {}, ...overrides });
+  const bridge = built.current as Record<string, never>;
+  return { api, bridge };
 }
 
-/** Build a host plus its View, wired the way the card wires them. */
-function host(
-  overrides: {
-    onToolCall?: (name: string, args: Record<string, unknown>) => Promise<McpToolResult>;
-    onReadResource?: (uri: string) => Promise<unknown[]>;
-    onMessage?: (text: string) => void;
-    onModelContext?: (c: Record<string, unknown>) => void;
-    toolInputSchema?: Record<string, unknown>;
-    displayModes?: string[];
-    onDisplayMode?: (mode: string) => void;
-  } = {},
-) {
-  const target = view();
-  const onToolCall = vi.fn(overrides.onToolCall ?? (async () => ({})));
-  const onHeight = vi.fn();
-  const bridge = createMcpAppHost({
-    toolName: "meridian_sign_document",
-    toolInputSchema: overrides.toolInputSchema,
-    displayModes: overrides.displayModes,
-    onDisplayMode: overrides.onDisplayMode,
-    onToolCall,
-    onHeight,
-    onReadResource: overrides.onReadResource,
-    onMessage: overrides.onMessage,
-    onModelContext: overrides.onModelContext,
-  });
-  /** Deliver one JSON-RPC message as if the View had posted it. */
-  const from = (msg: Record<string, unknown>, source: unknown = target.win) =>
-    bridge.handleMessage({ data: msg, source } as MessageEvent, target.win);
-  return { bridge, target, onToolCall, onHeight, from };
-}
+beforeEach(() => (built.current = null));
 
-/** The first message the host sent with this method. */
-const sent = (msgs: Record<string, unknown>[], method: string) =>
-  msgs.find((m) => m.method === method);
-
-/** The reply to a given JSON-RPC id. */
-const reply = (msgs: Record<string, unknown>[], id: number) =>
-  msgs.find((m) => m.id === id && m.method === undefined);
-
-describe("the handshake", () => {
-  it("answers ui/initialize with the protocol version and the host's context", () => {
-    const { target, from } = host();
-    from({ jsonrpc: "2.0", id: 1, method: "ui/initialize", params: {} });
-
-    const result = reply(target.sent, 1)?.result as Record<string, unknown>;
-    expect(result).toBeTruthy();
-    const ctx = result.hostContext as Record<string, unknown>;
-    expect(result.protocolVersion).toBe(PROTOCOL_VERSION);
-    // A COMPLETE `Tool`. `inputSchema` is required by that type and the official
-    // app SDK validates the initialize result against it, so leaving it out is
-    // not a cautious partial answer: Excalidraw's app rejected the handshake
-    // with `path: ["hostContext","toolInfo","tool","inputSchema"]`.
-    const tool = (ctx.toolInfo as { tool: Record<string, unknown> }).tool;
-    expect(tool.name).toBe("meridian_sign_document");
-    expect(tool.inputSchema).toEqual({ type: "object" });
-    expect(ctx.displayMode).toBe("inline");
-    // Flexible height, which is the mode that pairs with size-changed below.
-    expect(ctx.containerDimensions).toEqual({ maxHeight: 640 });
-  });
-
-  it("holds the call until the View says it is ready, then flushes it", () => {
-    const { bridge, target, from } = host();
-    const args = { account_id: "MW-10241", document: "IPS amendment" };
-    // Everything arrives BEFORE the handshake finishes, which is the ordinary
-    // race: dropping it would leave the app waiting for input it already
-    // missed.
-    bridge.setToolInput(target.win, args, true);
-    bridge.setToolResult(target.win, RESULT);
-    expect(target.sent).toHaveLength(0);
-
-    from({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
-
-    const input = sent(target.sent, "ui/notifications/tool-input");
-    const result = sent(target.sent, "ui/notifications/tool-result");
-    expect(input).toBeTruthy();
-    expect((input!.params as { arguments: unknown }).arguments).toEqual(args);
-    // Input first, then result. The spec requires that order.
-    expect(target.sent.indexOf(input!)).toBeLessThan(target.sent.indexOf(result!));
-    expect((result?.params as Record<string, unknown>).structuredContent).toEqual(
-      RESULT.structuredContent,
-    );
-  });
-
-  it("passes the server's real schema through when there is one", () => {
+describe("the host context we hand the SDK", () => {
+  it("carries a COMPLETE tool, schema included", () => {
     const schema = { type: "object", properties: { elements: { type: "string" } } };
-    const { target, from } = host({ toolInputSchema: schema });
-    from({ jsonrpc: "2.0", id: 1, method: "ui/initialize", params: {} });
-    const got = reply(target.sent, 1)?.result as Record<string, unknown> | undefined;
-    const ctx = got?.hostContext as Record<string, unknown>;
-    expect((ctx.toolInfo as { tool: { inputSchema: unknown } }).tool.inputSchema).toEqual(schema);
+    const { bridge } = host({ toolInputSchema: schema });
+    const tool = (bridge.options as never as { hostContext: never }).hostContext as never as {
+      toolInfo: { tool: { name: string; inputSchema: unknown } };
+    };
+    // `inputSchema` is required by `Tool`, and Excalidraw's app rejected the
+    // whole handshake when we left it out.
+    expect(tool.toolInfo.tool.name).toBe("meridian_sign_document");
+    expect(tool.toolInfo.tool.inputSchema).toEqual(schema);
   });
 
-  it("streams partial arguments, then closes with the complete ones", () => {
-    const { bridge, target, from } = host();
-    from({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
-
-    bridge.setToolInput(target.win, { elements: "[{" }, false);
-    bridge.setToolInput(target.win, { elements: "[{a:1}," }, false);
-    bridge.setToolInput(target.win, { elements: "[{a:1},{b:2}]" }, true);
-
-    const partials = target.sent.filter(
-      (m) => m.method === "ui/notifications/tool-input-partial",
-    );
-    // This is the whole difference between a diagram that draws itself and one
-    // that appears finished.
-    expect(partials).toHaveLength(2);
-    expect((partials[1].params as { arguments: { elements: string } }).arguments.elements).toBe(
-      "[{a:1},",
-    );
-
-    const finals = target.sent.filter((m) => m.method === "ui/notifications/tool-input");
-    expect(finals).toHaveLength(1);
+  it("falls back to an empty object schema, never to nothing", () => {
+    const { bridge } = host();
+    const ctx = (bridge.options as never as { hostContext: never }).hostContext as never as {
+      toolInfo: { tool: { inputSchema: unknown } };
+    };
+    expect(ctx.toolInfo.tool.inputSchema).toEqual({ type: "object" });
   });
 
-  it("stops sending partials once the complete arguments have gone", () => {
-    const { bridge, target, from } = host();
-    from({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
-    bridge.setToolInput(target.win, { a: 1 }, true);
-    // The spec says MUST stop. A later partial would walk the app back to a
-    // half-built value it had already moved past.
-    bridge.setToolInput(target.win, { a: 2 }, false);
-
-    expect(target.sent.filter((m) => m.method === "ui/notifications/tool-input-partial")).toHaveLength(0);
-    expect(target.sent.filter((m) => m.method === "ui/notifications/tool-input")).toHaveLength(1);
-  });
-
-  it("never lets a result overtake the arguments", () => {
-    const { bridge, target, from } = host();
-    from({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
-    bridge.setToolInput(target.win, { a: 1 }, false);
-    // A result while the arguments are still streaming settles them, because
-    // `tool-input` is required before `tool-result` and there will be no more.
-    bridge.setToolResult(target.win, { structuredContent: { done: true } });
-
-    const order = target.sent.filter((m) => String(m.method).startsWith("ui/notifications/tool-"));
-    expect(order.map((m) => m.method)).toEqual([
-      "ui/notifications/tool-input-partial",
-      "ui/notifications/tool-input",
-      "ui/notifications/tool-result",
-    ]);
-  });
-
-  it("ignores anything that did not come from its own View", () => {
-    const { target, from } = host();
-    from({ jsonrpc: "2.0", id: 1, method: "ui/initialize", params: {} }, { other: true });
-    expect(target.sent).toHaveLength(0);
-  });
-
-  it("ignores traffic that is not JSON-RPC", () => {
-    const { target, from } = host();
-    from({ type: "mcp-app:ready" });
-    expect(target.sent).toHaveLength(0);
-  });
-});
-
-describe("proxying what the app calls", () => {
-  it("forwards a tools/call and replies with the result", async () => {
-    const onToolCall = vi.fn(async () => ({ structuredContent: { reference: "MW-DOC-1" } }));
-    const { target, from } = host({ onToolCall });
-    from({
-      jsonrpc: "2.0",
-      id: 7,
-      method: "tools/call",
-      params: { name: "meridian_submit_signature", arguments: { signed_by: "Grace" } },
-    });
-
-    expect(onToolCall).toHaveBeenCalledWith("meridian_submit_signature", { signed_by: "Grace" });
-    await vi.waitFor(() => {
-      const got = reply(target.sent, 7)?.result as Record<string, unknown> | undefined;
-      expect(got?.structuredContent).toEqual({ reference: "MW-DOC-1" });
-    });
-  });
-
-  it("hands a refusal back as the reason, not as silence", async () => {
-    const onToolCall = vi.fn(async () => {
-      throw new Error("meridian_list_accounts is not open to apps");
-    });
-    const { target, from } = host({ onToolCall });
-    from({
-      jsonrpc: "2.0",
-      id: 8,
-      method: "tools/call",
-      params: { name: "meridian_list_accounts", arguments: {} },
-    });
-
-    // A dropped request is a button that hangs, which is worse than a refusal.
-    await vi.waitFor(() => {
-      const e = reply(target.sent, 8)?.error as { message: string } | undefined;
-      expect(e?.message).toMatch(/not open to apps/);
-    });
-  });
-
-  it("refuses a call when no proxy is wired", () => {
-    const { target, from } = host({ onToolCall: undefined });
-    // The default stub in `host` is a proxy, so build one without it.
-    const bare = createMcpAppHost({ toolName: "t", onHeight: () => {} });
-    bare.handleMessage(
-      { data: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "x" } }, source: target.win } as MessageEvent,
-      target.win,
-    );
-    expect(reply(target.sent, 1)?.error).toBeTruthy();
-    void from;
-  });
-
-  it("refuses a call with no name", () => {
-    const { target, from } = host();
-    from({ jsonrpc: "2.0", id: 9, method: "tools/call", params: {} });
-    expect(reply(target.sent, 9)?.error).toBeTruthy();
-  });
-});
-
-describe("the rest of the surface", () => {
-  it("resizes the frame to the height the View reports", () => {
-    const { onHeight, from } = host();
-    from({
-      jsonrpc: "2.0",
-      method: "ui/notifications/size-changed",
-      params: { width: 400, height: 288 },
-    });
-    expect(onHeight).toHaveBeenCalledWith(288);
-  });
-
-  it("opens an http link but refuses any other scheme", () => {
-    const open = vi.spyOn(window, "open").mockImplementation(() => null);
-    const { target, from } = host();
-    from({ jsonrpc: "2.0", id: 1, method: "ui/open-link", params: { url: "https://example.com" } });
-    expect(open).toHaveBeenCalled();
-
-    open.mockClear();
-    // javascript: would run in THIS page, which is the whole point of the sandbox.
-    from({ jsonrpc: "2.0", id: 2, method: "ui/open-link", params: { url: "javascript:alert(1)" } });
-    expect(open).not.toHaveBeenCalled();
-    expect(reply(target.sent, 2)?.error).toBeTruthy();
-    open.mockRestore();
-  });
-
-  it("declines a mode this surface cannot do, and says which one it kept", () => {
-    const { target, from } = host();
-    from({ jsonrpc: "2.0", id: 4, method: "ui/request-display-mode", params: { mode: "pip" } });
-    // Returning the RESULTING mode is a MUST, which is what lets a View rely on
-    // the answer instead of assuming it got what it asked for.
-    expect(reply(target.sent, 4)?.result).toEqual({ mode: "inline" });
-  });
-
-  it("grants fullscreen when both sides can do it", () => {
-    const onDisplayMode = vi.fn();
-    const { target, from } = host({ displayModes: ["inline", "fullscreen"], onDisplayMode });
-    from({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "ui/initialize",
-      params: { appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] } },
-    });
-    from({ jsonrpc: "2.0", id: 5, method: "ui/request-display-mode", params: { mode: "fullscreen" } });
-
-    expect(reply(target.sent, 5)?.result).toEqual({ mode: "fullscreen" });
-    expect(onDisplayMode).toHaveBeenCalledWith("fullscreen");
-  });
-
-  it("refuses a mode the View never declared it could handle", () => {
-    const onDisplayMode = vi.fn();
-    const { target, from } = host({ displayModes: ["inline", "fullscreen"], onDisplayMode });
-    // A host MUST NOT move a View into a mode absent from its capabilities,
-    // however willing the host is.
-    from({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "ui/initialize",
-      params: { appCapabilities: { availableDisplayModes: ["inline"] } },
-    });
-    from({ jsonrpc: "2.0", id: 6, method: "ui/request-display-mode", params: { mode: "fullscreen" } });
-
-    expect(reply(target.sent, 6)?.result).toEqual({ mode: "inline" });
-    expect(onDisplayMode).not.toHaveBeenCalled();
-  });
-
-  it("advertises every mode the surface supports", () => {
-    const { target, from } = host({ displayModes: ["inline", "fullscreen"] });
-    from({ jsonrpc: "2.0", id: 1, method: "ui/initialize", params: {} });
-    const got = reply(target.sent, 1)?.result as Record<string, unknown> | undefined;
-    const ctx = got?.hostContext as Record<string, unknown>;
-    // A View MUST check this before asking, so understating it is what makes a
+  it("advertises exactly the display modes this surface supports", () => {
+    const { bridge } = host({ displayModes: ["inline", "fullscreen"] });
+    const ctx = (bridge.options as never as { hostContext: never }).hostContext as never as {
+      availableDisplayModes: string[];
+    };
+    // A view MUST check this before asking, so understating it is what makes a
     // button like Excalidraw's Edit sit there doing nothing.
     expect(ctx.availableDisplayModes).toEqual(["inline", "fullscreen"]);
   });
+});
 
-  it("notifies the View when the HOST changes the mode", () => {
-    const { bridge, target } = host({ displayModes: ["inline", "fullscreen"] });
-    bridge.setDisplayMode(target.win, "fullscreen");
-    const note = sent(target.sent, "ui/notifications/host-context-changed");
-    // Pressing Escape is the host's decision, and the app has to hear about it
-    // to put its own chrome back.
-    expect((note?.params as { displayMode: string }).displayMode).toBe("fullscreen");
+describe("the capabilities we claim", () => {
+  it("claims a proxy only when one is wired", () => {
+    const bare = host().bridge.capabilities as Record<string, unknown>;
+    // Claiming a capability and then refusing it is worse than never claiming.
+    expect(bare.serverTools).toBeUndefined();
+    expect(bare.serverResources).toBeUndefined();
+
+    const wired = host({ onToolCall: async () => ({}), onReadResource: async () => [] }).bridge
+      .capabilities as Record<string, unknown>;
+    expect(wired.serverTools).toBeTruthy();
+    expect(wired.serverResources).toBeTruthy();
   });
+});
 
-  it("answers an unsupported method rather than dropping it", () => {
-    const { target, from } = host();
-    from({ jsonrpc: "2.0", id: 5, method: "ui/nonsense", params: {} });
-    expect(reply(target.sent, 5)?.error).toBeTruthy();
-  });
-
-  it("reads a resource for the View and replies with its contents", async () => {
-    const contents = [{ uri: "tips://what-are-apps", text: "{}" }];
-    const onReadResource = vi.fn(async () => contents as unknown[]);
-    const { target, from } = host({ onReadResource });
-    from({ jsonrpc: "2.0", id: 9, method: "resources/read", params: { uri: "tips://what-are-apps" } });
-
-    expect(onReadResource).toHaveBeenCalledWith("tips://what-are-apps");
-    // The read is async, so the reply lands a microtask later.
-    await vi.waitFor(() => expect(reply(target.sent, 9)?.result).toEqual({ contents }));
-  });
-
-  it("tells the View why a failed read failed, rather than hanging it", async () => {
-    const onReadResource = vi.fn(async () => {
-      throw new Error("that server refused the read");
+describe("the handlers, including what they refuse", () => {
+  it("proxies a tools/call and returns its result", async () => {
+    const onToolCall = vi.fn(async () => ({ structuredContent: { reference: "MW-DOC-1" } }));
+    const { bridge } = host({ onToolCall });
+    const out = await (bridge.oncalltool as (p: unknown) => Promise<{ structuredContent: unknown }>)({
+      name: "meridian_submit_signature",
+      arguments: { signed_by: "Grace" },
     });
-    const { target, from } = host({ onReadResource });
-    from({ jsonrpc: "2.0", id: 10, method: "resources/read", params: { uri: "tips://x" } });
-    await vi.waitFor(() => {
-      const e = reply(target.sent, 10)?.error as { message: string } | undefined;
-      expect(e?.message).toMatch(/refused the read/);
-    });
+    expect(onToolCall).toHaveBeenCalledWith("meridian_submit_signature", { signed_by: "Grace" });
+    expect(out.structuredContent).toEqual({ reference: "MW-DOC-1" });
   });
 
-  it("advertises serverResources only when a reader is wired", () => {
-    const withReader = host({ onReadResource: async () => [] });
-    withReader.from({ jsonrpc: "2.0", id: 1, method: "ui/initialize", params: {} });
-    const got = reply(withReader.target.sent, 1)?.result as Record<string, unknown> | undefined;
-    const caps = got?.hostCapabilities as Record<string, unknown> | undefined;
-    expect(caps?.serverResources).toBeTruthy();
-
-    // Claiming a capability the host then refuses is worse than never claiming it.
-    const without = host();
-    without.from({ jsonrpc: "2.0", id: 1, method: "ui/initialize", params: {} });
-    const plain = reply(without.target.sent, 1)?.result as Record<string, unknown> | undefined;
-    const bare = plain?.hostCapabilities as Record<string, unknown> | undefined;
-    expect(bare?.serverResources).toBeUndefined();
+  it("rejects rather than hanging when nothing is wired", async () => {
+    const { bridge } = host();
+    // A dropped request is a button that hangs, which is worse than a refusal.
+    await expect((bridge.oncalltool as (p: unknown) => Promise<unknown>)({ name: "x" })).rejects.toThrow(
+      /does not proxy tool calls/,
+    );
+    await expect(
+      (bridge.onreadresource as (p: unknown) => Promise<unknown>)({ uri: "tips://x" }),
+    ).rejects.toThrow(/does not proxy resources/);
+    await expect(
+      (bridge.onmessage as (p: unknown) => Promise<unknown>)({ content: { text: "hi" } }),
+    ).rejects.toThrow(/cannot accept a message/);
   });
 
-  it("refuses ui/message while the tool call is paused, and says why", () => {
-    const { target, from } = host();
-    from({
-      jsonrpc: "2.0",
-      id: 11,
-      method: "ui/message",
-      params: { role: "user", content: { type: "text", text: "hello" } },
-    });
-    // Nothing can enter the conversation mid-interrupt, so the app is told
-    // instead of having its message silently dropped.
-    const e = reply(target.sent, 11)?.error as { message: string } | undefined;
-    expect(e?.message).toMatch(/paused/i);
+  it("opens an http link and refuses any other scheme", async () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    const { bridge } = host();
+    await (bridge.onopenlink as (p: unknown) => Promise<unknown>)({ url: "https://example.com" });
+    expect(open).toHaveBeenCalled();
+
+    open.mockClear();
+    // javascript: would run in THIS page, which is the point of the sandbox.
+    await expect(
+      (bridge.onopenlink as (p: unknown) => Promise<unknown>)({ url: "javascript:alert(1)" }),
+    ).rejects.toThrow(/http and https/);
+    expect(open).not.toHaveBeenCalled();
+    open.mockRestore();
   });
 
-  it("passes a message through when the surface can accept one", () => {
-    const onMessage = vi.fn();
-    const { target, from } = host({ onMessage });
-    from({
-      jsonrpc: "2.0",
-      id: 12,
-      method: "ui/message",
-      params: { role: "user", content: { type: "text", text: "  hello  " } },
-    });
-    expect(onMessage).toHaveBeenCalledWith("hello");
-    expect(reply(target.sent, 12)?.result).toEqual({});
+  it("grants a mode it supports and reports the resulting one either way", async () => {
+    const onDisplayMode = vi.fn();
+    const { bridge } = host({ displayModes: ["inline", "fullscreen"], onDisplayMode });
+    const ask = bridge.onrequestdisplaymode as (p: unknown) => Promise<{ mode: string }>;
+
+    expect(await ask({ mode: "fullscreen" })).toEqual({ mode: "fullscreen" });
+    expect(onDisplayMode).toHaveBeenCalledWith("fullscreen");
+    // Not supported here, so the CURRENT mode comes back, not the request.
+    expect(await ask({ mode: "pip" })).toEqual({ mode: "fullscreen" });
   });
 
-  it("replaces model context rather than accumulating it", () => {
+  it("replaces model context rather than accumulating it", async () => {
     const onModelContext = vi.fn();
-    const { from } = host({ onModelContext });
-    from({
-      jsonrpc: "2.0",
-      id: 13,
-      method: "ui/update-model-context",
-      params: { structuredContent: { picked: "a" } },
-    });
-    from({
-      jsonrpc: "2.0",
-      id: 14,
-      method: "ui/update-model-context",
-      params: { structuredContent: { picked: "b" } },
-    });
-    // Each call overwrites the previous, per the spec, so the handler sees whole
-    // values and never a delta to merge.
-    expect(onModelContext).toHaveBeenNthCalledWith(1, {
-      content: undefined,
-      structuredContent: { picked: "a" },
-    });
+    const { bridge } = host({ onModelContext });
+    const send = bridge.onupdatemodelcontext as (p: unknown) => Promise<unknown>;
+    await send({ structuredContent: { picked: "a" } });
+    await send({ structuredContent: { picked: "b" } });
     expect(onModelContext).toHaveBeenNthCalledWith(2, {
       content: undefined,
       structuredContent: { picked: "b" },
     });
   });
+});
 
-  it("asks the View to shut down before the frame goes", () => {
-    const { bridge, target } = host();
-    bridge.teardown(target.win, "The pause was resolved.");
-    const bye = sent(target.sent, "ui/resource-teardown");
-    // A request, not a notification: the View gets a chance to save what the
-    // person typed, which means it needs an id to answer.
-    expect(bye?.id).toBeTruthy();
-    expect((bye?.params as { reason: string } | undefined)?.reason).toMatch(/resolved/i);
+describe("feeding the call in", () => {
+  it("sends partials while streaming and the complete arguments once", () => {
+    const { api, bridge } = host();
+    api.setToolInput({ elements: "[{" }, false);
+    api.setToolInput({ elements: "[{a:1}]" }, true);
+    // The difference between a diagram that draws itself and one that appears
+    // finished. Ordering after this point is the SDK's to enforce.
+    expect(bridge.sendToolInputPartial).toHaveBeenCalledTimes(1);
+    expect(bridge.sendToolInput).toHaveBeenCalledWith({ arguments: { elements: "[{a:1}]" } });
+  });
+
+  it("notifies the view when the HOST changes the mode", () => {
+    const { api, bridge } = host({ displayModes: ["inline", "fullscreen"] });
+    api.setDisplayMode("fullscreen");
+    // Pressing Escape is the host's decision, and the app has to hear about it.
+    expect(bridge.sendHostContextChange).toHaveBeenCalledWith({ displayMode: "fullscreen" });
+  });
+
+  it("asks the view to shut down before the frame goes", () => {
+    const { api, bridge } = host();
+    api.teardown("The app was closed.");
+    expect(bridge.teardownResource).toHaveBeenCalledWith({ reason: "The app was closed." });
   });
 });

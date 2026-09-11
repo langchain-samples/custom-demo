@@ -257,7 +257,11 @@ window.McpApp = (function () {
   // `ready`.
   request("ui/initialize", {
     protocolVersion: PROTOCOL_VERSION,
-    clientInfo: { name: "meridian-app", version: "1.0.0" },
+    // `appInfo`, NOT `clientInfo`. The spec's `ui/initialize` requires it, and a
+    // host built on the official SDK validates the request and rejects the
+    // handshake outright. Our own host never checked, so both halves agreed
+    // with each other and neither agreed with the spec.
+    appInfo: { name: "meridian-app", version: "1.0.0" },
     appCapabilities: { availableDisplayModes: ["inline"] },
   })
     .then(function (result) {

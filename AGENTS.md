@@ -324,8 +324,19 @@ stay that way: nothing can enter the conversation mid-interrupt, so an app there
 tool or send a message.
 
 The conversation with it is **SEP-1865**, JSON-RPC 2.0 over `postMessage`, with the app as MCP
-client and the host as its server. Guest half in `mcp_demo_server/apps/bridge.js`, host half in
-`frontend/src/lib/mcpAppHost.ts`:
+client and the host as its server. The host half (`frontend/src/lib/mcpAppHost.ts`) is a thin
+adapter over **`@modelcontextprotocol/ext-apps`**, the extension's official SDK: `AppBridge` owns
+the wire format, version negotiation and ordering, and we supply the host context and the
+handlers. `AppBridge` takes an MCP `Client` to forward `tools/call` and `resources/read` to; ours
+is `null`, because the browser has no MCP client, so those two are answered through
+`POST /mcp/call` and `POST /mcp/resource`.
+
+The guest half (`mcp_demo_server/apps/bridge.js`) is still hand-written vanilla JS, because an
+app is inlined into an origin-less iframe where bundling React is not free (ours are ~32KB;
+Excalidraw's is 432KB). That asymmetry is the risk `custom_demo/tests/mcp_app_conformance_test.js`
+covers: it parses what `bridge.js` actually sends with the SDK's own schemas. Two hand-written
+halves can agree with each other and disagree with the spec forever, which is precisely what
+`clientInfo` (where `ui/initialize` requires `appInfo`) did until the SDK refused it.
 
     app  -> host   ui/initialize, then ui/notifications/initialized
     host -> app    McpUiInitializeResult (theme, styles, toolInfo, containerDimensions)
