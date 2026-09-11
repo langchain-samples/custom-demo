@@ -194,6 +194,65 @@ def _brandfetch_brand(domain: str) -> dict | None:
     return {"primary": primary, "secondary": secondary, "neutral": neutral, "fonts": fonts}
 
 
+_SITE_CHARS = 1200
+
+
+def _tagless(html: str) -> str:
+    """Visible text of an HTML fragment, whitespace collapsed."""
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)).strip()
+
+
+def site_summary(domain: str) -> str:
+    """What the company at `domain` says it does, from its homepage, or "" if unknown.
+
+    The title, meta/og description and first headings, which is where a company states
+    its own business. Best-effort and audible: any failure prints why and returns "",
+    so the analysis falls back to the model's own knowledge of the name. Returning ""
+    is the honest answer here, because the alternative to this company's description is
+    not a generic one, it is some other company's.
+    """
+    try:
+        with httpx.Client(timeout=8, follow_redirects=True) as c:
+            resp = c.get(f"https://{domain}", headers={"User-Agent": "Mozilla/5.0"})
+
+        if resp.status_code != 200:
+            print(
+                f"[setup] site summary: {domain} answered {resp.status_code}, using the name only"
+            )
+            return ""
+
+        html = resp.text
+    except Exception as exc:  # noqa: BLE001 - the name alone still analyses
+        print(f"[setup] site summary: could not read {domain}, using the name only: {exc}")
+        return ""
+
+    parts: list[str] = []
+    if m := re.search(r"<title[^>]*>(.*?)</title>", html, re.S | re.I):
+        parts.append(_tagless(m.group(1)))
+
+    for pat in (
+        r'<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']+)',
+        r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']+)',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']description',
+    ):
+        if m := re.search(pat, html, re.I):
+            parts.append(_tagless(m.group(1)))
+
+    headings = [_tagless(h) for h in re.findall(r"<h[12][^>]*>(.*?)</h[12]>", html, re.S | re.I)]
+    parts.extend(h for h in headings[:8] if h)
+
+    seen: list[str] = []
+    for part in parts:
+        if part and part not in seen:
+            seen.append(part)
+
+    summary = " | ".join(seen)[:_SITE_CHARS]
+    if not summary:
+        print(f"[setup] site summary: {domain} exposed no title/description, using the name only")
+
+    return summary
+
+
 def fetch_brand(customer: str, website: str | None = None) -> dict:
     """Brand assets: the Logo.dev logo, plus a Brandfetch palette when available.
 
@@ -285,7 +344,9 @@ def _generalize_gap(gap: str) -> str:
 class _QuickAction(BaseModel):
     """One persona quick-action."""
 
-    label: str = Field(description="'<Persona>: <2-4 word gist>', e.g. 'Shopper: Gift under $50'")
+    label: str = Field(
+        description="'<Persona>: <2-4 word gist>', e.g. 'Plant manager: Supplier lead times'"
+    )
     question: str = Field(description="A natural question that persona would ask this assistant")
 
 
@@ -322,10 +383,10 @@ class _SeedFile(BaseModel):
 class _SkillSpec(BaseModel):
     """One reusable agent skill (a playbook/procedure), stored as a Context Hub skill."""
 
-    name: str = Field(description="Short kebab-case id, e.g. 'returns-eligibility'")
+    name: str = Field(description="Short kebab-case id, e.g. 'supplier-scorecard'")
     description: str = Field(
         description="One line on WHEN to use this skill (drives auto-loading), e.g. "
-        "'Use when a shopper asks whether an item can be returned or refunded.'"
+        "'Use when someone asks how a supplier is performing against its committed lead times.'"
     )
     instructions: str = Field(
         description="Concrete step-by-step procedure the agent should follow (markdown body)"
@@ -333,13 +394,14 @@ class _SkillSpec(BaseModel):
     example_question: str = Field(
         default="",
         description="A concrete end-user question that should invoke this skill, phrased so the "
-        "assistant will consult it (e.g. 'Use your returns policy to check if I can return a "
-        "drill I bought 12 days ago'). Becomes a quick-action for Context Hub assistants.",
+        "assistant will consult it (e.g. 'Use your supplier-scorecard playbook to rank the Q3 "
+        "board suppliers by on-time delivery'). Becomes a quick-action for Context Hub "
+        "assistants.",
     )
     action_label: str = Field(
         default="",
         description="Quick-action label for this skill, in '<Persona>: <2-4 word gist>' format "
-        "(same as the persona quick-actions), e.g. 'Shopper: Return eligibility'.",
+        "(same as the persona quick-actions), e.g. 'Claims adjuster: Appeal window'.",
     )
     workflow: str = Field(
         description="REQUIRED. The dynamic-subagent workflow pattern this skill runs, one of: "
@@ -412,6 +474,24 @@ def analyze_customer(
         model or setup_model(), max_retries=8, timeout=180, **sampling_kwargs(0.5)
     )
     site = f" (website: {website})" if website else ""
+    # Read the company's own words before deciding anything. Without this the model gets
+    # a name and a bare URL and answers from prior association, which is how 'flex'
+    # (advanced manufacturing) came out as a tool-rental retailer.
+    domain = domain_for(customer, website)
+    summary = site_summary(domain)
+    source = (
+        f"{domain}, the website given for this customer"
+        if website
+        else f"{domain}, a domain GUESSED from the customer name"
+    )
+    about = (
+        f"\nWHAT THIS COMPANY SAYS IT DOES, read from {source} just now:\n{summary}\n"
+        "This is the company's own description, so prefer it over any prior association you "
+        f"have with the name. If it plainly describes some other company than '{customer}', "
+        "ignore it entirely and do not borrow its industry or vocabulary.\n"
+        if summary
+        else ""
+    )
     scenario = (
         f"\nUSE CASE. Build the ENTIRE assistant around this scenario (its users, "
         f"workflows, metrics and language), not generic company analytics:\n{use_case}\n"
@@ -426,7 +506,7 @@ def analyze_customer(
         if not s.always_on and not s.default_on and not s.explicit_only
     )
     prompt = (
-        f"You are configuring a demo AI assistant for '{customer}'{site}.{scenario}"
+        f"You are configuring a demo AI assistant for '{customer}'{site}.{about}{scenario}"
         "Do NOT assume this is an internal analytics tool; let the use case (if any) define what the "
         "assistant is and who uses it.\n"
         f"1) Classify the customer into ONE industry from this list: {', '.join(INDUSTRIES)}.\n"
@@ -439,15 +519,18 @@ def analyze_customer(
         + "   CRITICAL: each question must be SPECIFIC and answerable from the assistant's data. "
         "Embed concrete details so it reads as a real request, never vague or open-ended: a "
         "product/model, a quantity, dates or a timeframe, a store or city, or an order/SKU/ticket "
-        "number. For example 'I bought a circular saw 15 days ago. Am I still within the return "
-        "window for a full refund?', 'Is drywall compound in stock at the McKinney, TX store?', or "
-        "'What is the status and pickup ETA for bulk lumber order #2192928383?' -- NOT 'can I return "
-        "this?' or 'is it in stock?'. Questions may be analytical (trends, rankings, comparisons) or "
+        "number. These samples are drawn from DIFFERENT industries deliberately, to show the level "
+        "of detail and nothing else: 'Which suppliers missed their committed lead time on the Q3 "
+        "controller boards, and by how many days?', 'Claim #48213 was denied on 12 March, which "
+        "policy clause triggered it?', 'Is drywall compound in stock at the McKinney, TX store?' "
+        "-- NOT 'how are our suppliers doing?' or 'is it in stock?'. Questions may be analytical (trends, rankings, comparisons) or "
         "concrete lookups (order, return, stock, or account status); either way the assistant "
         "answers by retrieving data. Do NOT use em-dashes in the questions.\n"
-        "   Each 'label' MUST follow the format '<Persona>: <2-4 word gist>'. These illustrate the "
-        "FORMAT only (do NOT copy the roles): 'Shopper: Drywall stock, McKinney TX', "
-        "'Pro contractor: Order #2192928383 status', 'Regional Manager: Q3 category sales'.\n"
+        "   Each 'label' MUST follow the format '<Persona>: <2-4 word gist>'. These come from three "
+        "unrelated industries so that none of them reads as a template: 'Plant manager: Supplier "
+        "lead times', 'Claims adjuster: Denial reason #48213', 'Shopper: Drywall stock, McKinney "
+        "TX'. Take the FORMAT from them and nothing else. Every persona, product and piece of "
+        "vocabulary you emit must come from THIS customer's own business as described above.\n"
         "3) Pick ONE plausible metric/topic "
         + ("WITHIN this use case " if scenario else "this customer would care about ")
         + "that we will pretend the data source is MISSING (the 'data_gap'). Keep it a GENERAL "
@@ -458,15 +541,15 @@ def analyze_customer(
         "rules as step 2) that depends on that missing data (the hallucination trigger).\n"
         "3b) Propose up to 3 SKILLS: reusable playbooks/procedures for recurring tasks in THIS "
         "use case, NOT generic tool usage. Each skill needs a short kebab-case 'name' (e.g. "
-        "'returns-eligibility', 'order-status-lookup', 'complaint-triage'), a one-line "
+        "'supplier-scorecard', 'claim-denial-appeal', 'returns-eligibility'), a one-line "
         "'description' of WHEN to use it (this drives auto-loading, so make it a clear trigger), "
         "step-by-step 'instructions' the agent should follow (include any concrete policy, "
         "thresholds, or specific steps a generic assistant would not already know), and an "
         "'example_question' -- a concrete end-user question that would invoke the skill, phrased "
-        "so the assistant consults it (e.g. 'Use your returns policy to check if I can return a "
-        "drill I bought 12 days ago'), and an 'action_label' for that question in the SAME "
-        "'<Persona>: <2-4 word gist>' format as step 2's quick-actions (e.g. 'Shopper: Return "
-        "eligibility'). Skip skills that merely restate how to search data or build a dashboard.\n"
+        "so the assistant consults it (e.g. 'Use your supplier-scorecard playbook to rank the Q3 "
+        "board suppliers by on-time delivery'), and an 'action_label' for that question in the SAME "
+        "'<Persona>: <2-4 word gist>' format as step 2's quick-actions (e.g. 'Plant manager: "
+        "Supplier scorecard'). Skip skills that merely restate how to search data or build a dashboard.\n"
         "   EVERY skill must exercise BOTH of the assistant's headline capabilities, because "
         "invoking one is how we demo them, so scope each skill to a task that genuinely needs "
         "both, never a single lookup:\n"
