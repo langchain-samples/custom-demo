@@ -309,10 +309,29 @@ drawn signature, which no schema-generated form can collect. While the run is pa
 POSTs `/mcp/app` with the paused `tool_name`, the deployment resolves the tool's `resourceUri`
 and reads the resource over MCP, and the card renders that HTML in an iframe **sandboxed to
 `allow-scripts` only** - no `allow-same-origin`, so server-authored HTML cannot touch our origin,
-cookies or storage. It talks to us solely over `postMessage`:
+cookies or storage.
 
-    in   mcp-app:init    {request, theme, accent}
-    out  mcp-app:ready | mcp-app:resize {height} | mcp-app:submit {content} | mcp-app:cancel
+The conversation with it is **SEP-1865**, JSON-RPC 2.0 over `postMessage`, with the app as MCP
+client and the host as its server. Guest half in `mcp_demo_server/apps/bridge.js`, host half in
+`frontend/src/lib/mcpAppHost.ts`:
+
+    app  -> host   ui/initialize, then ui/notifications/initialized
+    host -> app    McpUiInitializeResult (theme, styles, toolInfo, containerDimensions)
+    host -> app    ui/notifications/tool-input, then ui/notifications/tool-result
+    app  -> host   ui/notifications/size-changed
+    app  -> host   tools/call            the answer
+    host -> app    ui/resource-teardown  before the frame goes
+
+There is no elicitation message in SEP-1865, and none is needed. SEP-2322 makes a pause an
+ordinary *result* (`InputRequiredResult`) answered by an ordinary *call* to the same tool with
+`inputResponses`, so the question rides `ui/notifications/tool-result` and the answer rides
+`tools/call`. Our host proxies that call by resuming the LangGraph interrupt. **Do not add a
+message of our own here**: an app that needs one stops being renderable by any other host, which
+is the entire point of predeclaring a `ui://` resource.
+
+One deviation, deliberate: SEP-1865 says a web host MUST put a different-origin sandbox proxy in
+front of the view. We serve from one origin, so we render the view directly and never grant
+`allow-same-origin`. Stricter than the proxy, but an app requiring same-origin will not run here.
 
 The signed result is **multimodal**, which is the other half of making an App useful. The tool
 returns a text block (the record, including a `signature_url`) AND an image block of the drawn

@@ -262,6 +262,15 @@ interface ReviewItem {
   kind: "review";
   id: string;
   review: ReviewInterrupt;
+  /**
+   * Arguments the paused tool was called with, snapshotted when the pause
+   * arrived. An MCP App is told them over `ui/notifications/tool-input`, and
+   * needs them again to answer: SEP-2322 has the client re-call the same tool
+   * with the same arguments plus the response, so they have to survive the
+   * pause. The interrupt itself does not carry them, so they come off the
+   * stream.
+   */
+  toolArgs?: Record<string, unknown>;
   /** Cleared once approved, so the editor collapses to a read-only card. */
   done: boolean;
 }
@@ -611,6 +620,8 @@ export default function ChatPanel({
     let runId: string | null = null;
     let errorMsg: string | null = null;
     let interrupt: ReviewInterrupt | null = null;
+    // Every tool call's arguments this turn, by tool name, latest frame wins.
+    const argsByTool: Record<string, Record<string, unknown>> = {};
 
     const syncChips = () =>
       patchItem(activityId, (it) =>
@@ -648,6 +659,7 @@ export default function ChatPanel({
         for (const tc of tcs) {
           const name = tc.name || "";
           const args = tc.args || {};
+          if (name) argsByTool[name] = args;
           if (name === "push_widget") {
             // The real tool_call id, never a fallback. `toolCallKey` falls back to
             // `<msgId>:<name>`, and using that fallback here mangles dashboards: the
@@ -1035,7 +1047,13 @@ export default function ChatPanel({
         setBubble({ streaming: false, markdown: false });
         setItems((prev) => [
           ...prev.filter((it) => spoke || it.id !== bubbleId),
-          { kind: "review", id: nextId(), review: pending, done: false },
+          {
+            kind: "review",
+            id: nextId(),
+            review: pending,
+            toolArgs: pending.tool_name ? argsByTool[pending.tool_name] : undefined,
+            done: false,
+          },
         ]);
         // A caller driving this by voice cannot see the review card, so hand back a
         // line it can read out. The card is still rendered for whoever is looking.
@@ -1753,6 +1771,7 @@ function ItemView({
       return (
         <McpElicitationCard
           review={item.review}
+          toolArguments={item.toolArgs}
           busy={busy}
           servers={mcpServers}
           onApprove={(v) => onApproveReview?.(item.id, v)}

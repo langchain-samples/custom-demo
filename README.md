@@ -207,7 +207,8 @@ Both are written against the modern stateless MCP spec, so between them they exe
 cacheable tool list, **elicitation** (the server stops mid-call to ask, and the SPA builds a form
 from the schema it asked for) and **MCP Apps** (the server ships its own HTML and the SPA renders
 it in a sandboxed iframe: allocation sliders, a goal projection, an order ticket with
-hold-to-confirm, a signature pad).
+hold-to-confirm, a signature pad). The apps speak SEP-1865, the MCP Apps extension, rather than a
+protocol of our own, so they are renderable by any host that implements it.
 
 For how that works end to end, and the four failure modes that do not announce themselves, see
 [docs/mcp-apps-with-deep-agents.html](docs/mcp-apps-with-deep-agents.html).

@@ -283,12 +283,18 @@ async def probe(servers: tuple[McpServer, ...]) -> dict[str, Any]:
 def app_uri(tool: Any) -> str | None:
     """The `ui://` resource an MCP App tool renders, or None for an ordinary tool.
 
-    The MCP Apps extension stamps `_meta.ui.resourceUri` on the tool, and the
-    adapter carries the tool's MCP provenance through on `metadata["mcp"]`.
+    MCP Apps (SEP-1865) stamps `_meta.ui.resourceUri` on the tool, and the adapter
+    carries the tool's MCP provenance through on `metadata["mcp"]`.
+
+    The flat `_meta["ui/resourceUri"]` is the extension's earlier spelling. The
+    spec deprecates it but keeps it until GA, so a server built against a 2025
+    SDK still sends it, and reading only the nested one would render that
+    server's app as a generic form with no indication why.
     """
     meta = (tool.metadata or {}).get("mcp") or {}
-    ui = ((meta.get("tool") or {}).get("_meta") or {}).get("ui") or {}
-    uri = ui.get("resourceUri")
+    tool_meta = (meta.get("tool") or {}).get("_meta") or {}
+    ui = tool_meta.get("ui") or {}
+    uri = ui.get("resourceUri") or tool_meta.get("ui/resourceUri")
     return str(uri) if isinstance(uri, str) and uri.startswith("ui://") else None
 
 

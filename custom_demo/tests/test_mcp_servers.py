@@ -108,6 +108,35 @@ def test_app_uri_reads_the_mcp_apps_metadata():
     assert m.app_uri(tool) == "ui://a/b.html"
 
 
+def test_app_uri_reads_the_deprecated_flat_key():
+    """A server on the extension's earlier spelling still renders its app.
+
+    SEP-1865 deprecates `_meta["ui/resourceUri"]` but keeps it until GA. Ignoring
+    it would show a generic form for a server that does ship a UI, with nothing
+    anywhere saying why.
+    """
+    tool = SimpleNamespace(
+        metadata={"mcp": {"tool": {"_meta": {"ui/resourceUri": "ui://a/b.html"}}}}
+    )
+    assert m.app_uri(tool) == "ui://a/b.html"
+
+
+def test_app_uri_prefers_the_current_key_when_a_server_sends_both():
+    tool = SimpleNamespace(
+        metadata={
+            "mcp": {
+                "tool": {
+                    "_meta": {
+                        "ui": {"resourceUri": "ui://a/new.html"},
+                        "ui/resourceUri": "ui://a/old.html",
+                    }
+                }
+            }
+        }
+    )
+    assert m.app_uri(tool) == "ui://a/new.html"
+
+
 @pytest.mark.parametrize(
     "metadata",
     [

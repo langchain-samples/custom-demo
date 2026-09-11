@@ -15,11 +15,13 @@
  * 2. **A generic form**, built from the request's JSON schema. Every MCP server
  *    gets this for free, which matters because most ship no UI at all.
  *
+ * The app is a real MCP App: the conversation with it is SEP-1865, JSON-RPC 2.0
+ * over `postMessage`, and it lives in `lib/mcpAppHost.ts`. Nothing the app sends
+ * is trusted beyond being shaped into the elicitation answer, which the server
+ * itself has to validate against the schema it asked for.
+ *
  * The iframe is sandboxed to `allow-scripts` ONLY. No `allow-same-origin`, so the
- * server's HTML has no access to this page's origin, cookies, or storage, and it
- * talks to us solely over `postMessage`. Nothing it sends is trusted beyond being
- * shaped into the elicitation answer, which the server itself has to validate
- * against the schema it asked for.
+ * server's HTML has no access to this page's origin, cookies, or storage.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { IconPlugConnected, IconExternalLink } from "@tabler/icons-react";
@@ -35,6 +37,7 @@ import {
   type McpServerConfig,
   type ReviewInterrupt,
 } from "@/lib/api";
+import { createMcpAppHost } from "@/lib/mcpAppHost";
 
 const LABEL = "text-[11px] font-bold uppercase tracking-[0.03em] text-muted-foreground";
 
@@ -43,6 +46,12 @@ interface Props {
   busy?: boolean;
   /** MCP servers on the active assistant, needed to read the paused tool's app. */
   servers: McpServerConfig[];
+  /**
+   * Arguments the paused tool was called with. An app is handed them over
+   * `ui/notifications/tool-input` and sends them back with its answer, because
+   * answering is a fresh call to the same tool (SEP-2322).
+   */
+  toolArguments?: Record<string, unknown>;
   /** Resume the run. The value is the `{responses: {...}}` the adapter expects. */
   onApprove: (value: Record<string, unknown>) => void;
 }
@@ -199,59 +208,49 @@ function SchemaForm({
 
 /* --------------------------- The server's own UI -------------------------- */
 
+/**
+ * The server's own HTML, rendered as an MCP App.
+ *
+ * Everything about the conversation with it lives in `lib/mcpAppHost.ts`, which
+ * speaks SEP-1865 over JSON-RPC. This component owns the frame and its height,
+ * which is all a React component should need to know about a foreign document.
+ */
 function AppFrame({
   request,
+  toolName,
+  toolArguments,
   html,
   busy,
-  onSubmit,
-  onCancel,
+  onAnswer,
 }: {
   request: McpElicitationRequest;
+  toolName: string;
+  toolArguments: Record<string, unknown>;
   html: string;
   busy?: boolean;
-  onSubmit: (content: Record<string, unknown>) => void;
-  onCancel: () => void;
+  onAnswer: (response: McpElicitationResponse) => void;
 }) {
   const ref = useRef<HTMLIFrameElement | null>(null);
   const [height, setHeight] = useState(300);
 
   useEffect(() => {
-    function onMessage(event: MessageEvent) {
-      // A sandboxed iframe without allow-same-origin posts from a null origin, so
-      // the origin cannot identify it. Match on the frame's own window instead,
-      // which no other document can forge.
-      if (!ref.current || event.source !== ref.current.contentWindow) return;
-      const data = event.data as { type?: string; height?: number; content?: unknown };
-      if (data?.type === "mcp-app:ready") {
-        // Hand the app the question it is being rendered for, plus enough of the
-        // host's look that it does not read as a foreign page.
-        const dark = document.documentElement.classList.contains("dark");
-        const styles = getComputedStyle(document.documentElement);
-        ref.current.contentWindow?.postMessage(
-          {
-            type: "mcp-app:init",
-            request,
-            theme: dark ? "dark" : "light",
-            accent: styles.getPropertyValue("--brand-primary").trim() || undefined,
-            accentFg: styles.getPropertyValue("--brand-fg").trim() || undefined,
-          },
-          "*",
-        );
-        return;
-      }
-      if (data?.type === "mcp-app:resize" && typeof data.height === "number") {
-        setHeight(Math.min(Math.max(data.height, 160), 640));
-        return;
-      }
-      if (data?.type === "mcp-app:submit" && data.content && typeof data.content === "object") {
-        onSubmit(data.content as Record<string, unknown>);
-        return;
-      }
-      if (data?.type === "mcp-app:cancel") onCancel();
-    }
+    const host = createMcpAppHost({
+      toolName,
+      toolArguments,
+      request,
+      onAnswer,
+      // Clamped here rather than in the host: the ceiling is this card's
+      // layout, and it is the same number the host advertises as maxHeight.
+      onHeight: (h) => setHeight(Math.min(Math.max(h, 160), 640)),
+    });
+    const view = () => ref.current?.contentWindow ?? null;
+    const onMessage = (event: MessageEvent) => host.handleMessage(event, view());
     window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [request, onSubmit, onCancel]);
+    return () => {
+      window.removeEventListener("message", onMessage);
+      host.teardown(view(), "The pause was resolved.");
+    };
+  }, [request, toolName, toolArguments, onAnswer]);
 
   return (
     <div className="flex flex-col gap-2">
@@ -261,6 +260,8 @@ function AppFrame({
         srcDoc={html}
         // Scripts only. Without allow-same-origin the frame is its own opaque
         // origin, so the server's HTML cannot touch this page or its storage.
+        // See the deviation note in lib/mcpAppHost.ts for why there is no
+        // sandbox proxy in front of it.
         sandbox="allow-scripts"
         className="w-full rounded-lg border border-border bg-background"
         style={{ height }}
@@ -272,11 +273,19 @@ function AppFrame({
 
 /* --------------------------------- Shell --------------------------------- */
 
-export function McpElicitationCard({ review, busy, servers, onApprove }: Props) {
+export function McpElicitationCard({
+  review,
+  busy,
+  servers,
+  toolArguments,
+  onApprove,
+}: Props) {
   // Memoized so `answer` below keeps a stable identity across renders.
   const requests = useMemo(() => review.requests || [], [review]);
   const toolName = String(review.tool_name || "");
   const [app, setApp] = useState<{ html: string } | null>(null);
+  // Stable identity, or the app host would be rebuilt on every render.
+  const args = useMemo(() => toolArguments ?? {}, [toolArguments]);
   const [looking, setLooking] = useState(true);
 
   // Only the first request gets a custom UI: an MCP App is bound to the tool, so
@@ -359,10 +368,11 @@ export function McpElicitationCard({ review, busy, servers, onApprove }: Props) 
       ) : app ? (
         <AppFrame
           request={first}
+          toolName={toolName}
+          toolArguments={args}
           html={app.html}
           busy={busy}
-          onSubmit={(content) => answer({ action: "accept", content })}
-          onCancel={() => answer({ action: "cancel" })}
+          onAnswer={answer}
         />
       ) : (
         <SchemaForm

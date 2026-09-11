@@ -3,31 +3,42 @@
  *
  * Injected at serve time next to bridge.js (see apps.py). An app is rendered in
  * an iframe inside the host's chat, so it has to read as part of that page
- * rather than as an embedded website: the host sends its theme and accent on
- * init and the tokens below pick them up.
+ * rather than as an embedded website.
+ *
+ * Every token below is `var(<standardized>, <our default>)`. The outer names are
+ * the CSS custom properties from the Theming section of SEP-1865, which a host
+ * sets on the root during the `ui/initialize` handshake; the fallback is what an
+ * app looks like when the host sends nothing, or only some of them. The spec
+ * asks Views to carry their own defaults for exactly this reason, so the app is
+ * coherent in a host that does no theming at all.
  */
 
 :root {
   color-scheme: light;
-  --bg: #ffffff;
-  --panel: #f6f7f9;
-  --ink: #14161a;
-  --muted: #6b7280;
-  --border: #e4e6ea;
-  --accent: #2f6feb;
-  --accent-fg: #ffffff;
-  --up: #0f8a5f;
-  --down: #c2410c;
+  --bg: var(--color-background-primary, #ffffff);
+  --panel: var(--color-background-secondary, #f6f7f9);
+  --ink: var(--color-text-primary, #14161a);
+  --muted: var(--color-text-secondary, #6b7280);
+  --border: var(--color-border-primary, #e4e6ea);
+  /* The standardized set has no brand or accent token. Inverse is where a
+     high-contrast primary action surface belongs, so that is what a primary
+     button here picks up. */
+  --accent: var(--color-background-inverse, #2f6feb);
+  --accent-fg: var(--color-text-inverse, #ffffff);
+  --up: var(--color-text-success, #0f8a5f);
+  --down: var(--color-text-danger, #c2410c);
+  --round: var(--border-radius-md, 8px);
+  --face: var(--font-sans, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif);
 }
 [data-theme="dark"] {
   color-scheme: dark;
-  --bg: #16181d;
-  --panel: #1e2127;
-  --ink: #f2f3f5;
-  --muted: #9aa1ad;
-  --border: #2c3038;
-  --up: #34d399;
-  --down: #fb923c;
+  --bg: var(--color-background-primary, #16181d);
+  --panel: var(--color-background-secondary, #1e2127);
+  --ink: var(--color-text-primary, #f2f3f5);
+  --muted: var(--color-text-secondary, #9aa1ad);
+  --border: var(--color-border-primary, #2c3038);
+  --up: var(--color-text-success, #34d399);
+  --down: var(--color-text-danger, #fb923c);
 }
 
 * { box-sizing: border-box; }
@@ -37,7 +48,7 @@ body {
   padding: 12px;
   background: var(--bg);
   color: var(--ink);
-  font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: 13px/1.45 var(--face);
 }
 
 .msg { margin: 0 0 10px; font-size: 13px; }
@@ -61,7 +72,7 @@ input[type="text"], input[type="number"], select {
   width: 100%;
   padding: 7px 9px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--round);
   background: var(--bg);
   color: var(--ink);
   font: inherit;
@@ -73,7 +84,7 @@ input:focus-visible, button:focus-visible, select:focus-visible, canvas:focus-vi
 }
 
 button {
-  border-radius: 8px;
+  border-radius: var(--round);
   border: 1px solid var(--border);
   background: transparent;
   color: var(--ink);
@@ -129,7 +140,7 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
 
 .warn {
   border: 1px solid var(--down);
-  border-radius: 8px;
+  border-radius: var(--round);
   padding: 6px 8px;
   font-size: 11.5px;
   color: var(--down);
