@@ -27,7 +27,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { probeMcpServers, type McpProbeResult, type McpServerConfig } from "@/lib/api";
+import {
+  mcpServerId,
+  probeMcpServers,
+  type McpProbeResult,
+  type McpServerConfig,
+} from "@/lib/api";
 import { CollapseSection } from "./CollapseSection";
 import { HINT_CLS, LABEL_CLS } from "./types";
 
@@ -43,9 +48,9 @@ interface Props {
  * renames every tool, which invalidates the model's memory of them mid-demo.
  */
 function idFor(label: string, taken: Set<string>): string {
-  // "mcp" only when there is nothing to derive from: an unnamed server still
-  // needs a prefix, and the backend's slugify falls back the same way.
-  const base = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "mcp";
+  // One derivation, in `mcpServerId`, so this and the tool-name matching in
+  // ChatPanel cannot drift from each other or from the backend's slugify.
+  const base = mcpServerId({ label, url: "" });
   let id = base;
   let n = 2;
   while (taken.has(id)) id = `${base}_${n++}`;

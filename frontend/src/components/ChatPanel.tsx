@@ -54,6 +54,7 @@ import {
 } from "@/components/chat/helpers";
 import {
   isMcpElicitation,
+  mcpServerId,
   type McpServerConfig,
   IMAGE_MIME_TYPES,
   imageContent,
@@ -665,10 +666,10 @@ export default function ChatPanel({
     // Every tool call's arguments this turn, by tool name, latest frame wins.
     const argsByTool: Record<string, Record<string, unknown>> = {};
     // `{server}_` for each connected MCP server, which is how a remote tool is
-    // told from a local one without a lookup per call.
-    const mcpToolPrefixes = mcpServers
-      .filter((srv) => !!srv.id)
-      .map((srv) => `${srv.id}_`);
+    // told from a local one without a lookup per call. DERIVED, not read off
+    // `id`: that field is optional on a saved server while the backend always
+    // computes one, so filtering on it matched nothing and no app ever rendered.
+    const mcpToolPrefixes = mcpServers.map((srv) => `${mcpServerId(srv)}_`);
 
     const syncChips = () =>
       patchItem(activityId, (it) =>

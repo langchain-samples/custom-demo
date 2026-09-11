@@ -178,6 +178,28 @@ export const MODEL_CHOICES: { value: string; label: string }[] = [
  * point of view: the backend turns it into an Authorization header and only ever
  * reports back the header NAMES.
  */
+/**
+ * The prefix the backend namespaces a server's tools with (`{id}_{tool}`).
+ *
+ * Mirrors `slugify` in custom_demo/runtime/mcp_servers.py, including the "mcp"
+ * fallback for a server with nothing to derive from. `id` is optional on a
+ * saved server while the backend always derives one, so anything matching tool
+ * names has to derive it the same way or it silently matches nothing.
+ *
+ * Does NOT reproduce the backend's collision suffixes (`_2`), which only occur
+ * when two servers slugify alike.
+ */
+export function mcpServerId(server: McpServerConfig): string {
+  const from = server.id || server.label || server.url;
+  return (
+    from
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_|_$/g, "") || "mcp"
+  );
+}
+
 export interface McpServerConfig {
   id?: string;
   label: string;
