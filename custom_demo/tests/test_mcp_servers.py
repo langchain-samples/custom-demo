@@ -174,6 +174,71 @@ def test_visibility_defaults_let_a_tool_be_used_by_both():
     assert m.model_visible(ordinary) and m.app_callable(ordinary)
 
 
+@pytest.mark.parametrize(
+    ("asked_for", "resolves_to"),
+    [
+        # What an app actually sends: the name ITS SERVER published.
+        ("submit_signature", "meridian_submit_signature"),
+        # A prefixed name still works, for an app that knows the namespace.
+        ("meridian_submit_signature", "meridian_submit_signature"),
+    ],
+)
+def test_an_app_names_tools_the_way_its_own_server_does(monkeypatch, asked_for, resolves_to):
+    """The `{server}_` prefix is ours, and an app has no reason to know it.
+
+    `ClientGroup` adds it so a remote `search` cannot collide with a local one.
+    An app author writes `McpApp.call("submit_signature")`, and a host that only
+    matched the namespaced name left the person looking at a signed pad and the
+    message "submit_signature is not a tool on any connected server".
+    """
+    # `call_app_tool` resolves the OPENER first (for the same-server check) and
+    # the target second, so record both rather than the first.
+    resolved: list[str] = []
+
+    async def tools(*_a, **_k):
+        return [_tool("meridian_sign_document"), _tool("meridian_submit_signature", ["app"])]
+
+    class _Route:
+        server_name = "meridian"
+        upstream_name = "submit_signature"
+
+        class client:
+            @staticmethod
+            async def call_tool(name, args):
+                return SimpleNamespace(structured_content={"ok": True}, is_error=False)
+
+    class _Group:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def resolve_tool(self, name):
+            resolved.append(name)
+            return _Route()
+
+    monkeypatch.setattr(m, "load_tools", tools)
+    monkeypatch.setattr(m, "build_group", lambda _s: _Group())
+    servers = m.parse_servers([{"label": "Meridian", "url": "https://x/mcp"}])
+
+    out = asyncio.run(m.call_app_tool(servers, "meridian_sign_document", asked_for, {}))
+    assert out["structuredContent"] == {"ok": True}
+    assert resolved[-1] == resolves_to
+
+
+def test_an_app_cannot_reach_a_tool_its_server_does_not_have(monkeypatch):
+    """An unqualified name must not wander onto another server."""
+
+    async def tools(*_a, **_k):
+        return [_tool("meridian_sign_document"), _tool("other_secret_thing")]
+
+    monkeypatch.setattr(m, "load_tools", tools)
+    servers = m.parse_servers([{"label": "Meridian", "url": "https://x/mcp"}])
+    with pytest.raises(LookupError, match="not a tool on meridian"):
+        asyncio.run(m.call_app_tool(servers, "meridian_sign_document", "secret_thing", {}))
+
+
 def test_instructions_are_cached_beside_the_tools(monkeypatch):
     """One discovery fills both, so guidance costs no extra round trip.
 

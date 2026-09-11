@@ -449,6 +449,12 @@ async def call_app_tool(
     to apps, or server-authored HTML could drive any tool the connection can
     reach.
 
+    An app names tools the way ITS SERVER published them, unprefixed. The
+    `{server}_{tool}` namespace is ours, added so a remote `search` cannot
+    collide with a local one, and an app has no reason to know about it. So the
+    target is resolved inside the app's own namespace first, which also means an
+    unqualified name can never reach a different server by accident.
+
     Raises on refusal. The app is holding a promise open, so it needs the reason.
     """
     tools = await load_tools(servers, include_app_only=True)
@@ -456,9 +462,16 @@ async def call_app_tool(
     if app_tool not in by_name:
         raise LookupError(f"{app_tool} is not a tool on any connected server")
 
-    wanted = by_name.get(target)
-    if wanted is None:
-        raise LookupError(f"{target} is not a tool on any connected server")
+    owner = next((s.id for s in servers if app_tool.startswith(f"{s.id}_")), None)
+    # Its own namespace first, then the name as given, so a server whose tool is
+    # genuinely unprefixed still resolves.
+    for candidate in ([f"{owner}_{target}"] if owner else []) + [target]:
+        wanted = by_name.get(candidate)
+        if wanted is not None:
+            target = candidate
+            break
+    else:
+        raise LookupError(f"{target} is not a tool on {owner or 'any connected server'}")
 
     if not app_callable(wanted):
         raise PermissionError(
