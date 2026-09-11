@@ -60,6 +60,19 @@ export interface McpAppHostConfig {
   onAnswer: (response: McpElicitationResponse) => void;
   /** The View's reported content height, in pixels. */
   onHeight: (height: number) => void;
+  /**
+   * Read a resource for the View (`resources/read`).
+   *
+   * Optional because the capability is advertised only when it is wired: an
+   * origin-less iframe cannot fetch, so a View that needs data has no route but
+   * this one, and a host that claims the capability and then refuses is worse
+   * than one that never claimed it.
+   */
+  onReadResource?: (uri: string) => Promise<unknown[]>;
+  /** Put the View's text into the conversation (`ui/message`). */
+  onMessage?: (text: string) => void;
+  /** Replace the context the View contributes to the next turn. */
+  onModelContext?: (context: Record<string, unknown>) => void;
 }
 
 export interface McpAppHost {
@@ -174,6 +187,10 @@ export function createMcpAppHost(config: McpAppHostConfig): McpAppHost {
       openLinks: {},
       serverTools: {},
       logging: {},
+      // Advertised only when the caller wired a reader. The spec has Views check
+      // capabilities before relying on a method, so claiming this without one
+      // would send an app down a path that can only fail.
+      ...(config.onReadResource ? { serverResources: {} } : {}),
     },
     hostContext: {
       // Only the name. We know which tool paused, but not its declared schema,
@@ -272,6 +289,62 @@ export function createMcpAppHost(config: McpAppHostConfig): McpAppHost {
         // Inline is the only mode this card has room for, and the spec wants the
         // resulting mode returned whether or not it changed.
         reply(view, msg.id, { mode: "inline" });
+        return;
+      case "resources/read": {
+        const uri = String(params.uri ?? "");
+        if (!config.onReadResource) {
+          fail(view, msg.id, "This host does not proxy resources/read.");
+          return;
+        }
+        if (!uri) {
+          fail(view, msg.id, "resources/read needs a uri.");
+          return;
+        }
+
+        // Async, so the reply comes later. The View is holding a promise open
+        // and a dropped request would hang it, which is why the rejection path
+        // answers too.
+        void config
+          .onReadResource(uri)
+          .then((contents) => reply(view, msg.id as string | number, { contents }))
+          .catch((err: unknown) =>
+            fail(view, msg.id as string | number, err instanceof Error ? err.message : String(err)),
+          );
+        return;
+      }
+      case "ui/message": {
+        const content = params.content as { text?: string } | undefined;
+        const text = String(content?.text ?? "").trim();
+        if (!config.onMessage) {
+          // The honest refusal. An app rendered for a PAUSED tool call cannot
+          // put a turn into the conversation: the run is interrupted and the
+          // only thing that moves it is the elicitation answer. Saying so beats
+          // accepting the message and dropping it.
+          fail(view, msg.id, "This host cannot accept a message while a tool call is paused.");
+          return;
+        }
+        if (!text) {
+          fail(view, msg.id, "ui/message needs content.text.");
+          return;
+        }
+
+        config.onMessage(text);
+        reply(view, msg.id, {});
+        return;
+      }
+      case "ui/update-model-context":
+        if (!config.onModelContext) {
+          fail(view, msg.id, "This host does not carry model context from an app.");
+          return;
+        }
+
+        // Each call REPLACES the last, per the spec, so the handler is handed
+        // the whole thing rather than a delta to merge.
+        config.onModelContext({
+          content: params.content,
+          structuredContent: params.structuredContent,
+        });
+        reply(view, msg.id, {});
         return;
       case "ping":
         reply(view, msg.id, {});

@@ -31,6 +31,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
   fetchMcpApp,
+  fetchMcpResource,
   type JsonSchema,
   type McpElicitationRequest,
   type McpElicitationResponse,
@@ -219,6 +220,7 @@ function AppFrame({
   request,
   toolName,
   toolArguments,
+  servers,
   html,
   busy,
   onAnswer,
@@ -226,6 +228,7 @@ function AppFrame({
   request: McpElicitationRequest;
   toolName: string;
   toolArguments: Record<string, unknown>;
+  servers: McpServerConfig[];
   html: string;
   busy?: boolean;
   onAnswer: (response: McpElicitationResponse) => void;
@@ -242,6 +245,14 @@ function AppFrame({
       // Clamped here rather than in the host: the ceiling is this card's
       // layout, and it is the same number the host advertises as maxHeight.
       onHeight: (h) => setHeight(Math.min(Math.max(h, 160), 640)),
+      // The app cannot fetch: it has no origin. The deployment reads on its
+      // behalf, from the one server its tool came from.
+      onReadResource: (uri) => fetchMcpResource(servers, toolName, uri),
+      // `ui/message` and `ui/update-model-context` are deliberately NOT wired
+      // here. This frame renders during a PAUSED tool call, and nothing can
+      // enter the conversation until the pause resolves, so the host answers
+      // both with an error saying exactly that rather than accepting and
+      // dropping them.
     });
     const view = () => ref.current?.contentWindow ?? null;
     const onMessage = (event: MessageEvent) => host.handleMessage(event, view());
@@ -250,7 +261,7 @@ function AppFrame({
       window.removeEventListener("message", onMessage);
       host.teardown(view(), "The pause was resolved.");
     };
-  }, [request, toolName, toolArguments, onAnswer]);
+  }, [request, toolName, toolArguments, servers, onAnswer]);
 
   return (
     <div className="flex flex-col gap-2">
@@ -370,6 +381,7 @@ export function McpElicitationCard({
           request={first}
           toolName={toolName}
           toolArguments={args}
+          servers={servers}
           html={app.html}
           busy={busy}
           onAnswer={answer}

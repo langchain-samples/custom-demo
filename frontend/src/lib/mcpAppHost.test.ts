@@ -38,7 +38,14 @@ function view() {
 }
 
 /** Build a host plus its View, wired the way the card wires them. */
-function host(overrides: { onAnswer?: (r: McpElicitationResponse) => void } = {}) {
+function host(
+  overrides: {
+    onAnswer?: (r: McpElicitationResponse) => void;
+    onReadResource?: (uri: string) => Promise<unknown[]>;
+    onMessage?: (text: string) => void;
+    onModelContext?: (c: Record<string, unknown>) => void;
+  } = {},
+) {
   const target = view();
   const onAnswer = vi.fn(overrides.onAnswer ?? (() => {}));
   const onHeight = vi.fn();
@@ -48,6 +55,9 @@ function host(overrides: { onAnswer?: (r: McpElicitationResponse) => void } = {}
     request: REQUEST,
     onAnswer,
     onHeight,
+    onReadResource: overrides.onReadResource,
+    onMessage: overrides.onMessage,
+    onModelContext: overrides.onModelContext,
   });
   /** Deliver one JSON-RPC message as if the View had posted it. */
   const from = (msg: Record<string, unknown>, source: unknown = target.win) =>
@@ -212,6 +222,98 @@ describe("the rest of the surface", () => {
     const { target, from } = host();
     from({ jsonrpc: "2.0", id: 5, method: "ui/nonsense", params: {} });
     expect(reply(target.sent, 5)?.error).toBeTruthy();
+  });
+
+  it("reads a resource for the View and replies with its contents", async () => {
+    const contents = [{ uri: "tips://what-are-apps", text: "{}" }];
+    const onReadResource = vi.fn(async () => contents as unknown[]);
+    const { target, from } = host({ onReadResource });
+    from({ jsonrpc: "2.0", id: 9, method: "resources/read", params: { uri: "tips://what-are-apps" } });
+
+    expect(onReadResource).toHaveBeenCalledWith("tips://what-are-apps");
+    // The read is async, so the reply lands a microtask later.
+    await vi.waitFor(() => expect(reply(target.sent, 9)?.result).toEqual({ contents }));
+  });
+
+  it("tells the View why a failed read failed, rather than hanging it", async () => {
+    const onReadResource = vi.fn(async () => {
+      throw new Error("that server refused the read");
+    });
+    const { target, from } = host({ onReadResource });
+    from({ jsonrpc: "2.0", id: 10, method: "resources/read", params: { uri: "tips://x" } });
+    await vi.waitFor(() => {
+      const e = reply(target.sent, 10)?.error as { message: string } | undefined;
+      expect(e?.message).toMatch(/refused the read/);
+    });
+  });
+
+  it("advertises serverResources only when a reader is wired", () => {
+    const withReader = host({ onReadResource: async () => [] });
+    withReader.from({ jsonrpc: "2.0", id: 1, method: "ui/initialize", params: {} });
+    const got = reply(withReader.target.sent, 1)?.result as Record<string, unknown> | undefined;
+    const caps = got?.hostCapabilities as Record<string, unknown> | undefined;
+    expect(caps?.serverResources).toBeTruthy();
+
+    // Claiming a capability the host then refuses is worse than never claiming it.
+    const without = host();
+    without.from({ jsonrpc: "2.0", id: 1, method: "ui/initialize", params: {} });
+    const plain = reply(without.target.sent, 1)?.result as Record<string, unknown> | undefined;
+    const bare = plain?.hostCapabilities as Record<string, unknown> | undefined;
+    expect(bare?.serverResources).toBeUndefined();
+  });
+
+  it("refuses ui/message while the tool call is paused, and says why", () => {
+    const { target, from } = host();
+    from({
+      jsonrpc: "2.0",
+      id: 11,
+      method: "ui/message",
+      params: { role: "user", content: { type: "text", text: "hello" } },
+    });
+    // Nothing can enter the conversation mid-interrupt, so the app is told
+    // instead of having its message silently dropped.
+    const e = reply(target.sent, 11)?.error as { message: string } | undefined;
+    expect(e?.message).toMatch(/paused/i);
+  });
+
+  it("passes a message through when the surface can accept one", () => {
+    const onMessage = vi.fn();
+    const { target, from } = host({ onMessage });
+    from({
+      jsonrpc: "2.0",
+      id: 12,
+      method: "ui/message",
+      params: { role: "user", content: { type: "text", text: "  hello  " } },
+    });
+    expect(onMessage).toHaveBeenCalledWith("hello");
+    expect(reply(target.sent, 12)?.result).toEqual({});
+  });
+
+  it("replaces model context rather than accumulating it", () => {
+    const onModelContext = vi.fn();
+    const { from } = host({ onModelContext });
+    from({
+      jsonrpc: "2.0",
+      id: 13,
+      method: "ui/update-model-context",
+      params: { structuredContent: { picked: "a" } },
+    });
+    from({
+      jsonrpc: "2.0",
+      id: 14,
+      method: "ui/update-model-context",
+      params: { structuredContent: { picked: "b" } },
+    });
+    // Each call overwrites the previous, per the spec, so the handler sees whole
+    // values and never a delta to merge.
+    expect(onModelContext).toHaveBeenNthCalledWith(1, {
+      content: undefined,
+      structuredContent: { picked: "a" },
+    });
+    expect(onModelContext).toHaveBeenNthCalledWith(2, {
+      content: undefined,
+      structuredContent: { picked: "b" },
+    });
   });
 
   it("asks the View to shut down before the frame goes", () => {

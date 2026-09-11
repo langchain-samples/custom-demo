@@ -320,7 +320,23 @@ client and the host as its server. Guest half in `mcp_demo_server/apps/bridge.js
     host -> app    ui/notifications/tool-input, then ui/notifications/tool-result
     app  -> host   ui/notifications/size-changed
     app  -> host   tools/call            the answer
+    app  -> host   resources/read        proxied via POST /mcp/resource
+    app  -> host   ui/open-link, ui/request-display-mode, ping
     host -> app    ui/resource-teardown  before the frame goes
+
+`ui/message` and `ui/update-model-context` are answered with a JSON-RPC **error**
+saying why: this frame renders during a PAUSED tool call, and nothing can enter the
+conversation until the pause resolves. Accepting and dropping them would leave an app
+believing it had spoken. Both become available if an app is ever rendered for a
+*completed* call.
+
+**App-only tools are kept from the model.** `_meta.ui.visibility: ["app"]` means a tool
+its own App may call and the agent may not, and the host rule is a MUST, so
+`model_visible` filters them in `_discover`. Excalidraw's server
+(`https://mcp.excalidraw.com/mcp`, no auth) is the live case: `create_view` is the
+model's, `save_checkpoint` / `read_checkpoint` / `export_to_excalidraw` are the app's.
+It also sends `_meta.ui.resourceUri` and the deprecated flat `_meta["ui/resourceUri"]`
+together, which is why `app_uri` reads both and prefers the former.
 
 There is no elicitation message in SEP-1865, and none is needed. SEP-2322 makes a pause an
 ordinary *result* (`InputRequiredResult`) answered by an ordinary *call* to the same tool with
