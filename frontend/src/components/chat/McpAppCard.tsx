@@ -27,10 +27,18 @@ import { createMcpAppHost, type McpToolResult } from "@/lib/mcpAppHost";
 export interface McpAppCardProps {
   /** The tool whose app this is, namespaced as `{server}_{tool}`. */
   toolName: string;
-  /** What it was called with, replayed to the app. */
+  /**
+   * What it was called with, as they stand.
+   *
+   * Streamed: this changes frame by frame while the model writes the arguments,
+   * and each change reaches the app as `tool-input-partial`, which is what lets
+   * a drawing app draw as it goes instead of appearing finished.
+   */
   toolArguments: Record<string, unknown>;
-  /** What it returned, which is the data the app draws. */
-  toolResult: McpToolResult;
+  /** True while the arguments are still arriving. */
+  streaming?: boolean;
+  /** What it returned. Absent until the call finishes. */
+  toolResult?: McpToolResult;
   /** MCP servers on the active assistant, needed to read the app and proxy calls. */
   servers: McpServerConfig[];
 }
@@ -59,6 +67,7 @@ function AppFrame({
   toolName,
   toolArguments,
   toolResult,
+  streaming,
   servers,
   html,
   inputSchema,
@@ -71,8 +80,6 @@ function AppFrame({
   useEffect(() => {
     host.current = createMcpAppHost({
       toolName,
-      toolArguments,
-      toolResult,
       toolInputSchema: inputSchema,
       // Clamped here rather than in the host: the ceiling is this card's
       // layout, and it is the same number the host advertises as maxHeight.
@@ -87,7 +94,6 @@ function AppFrame({
       // never reloads the app.
       onDisplayMode: setMode,
     });
-    const view = () => ref.current?.contentWindow ?? null;
     const onMessage = (event: MessageEvent) => host.current?.handleMessage(event, view());
     window.addEventListener("message", onMessage);
     return () => {
@@ -95,7 +101,23 @@ function AppFrame({
       host.current?.teardown(view(), "The app was closed.");
       host.current = null;
     };
-  }, [toolName, toolArguments, toolResult, servers, inputSchema]);
+    // Deliberately NOT keyed on the arguments or the result. Those change on
+    // every streamed frame, and rebuilding the host would tear down a handshake
+    // the iframe never repeats: its document does not reload, so the app would
+    // sit there talking to a host that had forgotten it.
+  }, [toolName, servers, inputSchema]);
+
+  const view = () => ref.current?.contentWindow ?? null;
+
+  // Feed the call in as it arrives. The host holds anything that lands before
+  // the app has finished its handshake and flushes it then.
+  useEffect(() => {
+    host.current?.setToolInput(view(), toolArguments, !streaming);
+  }, [toolArguments, streaming]);
+
+  useEffect(() => {
+    if (toolResult) host.current?.setToolResult(view(), toolResult);
+  }, [toolResult]);
 
   /** Leave fullscreen, and tell the app so it can put its own chrome back. */
   const collapse = useCallback(() => {

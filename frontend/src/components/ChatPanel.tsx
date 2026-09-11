@@ -291,7 +291,10 @@ interface AppItem {
   id: string;
   toolName: string;
   toolArgs: Record<string, unknown>;
-  toolResult: { structuredContent?: unknown; content?: unknown[] };
+  /** True while the model is still writing the arguments. */
+  streaming?: boolean;
+  /** Absent until the call returns. */
+  toolResult?: { structuredContent?: unknown; content?: unknown[] };
 }
 /** A tool paused the run for human review; resolved by resuming the thread. */
 interface ReviewItem {
@@ -670,6 +673,9 @@ export default function ChatPanel({
     // `id`: that field is optional on a saved server while the backend always
     // computes one, so filtering on it matched nothing and no app ever rendered.
     const mcpToolPrefixes = mcpServers.map((srv) => `${mcpServerId(srv)}_`);
+    // Which app frames this turn has already mounted, so a later argument frame
+    // patches rather than opening a second copy.
+    const appSeen = new Set<string>();
 
     const syncChips = () =>
       patchItem(activityId, (it) =>
@@ -708,6 +714,25 @@ export default function ChatPanel({
           const name = tc.name || "";
           const args = tc.args || {};
           if (name) argsByTool[name] = args;
+          // An MCP tool that ships a UI gets its frame NOW, while the model is
+          // still writing the arguments, so the app can draw as they arrive.
+          // Waiting for the result is what made a streamed diagram appear all at
+          // once. Keyed by tool_call_id so every later frame patches the same
+          // item and the iframe is never remounted.
+          const appId = tc.id ? `app:${tc.id}` : "";
+          if (appId && mcpToolPrefixes.some((p) => name.startsWith(p))) {
+            if (appSeen.has(appId)) {
+              patchItem(appId, (it) =>
+                it.kind === "app" ? { ...it, toolArgs: args } : it,
+              );
+            } else {
+              appSeen.add(appId);
+              setItems((prev) => [
+                ...prev,
+                { kind: "app", id: appId, toolName: name, toolArgs: args, streaming: true },
+              ]);
+            }
+          }
           if (name === "push_widget") {
             // The real tool_call id, never a fallback. `toolCallKey` falls back to
             // `<msgId>:<name>`, and using that fallback here mangles dashboards: the
@@ -839,25 +864,23 @@ export default function ChatPanel({
           chipMap[cid] = { ...chipMap[cid], result: contentToText(msg.content) };
           syncChips();
         }
-        // An MCP tool may ship its own UI, bound to this result. Only MCP tools
-        // are considered, by the `{server}_{tool}` prefix the ClientGroup adds,
-        // so a local tool never costs a lookup. The card itself renders nothing
-        // when the tool has no app, which is the common case.
-        const name = msg.name || "";
-        if (mcpToolPrefixes.some((p) => name.startsWith(p))) {
+        // The app was mounted when the call started; this closes it. Marking
+        // `streaming` false is what turns the last partial into the single
+        // `tool-input` the spec requires before a result.
+        const appId = cid ? `app:${cid}` : "";
+        if (appId && appSeen.has(appId)) {
           const text = contentToText(msg.content);
-          setItems((prev) => [
-            ...prev,
-            {
-              kind: "app",
-              id: nextId(),
-              toolName: name,
-              toolArgs: argsByTool[name] || {},
-              // MCP structured content reaches us serialized in the tool
-              // message, so parse it back. A non-object result is content only.
-              toolResult: { structuredContent: parseStructured(text), content: [] },
-            },
-          ]);
+          patchItem(appId, (it) =>
+            it.kind === "app"
+              ? {
+                  ...it,
+                  streaming: false,
+                  // MCP structured content reaches us serialized in the tool
+                  // message, so parse it back. A non-object result is content only.
+                  toolResult: { structuredContent: parseStructured(text), content: [] },
+                }
+              : it,
+          );
         }
       }
     };
@@ -1859,6 +1882,7 @@ function ItemView({
         toolName={item.toolName}
         toolArguments={item.toolArgs}
         toolResult={item.toolResult}
+        streaming={item.streaming}
         servers={mcpServers}
       />
     );

@@ -49,8 +49,6 @@ function host(
   const onHeight = vi.fn();
   const bridge = createMcpAppHost({
     toolName: "meridian_sign_document",
-    toolArguments: { account_id: "MW-10241", document: "IPS amendment" },
-    toolResult: RESULT,
     toolInputSchema: overrides.toolInputSchema,
     displayModes: overrides.displayModes,
     onDisplayMode: overrides.onDisplayMode,
@@ -95,23 +93,27 @@ describe("the handshake", () => {
     expect(ctx.containerDimensions).toEqual({ maxHeight: 640 });
   });
 
-  it("hands over the call once the View confirms initialization", () => {
-    const { target, from } = host();
+  it("holds the call until the View says it is ready, then flushes it", () => {
+    const { bridge, target, from } = host();
+    const args = { account_id: "MW-10241", document: "IPS amendment" };
+    // Everything arrives BEFORE the handshake finishes, which is the ordinary
+    // race: dropping it would leave the app waiting for input it already
+    // missed.
+    bridge.setToolInput(target.win, args, true);
+    bridge.setToolResult(target.win, RESULT);
+    expect(target.sent).toHaveLength(0);
+
     from({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
 
     const input = sent(target.sent, "ui/notifications/tool-input");
     const result = sent(target.sent, "ui/notifications/tool-result");
     expect(input).toBeTruthy();
-    expect((input!.params as { arguments: unknown }).arguments).toEqual({
-      account_id: "MW-10241",
-      document: "IPS amendment",
-    });
-    // Input first, then result. The spec requires that order, and an app that
-    // renders from arguments while waiting would otherwise see them late.
+    expect((input!.params as { arguments: unknown }).arguments).toEqual(args);
+    // Input first, then result. The spec requires that order.
     expect(target.sent.indexOf(input!)).toBeLessThan(target.sent.indexOf(result!));
-
-    const params = result?.params as Record<string, unknown>;
-    expect(params.structuredContent).toEqual(RESULT.structuredContent);
+    expect((result?.params as Record<string, unknown>).structuredContent).toEqual(
+      RESULT.structuredContent,
+    );
   });
 
   it("passes the server's real schema through when there is one", () => {
@@ -121,6 +123,56 @@ describe("the handshake", () => {
     const got = reply(target.sent, 1)?.result as Record<string, unknown> | undefined;
     const ctx = got?.hostContext as Record<string, unknown>;
     expect((ctx.toolInfo as { tool: { inputSchema: unknown } }).tool.inputSchema).toEqual(schema);
+  });
+
+  it("streams partial arguments, then closes with the complete ones", () => {
+    const { bridge, target, from } = host();
+    from({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
+
+    bridge.setToolInput(target.win, { elements: "[{" }, false);
+    bridge.setToolInput(target.win, { elements: "[{a:1}," }, false);
+    bridge.setToolInput(target.win, { elements: "[{a:1},{b:2}]" }, true);
+
+    const partials = target.sent.filter(
+      (m) => m.method === "ui/notifications/tool-input-partial",
+    );
+    // This is the whole difference between a diagram that draws itself and one
+    // that appears finished.
+    expect(partials).toHaveLength(2);
+    expect((partials[1].params as { arguments: { elements: string } }).arguments.elements).toBe(
+      "[{a:1},",
+    );
+
+    const finals = target.sent.filter((m) => m.method === "ui/notifications/tool-input");
+    expect(finals).toHaveLength(1);
+  });
+
+  it("stops sending partials once the complete arguments have gone", () => {
+    const { bridge, target, from } = host();
+    from({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
+    bridge.setToolInput(target.win, { a: 1 }, true);
+    // The spec says MUST stop. A later partial would walk the app back to a
+    // half-built value it had already moved past.
+    bridge.setToolInput(target.win, { a: 2 }, false);
+
+    expect(target.sent.filter((m) => m.method === "ui/notifications/tool-input-partial")).toHaveLength(0);
+    expect(target.sent.filter((m) => m.method === "ui/notifications/tool-input")).toHaveLength(1);
+  });
+
+  it("never lets a result overtake the arguments", () => {
+    const { bridge, target, from } = host();
+    from({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
+    bridge.setToolInput(target.win, { a: 1 }, false);
+    // A result while the arguments are still streaming settles them, because
+    // `tool-input` is required before `tool-result` and there will be no more.
+    bridge.setToolResult(target.win, { structuredContent: { done: true } });
+
+    const order = target.sent.filter((m) => String(m.method).startsWith("ui/notifications/tool-"));
+    expect(order.map((m) => m.method)).toEqual([
+      "ui/notifications/tool-input-partial",
+      "ui/notifications/tool-input",
+      "ui/notifications/tool-result",
+    ]);
   });
 
   it("ignores anything that did not come from its own View", () => {
@@ -176,12 +228,7 @@ describe("proxying what the app calls", () => {
   it("refuses a call when no proxy is wired", () => {
     const { target, from } = host({ onToolCall: undefined });
     // The default stub in `host` is a proxy, so build one without it.
-    const bare = createMcpAppHost({
-      toolName: "t",
-      toolArguments: {},
-      toolResult: {},
-      onHeight: () => {},
-    });
+    const bare = createMcpAppHost({ toolName: "t", onHeight: () => {} });
     bare.handleMessage(
       { data: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "x" } }, source: target.win } as MessageEvent,
       target.win,

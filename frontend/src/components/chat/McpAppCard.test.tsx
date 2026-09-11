@@ -37,6 +37,7 @@ function draw(overrides: Partial<Parameters<typeof McpAppCard>[0]> = {}) {
       toolName="meridian_propose_rebalance"
       toolArguments={{ account_id: "MW-10241" }}
       toolResult={{ structuredContent: { household: "Whitfield Family Trust" } }}
+      streaming={false}
       servers={SERVERS}
       {...overrides}
     />,
@@ -79,6 +80,14 @@ it("shows the tool's own name, without the server prefix", async () => {
   // looking at this cares which tool ran, not how we avoided a name collision.
   expect(container.textContent).toContain("propose_rebalance");
   expect(container.textContent).not.toContain("meridian_propose_rebalance");
+});
+
+it("mounts while the arguments are still streaming", async () => {
+  fetchMcpApp.mockResolvedValue(APP);
+  // The whole point of mounting on the CALL: the frame has to exist before the
+  // arguments finish, or a diagram cannot draw itself as they arrive.
+  const { container } = draw({ streaming: true, toolResult: undefined });
+  await waitFor(() => expect(container.querySelector("iframe")).toBeTruthy());
 });
 
 it("does not look for an app when no server is connected", async () => {

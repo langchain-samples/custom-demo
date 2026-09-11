@@ -801,10 +801,32 @@ answer = await ctx.elicit("Set the target allocation", response_type=Allocation)
     <a href="https://github.com/modelcontextprotocol/ext-apps"><strong>modelcontextprotocol/ext-apps</strong></a>
     is the single most useful link of these. It holds the normative spec text
     (<a href="https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx">2026-01-26</a>
-    alongside a <code>draft</code>), the official host and view SDKs, and a plugin marketplace of
-    skills for building apps. Read the spec source rather than a summary: every write-up we
-    checked while building this, including one that claimed apps ship declarative JSON rather than
-    HTML, got something wrong.
+    alongside a <code>draft</code>) and the official host and view SDKs. Read the spec source
+    rather than a summary: every write-up we checked while building this, including one that
+    claimed apps ship declarative JSON rather than HTML, got something wrong.
+  </p>
+  <p>
+    It also ships a <strong>plugin marketplace of skills for building apps</strong>, which is the
+    fastest way to start one and the part most people miss:
+  </p>
+</div>
+
+<p class="filename">four skills, in the same repo as the spec</p>
+<pre><code>/plugin marketplace add modelcontextprotocol/ext-apps
+
+<span class="c">create-mcp-app      scaffold a new app with an interactive UI</span>
+<span class="c">add-app-to-server   add UI to an existing MCP server's tools</span>
+<span class="c">migrate-oai-app     convert an OpenAI Apps SDK app to MCP Apps</span>
+<span class="c">convert-web-app     turn an existing web app into a hybrid web + MCP App</span></code></pre>
+
+<div class="col">
+  <p>
+    <code>add-app-to-server</code> is the one that fits a server like the one here, and
+    <code>migrate-oai-app</code> matters more than it looks: Figma and Canva came through the
+    ChatGPT Apps SDK, which uses <code>_meta["openai/outputTemplate"]</code> and
+    <code>text/html+skybridge</code> rather than <code>_meta.ui.resourceUri</code> and
+    <code>text/html;profile=mcp-app</code>. The two converged on this spec in January 2026, and
+    that skill is the bridge for anything built before then.
   </p>
   <p>
     If you would rather watch than read, Burke Holland's

@@ -11,8 +11,9 @@
  *
  *   View -> Host   ui/initialize                  answered with McpUiInitializeResult
  *   View -> Host   ui/notifications/initialized
- *   Host -> View   ui/notifications/tool-input    the arguments the tool was called with
- *   Host -> View   ui/notifications/tool-result   the result of this leg of the call
+ *   Host -> View   ui/notifications/tool-input-partial  arguments, still streaming
+ *   Host -> View   ui/notifications/tool-input    the complete arguments, once
+ *   Host -> View   ui/notifications/tool-result   the finished result
  *   View -> Host   ui/notifications/size-changed  the content resized
  *   View -> Host   tools/call, resources/read     proxied to the app's server
  *   Host -> View   ui/resource-teardown           before the frame goes away
@@ -56,10 +57,6 @@ interface RpcMessage {
 export interface McpAppHostConfig {
   /** The tool whose app this is. Its name scopes every call the view makes. */
   toolName: string;
-  /** The arguments it was called with, replayed to the View. */
-  toolArguments: Record<string, unknown>;
-  /** Its result, which is the data the app draws. */
-  toolResult: McpToolResult;
   /**
    * Its JSON Schema, for `hostContext.toolInfo.tool`.
    *
@@ -100,6 +97,18 @@ export interface McpAppHostConfig {
 export interface McpAppHost {
   /** Feed every window message here. Anything not from `view` is ignored. */
   handleMessage: (event: MessageEvent, view: Window | null) => void;
+  /**
+   * The tool's arguments as they stand.
+   *
+   * Call it as often as they change. While `final` is false each call is a
+   * `ui/notifications/tool-input-partial`, which is how an app draws itself
+   * progressively instead of appearing all at once when the tool returns.
+   * `final: true` sends the one `ui/notifications/tool-input` and closes the
+   * partial stream for good, which the spec requires.
+   */
+  setToolInput: (view: Window | null, args: Record<string, unknown>, final: boolean) => void;
+  /** The finished result. Ordered after `tool-input`, which the spec requires. */
+  setToolResult: (view: Window | null, result: McpToolResult) => void;
   /** Ask the View to shut down before the frame is dropped. */
   teardown: (view: Window | null, reason: string) => void;
   /**
@@ -211,13 +220,75 @@ export function createMcpAppHost(config: McpAppHostConfig): McpAppHost {
     },
   });
 
-  /** Hand the View the call it is rendering, in the order the spec requires. */
-  const sendCall = (view: Window | null) => {
-    notify(view, "ui/notifications/tool-input", { arguments: config.toolArguments });
-    notify(view, "ui/notifications/tool-result", {
-      structuredContent: config.toolResult.structuredContent ?? {},
-      content: config.toolResult.content ?? [],
-    });
+  /*
+   * The call arrives in pieces, and the spec fixes their order: any number of
+   * `tool-input-partial`, then exactly one `tool-input`, then `tool-result`.
+   *
+   * The View may finish its handshake at any point in that sequence, so this
+   * keeps the latest of each and flushes whatever it holds once the View says
+   * it is ready. Sending before then is not allowed, and dropping what arrived
+   * early would leave an app waiting for input it already missed.
+   */
+  let ready = false;
+  // The latest arguments are KEPT, not consumed: a result arriving mid-stream
+  // has to be preceded by a `tool-input`, and that has to carry the last thing
+  // we knew rather than an empty object.
+  let latestArgs: Record<string, unknown> | null = null;
+  let argsDirty = false;
+  let argsAreFinal = false;
+  let inputSent = false;
+  let pendingResult: McpToolResult | null = null;
+  let resultSent = false;
+
+  const flush = (view: Window | null) => {
+    if (!ready) return;
+
+    if (!inputSent) {
+      // A result settles the arguments whatever the caller last said: there
+      // will be no more partials, and `tool-input` is required before it.
+      if (pendingResult) argsAreFinal = true;
+
+      if (argsAreFinal) {
+        notify(view, "ui/notifications/tool-input", { arguments: latestArgs ?? {} });
+        inputSent = true;
+        argsDirty = false;
+      } else if (argsDirty) {
+        notify(view, "ui/notifications/tool-input-partial", { arguments: latestArgs ?? {} });
+        argsDirty = false;
+      }
+    }
+
+    // `tool-input` is required BEFORE `tool-result`, so a result that arrives
+    // while the arguments are still streaming waits its turn rather than
+    // reaching the app out of order.
+    if (pendingResult && inputSent && !resultSent) {
+      notify(view, "ui/notifications/tool-result", {
+        structuredContent: pendingResult.structuredContent ?? {},
+        content: pendingResult.content ?? [],
+      });
+      resultSent = true;
+      pendingResult = null;
+    }
+  };
+
+  const setToolInput = (
+    view: Window | null,
+    args: Record<string, unknown>,
+    final: boolean,
+  ) => {
+    // Once the complete arguments have gone out, a later partial would be a
+    // regression to a half-built value. The spec says stop, so stop.
+    if (inputSent) return;
+    latestArgs = args;
+    argsDirty = true;
+    argsAreFinal = final;
+    flush(view);
+  };
+
+  const setToolResult = (view: Window | null, result: McpToolResult) => {
+    if (resultSent) return;
+    pendingResult = result;
+    flush(view);
   };
 
   const onToolsCall = (
@@ -256,7 +327,10 @@ export function createMcpAppHost(config: McpAppHostConfig): McpAppHost {
     const params = msg.params ?? {};
 
     if (msg.id === undefined) {
-      if (msg.method === "ui/notifications/initialized") sendCall(view);
+      if (msg.method === "ui/notifications/initialized") {
+        ready = true;
+        flush(view);
+      }
       else if (msg.method === "ui/notifications/size-changed") {
         const height = params.height;
         if (typeof height === "number") config.onHeight(height);
@@ -390,5 +464,5 @@ export function createMcpAppHost(config: McpAppHostConfig): McpAppHost {
     post(view, { id: `teardown-${Date.now()}`, method: "ui/resource-teardown", params: { reason } });
   };
 
-  return { handleMessage, teardown, setDisplayMode };
+  return { handleMessage, teardown, setDisplayMode, setToolInput, setToolResult };
 }
