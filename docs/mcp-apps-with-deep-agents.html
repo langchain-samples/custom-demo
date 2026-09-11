@@ -740,6 +740,49 @@ answer = await ctx.elicit("Set the target allocation", response_type=Allocation)
 </p>
 </div>
 
+<h2><span class="n">07</span> Further reading</h2>
+
+<div class="col">
+  <p>
+    Two specs do the work in this piece, and they are worth reading separately, because they
+    solve unrelated problems and compose only by coincidence.
+  </p>
+  <p>
+    <a href="https://modelcontextprotocol.io/seps/1865-mcp-apps-interactive-user-interfaces-for-mcp"><strong>SEP-1865, MCP Apps</strong></a>
+    is the extension itself: the <code>ui://</code> scheme, the <code>_meta.ui</code> binding, the
+    sandbox and CSP rules, and the JSON-RPC protocol between host and view. Final since
+    2026-01-26. Note that this is the <em>extension</em> revision, which moves independently of
+    the <a href="https://modelcontextprotocol.io/specification/2026-07-28">base MCP protocol
+    revision</a>.
+  </p>
+  <p>
+    <a href="https://modelcontextprotocol.io/seps/2322-MRTR"><strong>SEP-2322</strong></a> is the
+    other half of what the paused tools here do: a tool that needs input returns rather than
+    holding a socket open. There is <strong>no elicitation anywhere in SEP-1865</strong>, and none
+    is needed. An MCP App normally renders a finished tool result and calls tools when it wants
+    something.
+  </p>
+  <p>
+    <a href="https://github.com/modelcontextprotocol/ext-apps"><strong>modelcontextprotocol/ext-apps</strong></a>
+    is the single most useful link of these. It holds the normative spec text
+    (<a href="https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx">2026-01-26</a>
+    alongside a <code>draft</code>), the official host and view SDKs, and a plugin marketplace of
+    skills for building apps. Read the spec source rather than a summary: every write-up we
+    checked while building this, including one that claimed apps ship declarative JSON rather than
+    HTML, got something wrong.
+  </p>
+  <p>
+    Two servers to point a host at, both reachable without credentials.
+    <a href="https://github.com/MCPJam/mcp-apps-everything"><strong>mcp-apps-everything</strong></a>
+    runs locally and exists to exercise the whole surface, including resources that deliberately
+    serve the wrong MIME type so you find out how strict your host really is.
+    <a href="https://github.com/excalidraw/excalidraw-mcp"><strong>Excalidraw</strong></a> is the
+    real thing, hosted at <code>mcp.excalidraw.com/mcp</code>: one tool for the model, three marked
+    <code>visibility: ["app"]</code> for its own widget. Pointing our host at it is what taught us
+    we were handing those three to the model, which the spec forbids.
+  </p>
+</div>
+
 <footer>
   <div class="col">
     <p>
