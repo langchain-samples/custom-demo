@@ -8,6 +8,7 @@ The graph node (setup_graph.py) calls these and returns a ready assistant payloa
 
 from __future__ import annotations
 
+import html
 import os
 import re
 import secrets
@@ -195,11 +196,25 @@ def _brandfetch_brand(domain: str) -> dict | None:
 
 
 _SITE_CHARS = 1200
+_SITE_MIN_CHARS = 40
+# A blocked or broken site still returns 200 with a page, and that page describes the
+# outage rather than the company. jnj.com served "Site Maintenance | Oops! It looks like
+# there's an error", which would otherwise reach the model under the heading "what this
+# company says it does" and get built into an assistant.
+_SITE_JUNK = re.compile(
+    r"site maintenance|under maintenance|temporarily unavailable|service unavailable|"
+    r"access denied|forbidden|are you a robot|verify you are human|just a moment|"
+    r"enable javascript|javascript is required|page not found|page cannot be found",
+    re.I,
+)
 
 
-def _tagless(html: str) -> str:
-    """Visible text of an HTML fragment, whitespace collapsed."""
-    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)).strip()
+def _tagless(fragment: str) -> str:
+    """Visible text of an HTML fragment: tags dropped, entities decoded, space collapsed."""
+    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", fragment)).strip()
+    # Decode before the text reaches a prompt: "Pacific Gas &amp; Electric" is what the
+    # model would otherwise be told the company calls itself.
+    return html.unescape(text)
 
 
 def site_summary(domain: str) -> str:
@@ -221,13 +236,13 @@ def site_summary(domain: str) -> str:
             )
             return ""
 
-        html = resp.text
+        page = resp.text
     except Exception as exc:  # noqa: BLE001 - the name alone still analyses
         print(f"[setup] site summary: could not read {domain}, using the name only: {exc}")
         return ""
 
     parts: list[str] = []
-    if m := re.search(r"<title[^>]*>(.*?)</title>", html, re.S | re.I):
+    if m := re.search(r"<title[^>]*>(.*?)</title>", page, re.S | re.I):
         parts.append(_tagless(m.group(1)))
 
     for pat in (
@@ -235,10 +250,10 @@ def site_summary(domain: str) -> str:
         r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']+)',
         r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']description',
     ):
-        if m := re.search(pat, html, re.I):
+        if m := re.search(pat, page, re.I):
             parts.append(_tagless(m.group(1)))
 
-    headings = [_tagless(h) for h in re.findall(r"<h[12][^>]*>(.*?)</h[12]>", html, re.S | re.I)]
+    headings = [_tagless(h) for h in re.findall(r"<h[12][^>]*>(.*?)</h[12]>", page, re.S | re.I)]
     parts.extend(h for h in headings[:8] if h)
 
     seen: list[str] = []
@@ -249,6 +264,14 @@ def site_summary(domain: str) -> str:
     summary = " | ".join(seen)[:_SITE_CHARS]
     if not summary:
         print(f"[setup] site summary: {domain} exposed no title/description, using the name only")
+        return ""
+
+    if len(summary) < _SITE_MIN_CHARS or _SITE_JUNK.search(summary):
+        print(
+            f"[setup] site summary: {domain} served an outage or challenge page, "
+            "using the name only"
+        )
+        return ""
 
     return summary
 
@@ -282,14 +305,14 @@ def fetch_brand(customer: str, website: str | None = None) -> dict:
         # silence made that undiagnosable.
         try:
             with httpx.Client(timeout=12, follow_redirects=True) as c:
-                html = c.get(f"https://{domain}").text
+                page = c.get(f"https://{domain}").text
 
             for pat in (
                 r'<meta[^>]+name=["\']theme-color["\'][^>]+content=["\'](#[0-9a-fA-F]{3,6})',
                 r'<meta[^>]+content=["\'](#[0-9a-fA-F]{3,6})["\'][^>]+name=["\']theme-color',
                 r'<meta[^>]+name=["\']msapplication-TileColor["\'][^>]+content=["\'](#[0-9a-fA-F]{3,6})',
             ):
-                m = re.search(pat, html)
+                m = re.search(pat, page)
                 if m:
                     accent_scraped = m.group(1)
                     break
