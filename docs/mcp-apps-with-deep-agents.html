@@ -513,6 +513,39 @@ answer = await ctx.elicit("Set the target allocation", response_type=Allocation)
   The UI is a resource on the same server, served with the MCP Apps MIME type. Nothing fetches it
   from a CDN; the host reads it over MCP and hands it to the iframe as <code>srcdoc</code>.
 </p>
+<p>
+  You can watch this happen against a real server in about thirty seconds, and it is the fastest way
+  to understand the rest of this piece. <strong>Excalidraw's MCP App is hosted, open, and needs no
+  account:</strong>
+</p>
+</div>
+
+<p class="filename">two calls, no credentials</p>
+<pre><code>curl -sN https://mcp.excalidraw.com/mcp \
+  -H <span class="s">'Content-Type: application/json'</span> \
+  -H <span class="s">'Accept: application/json, text/event-stream'</span> \
+  -d <span class="s">'{"jsonrpc":"2.0","id":1,"method":"tools/list"}'</span>
+
+<span class="c"># create_view carries _meta.ui.resourceUri = "ui://excalidraw/mcp-app.html"</span>
+<span class="c"># then read that resource the way a host does:</span>
+<span class="c">#   {"method":"resources/read","params":{"uri":"ui://excalidraw/mcp-app.html"}}</span>
+<span class="c"># -&gt; ~430KB of text/html;profile=mcp-app, every asset inlined</span></code></pre>
+
+<div class="col">
+<p>
+  Five tools come back, and the shape of them is the whole lesson.
+  <code>create_view</code> is the one the model calls. The other three,
+  <code>save_checkpoint</code>, <code>read_checkpoint</code> and <code>export_to_excalidraw</code>,
+  are marked <code>visibility: ["app"]</code>: they exist for the widget, and a host MUST keep them
+  out of the model's tool list. Pointing our own host at this server is how we found out we were
+  handing the model all five.
+</p>
+<p>
+  It is worth trying before you build anything, because a server you did not write is the only real
+  test of a host. Ours passed the easy part and failed on a required field nobody notices until an
+  app refuses the handshake: the initialize result has to carry the tool's full
+  <code>inputSchema</code>, and the official SDK validates it.
+</p>
 </div>
 
 <figure>
@@ -779,7 +812,8 @@ answer = await ctx.elicit("Set the target allocation", response_type=Allocation)
     runs locally and exists to exercise the whole surface, including resources that deliberately
     serve the wrong MIME type so you find out how strict your host really is.
     <a href="https://github.com/excalidraw/excalidraw-mcp"><strong>Excalidraw</strong></a> is the
-    real thing, hosted at <code>mcp.excalidraw.com/mcp</code>: one tool for the model, three marked
+    real thing, hosted at <a href="https://mcp.excalidraw.com/mcp"><code>mcp.excalidraw.com/mcp</code></a>
+    and needing no account: one tool for the model, three marked
     <code>visibility: ["app"]</code> for its own widget. Pointing our host at it is what taught us
     we were handing those three to the model, which the spec forbids.
   </p>
