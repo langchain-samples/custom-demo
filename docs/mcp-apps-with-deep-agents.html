@@ -273,13 +273,13 @@
     <p class="eyebrow">mcp apps · deep agents · langchain.mcp</p>
     <h1>Tools That Ship Their Own UI</h1>
     <p class="standfirst">
-      An MCP server can hand your frontend a set of allocation sliders, a handwriting pad, or an
-      order ticket, and get structured data back mid-tool-call. Here is the whole path, from the
-      server's decorator to the iframe, and the four things that cost us an hour each.
+      An MCP server can hand your frontend allocation sliders, a signature pad, or an order ticket,
+      and get structured data back. Here is the whole path, and the four conformance bugs a real
+      third-party app found in our host that our own tests never could.
     </p>
     <div class="byline">
-      <span>Full stack: FastMCP → MCPAdapter → Deep Agent → React</span>
-      <span>~12 min</span>
+      <span>FastMCP → langchain.mcp → Deep Agent → React</span>
+      <span>~7 min</span>
     </div>
   </div>
 </div>
@@ -289,234 +289,60 @@
 
 <p>
   A generated form handles most of what a tool needs from a person. It cannot handle a drawn
-  handwritten mark, five sliders that must total 100%, or a hold-to-confirm on an order that moves
-  money.
-  <strong>MCP Apps</strong> are the answer to that: a tool declares a <code>ui://</code> resource,
-  the server serves HTML, and the host renders it once the tool call returns.
+  signature, five sliders that must total 100%, or a hold-to-confirm on an order that moves money.
+  <strong>MCP Apps</strong> (SEP-1865, final 2026-01-26) are the answer: a tool declares a
+  <code>ui://</code> resource, the server serves HTML, the host renders it in a sandboxed iframe
+  that can call tools back.
 </p>
 
 <p>
-  The pieces are all shipping - the stateless MCP spec, <code>langchain.mcp</code>, FastMCP's
-  <code>AppConfig</code> - but they are documented separately, and the interesting part is how they
-  meet. This is the working path, with the mechanism drawn rather than described.
+  The happy path is in the spec. What follows is the working path through FastMCP and a Deep Agent,
+  plus the four things a real third-party server found wrong with our host.
 </p>
 
 </div>
 
-<h2><span class="n">01</span> The round trip</h2>
+<h2><span class="n">01</span> Two tools, not one</h2>
 <div class="col">
 <p>
-  Start with the shape, because every later decision follows from it. The thing to notice is that
-  <strong>the tool call is suspended in the middle</strong>, and it resumes on the server as the
-  same call, not a new one.
-</p>
-</div>
-
-<figure>
-  <svg viewBox="0 0 860 400" role="img" aria-label="A tool call pauses mid-execution: the MCP server returns an input-required result, the adapter raises a LangGraph interrupt, the browser renders the server's own HTML in a sandboxed iframe, and the resume re-issues the same call with the answer attached.">
-    <defs>
-      <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-        <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
-      </marker>
-      <marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-        <path d="M0 0 L10 5 L0 10 z" fill="#7FC8FF"/>
-      </marker>
-    </defs>
-
-    <!-- lanes -->
-    <text x="8" y="30" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor">Browser</text>
-    <text x="8" y="150" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor">Deep Agent</text>
-    <text x="8" y="290" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor">MCP server</text>
-    <line x1="0" y1="60" x2="860" y2="60" stroke="currentColor" stroke-width="1" opacity="0.18"/>
-    <line x1="0" y1="196" x2="860" y2="196" stroke="currentColor" stroke-width="1" opacity="0.18"/>
-
-    <!-- step 1: model calls tool -->
-    <rect x="96" y="104" width="132" height="42" rx="8" fill="none" stroke="currentColor" stroke-width="1.2"/>
-    <text x="162" y="124" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">model calls</text>
-    <text x="162" y="138" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">propose_rebalance</text>
-
-    <line x1="162" y1="146" x2="162" y2="248" stroke="currentColor" stroke-width="1.4" marker-end="url(#a)"/>
-    <text x="172" y="200" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">tools/call</text>
-
-    <!-- step 2: server asks -->
-    <rect x="96" y="252" width="176" height="42" rx="8" fill="none" stroke="#7FC8FF" stroke-width="1.4"/>
-    <text x="184" y="272" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="#7FC8FF">InputRequiredResult</text>
-    <text x="184" y="286" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#7FC8FF">+ requested_schema</text>
-
-    <path d="M272 268 L360 268 L360 128" fill="none" stroke="#7FC8FF" stroke-width="1.4" marker-end="url(#ab)"/>
-
-    <!-- step 3: adapter interrupt -->
-    <rect x="300" y="104" width="150" height="42" rx="8" fill="none" stroke="#7FC8FF" stroke-width="1.4"/>
-    <text x="375" y="124" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="#7FC8FF">MCPAdapter raises</text>
-    <text x="375" y="138" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="#7FC8FF">interrupt()</text>
-
-    <line x1="375" y1="104" x2="375" y2="44" stroke="#7FC8FF" stroke-width="1.4" marker-end="url(#ab)"/>
-    <text x="385" y="80" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#7FC8FF">__interrupt__</text>
-
-    <!-- step 4: iframe -->
-    <rect x="300" y="12" width="188" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="4 3"/>
-    <text x="394" y="30" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">sandboxed iframe</text>
-    <text x="394" y="45" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">the server's own HTML</text>
-
-    <path d="M488 34 L560 34 L560 118" fill="none" stroke="currentColor" stroke-width="1.4" marker-end="url(#a)"/>
-    <text x="570" y="76" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">postMessage</text>
-    <text x="570" y="90" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">submit</text>
-
-    <!-- step 5: resume -->
-    <rect x="500" y="104" width="132" height="42" rx="8" fill="none" stroke="currentColor" stroke-width="1.2"/>
-    <text x="566" y="124" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">Command(resume)</text>
-    <text x="566" y="138" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">keyed by request key</text>
-
-    <line x1="632" y1="128" x2="700" y2="128" stroke="currentColor" stroke-width="1.4" marker-end="url(#a)"/>
-    <line x1="700" y1="128" x2="700" y2="248" stroke="currentColor" stroke-width="1.4" marker-end="url(#a)"/>
-    <text x="640" y="196" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">tools/call again,</text>
-    <text x="640" y="210" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">+ input_responses</text>
-
-    <!-- step 6: finish -->
-    <rect x="628" y="252" width="150" height="42" rx="8" fill="none" stroke="currentColor" stroke-width="1.2"/>
-    <text x="703" y="272" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">tool body runs</text>
-    <text x="703" y="286" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">to completion</text>
-
-    <line x1="778" y1="268" x2="820" y2="268" stroke="currentColor" stroke-width="1.4" marker-end="url(#a)"/>
-    <line x1="820" y1="268" x2="820" y2="128" stroke="currentColor" stroke-width="1.4" marker-end="url(#a)"/>
-    <text x="700" y="330" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">result → model</text>
-
-    <!-- pause bracket -->
-    <path d="M84 100 L74 100 L74 300 L84 300" fill="none" stroke="#7FC8FF" stroke-width="1.2"/>
-    <text x="66" y="204" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#7FC8FF">one</text>
-    <text x="66" y="218" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#7FC8FF">tool call</text>
-  </svg>
-  <figcaption>
-    The blue path is the pause. One <code>propose_rebalance</code> call spans both legs: the server
-    answers the first with a request for input, and the second carries the person's answer back into
-    the same call, which then finishes normally.
-  </figcaption>
-</figure>
-
-<div class="col">
-<p>
-  Two consequences fall straight out of that picture, and both bite if you miss them. The tool body
-  <strong>runs from the top on every round</strong> - so any real work before the ask happens twice.
-  And the answer is <strong>keyed by the server's own request key</strong>, so a resume under the
-  wrong key fails rather than degrading.
-</p>
-</div>
-
-<h2><span class="n">02</span> Why the server can't just ask</h2>
-<div class="col">
-<p>
-  The obvious API is <code>ctx.elicit()</code>: pause here, ask the caller, carry on. On a modern
-  connection it fails outright:
-</p>
-<pre><code><span class="c"># fastmcp, against a 2026-07-28 connection</span>
-answer = await ctx.elicit("Set the target allocation", response_type=Allocation)
-<span class="c"># -&gt; elicitation via server-initiated requests is unavailable</span></code></pre>
-<p>
-  That is not a bug, it is the stateless spec working. Server-initiated elicitation needs a live
-  session to push a question down. The new protocol removed sessions, which is what makes MCP
-  servers horizontally scalable - and it replaced the push with a <strong>retry-able round</strong>.
-</p>
-</div>
-
-<figure>
-  <svg viewBox="0 0 820 250" role="img" aria-label="Legacy elicitation holds a session open while it waits for an answer; the guard pattern instead ends the call with an input-required result and the client re-issues it with the answer attached.">
-    <defs>
-      <marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-        <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
-      </marker>
-      <marker id="bb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-        <path d="M0 0 L10 5 L0 10 z" fill="#7FC8FF"/>
-      </marker>
-    </defs>
-
-    <text x="0" y="16" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">legacy - ctx.elicit()</text>
-    <line x1="60" y1="44" x2="60" y2="104" stroke="currentColor" stroke-width="1.2"/>
-    <line x1="330" y1="44" x2="330" y2="104" stroke="currentColor" stroke-width="1.2"/>
-    <text x="60" y="40" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">client</text>
-    <text x="330" y="40" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">server</text>
-    <line x1="60" y1="58" x2="326" y2="58" stroke="currentColor" stroke-width="1.3" marker-end="url(#b)"/>
-    <text x="193" y="53" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">tools/call</text>
-    <line x1="330" y1="80" x2="64" y2="80" stroke="currentColor" stroke-width="1.3" marker-end="url(#b)"/>
-    <text x="197" y="75" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">elicitation/create</text>
-    <rect x="60" y="88" width="270" height="14" fill="currentColor" opacity="0.12"/>
-    <text x="195" y="99" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">session held open the whole time</text>
-    <text x="0" y="128" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">one server instance, pinned</text>
-
-    <line x1="410" y1="20" x2="410" y2="230" stroke="currentColor" stroke-width="1" opacity="0.2"/>
-
-    <text x="450" y="16" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="#7FC8FF">stateless - guard pattern</text>
-    <line x1="510" y1="44" x2="510" y2="190" stroke="currentColor" stroke-width="1.2"/>
-    <line x1="780" y1="44" x2="780" y2="190" stroke="currentColor" stroke-width="1.2"/>
-    <text x="510" y="40" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">client</text>
-    <text x="780" y="40" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">any instance</text>
-    <line x1="510" y1="58" x2="776" y2="58" stroke="currentColor" stroke-width="1.3" marker-end="url(#b)"/>
-    <text x="643" y="53" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">tools/call</text>
-    <line x1="780" y1="82" x2="514" y2="82" stroke="#7FC8FF" stroke-width="1.4" marker-end="url(#bb)"/>
-    <text x="647" y="77" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="#7FC8FF">InputRequiredResult</text>
-    <text x="510" y="104" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="#7FC8FF">call is over</text>
-    <text x="560" y="126" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">…person answers, minutes later…</text>
-    <line x1="510" y1="150" x2="776" y2="150" stroke="#7FC8FF" stroke-width="1.4" marker-end="url(#bb)"/>
-    <text x="643" y="145" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="#7FC8FF">tools/call + input_responses</text>
-    <line x1="780" y1="174" x2="514" y2="174" stroke="currentColor" stroke-width="1.3" marker-end="url(#b)"/>
-    <text x="647" y="169" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">final result</text>
-    <text x="450" y="214" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">nothing pinned; the pause can outlive the process</text>
-  </svg>
-  <figcaption>
-    The one structural difference: the guard pattern <em>ends</em> the call to ask. That is why the
-    pause can survive a checkpoint, a redeploy, and a person going to lunch - and why an
-    <code>interrupt()</code> can wrap it at all.
-  </figcaption>
-</figure>
-
-<div class="col">
-<p>
-  Two tools, and the split is the whole idea. One opens the app and returns what it draws. The
-  other receives what the person did, and is marked so that only the app may call it.
+  <strong>Nothing pauses.</strong> One tool opens the app and returns the data it draws. A second
+  receives what the person did, marked so only the app may call it.
 </p>
 </div>
 
 <p class="filename">server.py</p>
 <pre><code><span class="k">@mcp</span>.tool(app=AppConfig(resource_uri=<span class="s">"ui://meridian/rebalance.html"</span>))
 <span class="k">def</span> <span class="f">propose_rebalance</span>(account_id: str) -&gt; dict:
-    <span class="s">"""Open the rebalance app on an account."""</span>
-    <span class="c"># The result IS the render data. Nothing else happens here: a tool that</span>
-    <span class="c"># both opened an app and acted would let the model rebalance by looking.</span>
+    <span class="c"># The result IS the render data. A tool that both opened an app and</span>
+    <span class="c"># acted would let the model rebalance by looking.</span>
     <span class="k">return</span> rebalance_view(lookup(account_id))
 
 
 <span class="k">@mcp</span>.tool(app=AppConfig(resource_uri=<span class="s">"ui://meridian/rebalance.html"</span>,
                         visibility=[<span class="s">"app"</span>]))
 <span class="k">def</span> <span class="f">submit_rebalance</span>(account_id: str, allocation: dict[str, float]) -&gt; dict:
-    <span class="s">"""Submit the allocation the advisor set in the app."""</span>
     <span class="k">return</span> place_trades(lookup(account_id), allocation)</code></pre>
 
 <div class="col">
 <p>
-  <code>visibility=["app"]</code> is the load-bearing line. It keeps <code>submit_rebalance</code>
-  out of the model's tool list entirely, which a host MUST honour, and the reason is the point of
-  the app: an allocation is where a person left five sliders. A model that can call the submit tool
-  can skip the person.
+  <code>visibility=["app"]</code> is load-bearing. It keeps <code>submit_rebalance</code> out of
+  the model's tool list, which a host <strong>MUST</strong> honour, and that is the point of the
+  app: an allocation is where a person left five sliders. A model that can call the submit tool can
+  skip the person.
 </p>
 <p>
-  Note what is <em>absent</em>. No pause, no <code>ctx</code>, no schema, and no round two. The
-  allocation is also a nested object again, which an elicitation answer cannot carry: its content
-  allows primitives only, so the same data previously had to be flattened to one key per sleeve.
-  Render context needed a hiding place too, hung off a schema property because the SDK silently
-  drops unknown schema root keys. An ordinary result has neither problem, and both workarounds were
-  deleted rather than ported.
+  We built this on elicitation (SEP-2322) first. Two workarounds died with it: render context
+  smuggled onto a schema <em>property</em> (the SDK drops unknown root keys silently) and the
+  allocation flattened to one key per sleeve (elicitation content allows primitives only).
 </p>
 </div>
 
-<h2><span class="n">03</span> Where the HTML comes from</h2>
+<h2><span class="n">02</span> Where the HTML comes from</h2>
 <div class="col">
 <p>
-  The UI is a resource on the same server, served with the MCP Apps MIME type. Nothing fetches it
-  from a CDN; the host reads it over MCP and hands it to the iframe as <code>srcdoc</code>.
-</p>
-<p>
-  You can watch this happen against a real server in about thirty seconds, and it is the fastest way
-  to understand the rest of this piece. <strong>Excalidraw's MCP App is hosted, open, and needs no
-  account:</strong>
+  <code>ui://</code> is an MCP resource identifier, not a URL. The <strong>host</strong> reads it
+  over MCP and hands the bytes to the iframe as <code>srcdoc</code>; a browser cannot resolve it at
+  all. Excalidraw's app is hosted and needs no account, so you can watch this in thirty seconds:
 </p>
 </div>
 
@@ -527,27 +353,22 @@ answer = await ctx.elicit("Set the target allocation", response_type=Allocation)
   -d <span class="s">'{"jsonrpc":"2.0","id":1,"method":"tools/list"}'</span>
 
 <span class="c"># create_view carries _meta.ui.resourceUri = "ui://excalidraw/mcp-app.html"</span>
-<span class="c"># then read that resource the way a host does:</span>
+<span class="c"># read that resource the way a host does:</span>
 <span class="c">#   {"method":"resources/read","params":{"uri":"ui://excalidraw/mcp-app.html"}}</span>
 <span class="c"># -&gt; ~430KB of text/html;profile=mcp-app, every asset inlined</span></code></pre>
 
 <div class="col">
 <p>
-  Five tools come back, and the shape of them is the whole lesson.
-  <code>create_view</code> is the one the model calls. The other three,
-  <code>save_checkpoint</code>, <code>read_checkpoint</code> and <code>export_to_excalidraw</code>,
-  are marked <code>visibility: ["app"]</code>: they exist for the widget, and a host MUST keep them
-  out of the model's tool list. Pointing our own host at this server is how we found out we were
-  handing the model all five.
+  Five tools come back. <code>create_view</code> is the model's; the other three are
+  <code>visibility: ["app"]</code>. Pointing our host here is how we found we were handing the
+  model all five.
 </p>
 <p>
-  It is worth trying before you build anything, because a server you did not write is the only real
-  test of a host. Ours passed the easy part and failed on a required field nobody notices until an
-  app refuses the handshake: the initialize result has to carry the tool's full
-  <code>inputSchema</code>, and the official SDK validates it.
+  Everything is inlined because the iframe has an opaque origin and can fetch nothing: no script
+  tag, no stylesheet, no image URL. That is why Excalidraw's app is 430KB, and why ours went from
+  32KB to 618KB when we adopted the official SDK.
 </p>
 </div>
-
 <figure>
   <svg viewBox="0 0 800 218" role="img" aria-label="The tool's metadata names a ui:// resource; the deployment reads that resource over MCP and returns the HTML, which the browser renders inside an iframe sandboxed to scripts only.">
     <defs>
@@ -594,268 +415,183 @@ answer = await ctx.elicit("Set the target allocation", response_type=Allocation)
   </figcaption>
 </figure>
 
+
+<h2><span class="n">03</span> The host, and four bugs</h2>
+<div class="col">
+<p>
+  We hand-wrote the host first, about 400 lines of JSON-RPC over <code>postMessage</code>. It
+  passed against our own apps. Then we pointed it at Excalidraw and the MCPJam reference server:
+</p>
+<ul>
+  <li>
+    <code>toolInfo.tool</code> without <code>inputSchema</code>. Required on <code>Tool</code>, and
+    the SDK validates the initialize result, so the app refused the handshake. Absent was never an
+    option.
+  </li>
+  <li>App-only tools offered to the model, because we never read <code>visibility</code>.</li>
+  <li>
+    Excalidraw's <strong>Edit</strong> doing nothing: it asks for fullscreen, we advertised
+    <code>["inline"]</code>. The app was behaving correctly with the answer we gave it.
+  </li>
+  <li>
+    Our own view sending <code>clientInfo</code> where <code>ui/initialize</code> requires
+    <code>appInfo</code>. Both halves were ours, so they agreed with each other and neither agreed
+    with the spec.
+  </li>
+</ul>
+<p>
+  That last one is the argument for the SDK, now used on both ends: <code>AppBridge</code> in the
+  frontend, <code>App</code> bundled into each view. None of the four bugs is expressible against
+  it.
+</p>
+<p>
+  One thing does not delegate. <code>AppBridge</code> forwards a view's <code>tools/call</code> to
+  an MCP <code>Client</code>, and <strong>a browser has none</strong>. Ours is <code>null</code>,
+  so the call arrives as a handler, which is where the two rules land:
+</p>
+</div>
+
+<p class="filename">what a host must check on a view's tools/call</p>
+<pre><code><span class="c"># same server as the app's own tool, on the route's server_name rather</span>
+<span class="c"># than by parsing our own `{server}_{tool}` prefix</span>
+<span class="k">if</span> opener.server_name != route.server_name:
+    <span class="k">raise</span> PermissionError(...)
+
+<span class="k">if</span> <span class="k">not</span> app_callable(wanted):
+    <span class="k">raise</span> PermissionError(<span class="s">f"{target} is not open to apps"</span>)</code></pre>
+
+<div class="col">
+<p>
+  A refusal goes back as a JSON-RPC error, never dropped: a dropped request is a button that hangs.
+</p>
+</div>
+
 <h2><span class="n">04</span> Binding it to a Deep Agent</h2>
 <div class="col">
 <p>
-  If the server list is fixed at build time, this is three lines and you are done:
-</p>
-<pre><code><span class="k">async with</span> MCPAdapter(<span class="s">"https://example.com/mcp"</span>) <span class="k">as</span> adapter:
-    agent = create_deep_agent(model=<span class="s">"claude-sonnet-5"</span>,
-                              tools=<span class="k">await</span> adapter.list_tools(),
-                              checkpointer=checkpointer)   <span class="c"># required: the pause has to wait somewhere</span></code></pre>
-<p>
-  The tools hold the client, so they stay callable after the context exits, and elicitation is armed
-  by default.
-</p>
-
-<h3>When each user brings their own server</h3>
-<p>
-  This is the case worth writing down, because it is the one that does not fit. If servers come from
-  per-user configuration, you cannot know them when the graph is built - and
-  <code>create_deep_agent(tools=…)</code> is fixed at build time. Middleware bridges it, but
-  <strong>both halves are load-bearing</strong>:
+  A fixed server list is trivial: hand <code>await adapter.list_tools()</code> to
+  <code>create_deep_agent</code> and stop. Per-user servers are the interesting case, unknowable at
+  graph build while <code>create_deep_agent(tools=…)</code> is fixed then. Both middleware halves
+  are load-bearing:
 </p>
 </div>
 
 <p class="filename">agent.py</p>
 <pre><code><span class="k">class</span> <span class="f">McpTools</span>(AgentMiddleware):
     <span class="k">async def</span> <span class="f">awrap_model_call</span>(self, request, handler):
-        <span class="c"># half one: what the MODEL is offered.</span>
-        tools = <span class="k">await</span> load_tools(servers_for(request.runtime))   <span class="c"># cached!</span>
+        <span class="c"># what the MODEL is offered. Cached: this fires on every model</span>
+        <span class="c"># call, and a round trip per call is visible on stage.</span>
+        tools = <span class="k">await</span> load_tools(servers_for(request.runtime))
         <span class="k">return await</span> handler(request.override(tools=[*request.tools, *tools]))
 
     <span class="k">async def</span> <span class="f">awrap_tool_call</span>(self, request, handler):
-        <span class="c"># half two: what actually RUNS. ToolNode was built without these,</span>
-        <span class="c"># so it passes tool=None; hand it the real object or every MCP</span>
-        <span class="c"># call comes back "tool not found".</span>
-        <span class="k">if</span> request.tool <span class="k">is</span> <span class="k">None</span>:
-            name = request.tool_call[<span class="s">"name"</span>]
-            tool = find(<span class="k">await</span> load_tools(servers_for(request.runtime)), name)
+        <span class="c"># what actually RUNS. ToolNode was built without these, so it</span>
+        <span class="c"># passes tool=None; hand it the real object or every MCP call</span>
+        <span class="c"># comes back "tool not found".</span>
+        <span class="k">if</span> request.tool <span class="k">is None</span>:
+            tool = find(<span class="k">await</span> load_tools(servers_for(request.runtime)),
+                        request.tool_call[<span class="s">"name"</span>])
             <span class="k">if</span> tool: request = dataclasses.replace(request, tool=tool)
         <span class="k">return await</span> handler(request)
 
     <span class="k">def</span> <span class="f">wrap_model_call</span>(self, request, handler): <span class="k">return</span> handler(request)
     <span class="k">def</span> <span class="f">wrap_tool_call</span>(self, request, handler): <span class="k">return</span> handler(request)</code></pre>
 
-<div class="callout">
-  <p>
-    Those two sync one-liners are not filler. A middleware with only async hooks makes every
-    synchronous <code>invoke()</code> raise <code>NotImplementedError</code> - which took out our
-    entire test suite on the first run. Defining <code>wrap_tool_call</code> is also what tells
-    <code>create_agent</code> this agent has dynamic tools, so it stops rejecting the names the first
-    half just added.
-  </p>
+<div class="col">
+<p>
+  The two sync one-liners are not filler. Async-only hooks make every synchronous
+  <code>invoke()</code> raise, which took out our whole test suite; and
+  <code>wrap_tool_call</code> is what tells <code>create_agent</code> this agent has dynamic
+  tools, so it stops rejecting the names the first half added.
+</p>
+<p>
+  Namespace each server or a remote <code>search</code> collides with yours. But the prefix is
+  <em>yours</em>: an app calls <code>submit_rebalance</code>, the name its own server published, so
+  resolve in the app's namespace. Nothing else in the agent changes, and the one agent-visible rule
+  is the <code>visibility</code> filter, which lives in the MCP adapter.
+</p>
 </div>
+
+<h2><span class="n">05</span> Nothing makes the model wait</h2>
+<div class="col">
+<p>
+  The spec does not warn you about this. The tool returns, the app renders, and the person answers
+  whenever, possibly into a turn that already ended. Our server's <code>instructions</code> say
+  "say the app is open and wait," which is a request, not a guarantee.
+</p>
+</div>
+
+<p class="filename">the three ways a tool can wait for a person</p>
+<pre><code>held promise      the handler awaits; the call stays open
+                  needs shared process memory, dies at your timeout
+
+elicitation       InputRequiredResult, then a fresh call with the answer
++ interrupt       survives a checkpoint, a redeploy, and lunch
+
+MCP Apps          nothing waits</code></pre>
 
 <div class="col">
 <p>
-  Two more things that matter at this seam. Cache the discovery - <code>awrap_model_call</code> fires
-  on <em>every</em> model call, and a round trip per call is visible on stage. And give each server
-  its own namespace: a remote tool called <code>search</code> will otherwise collide with yours.
-  A <code>ClientGroup</code> prefixes every tool with the server it came from, which is worth doing
-  even for a single server.
+  A held-open promise does work on a stateless server: statelessness means no session persists
+  <em>between</em> requests, not that one request cannot be slow. It breaks behind a second
+  replica. Elicitation plus a LangGraph <code>interrupt()</code> is the durable option, because a
+  checkpoint outlives the process and an open socket does not.
 </p>
 </div>
-
-<h2><span class="n">05</span> The frontend</h2>
-<div class="col">
-<p>
-  The pause arrives on the stream as an ordinary <code>__interrupt__</code>, in this shape:
-</p>
-<pre><code>{ <span class="s">"type"</span>: <span class="s">"mcp_elicitation"</span>,
-  <span class="s">"tool_name"</span>: <span class="s">"meridian_propose_rebalance"</span>,
-  <span class="s">"requests"</span>: [{ <span class="s">"key"</span>: <span class="s">"rebalance"</span>, <span class="s">"message"</span>: <span class="s">"Set the target allocation"</span>,
-                <span class="s">"mode"</span>: <span class="s">"form"</span>, <span class="s">"requested_schema"</span>: {…} }] }</code></pre>
-<p>
-  Route on <code>type</code>, ask your backend whether that tool ships an App, and render one of two
-  things. The fallback matters more than the App: <strong>most MCP servers ship no UI</strong>, and a
-  form generated from <code>requested_schema</code> covers all of them for free.
-</p>
-</div>
-
-<p class="filename">McpElicitationCard.tsx</p>
-<pre><code><span class="k">const</span> app = <span class="k">await</span> fetchMcpApp(servers, review.tool_name);   <span class="c">// null for a plain tool</span>
-
-<span class="k">return</span> app
-  ? &lt;iframe srcDoc={app.html} sandbox=<span class="s">"allow-scripts"</span> /&gt;   <span class="c">// scripts only. never allow-same-origin</span>
-  : &lt;SchemaForm schema={first.requested_schema} onSubmit={accept} /&gt;;</code></pre>
-
-<p>
-  The conversation with that iframe is not yours to invent. <strong>SEP-1865</strong>, the MCP Apps
-  extension, went final on 2026-01-26 and fixes it: JSON-RPC 2.0 over <code>postMessage</code>, with
-  the app acting as an MCP client and the host as the server it connects to. Write your own message
-  names and your app renders in exactly one host, yours.
-</p>
-
-<p class="filename">the SEP-1865 handshake, as the app sees it</p>
-<pre><code><span class="c">// app → host, on load</span>
-{ jsonrpc: <span class="s">"2.0"</span>, id: 1, method: <span class="s">"ui/initialize"</span>,
-  params: { protocolVersion: <span class="s">"2026-01-26"</span>, appCapabilities: {…} } }
-
-<span class="c">// host → app: theme, sizing, and which tool is paused</span>
-{ jsonrpc: <span class="s">"2.0"</span>, id: 1, result: { hostContext: { theme, styles, toolInfo } } }
-
-<span class="c">// app → host</span>
-{ method: <span class="s">"ui/notifications/initialized"</span> }
-{ method: <span class="s">"ui/notifications/size-changed"</span>, params: { width, height } }
-
-<span class="c">// host → app: the call it is rendering</span>
-{ method: <span class="s">"ui/notifications/tool-input"</span>,  params: { arguments } }
-{ method: <span class="s">"ui/notifications/tool-result"</span>, params: {…} }</code></pre>
-
-<p>
-  Which leaves the interesting question: the app has to send an <em>answer</em>, and SEP-1865 has no
-  elicitation message. Not an oversight so much as a different starting assumption. An app there
-  renders a finished tool result, and when it needs to do something it calls a tool.
-</p>
-
-<p>
-  That turns out to be exactly what a paused call already is. Under <strong>SEP-2322</strong> a tool
-  that needs input does not hold a socket open, it <em>returns</em>: an
-  <code>InputRequiredResult</code> naming what it wants, which the client answers by calling the same
-  tool again with <code>inputResponses</code> attached. So the question is an ordinary tool result,
-  and the answer is an ordinary tool call. Compose the two SEPs and there is nothing left to invent.
-</p>
-
-<p class="filename">the question arrives as a result; the answer goes back as a call</p>
-<pre><code><span class="c">// host → app  (ui/notifications/tool-result)</span>
-{ resultType: <span class="s">"input_required"</span>,
-  inputRequests: { rebalance: { method: <span class="s">"elicitation/create"</span>,
-                                params: { message, requestedSchema } } } }
-
-<span class="c">// app → host  (a plain tools/call, which the host proxies onward)</span>
-{ method: <span class="s">"tools/call"</span>,
-  params: { name: <span class="s">"meridian_propose_rebalance"</span>, arguments,
-            inputResponses: { rebalance: { action: <span class="s">"accept"</span>, content } } } }</code></pre>
-
-<p>
-  For us the host proxies that call by resuming the LangGraph interrupt, because the paused call
-  belongs to the agent's run rather than to the browser. That is still ordinary host behaviour: the
-  spec has a host receive a view's <code>tools/call</code> and forward it to the server, and our
-  route there happens to run through the agent.
-</p>
-
-<p>
-  One deviation, and it is worth naming rather than glossing. SEP-1865 says a <em>web</em> host MUST
-  wrap the view in a different-origin sandbox proxy, so a view can hold
-  <code>allow-same-origin</code> without holding the host's origin. This SPA is served from one
-  origin and has nowhere to put a second, so it renders the view directly and never grants
-  <code>allow-same-origin</code> at all. Stricter than the proxy it replaces, not looser, but the
-  cost is real: an app that needs same-origin will not run here.
-</p>
-
-<div class="col">
-<p>
-  One detail on the listener: a sandboxed frame with no origin posts from <code>"null"</code>, so
-  <code>event.origin</code> cannot identify it. Match on the frame's own window instead, which no
-  other document can forge:
-</p>
-<pre><code><span class="k">if</span> (event.source !== iframeRef.current?.contentWindow) <span class="k">return</span>;</code></pre>
-<p>Then resume, keyed by the server's key:</p>
-<pre><code>resume({ responses: { [first.key]: { action: <span class="s">"accept"</span>, content } } });</code></pre>
-</div>
-
 
 <h2><span class="n">06</span> When to build one</h2>
 <div class="col">
 <p>
-  The test we settled on: <strong>could a generated form do this?</strong> If yes, skip it - the
-  schema fallback already handles it, for free, on every server. An App earns its place when the
-  interaction genuinely cannot be expressed as fields: a handwritten mark, sliders under a constraint
-  that only makes sense as a whole, a confirmation that should cost more than a reflex click.
+  <strong>Could a generated form do this?</strong> If yes, skip the app: a schema-driven form
+  covers every server for free. An App earns its place when the interaction cannot be fields at
+  all. A card list is not that: if your App renders rows of results, you have built a worse version
+  of your chat surface.
 </p>
 <p>
-  What does <em>not</em> earn one is a card list. If your App is rendering rows of results, you have
-  built a worse version of what your chat surface already does.
-</p>
-<p>
-  And whatever the App enforces, enforce again on the server. The allocation that must total 100% and
-  the sale that cannot exceed the position are both checked twice in our implementation, because the
-  App is a UI, not a boundary - anyone can call the tool without it.
+  And enforce on the server whatever the App enforces. The 100% total and the sale that cannot
+  exceed the position are checked twice here, because the App is a UI, not a boundary.
 </p>
 </div>
 
 <h2><span class="n">07</span> Further reading</h2>
-
 <div class="col">
-  <p>
-    Two specs do the work in this piece, and they are worth reading separately, because they
-    solve unrelated problems and compose only by coincidence.
-  </p>
-  <p>
-    <a href="https://modelcontextprotocol.io/seps/1865-mcp-apps-interactive-user-interfaces-for-mcp"><strong>SEP-1865, MCP Apps</strong></a>
-    is the extension itself: the <code>ui://</code> scheme, the <code>_meta.ui</code> binding, the
-    sandbox and CSP rules, and the JSON-RPC protocol between host and view. Final since
-    2026-01-26. Note that this is the <em>extension</em> revision, which moves independently of
-    the <a href="https://modelcontextprotocol.io/specification/2026-07-28">base MCP protocol
-    revision</a>.
-  </p>
-  <p>
-    <a href="https://modelcontextprotocol.io/seps/2322-MRTR"><strong>SEP-2322</strong></a> is the
-    other half of what the paused tools here do: a tool that needs input returns rather than
-    holding a socket open. There is <strong>no elicitation anywhere in SEP-1865</strong>, and none
-    is needed. An MCP App normally renders a finished tool result and calls tools when it wants
-    something.
-  </p>
-  <p>
+<ul>
+  <li>
     <a href="https://github.com/modelcontextprotocol/ext-apps"><strong>modelcontextprotocol/ext-apps</strong></a>
-    is the single most useful link of these. It holds the normative spec text
-    (<a href="https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx">2026-01-26</a>
-    alongside a <code>draft</code>) and the official host and view SDKs. Read the spec source
-    rather than a summary: every write-up we checked while building this, including one that
-    claimed apps ship declarative JSON rather than HTML, got something wrong.
-  </p>
-  <p>
-    It also ships a <strong>plugin marketplace of skills for building apps</strong>, which is the
-    fastest way to start one and the part most people miss:
-  </p>
-</div>
-
-<p class="filename">four skills, in the same repo as the spec</p>
-<pre><code>/plugin marketplace add modelcontextprotocol/ext-apps
-
-<span class="c">create-mcp-app      scaffold a new app with an interactive UI</span>
-<span class="c">add-app-to-server   add UI to an existing MCP server's tools</span>
-<span class="c">migrate-oai-app     convert an OpenAI Apps SDK app to MCP Apps</span>
-<span class="c">convert-web-app     turn an existing web app into a hybrid web + MCP App</span></code></pre>
-
-<div class="col">
-  <p>
-    <code>add-app-to-server</code> is the one that fits a server like the one here, and
-    <code>migrate-oai-app</code> matters more than it looks: Figma and Canva came through the
-    ChatGPT Apps SDK, which uses <code>_meta["openai/outputTemplate"]</code> and
-    <code>text/html+skybridge</code> rather than <code>_meta.ui.resourceUri</code> and
-    <code>text/html;profile=mcp-app</code>. The two converged on this spec in January 2026, and
-    that skill is the bridge for anything built before then.
-  </p>
-  <p>
-    If you would rather watch than read, there are two. Burke Holland's
-    <a href="https://www.youtube.com/watch?v=r3UkKVE3gtk"><strong>Let's learn about MCP
-    Apps</strong></a> walks through the extension, and GritAI Studio's
-    <a href="https://www.youtube.com/watch?v=8HpM_vm5RcM"><strong>How to Add Interactive UIs in
-    Claude and ChatGPT via MCP Apps</strong></a> covers getting one running in both hosts. Either
-    is a gentler entry than the spec text for a first pass.
-  </p>
-  <p>
-    For a sense of what is actually shipping, Reclaim's
-    <a href="https://reclaim.ai/blog/top-mcp-apps"><strong>Top 16 MCP Apps</strong></a> is the most
-    useful roundup we found: Zillow's pannable map, Canva's editable deck, Figma's FigJam diagrams,
-    Spotify, Instacart, Slack's preview-and-confirm composer, monday.com's boards. It is vendor
-    content and Reclaim puts itself at number one, so read the framing with that in mind, but the
-    list itself is concrete and it is the fastest way to see how varied the interaction models
-    already are.
-  </p>
-  <p>
-    Two servers to point a host at, both reachable without credentials.
-    <a href="https://github.com/MCPJam/mcp-apps-everything"><strong>mcp-apps-everything</strong></a>
-    runs locally and exists to exercise the whole surface, including resources that deliberately
-    serve the wrong MIME type so you find out how strict your host really is.
-    <a href="https://github.com/excalidraw/excalidraw-mcp"><strong>Excalidraw</strong></a> is the
-    real thing, hosted at <code>mcp.excalidraw.com/mcp</code> and needing no account (a POST
-    endpoint, not a page: open it in a browser and it answers 405): one tool for the model, three marked
-    <code>visibility: ["app"]</code> for its own widget. Pointing our host at it is what taught us
-    we were handing those three to the model, which the spec forbids.
-  </p>
+    is the one link to keep: normative spec text, the official host and view SDKs, and a plugin
+    marketplace (<code>create-mcp-app</code>, <code>add-app-to-server</code>,
+    <code>migrate-oai-app</code>, <code>convert-web-app</code>). Read the source, not a summary:
+    every write-up we checked got something wrong, including one claiming apps ship declarative
+    JSON rather than HTML.
+  </li>
+  <li>
+    <a href="https://modelcontextprotocol.io/seps/1865-mcp-apps-interactive-user-interfaces-for-mcp"><strong>SEP-1865</strong></a>
+    is MCP Apps, versioned independently of the
+    <a href="https://modelcontextprotocol.io/specification/2026-07-28">base MCP revision</a>.
+    <a href="https://modelcontextprotocol.io/seps/2322-MRTR"><strong>SEP-2322</strong></a> is
+    elicitation. <strong>SEP-1865 contains no elicitation and needs none</strong>, the most common
+    misreading of it.
+  </li>
+  <li>
+    <strong>Two servers to test a host against, no credentials.</strong>
+    <a href="https://github.com/excalidraw/excalidraw-mcp">Excalidraw</a> at
+    <code>mcp.excalidraw.com/mcp</code> (a POST endpoint, not a page) and
+    <a href="https://github.com/MCPJam/mcp-apps-everything">mcp-apps-everything</a>, which serves
+    deliberately wrong MIME types to see how strict you are. Both broke ours.
+  </li>
+  <li>
+    <code>migrate-oai-app</code> matters more than it looks: Figma and Canva came via the ChatGPT
+    Apps SDK, which uses <code>_meta["openai/outputTemplate"]</code> and
+    <code>text/html+skybridge</code>. The two converged in January 2026.
+  </li>
+  <li>
+    Gentler entries: Burke Holland's
+    <a href="https://www.youtube.com/watch?v=r3UkKVE3gtk">Let's learn about MCP Apps</a>, GritAI
+    Studio's <a href="https://www.youtube.com/watch?v=8HpM_vm5RcM">version covering both hosts</a>,
+    and Reclaim's <a href="https://reclaim.ai/blog/top-mcp-apps">Top 16 MCP Apps</a> for what is
+    shipping (vendor content; they rank themselves first).
+  </li>
+</ul>
 </div>
 
 <footer>
