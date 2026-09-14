@@ -14,12 +14,12 @@ from __future__ import annotations
 from starlette.responses import JSONResponse
 
 from custom_demo.runtime.mcp_servers import (
-    app_manifest,
     call_app_tool,
     parse_servers,
     probe,
     read_app,
     read_app_resource,
+    tool_catalog,
 )
 
 
@@ -48,16 +48,15 @@ async def mcp_probe(request):
 
 
 async def mcp_bootstrap(request):
-    """Which of these servers' tools ship an MCP App, for the SPA.
+    """Every configured server and the tools it offers, for the SPA.
 
-    The browser half of the Host cannot read `_meta.ui.resourceUri` itself, so
-    without this it guesses from the tool-name prefix and asks about every
-    remote call. One answer per server set replaces one question per tool call.
+    Two things at once, both impossible in the browser: which tools ship a UI
+    (`_meta.ui.resourceUri` is only on `tools/list`), and what each server
+    offers, so the Settings list renders on page load instead of after a click.
 
-    Always 200 with an `apps` object. An empty one is the ordinary answer for a
-    server set with no apps in it, and a failure to reach a server is reported
-    beside the apps rather than as a failed request, so one dead tunnel does not
-    stop the others' apps rendering.
+    Always 200 with a `servers` array. Empty is the ordinary answer for no
+    configured servers, and a server whose tools are unknown comes back
+    `ok: false` beside the others rather than failing the request.
 
     Plain JSON, not SSE. Claude's equivalent streams because it fans out over
     many connectors of which most may be cold or broken, and a page-load
@@ -72,12 +71,12 @@ async def mcp_bootstrap(request):
 
     servers = _mcp_servers_from(payload)
     if not servers:
-        return JSONResponse({"apps": {}})
+        return JSONResponse({"servers": []})
 
     try:
-        return JSONResponse({"apps": await app_manifest(servers)})
+        return JSONResponse({"servers": await tool_catalog(servers)})
     except Exception as exc:  # noqa: BLE001 - a chat must still run when discovery fails
-        return JSONResponse({"apps": {}, "error": f"{type(exc).__name__}: {exc}"[:300]})
+        return JSONResponse({"servers": [], "error": f"{type(exc).__name__}: {exc}"[:300]})
 
 
 async def mcp_app(request):

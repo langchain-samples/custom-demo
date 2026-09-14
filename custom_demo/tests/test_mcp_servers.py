@@ -913,16 +913,22 @@ def test_the_signature_png_is_served_over_http(meridian):
         assert http.get("/signatures/MW-DOC-99999.png").status_code == 404
 
 
-def test_app_manifest_lists_only_the_tools_that_ship_a_ui(monkeypatch):
+def test_tool_catalog_reports_every_tool_and_marks_the_ones_with_a_ui(monkeypatch):
     """The answer that replaces the SPA's prefix guess.
 
     A tool-name prefix says a tool came from an MCP server, not that it has a
     UI, so the browser used to ask about every remote call and get null for most
     of them. This is the map that makes the question unnecessary.
     """
-    plain = SimpleNamespace(name="draw_read_me", metadata={}, args_schema={"type": "object"})
+    plain = SimpleNamespace(
+        name="draw_read_me",
+        description="Format reference",
+        metadata={},
+        args_schema={"type": "object"},
+    )
     app = SimpleNamespace(
         name="draw_create_view",
+        description="Draw a diagram",
         metadata={"mcp": {"tool": {"_meta": {"ui": {"resourceUri": "ui://excalidraw/app.html"}}}}},
         args_schema={"type": "object", "properties": {"elements": {"type": "string"}}},
     )
@@ -931,16 +937,26 @@ def test_app_manifest_lists_only_the_tools_that_ship_a_ui(monkeypatch):
         return [plain, app]
 
     monkeypatch.setattr(m, "load_tools", fake_load)
-    out = asyncio.run(m.app_manifest((m.McpServer(id="draw", label="Draw", url="https://x/mcp"),)))
+    out = asyncio.run(m.tool_catalog((m.McpServer(id="draw", label="Draw", url="https://x/mcp"),)))[
+        0
+    ]
 
-    assert list(out) == ["draw_create_view"]
-    assert out["draw_create_view"]["resourceUri"] == "ui://excalidraw/app.html"
+    # Every tool, not only the one with a UI: the Settings list renders from
+    # this on page load, and Claude's own bootstrap ships the whole catalogue
+    # for the same reason.
+    assert [t["name"] for t in out["tools"]] == ["draw_read_me", "draw_create_view"]
+    assert out["ok"] is True
+    by_name = {t["name"]: t for t in out["tools"]}
+    assert by_name["draw_read_me"]["app"] is None
+    assert by_name["draw_create_view"]["app"] == "ui://excalidraw/app.html"
     # Carried so the host can fill `hostContext.toolInfo.tool` before the app
     # mounts. The app SDK validates it and refuses a handshake without it.
-    assert out["draw_create_view"]["inputSchema"]["properties"] == {"elements": {"type": "string"}}
+    assert by_name["draw_create_view"]["inputSchema"]["properties"] == {
+        "elements": {"type": "string"}
+    }
 
 
-def test_app_manifest_includes_app_only_tools(monkeypatch):
+def test_tool_catalog_includes_app_only_tools(monkeypatch):
     """The browser needs the tools the MODEL must never see.
 
     `visibility: ["app"]` keeps a tool out of the agent's list, which is a MUST.
@@ -955,6 +971,7 @@ def test_app_manifest_includes_app_only_tools(monkeypatch):
         return [
             SimpleNamespace(
                 name="draw_save_checkpoint",
+                description="Save",
                 metadata={
                     "mcp": {
                         "tool": {
@@ -972,13 +989,16 @@ def test_app_manifest_includes_app_only_tools(monkeypatch):
         ]
 
     monkeypatch.setattr(m, "load_tools", fake_load)
-    out = asyncio.run(m.app_manifest((m.McpServer(id="draw", label="Draw", url="https://x/mcp"),)))
+    out = asyncio.run(m.tool_catalog((m.McpServer(id="draw", label="Draw", url="https://x/mcp"),)))[
+        0
+    ]
 
     assert seen["include_app_only"] is True
-    assert out["draw_save_checkpoint"]["appOnly"] is True
+    tool = out["tools"][0]
+    assert tool["appOnly"] is True
     # A tool with no published schema still needs one: an empty object schema is
     # valid, and absent is what an app refuses.
-    assert out["draw_save_checkpoint"]["inputSchema"] == {"type": "object"}
+    assert tool["inputSchema"] == {"type": "object"}
 
 
 def test_one_unreachable_server_does_not_take_the_others_down(monkeypatch):

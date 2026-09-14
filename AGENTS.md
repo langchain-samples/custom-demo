@@ -341,9 +341,13 @@ can know.
 `POST /mcp/bootstrap` is the other half of being a two-process Host. `_meta.ui.resourceUri`
 only exists on `tools/list`, so the browser cannot see which tools ship a UI and used to
 guess from the `{server}_` prefix, which answers "is this an MCP tool" instead. It now asks
-once per server set and looks each streamed tool call up in the answer. Served off the same
-cached discovery the agent uses, and it includes app-only tools on purpose: they are hidden
-from the MODEL, but the browser is what authorises a view's `tools/call`.
+once per server set and looks each streamed tool call up in the answer. It returns the WHOLE
+catalogue per server, not only the tools with a UI, shaped like `/mcp/probe` so one renderer
+serves both: Claude's bootstrap does the same, and it is what lets a connector list render
+on page load rather than after a click. It includes app-only tools on purpose, because they
+are hidden from the MODEL but the browser is what authorises a view's `tools/call`. The
+difference from `probe` is cost and promise: bootstrap is served warm and `ok` means only
+"we know this server's tools", while Test reconnects and is authoritative.
 
 The guest half runs on the same SDK. `mcp_demo_server/apps/src/bridge.src.js` imports `App` and
 `apps/build.sh` bundles it to `apps/bridge.js`, which `apps.py` inlines. **The bundle is committed**

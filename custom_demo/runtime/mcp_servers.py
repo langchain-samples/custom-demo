@@ -469,45 +469,65 @@ async def read_app(servers: tuple[McpServer, ...], tool_name: str) -> dict[str, 
     return None
 
 
-async def app_manifest(servers: tuple[McpServer, ...]) -> dict[str, dict[str, Any]]:
-    """Which tools ship an MCP App, keyed by namespaced tool name.
+async def tool_catalog(servers: tuple[McpServer, ...]) -> list[dict[str, Any]]:
+    """Every server and every tool it offers, off the cached discovery.
 
-    The browser is half of one Host, and this is the half of discovery it cannot
-    do: `_meta.ui.resourceUri` only exists on `tools/list`, which needs an MCP
-    client, which only the deployment has. Without this the SPA has to guess
-    from the tool-name prefix, which answers "is this an MCP tool" and not "does
-    it have a UI", so it asked about every remote call and most answers were
-    null.
+    The browser is half of one Host and this is the half of discovery it cannot
+    do. `_meta.ui.resourceUri` only exists on `tools/list`, which needs an MCP
+    client, which only the deployment has, so without this the SPA has to guess
+    which tools ship a UI from the tool-name prefix, and Settings can only show
+    a server's tools after someone clicks Test.
 
-    Served off the same cached discovery the agent uses, so a warm call is a
-    dict lookup rather than a connection.
+    Whole catalogue rather than only the tools with a UI. Claude's own bootstrap
+    does the same, and it is what lets a connector list render on page load: its
+    Excalidraw arrives with all five tools, of which exactly one carries a
+    `resourceUri`, the other four using `_meta.ui` only to say
+    `visibility: ["app"]`.
+
+    Shaped like `probe`, so the SPA can render either. The difference is what
+    they cost and what they promise: this is served from a warm cache and `ok`
+    means no more than "we know this server's tools", while Test reconnects and
+    is the authoritative answer about whether a tunnel is up.
 
     `include_app_only` on purpose. An app-only tool never reaches the MODEL
     (`model_visible`), but the browser is the party that authorises a View's
-    `tools/call`, so it has to know the tool exists. Claude's own bootstrap does
-    the same: Excalidraw arrives there with all five tools, four of them
-    carrying `_meta.ui`.
+    `tools/call`, so it has to know the tool exists.
     """
     tools = await load_tools(servers, include_app_only=True)
-    out: dict[str, dict[str, Any]] = {}
+    # Declared so the appends below type-check. The server's own redacted
+    # fields are merged back in at the end rather than carried through.
+    found: dict[str, list[dict[str, Any]]] = {server.id: [] for server in servers}
+    # Longest id first, so a server called `acme` cannot claim the tools of one
+    # called `acme_corp`. Matching on the prefix is sound here in a way it never
+    # was in the browser: WE applied it, in `build_group`, from the same ids.
+    owners = sorted(servers, key=lambda s: len(s.id), reverse=True)
+
     for tool in tools:
-        uri = app_uri(tool)
-        if uri is None:
+        owner = next((s for s in owners if tool.name.startswith(f"{s.id}_")), None)
+        if owner is None:
             continue
 
-        out[tool.name] = {
-            "resourceUri": uri,
-            # Carried here so the host has it before the app is mounted. `Tool`
-            # requires `inputSchema` and the app SDK validates the initialize
-            # result, so a host that cannot fill `hostContext.toolInfo.tool`
-            # is refused outright by every app built on it.
-            "inputSchema": tool.args_schema
-            if isinstance(tool.args_schema, dict)
-            else {"type": "object"},
-            "appOnly": not model_visible(tool),
-        }
+        found[owner.id].append(
+            {
+                "name": tool.name,
+                "description": (tool.description or "").strip().split("\n")[0][:200],
+                # Same key `probe` uses, so one renderer serves both.
+                "app": app_uri(tool),
+                # Carried so the host can fill `hostContext.toolInfo.tool`
+                # before the app mounts. `Tool` requires `inputSchema` and the
+                # app SDK validates the initialize result, so a host that
+                # cannot supply it is refused by every app built on that SDK.
+                "inputSchema": tool.args_schema
+                if isinstance(tool.args_schema, dict)
+                else {"type": "object"},
+                "appOnly": not model_visible(tool),
+            }
+        )
 
-    return out
+    return [
+        {**server.redacted(), "ok": bool(found[server.id]), "tools": found[server.id]}
+        for server in servers
+    ]
 
 
 async def call_app_tool(

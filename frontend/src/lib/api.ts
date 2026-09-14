@@ -967,9 +967,28 @@ export interface McpAppBinding {
  * Cached like `fetchMcpApp`, and keyed on the servers rather than a tool: one
  * answer covers every call in the conversation.
  */
+export interface McpCatalogTool {
+  name: string;
+  description?: string;
+  /** The `ui://` document this tool renders, or null for an ordinary tool. */
+  app?: string | null;
+  inputSchema?: Record<string, unknown>;
+  /** True when `visibility: ["app"]` keeps it out of the model's tool list. */
+  appOnly?: boolean;
+}
+
+/** One server as the deployment knows it, shaped like a `/mcp/probe` row. */
+export interface McpCatalogServer {
+  id?: string;
+  label?: string;
+  url?: string;
+  ok?: boolean;
+  tools: McpCatalogTool[];
+}
+
 const MCP_BOOTSTRAP_CACHE = new Map<
   string,
-  { at: number; apps: Promise<Record<string, McpAppBinding>> }
+  { at: number; catalog: Promise<McpCatalogServer[]> }
 >();
 
 /** The servers as a cache key, so editing one in Settings re-asks. */
@@ -977,33 +996,57 @@ function serverSetKey(servers: McpServerConfig[]): string {
   return servers.map((s) => `${mcpServerId(s)}\u0000${s.url}`).join("\n");
 }
 
-export function fetchMcpApps(
-  servers: McpServerConfig[],
-): Promise<Record<string, McpAppBinding>> {
-  if (!servers.length) return Promise.resolve({});
+export function fetchMcpCatalog(servers: McpServerConfig[]): Promise<McpCatalogServer[]> {
+  if (!servers.length) return Promise.resolve([]);
   const key = serverSetKey(servers);
   const hit = MCP_BOOTSTRAP_CACHE.get(key);
-  if (hit && Date.now() - hit.at < MCP_APP_TTL_MS) return hit.apps;
+  if (hit && Date.now() - hit.at < MCP_APP_TTL_MS) return hit.catalog;
 
-  const apps = (async () => {
+  const catalog = (async () => {
     const res = await fetch(`${getApiBase()}/mcp/bootstrap`, {
       method: "POST",
       headers: apiHeaders(),
       body: JSON.stringify({ servers }),
     });
     // Thrown, not returned: the catch below is what forgets a failed lookup,
-    // and returning here would slip past it and cache the empty map.
+    // and returning here would slip past it and cache the empty answer.
     if (!res.ok) throw new Error(`bootstrap failed (${res.status})`);
     const d = await res.json();
-    return (d?.apps ?? {}) as Record<string, McpAppBinding>;
+    return (d?.servers ?? []) as McpCatalogServer[];
   })().catch(() => {
-    // Not remembered on failure: an empty map means "no tool here has a UI",
-    // which would silently stop every app rendering for the whole TTL.
+    // Not remembered on failure: an empty catalogue means "no tool here has a
+    // UI", which would silently stop every app rendering for the whole TTL.
     MCP_BOOTSTRAP_CACHE.delete(key);
-    return {};
+    return [];
   });
 
-  MCP_BOOTSTRAP_CACHE.set(key, { at: Date.now(), apps });
+  MCP_BOOTSTRAP_CACHE.set(key, { at: Date.now(), catalog });
+  return catalog;
+}
+
+/**
+ * Just the tools that ship a UI, by namespaced tool name.
+ *
+ * Derived from the same cached catalogue, so asking for this costs no extra
+ * request. `ChatPanel` wants only this question answered; Settings wants the
+ * whole catalogue.
+ */
+export async function fetchMcpApps(
+  servers: McpServerConfig[],
+): Promise<Record<string, McpAppBinding>> {
+  const catalog = await fetchMcpCatalog(servers);
+  const apps: Record<string, McpAppBinding> = {};
+  for (const server of catalog) {
+    for (const tool of server.tools ?? []) {
+      if (!tool.app) continue;
+      apps[tool.name] = {
+        resourceUri: tool.app,
+        inputSchema: tool.inputSchema,
+        appOnly: tool.appOnly,
+      };
+    }
+  }
+
   return apps;
 }
 
