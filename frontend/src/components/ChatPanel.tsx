@@ -54,7 +54,7 @@ import {
 } from "@/components/chat/helpers";
 import {
   isMcpElicitation,
-  mcpServerId,
+  fetchMcpApps,
   type McpServerConfig,
   IMAGE_MIME_TYPES,
   imageContent,
@@ -668,11 +668,23 @@ export default function ChatPanel({
     let interrupt: ReviewInterrupt | null = null;
     // Every tool call's arguments this turn, by tool name, latest frame wins.
     const argsByTool: Record<string, Record<string, unknown>> = {};
-    // `{server}_` for each connected MCP server, which is how a remote tool is
-    // told from a local one without a lookup per call. DERIVED, not read off
-    // `id`: that field is optional on a saved server while the backend always
-    // computes one, so filtering on it matched nothing and no app ever rendered.
-    const mcpToolPrefixes = mcpServers.map((srv) => `${mcpServerId(srv)}_`);
+    /**
+     * Which tools on the connected servers ship a UI, by namespaced tool name.
+     *
+     * Answered once per server set by the deployment, which is the only half of
+     * this Host that can read `_meta.ui.resourceUri`. Awaited here rather than
+     * held in a ref so the first turn after a page load cannot race it: the
+     * lookup is cached, and warmed on mount, so this is free after the first.
+     *
+     * What it replaces was a guess. Matching `{server}_` prefixes answers "is
+     * this an MCP tool", not "does it have a UI", so every remote call mounted
+     * a card that then asked the deployment and was usually told null. Both
+     * ChatGPT and Claude tell their browser half instead: a pointer pushed down
+     * the stream, and a bootstrap request at page load respectively. We cannot
+     * do the first, because our tool calls stream token by token out of the
+     * model with nowhere to stamp them, so this is the second.
+     */
+    const mcpApps = await fetchMcpApps(mcpServers);
     // Which app frames this turn has already mounted, so a later argument frame
     // patches rather than opening a second copy.
     const appSeen = new Set<string>();
@@ -720,7 +732,7 @@ export default function ChatPanel({
           // once. Keyed by tool_call_id so every later frame patches the same
           // item and the iframe is never remounted.
           const appId = tc.id ? `app:${tc.id}` : "";
-          if (appId && mcpToolPrefixes.some((p) => name.startsWith(p))) {
+          if (appId && mcpApps[name]) {
             if (appSeen.has(appId)) {
               patchItem(appId, (it) =>
                 it.kind === "app" ? { ...it, toolArgs: args } : it,
@@ -1425,6 +1437,13 @@ export default function ChatPanel({
    * between turns, and the value is a small array off an existing call.
    */
   const mcpServers = getRunContext().mcp_servers ?? EMPTY_MCP_SERVERS;
+
+  // Warm the app lookup as soon as servers are known. `runTurn` awaits the same
+  // cached promise, so this only ever removes latency from the first turn; it is
+  // never the thing that makes an app render.
+  useEffect(() => {
+    void fetchMcpApps(mcpServers);
+  }, [mcpServers]);
 
   /** Human answered a paused artifact — resume the run with their version. */
   const approveReview = (itemId: string, value: Record<string, unknown>) => {

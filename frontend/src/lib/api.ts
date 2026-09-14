@@ -880,7 +880,10 @@ export function fetchMcpApp(
       headers: apiHeaders(),
       body: JSON.stringify({ servers, tool_name: toolName }),
     });
-    if (!res.ok) return null;
+    // Thrown rather than returned, so the catch below forgets it. `null` is a
+    // legitimate ANSWER here (most tools have no app) and is cached on purpose;
+    // a 502 is not an answer and must not be.
+    if (!res.ok) throw new Error(`app lookup failed (${res.status})`);
     const d = await res.json();
     return d?.app?.html ? (d.app as McpAppResource) : null;
   })().catch(() => {
@@ -892,6 +895,79 @@ export function fetchMcpApp(
 
   MCP_APP_CACHE.set(key, { at: Date.now(), app });
   return app;
+}
+
+/** What a tool's MCP App binding looks like to the host's browser half. */
+export interface McpAppBinding {
+  /** The `ui://` document this tool renders. */
+  resourceUri: string;
+  /** The tool's own JSON Schema, for `hostContext.toolInfo.tool`. */
+  inputSchema?: Record<string, unknown>;
+  /** True when `visibility: ["app"]` keeps it out of the model's tool list. */
+  appOnly?: boolean;
+}
+
+/**
+ * Which tools on these servers ship a UI (POST /mcp/bootstrap).
+ *
+ * The browser cannot read `_meta.ui.resourceUri`: it lives on `tools/list`,
+ * which needs an MCP client, which only the deployment has. Before this, the
+ * SPA matched a tool name against `{server}_` prefixes, which answers "is this
+ * an MCP tool" rather than "does it have a UI", so it asked about every remote
+ * call and most answers were null.
+ *
+ * Both major hosts tell their browser half instead of letting it guess:
+ * ChatGPT pushes `html_asset_pointer` down the conversation stream, Claude
+ * answers a `bootstrap` request at page load. We cannot do the first, because
+ * our tool calls stream token by token out of the model with nowhere to stamp
+ * them, so this is the second.
+ *
+ * Cached like `fetchMcpApp`, and keyed on the servers rather than a tool: one
+ * answer covers every call in the conversation.
+ */
+const MCP_BOOTSTRAP_CACHE = new Map<
+  string,
+  { at: number; apps: Promise<Record<string, McpAppBinding>> }
+>();
+
+/** The servers as a cache key, so editing one in Settings re-asks. */
+function serverSetKey(servers: McpServerConfig[]): string {
+  return servers.map((s) => `${mcpServerId(s)}\u0000${s.url}`).join("\n");
+}
+
+export function fetchMcpApps(
+  servers: McpServerConfig[],
+): Promise<Record<string, McpAppBinding>> {
+  if (!servers.length) return Promise.resolve({});
+  const key = serverSetKey(servers);
+  const hit = MCP_BOOTSTRAP_CACHE.get(key);
+  if (hit && Date.now() - hit.at < MCP_APP_TTL_MS) return hit.apps;
+
+  const apps = (async () => {
+    const res = await fetch(`${getApiBase()}/mcp/bootstrap`, {
+      method: "POST",
+      headers: apiHeaders(),
+      body: JSON.stringify({ servers }),
+    });
+    // Thrown, not returned: the catch below is what forgets a failed lookup,
+    // and returning here would slip past it and cache the empty map.
+    if (!res.ok) throw new Error(`bootstrap failed (${res.status})`);
+    const d = await res.json();
+    return (d?.apps ?? {}) as Record<string, McpAppBinding>;
+  })().catch(() => {
+    // Not remembered on failure: an empty map means "no tool here has a UI",
+    // which would silently stop every app rendering for the whole TTL.
+    MCP_BOOTSTRAP_CACHE.delete(key);
+    return {};
+  });
+
+  MCP_BOOTSTRAP_CACHE.set(key, { at: Date.now(), apps });
+  return apps;
+}
+
+/** Drop the bootstrap cache, for tests and for a Settings change. */
+export function clearMcpAppsCache(): void {
+  MCP_BOOTSTRAP_CACHE.clear();
 }
 
 /** One content block from a resource an MCP App asked the host to read. */

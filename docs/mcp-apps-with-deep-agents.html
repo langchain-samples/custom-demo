@@ -303,16 +303,113 @@
 </div>
 
 <h2><span class="n">01</span> Two tools, not one</h2>
+
 <div class="col">
 <p>
-  <strong>Nothing pauses.</strong> One tool opens the app and returns the data it draws. A second
-  receives what the person did, marked so only the app may call it. Four parties, and the useful
-  thing to notice is how little of it the agent is in:
+  The lifecycle is not ours to invent: SEP-1865 fixes it, and the block marked <code>par</code> is
+  the half that gets built wrong. Rendering the View and calling the tool are
+  <strong>concurrent</strong>. A host that waits for the result before it mounts the iframe is
+  still standards-compliant on the wire and still wrong in the room, because the app has nothing
+  to draw progressively with.
 </p>
 </div>
 
 <figure>
-  <svg viewBox="0 0 800 470" role="img" aria-label="Five lanes: the View, the Host frontend, the Agent, the Deployment and the MCP server. Discovery and the model's tool call run through the Agent and Deployment. Once the result reaches the Host, the Host fetches the ui:// document and talks to the View directly over JSON-RPC, and the View's own tool call is proxied by the Deployment without the Agent taking part.">
+  <svg viewBox="0 0 800 388" role="img" aria-label="The SEP-1865 lifecycle. At connection the host lists tools and resources and learns each tool's ui resourceUri. A par block then runs two branches at once: the host calls the tool on the server, and in parallel renders the View, completes the ui/initialize handshake, and streams partial tool input followed by the complete input. Finally an alt block delivers either the tool result or a cancellation.">
+    <defs>
+      <marker id="s2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+      </marker>
+    </defs>
+
+    <!-- lane headers -->
+    <g font-family="IBM Plex Mono, monospace" font-size="10.5" text-anchor="middle" fill="currentColor">
+      <rect x="30"  y="6" width="140" height="26" rx="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <text x="100" y="23">View (iframe)</text>
+      <rect x="330" y="6" width="140" height="26" rx="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <text x="400" y="23">Host</text>
+      <rect x="620" y="6" width="140" height="26" rx="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <text x="690" y="23">MCP server</text>
+    </g>
+
+    <!-- lifelines -->
+    <g stroke="currentColor" stroke-width="1" stroke-dasharray="3 4" opacity="0.45">
+      <line x1="100" y1="32" x2="100" y2="384"/>
+      <line x1="400" y1="32" x2="400" y2="384"/>
+      <line x1="690" y1="32" x2="690" y2="384"/>
+    </g>
+
+    <g font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor">
+
+      <!-- connection and discovery -->
+      <text x="406" y="52" font-size="9" opacity="0.75">connection and discovery</text>
+      <line x1="406" y1="66" x2="684" y2="66" stroke="currentColor" stroke-width="1.2" marker-end="url(#s2)"/>
+      <text x="545" y="62" text-anchor="middle">tools/list, resources/list</text>
+      <line x1="684" y1="86" x2="406" y2="86" stroke="currentColor" stroke-width="1.2" marker-end="url(#s2)"/>
+      <text x="545" y="82" text-anchor="middle" fill="#7FC8FF">_meta.ui.resourceUri</text>
+
+      <!-- par: the tool call and the view come up together -->
+      <rect x="20" y="100" width="760" height="200" rx="6" fill="none" stroke="#7FC8FF" stroke-width="1.2" opacity="0.6"/>
+      <text x="30" y="114" font-size="9" fill="#7FC8FF">par</text>
+
+      <line x1="406" y1="136" x2="684" y2="136" stroke="currentColor" stroke-width="1.2" marker-end="url(#s2)"/>
+      <text x="545" y="132" text-anchor="middle">tools/call</text>
+
+      <line x1="20" y1="152" x2="780" y2="152" stroke="#7FC8FF" stroke-width="1" stroke-dasharray="4 4" opacity="0.5"/>
+
+      <path d="M400 166 h28 v16 h-22" fill="none" stroke="currentColor" stroke-width="1.2" marker-end="url(#s2)"/>
+      <text x="436" y="179">render View in an iframe (HTML from the ui:// resource)</text>
+
+      <line x1="106" y1="202" x2="394" y2="202" stroke="currentColor" stroke-width="1.2" marker-end="url(#s2)"/>
+      <text x="250" y="198" text-anchor="middle">ui/initialize</text>
+      <line x1="394" y1="222" x2="106" y2="222" stroke="currentColor" stroke-width="1.2" marker-end="url(#s2)"/>
+      <text x="250" y="218" text-anchor="middle">McpUiInitializeResult</text>
+      <line x1="106" y1="242" x2="394" y2="242" stroke="currentColor" stroke-width="1.2" marker-end="url(#s2)"/>
+      <text x="250" y="238" text-anchor="middle">ui/notifications/initialized</text>
+
+      <text x="30" y="264" font-size="8.5" opacity="0.6">opt</text>
+      <line x1="394" y1="264" x2="106" y2="264" stroke="currentColor" stroke-width="1.2" marker-end="url(#s2)"/>
+      <text x="250" y="260" text-anchor="middle" fill="#7FC8FF">tool-input-partial (0..n)</text>
+      <line x1="394" y1="284" x2="106" y2="284" stroke="currentColor" stroke-width="1.2" marker-end="url(#s2)"/>
+      <text x="250" y="280" text-anchor="middle">tool-input (complete)</text>
+
+      <!-- alt: result or cancellation -->
+      <rect x="20" y="310" width="760" height="68" rx="6" fill="none" stroke="currentColor" stroke-width="1.1" opacity="0.35"/>
+      <text x="30" y="324" font-size="9" opacity="0.75">alt</text>
+      <line x1="394" y1="340" x2="106" y2="340" stroke="currentColor" stroke-width="1.2" marker-end="url(#s2)"/>
+      <text x="250" y="336" text-anchor="middle">tool-result</text>
+      <line x1="20" y1="352" x2="780" y2="352" stroke="currentColor" stroke-width="1" stroke-dasharray="4 4" opacity="0.3"/>
+      <line x1="394" y1="370" x2="106" y2="370" stroke="currentColor" stroke-width="1.2" marker-end="url(#s2)"/>
+      <text x="250" y="366" text-anchor="middle">tool-cancelled</text>
+    </g>
+  </svg>
+  <figcaption>
+    Redrawn from
+    <a href="https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx">SEP-1865, Lifecycle</a>
+    (stable, 2026-01-26). Two things are left out to keep the shape readable: teardown, and the
+    step where a web host <strong>MUST</strong> wrap the View in a different-origin sandbox proxy
+    that applies the server's declared <code>ui.csp</code>. We serve one origin and have nowhere to
+    put a second, so we render the View directly under <code>allow-scripts</code> and never
+    <code>allow-same-origin</code>: stricter than the proxy on origin, weaker on CSP, and a
+    deliberate deviation rather than an oversight, and drawn out in section 03. Note the single
+    <strong>Host</strong> lane: the spec says nothing about a host split across a browser and a
+    server, which is the shape every web host actually has. The next figure splits it.
+    Discovery runs once per connection, which is why
+    the spec lets a host prefetch and cache the <code>ui://</code> document before any tool runs.
+  </figcaption>
+</figure>
+
+<div class="col">
+<p>
+  <strong>Nothing pauses.</strong> One tool opens the app and returns the data it draws. A second
+  receives what the person did, marked so only the app may call it. Below is that same lifecycle
+  with the Host split into the three parties it really is here, and the useful thing to notice is
+  how little of it the agent is in:
+</p>
+</div>
+
+<figure>
+  <svg viewBox="0 0 800 540" role="img" aria-label="Five lanes: the View, the Host frontend, the Agent, the Deployment and the MCP server. The deployment discovers tools and keeps the ui resourceUri. When the model calls a tool, the call streams to the browser carrying no UI metadata, so the Host matches the tool name against the prefixes of servers it knows and asks the deployment for the document, concurrently with the tool actually running. The Host then handshakes with the View directly, and the View's own tool call is proxied by the deployment without the agent taking part.">
     <defs>
       <marker id="s1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
         <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
@@ -328,80 +425,102 @@
       <rect x="328" y="6" width="128" height="26" rx="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
       <text x="392" y="23">Agent</text>
       <rect x="488" y="6" width="128" height="26" rx="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
-      <text x="552" y="23">Deployment</text>
+      <text x="552" y="19" font-size="10.5">Deployment</text>
+      <text x="552" y="29" font-size="8.5" opacity="0.75">the Host's server half</text>
       <rect x="648" y="6" width="144" height="26" rx="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
       <text x="720" y="23">MCP server</text>
     </g>
 
     <!-- lifelines -->
     <g stroke="currentColor" stroke-width="1" stroke-dasharray="3 4" opacity="0.45">
-      <line x1="72" y1="32" x2="72" y2="452"/>
-      <line x1="232" y1="32" x2="232" y2="452"/>
-      <line x1="392" y1="32" x2="392" y2="452"/>
-      <line x1="552" y1="32" x2="552" y2="452"/>
-      <line x1="720" y1="32" x2="720" y2="452"/>
+      <line x1="72"  y1="32" x2="72"  y2="532"/>
+      <line x1="232" y1="32" x2="232" y2="532"/>
+      <line x1="392" y1="32" x2="392" y2="532"/>
+      <line x1="552" y1="32" x2="552" y2="532"/>
+      <line x1="720" y1="32" x2="720" y2="532"/>
     </g>
 
     <g font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor">
 
-      <!-- 1. discovery -->
-      <text x="480" y="52" font-size="9" opacity="0.75">1 · discovery, cached 120s</text>
-      <line x1="552" y1="64" x2="714" y2="64" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
-      <text x="633" y="60" text-anchor="middle">tools/list</text>
-      <line x1="720" y1="82" x2="558" y2="82" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
-      <text x="639" y="78" text-anchor="middle" fill="#7FC8FF">_meta.ui.resourceUri</text>
-      <line x1="552" y1="100" x2="398" y2="100" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
-      <text x="475" y="96" text-anchor="middle">tools, app-only filtered out</text>
+      <!-- 1 -->
+      <text x="238" y="52" font-size="9" opacity="0.75">0 · on connect, and 1 · the discovery behind it, cached 120s</text>
+      <line x1="238" y1="64" x2="546" y2="64" stroke="#7FC8FF" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="392" y="60" text-anchor="middle" fill="#7FC8FF">POST /mcp/bootstrap: which tools ship a UI?</text>
+      <line x1="558" y1="64" x2="714" y2="64" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="636" y="60" text-anchor="middle">tools/list</text>
+      <line x1="714" y1="82" x2="558" y2="82" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="636" y="78" text-anchor="middle" fill="#7FC8FF">_meta.ui.resourceUri</text>
+      <line x1="546" y1="100" x2="398" y2="100" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="472" y="96" text-anchor="middle">tools, app-only filtered out</text>
 
-      <!-- 2. the model's call -->
-      <text x="336" y="128" font-size="9" opacity="0.75">2 · the model calls a tool</text>
-      <line x1="392" y1="140" x2="546" y2="140" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
-      <text x="469" y="136" text-anchor="middle">propose_rebalance</text>
-      <line x1="552" y1="158" x2="714" y2="158" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
-      <text x="633" y="154" text-anchor="middle">tools/call</text>
-      <line x1="720" y1="176" x2="238" y2="176" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
-      <text x="479" y="172" text-anchor="middle">result: the data the app draws (no _meta)</text>
+      <!-- 2 -->
+      <text x="140" y="128" font-size="9" opacity="0.75">2 · the model calls a tool, and the browser hears about it</text>
+      <line x1="386" y1="140" x2="238" y2="140" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="312" y="136" text-anchor="middle">streamed: name, args</text>
+      <path d="M232 152 h26 v18 h-20" fill="none" stroke="#7FC8FF" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="266" y="159" fill="#7FC8FF">is this tool in the bootstrap map? the stream carries</text>
+      <text x="266" y="172" fill="#7FC8FF">no ui metadata, so the answer was fetched at step 0</text>
+      <line x1="398" y1="196" x2="546" y2="196" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="472" y="192" text-anchor="middle">propose_rebalance</text>
+      <line x1="558" y1="214" x2="714" y2="214" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="636" y="210" text-anchor="middle">tools/call</text>
 
-      <!-- agent-out-of-the-loop band -->
-      <rect x="330" y="192" width="124" height="248" rx="6" fill="currentColor" opacity="0.055"/>
-      <text x="392" y="322" text-anchor="middle" font-size="9" opacity="0.75" transform="rotate(-90 392 322)">agent takes no further part</text>
+      <!-- agent-out-of-the-loop bands, split so the result can pass through -->
+      <rect x="330" y="232" width="124" height="176" rx="6" fill="currentColor" opacity="0.055"/>
+      <rect x="330" y="430" width="124" height="102" rx="6" fill="currentColor" opacity="0.055"/>
+      <text x="392" y="320" text-anchor="middle" font-size="9" opacity="0.75" transform="rotate(-90 392 320)">not in the app's loop</text>
 
-      <!-- 3. fetch the document -->
-      <text x="176" y="212" font-size="9" opacity="0.75">3 · the Host fetches the document</text>
-      <line x1="232" y1="224" x2="546" y2="224" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
-      <text x="389" y="220" text-anchor="middle">POST /mcp/app {tool_name}</text>
-      <line x1="552" y1="242" x2="714" y2="242" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
-      <text x="633" y="238" text-anchor="middle">resources/read ui://…</text>
-      <line x1="720" y1="260" x2="238" y2="260" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
-      <text x="479" y="256" text-anchor="middle">html + inputSchema</text>
-      <line x1="226" y1="278" x2="78" y2="278" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
-      <text x="152" y="274" text-anchor="middle" fill="#7FC8FF">iframe srcdoc</text>
+      <!-- 3 -->
+      <text x="16" y="252" font-size="9" opacity="0.75">3 · the Host fetches the document, while the tool is still running</text>
+      <line x1="238" y1="264" x2="546" y2="264" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="392" y="260" text-anchor="middle">POST /mcp/app {tool_name}</text>
+      <line x1="558" y1="282" x2="714" y2="282" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="636" y="278" text-anchor="middle">resources/read ui://…</text>
+      <line x1="714" y1="300" x2="238" y2="300" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="476" y="296" text-anchor="middle">html + inputSchema</text>
+      <line x1="226" y1="318" x2="78" y2="318" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="152" y="314" text-anchor="middle" fill="#7FC8FF">iframe srcdoc</text>
 
-      <!-- 4. the SEP-1865 handshake -->
-      <text x="16" y="306" font-size="9" opacity="0.75">4 · SEP-1865 handshake, JSON-RPC over postMessage</text>
-      <line x1="72" y1="318" x2="226" y2="318" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
-      <text x="149" y="314" text-anchor="middle">ui/initialize {appInfo}</text>
-      <line x1="232" y1="336" x2="78" y2="336" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
-      <text x="155" y="332" text-anchor="middle">hostContext {toolInfo, theme}</text>
-      <line x1="72" y1="354" x2="226" y2="354" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
-      <text x="149" y="350" text-anchor="middle">initialized</text>
-      <line x1="232" y1="372" x2="78" y2="372" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
-      <text x="155" y="368" text-anchor="middle">tool-input, then tool-result</text>
+      <!-- 4 -->
+      <text x="16" y="346" font-size="9" opacity="0.75">4 · SEP-1865 handshake, JSON-RPC over postMessage</text>
+      <line x1="78" y1="358" x2="226" y2="358" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="152" y="354" text-anchor="middle">ui/initialize {appInfo}</text>
+      <line x1="226" y1="376" x2="78" y2="376" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="152" y="372" text-anchor="middle">hostContext {toolInfo, theme}</text>
+      <line x1="78" y1="394" x2="226" y2="394" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="152" y="390" text-anchor="middle">initialized</text>
 
-      <!-- 5. the view acts -->
-      <text x="16" y="400" font-size="9" opacity="0.75">5 · a person acts, and the View calls a tool</text>
-      <line x1="72" y1="412" x2="226" y2="412" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
-      <text x="149" y="408" text-anchor="middle">tools/call submit_rebalance</text>
-      <line x1="232" y1="430" x2="546" y2="430" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
-      <text x="389" y="426" text-anchor="middle">POST /mcp/call</text>
-      <line x1="552" y1="448" x2="714" y2="448" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
-      <text x="633" y="444" text-anchor="middle" fill="#7FC8FF">same server? open to apps?</text>
+      <!-- the result, which reaches the agent and the browser both -->
+      <line x1="714" y1="420" x2="238" y2="420" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="476" y="416" text-anchor="middle">result: the data the app draws. no _meta on it, and the agent keeps a copy</text>
+      <line x1="226" y1="444" x2="78" y2="444" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="152" y="440" text-anchor="middle">tool-input, then tool-result</text>
+
+      <!-- 5 -->
+      <text x="16" y="472" font-size="9" opacity="0.75">5 · a person acts, and the View calls a tool</text>
+      <line x1="78" y1="484" x2="226" y2="484" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="152" y="480" text-anchor="middle">tools/call submit_rebalance</text>
+      <line x1="238" y1="502" x2="546" y2="502" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="392" y="498" text-anchor="middle">POST /mcp/call</text>
+      <line x1="558" y1="520" x2="714" y2="520" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="636" y="516" text-anchor="middle" fill="#7FC8FF">same server? open to apps?</text>
     </g>
   </svg>
   <figcaption>
-    The Agent only appears in steps 1 and 2. Everything after the tool returns is the Host talking
-    to the View, and the Deployment proxying on their behalf, because the browser has no MCP client
-    and the View's frame has no network at all.
+    What triggers the fetch is the first arrow in step 2. The tool call reaches the browser in the
+    message stream carrying a name and arguments and <strong>no UI metadata at all</strong>, so the
+    Host looks the name up in the map it was handed at step 0 by the Deployment, the only party
+    that can read <code>_meta</code>. Both major hosts do a version of this rather than let the
+    browser guess: ChatGPT pushes the pointer down its own stream, Claude answers a bootstrap
+    request at page load. Our stream cannot carry a pointer, because a tool call arrives token by
+    token from the model with nowhere to stamp it, so we answer once up front instead.
+    <strong>Lanes two and four are one Host.</strong> SEP-1865 draws a single participant; a web
+    host that keeps its MCP client on a server is really two processes, and every arrow between
+    those two lanes is a seam the spec does not describe, so <code>/mcp/app</code> and
+    <code>/mcp/call</code> are ours to name. Lane three is a third thing again: the agent runs on
+    the same deployment but takes no part in any of this. The document itself is still read lazily, on first use
+    and cached: the spec permits prefetching every <code>ui://</code> document at connection
+    instead, but they run 400KB to 600KB each and most conversations open none of them.
   </figcaption>
 </figure>
 
@@ -582,6 +701,80 @@
   A refusal goes back as a JSON-RPC error, never dropped: a dropped request is a button that hangs.
 </p>
 </div>
+
+<div class="col">
+<p>
+  One more thing we do not delegate, and this one is a deviation rather than a decision the SDK
+  makes for you. A web host <strong>MUST NOT</strong> render the View itself. It renders a
+  <em>sandbox proxy</em> on a second origin, and that proxy renders the View:
+</p>
+</div>
+
+<figure>
+  <svg viewBox="0 0 800 288" role="img" aria-label="The sandbox proxy handshake. The host page on origin A renders a proxy iframe on origin B. The proxy announces itself with sandbox-proxy-ready, the host sends the raw HTML in sandbox-resource-ready, and the proxy renders the inner View iframe applying the CSP declared in ui.csp. The view's ui/initialize and the host's reply are forwarded verbatim through the proxy, which relays every message except those beginning ui/notifications/sandbox.">
+    <defs>
+      <marker id="s3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+      </marker>
+    </defs>
+
+    <g font-family="IBM Plex Mono, monospace" font-size="10.5" text-anchor="middle" fill="currentColor">
+      <rect x="20"  y="6" width="160" height="26" rx="6" fill="none" stroke="#7FC8FF" stroke-width="1.2" stroke-dasharray="5 3"/>
+      <text x="100" y="23">View (inner iframe)</text>
+      <rect x="310" y="6" width="180" height="26" rx="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <text x="400" y="23">Sandbox proxy</text>
+      <rect x="600" y="6" width="160" height="26" rx="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <text x="680" y="23">Host page</text>
+    </g>
+    <g font-family="IBM Plex Mono, monospace" font-size="9" text-anchor="middle" opacity="0.75" fill="currentColor">
+      <text x="100" y="46">the server's HTML</text>
+      <text x="400" y="46">origin B</text>
+      <text x="680" y="46">origin A</text>
+    </g>
+
+    <g stroke="currentColor" stroke-width="1" stroke-dasharray="3 4" opacity="0.45">
+      <line x1="100" y1="54" x2="100" y2="214"/>
+      <line x1="400" y1="54" x2="400" y2="214"/>
+      <line x1="680" y1="54" x2="680" y2="214"/>
+    </g>
+
+    <g font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor">
+      <path d="M680 70 h-30 v16 h24" fill="none" stroke="currentColor" stroke-width="1.2" marker-end="url(#s3)"/>
+      <text x="642" y="83" text-anchor="end">render the proxy iframe on a different origin</text>
+
+      <line x1="406" y1="108" x2="674" y2="108" stroke="currentColor" stroke-width="1.2" marker-end="url(#s3)"/>
+      <text x="540" y="104" text-anchor="middle">sandbox-proxy-ready</text>
+      <line x1="674" y1="130" x2="406" y2="130" stroke="currentColor" stroke-width="1.2" marker-end="url(#s3)"/>
+      <text x="540" y="126" text-anchor="middle">sandbox-resource-ready (raw HTML)</text>
+
+      <path d="M400 144 h30 v16 h-24" fill="none" stroke="currentColor" stroke-width="1.2" marker-end="url(#s3)"/>
+      <text x="438" y="157">render the inner iframe, CSP from the server's ui.csp</text>
+
+      <line x1="106" y1="182" x2="394" y2="182" stroke="currentColor" stroke-width="1.2" marker-end="url(#s3)"/>
+      <text x="250" y="178" text-anchor="middle">ui/initialize</text>
+      <line x1="406" y1="182" x2="674" y2="182" stroke="currentColor" stroke-width="1.2" marker-end="url(#s3)"/>
+      <text x="540" y="178" text-anchor="middle" fill="#7FC8FF">forwarded verbatim</text>
+
+      <line x1="674" y1="204" x2="406" y2="204" stroke="currentColor" stroke-width="1.2" marker-end="url(#s3)"/>
+      <text x="540" y="200" text-anchor="middle">McpUiInitializeResult</text>
+      <line x1="394" y1="204" x2="106" y2="204" stroke="currentColor" stroke-width="1.2" marker-end="url(#s3)"/>
+      <text x="250" y="200" text-anchor="middle" fill="#7FC8FF">forwarded verbatim</text>
+
+      <rect x="20" y="226" width="740" height="46" rx="6" fill="none" stroke="currentColor" stroke-width="1.1" opacity="0.35"/>
+      <text x="34" y="244" font-size="9.5">the proxy relays every message both ways except ui/notifications/sandbox-*</text>
+      <text x="34" y="260" font-size="9.5" opacity="0.8">so View and Host speak the same protocol whether or not one sits between them</text>
+    </g>
+  </svg>
+  <figcaption>
+    The proxy exists so the View can hold <code>allow-same-origin</code>, which ES modules and
+    <code>localStorage</code> need, without that origin being yours. It is also what enforces the
+    server's declared <code>ui.csp</code>. <strong>We do not have one:</strong> the SPA is a single
+    origin with nowhere to put a second, so the View is rendered directly under
+    <code>allow-scripts</code> and never <code>allow-same-origin</code>. Stricter on origin, since
+    an opaque origin reaches nothing at all, and weaker on CSP, since nothing applies
+    <code>ui.csp</code>. An app that needs same-origin does not run here.
+  </figcaption>
+</figure>
 
 <h2><span class="n">04</span> Binding it to a Deep Agent</h2>
 <div class="col">

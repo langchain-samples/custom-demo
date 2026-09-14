@@ -14,6 +14,7 @@ from __future__ import annotations
 from starlette.responses import JSONResponse
 
 from custom_demo.runtime.mcp_servers import (
+    app_manifest,
     call_app_tool,
     parse_servers,
     probe,
@@ -44,6 +45,39 @@ async def mcp_probe(request):
         return JSONResponse({"servers": []})
 
     return JSONResponse(await probe(servers))
+
+
+async def mcp_bootstrap(request):
+    """Which of these servers' tools ship an MCP App, for the SPA.
+
+    The browser half of the Host cannot read `_meta.ui.resourceUri` itself, so
+    without this it guesses from the tool-name prefix and asks about every
+    remote call. One answer per server set replaces one question per tool call.
+
+    Always 200 with an `apps` object. An empty one is the ordinary answer for a
+    server set with no apps in it, and a failure to reach a server is reported
+    beside the apps rather than as a failed request, so one dead tunnel does not
+    stop the others' apps rendering.
+
+    Plain JSON, not SSE. Claude's equivalent streams because it fans out over
+    many connectors of which most may be cold or broken, and a page-load
+    critical path must not wait for the slowest. Ours answers off a warm
+    `load_tools` cache for one or two servers, so there is nothing to stream.
+    Revisit that if a demo ever carries enough servers for the tail to show.
+    """
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001 - a malformed body is a client error, not a crash
+        return JSONResponse({"error": "expected a JSON body"}, status_code=400)
+
+    servers = _mcp_servers_from(payload)
+    if not servers:
+        return JSONResponse({"apps": {}})
+
+    try:
+        return JSONResponse({"apps": await app_manifest(servers)})
+    except Exception as exc:  # noqa: BLE001 - a chat must still run when discovery fails
+        return JSONResponse({"apps": {}, "error": f"{type(exc).__name__}: {exc}"[:300]})
 
 
 async def mcp_app(request):

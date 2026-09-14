@@ -16,6 +16,22 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { McpAppCard } from "./McpAppCard";
 
+const bridge = vi.hoisted(() => ({ current: null as null | Record<string, ReturnType<typeof vi.fn>> }));
+vi.mock("@modelcontextprotocol/ext-apps/app-bridge", () => ({
+  PostMessageTransport: class {},
+  AppBridge: class {
+    constructor() {
+      bridge.current = this as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    }
+    connect = vi.fn(async () => {});
+    sendToolInput = vi.fn(async () => {});
+    sendToolInputPartial = vi.fn(async () => {});
+    sendToolResult = vi.fn(async () => {});
+    sendHostContextChange = vi.fn(async () => {});
+    teardownResource = vi.fn(async () => ({}));
+  },
+}));
+
 const fetchMcpApp = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api")>()),
@@ -44,7 +60,12 @@ function draw(overrides: Partial<Parameters<typeof McpAppCard>[0]> = {}) {
   );
 }
 
-beforeEach(() => fetchMcpApp.mockReset());
+beforeEach(() => {
+  fetchMcpApp.mockReset();
+  // Cleared per test, or `waitFor` below resolves instantly against the bridge
+  // a previous test built and every assertion counts the wrong card's frames.
+  bridge.current = null;
+});
 afterEach(cleanup);
 
 it("renders the server's HTML in a script-only sandbox", async () => {
@@ -97,4 +118,49 @@ it("does not look for an app when no server is connected", async () => {
   // to nothing.
   await new Promise((r) => setTimeout(r, 0));
   expect(fetchMcpApp).not.toHaveBeenCalled();
+});
+
+it("forwards each streamed argument frame as a partial, then one complete input", async () => {
+  // The link the other tests miss. `mcpAppHost.test.ts` proves the bridge sends
+  // a partial when told to; `ChatPanel` proves a `messages/partial` frame
+  // patches `toolArgs`. Nothing joined them, so a card that failed to re-fire on
+  // a changed argument object would still pass both and quietly render the
+  // diagram in one jump, which is the exact bug this flow exists to avoid.
+  fetchMcpApp.mockResolvedValue(APP);
+  const { rerender } = draw({ streaming: true, toolResult: undefined, toolArguments: { elements: "[{a" } });
+  await waitFor(() => expect(bridge.current).toBeTruthy());
+  const b = bridge.current as NonNullable<typeof bridge.current>;
+
+  // Successive accumulated frames, as the server sends them: each carries the
+  // whole partial value so far, not a delta.
+  for (const elements of ["[{a:1},{b", "[{a:1},{b:2},{c"]) {
+    rerender(
+      <McpAppCard
+        toolName="meridian_propose_rebalance"
+        toolArguments={{ elements }}
+        streaming
+        servers={SERVERS}
+      />,
+    );
+  }
+
+  rerender(
+    <McpAppCard
+      toolName="meridian_propose_rebalance"
+      toolArguments={{ elements: "[{a:1},{b:2},{c:3}]" }}
+      streaming={false}
+      servers={SERVERS}
+    />,
+  );
+
+  // Three partials, one per streamed frame, and exactly one complete. The count
+  // is the assertion: one partial would mean the app draws in a single jump.
+  expect(b.sendToolInputPartial).toHaveBeenCalledTimes(3);
+  expect(b.sendToolInput).toHaveBeenCalledTimes(1);
+  expect(b.sendToolInput).toHaveBeenCalledWith({ arguments: { elements: "[{a:1},{b:2},{c:3}]" } });
+  // Ordering matters as much as the count: a partial after the complete is a
+  // spec violation the SDK would reject.
+  expect(b.sendToolInputPartial.mock.invocationCallOrder[2]).toBeLessThan(
+    b.sendToolInput.mock.invocationCallOrder[0],
+  );
 });

@@ -49,7 +49,7 @@ custom_demo/
   setup_graph.py              SECOND graph (`assistant_setup`): prepares a customer assistant
   config.py                   env loading, model/prompt/workspace accessors, LangSmith clients
   webapp.py           extra Starlette routes: /feedback /projects /workspaces /agents /tools
-                      /mcp/probe + /mcp/app (the SPA cannot speak MCP; the deployment does)
+                      /mcp/bootstrap + /mcp/app (the SPA cannot speak MCP; the deployment does)
                       /sandbox-files /sandbox-file (read-only browse of the assistant's VM)
                       /evals/run + /evals/status (per-assistant demo eval), /cleanup, /trace-url
   tests/              widgets, prompt composition, tool-registry, sandbox, MCP,
@@ -330,6 +330,13 @@ the wire format, version negotiation and ordering, and we supply the host contex
 handlers. `AppBridge` takes an MCP `Client` to forward `tools/call` and `resources/read` to; ours
 is `null`, because the browser has no MCP client, so those two are answered through
 `POST /mcp/call` and `POST /mcp/resource`.
+
+`POST /mcp/bootstrap` is the other half of being a two-process Host. `_meta.ui.resourceUri`
+only exists on `tools/list`, so the browser cannot see which tools ship a UI and used to
+guess from the `{server}_` prefix, which answers "is this an MCP tool" instead. It now asks
+once per server set and looks each streamed tool call up in the answer. Served off the same
+cached discovery the agent uses, and it includes app-only tools on purpose: they are hidden
+from the MODEL, but the browser is what authorises a view's `tools/call`.
 
 The guest half runs on the same SDK. `mcp_demo_server/apps/src/bridge.src.js` imports `App` and
 `apps/build.sh` bundles it to `apps/bridge.js`, which `apps.py` inlines. **The bundle is committed**

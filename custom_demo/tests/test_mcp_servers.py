@@ -911,3 +911,71 @@ def test_the_signature_png_is_served_over_http(meridian):
         assert ok.headers["content-type"] == "image/png"
         assert ok.content == _PNG_BYTES
         assert http.get("/signatures/MW-DOC-99999.png").status_code == 404
+
+
+def test_app_manifest_lists_only_the_tools_that_ship_a_ui(monkeypatch):
+    """The answer that replaces the SPA's prefix guess.
+
+    A tool-name prefix says a tool came from an MCP server, not that it has a
+    UI, so the browser used to ask about every remote call and get null for most
+    of them. This is the map that makes the question unnecessary.
+    """
+    plain = SimpleNamespace(name="draw_read_me", metadata={}, args_schema={"type": "object"})
+    app = SimpleNamespace(
+        name="draw_create_view",
+        metadata={"mcp": {"tool": {"_meta": {"ui": {"resourceUri": "ui://excalidraw/app.html"}}}}},
+        args_schema={"type": "object", "properties": {"elements": {"type": "string"}}},
+    )
+
+    async def fake_load(servers, *, refresh=False, include_app_only=False):
+        return [plain, app]
+
+    monkeypatch.setattr(m, "load_tools", fake_load)
+    out = asyncio.run(m.app_manifest((m.McpServer(id="draw", label="Draw", url="https://x/mcp"),)))
+
+    assert list(out) == ["draw_create_view"]
+    assert out["draw_create_view"]["resourceUri"] == "ui://excalidraw/app.html"
+    # Carried so the host can fill `hostContext.toolInfo.tool` before the app
+    # mounts. The app SDK validates it and refuses a handshake without it.
+    assert out["draw_create_view"]["inputSchema"]["properties"] == {"elements": {"type": "string"}}
+
+
+def test_app_manifest_includes_app_only_tools(monkeypatch):
+    """The browser needs the tools the MODEL must never see.
+
+    `visibility: ["app"]` keeps a tool out of the agent's list, which is a MUST.
+    It does not keep it from the host: the browser is the half that authorises a
+    View's `tools/call`, so it has to know the tool exists. Claude's own
+    bootstrap ships Excalidraw's app-only tools for the same reason.
+    """
+    seen = {}
+
+    async def fake_load(servers, *, refresh=False, include_app_only=False):
+        seen["include_app_only"] = include_app_only
+        return [
+            SimpleNamespace(
+                name="draw_save_checkpoint",
+                metadata={
+                    "mcp": {
+                        "tool": {
+                            "_meta": {
+                                "ui": {
+                                    "resourceUri": "ui://excalidraw/app.html",
+                                    "visibility": ["app"],
+                                }
+                            }
+                        }
+                    }
+                },
+                args_schema=None,
+            )
+        ]
+
+    monkeypatch.setattr(m, "load_tools", fake_load)
+    out = asyncio.run(m.app_manifest((m.McpServer(id="draw", label="Draw", url="https://x/mcp"),)))
+
+    assert seen["include_app_only"] is True
+    assert out["draw_save_checkpoint"]["appOnly"] is True
+    # A tool with no published schema still needs one: an empty object schema is
+    # valid, and absent is what an app refuses.
+    assert out["draw_save_checkpoint"]["inputSchema"] == {"type": "object"}

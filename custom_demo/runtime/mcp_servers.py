@@ -433,6 +433,47 @@ async def read_app(servers: tuple[McpServer, ...], tool_name: str) -> dict[str, 
     return None
 
 
+async def app_manifest(servers: tuple[McpServer, ...]) -> dict[str, dict[str, Any]]:
+    """Which tools ship an MCP App, keyed by namespaced tool name.
+
+    The browser is half of one Host, and this is the half of discovery it cannot
+    do: `_meta.ui.resourceUri` only exists on `tools/list`, which needs an MCP
+    client, which only the deployment has. Without this the SPA has to guess
+    from the tool-name prefix, which answers "is this an MCP tool" and not "does
+    it have a UI", so it asked about every remote call and most answers were
+    null.
+
+    Served off the same cached discovery the agent uses, so a warm call is a
+    dict lookup rather than a connection.
+
+    `include_app_only` on purpose. An app-only tool never reaches the MODEL
+    (`model_visible`), but the browser is the party that authorises a View's
+    `tools/call`, so it has to know the tool exists. Claude's own bootstrap does
+    the same: Excalidraw arrives there with all five tools, four of them
+    carrying `_meta.ui`.
+    """
+    tools = await load_tools(servers, include_app_only=True)
+    out: dict[str, dict[str, Any]] = {}
+    for tool in tools:
+        uri = app_uri(tool)
+        if uri is None:
+            continue
+
+        out[tool.name] = {
+            "resourceUri": uri,
+            # Carried here so the host has it before the app is mounted. `Tool`
+            # requires `inputSchema` and the app SDK validates the initialize
+            # result, so a host that cannot fill `hostContext.toolInfo.tool`
+            # is refused outright by every app built on it.
+            "inputSchema": tool.args_schema
+            if isinstance(tool.args_schema, dict)
+            else {"type": "object"},
+            "appOnly": not model_visible(tool),
+        }
+
+    return out
+
+
 async def call_app_tool(
     servers: tuple[McpServer, ...], app_tool: str, target: str, arguments: dict[str, Any]
 ) -> dict[str, Any]:
