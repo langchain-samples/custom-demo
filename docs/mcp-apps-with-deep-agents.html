@@ -414,7 +414,42 @@
 </p>
 </div>
 
-<h2><span class="n">03</span> The app runs in a box with nothing in it</h2>
+<h2><span class="n">03</span> Giving the agent the tools</h2>
+<div class="col">
+<p>
+  If the server list is fixed, hand <code>await adapter.list_tools()</code> to
+  <code>create_deep_agent</code> and stop reading. Per-user servers are the interesting case:
+  they are unknowable at graph build, and <code>create_deep_agent(tools=…)</code> is fixed then.
+  A middleware supplies them per run instead, and both halves are load-bearing.
+</p>
+</div>
+
+<p class="filename">agent.py</p>
+<pre><code><span class="k">class</span> <span class="f">McpTools</span>(AgentMiddleware):
+    <span class="k">async def</span> <span class="f">awrap_model_call</span>(self, request, handler):
+        <span class="c"># What the model sees. Discovery is cached, so a warm call adds no latency.</span>
+        tools = <span class="k">await</span> load_tools(servers_for(request.runtime))
+        <span class="k">return await</span> handler(request.override(tools=[*request.tools, *tools]))
+
+    <span class="k">async def</span> <span class="f">awrap_tool_call</span>(self, request, handler):
+        <span class="c"># What actually runs. ToolNode was built without these names, so it</span>
+        <span class="c"># passes tool=None; substituting the real one is what makes the call execute.</span>
+        <span class="k">if</span> request.tool <span class="k">is</span> <span class="k">None</span>:
+            name = request.tool_call[<span class="s">"name"</span>]
+            tool = next((t <span class="k">for</span> t <span class="k">in</span> <span class="k">await</span> load_tools(...) <span class="k">if</span> t.name == name), <span class="k">None</span>)
+            request = dataclasses.replace(request, tool=tool)
+        <span class="k">return await</span> handler(request)</code></pre>
+
+<div class="col">
+<p>
+  <code>load_tools</code> drops anything the server marked
+  <code>visibility: ["app"]</code> on the way out. That filter is the only thing your agent
+  needs to know about MCP Apps, and it cannot move to the browser, because the model's tool list
+  is assembled here.
+</p>
+</div>
+
+<h2><span class="n">04</span> The app runs in a box with nothing in it</h2>
 <div class="col">
 <p>
   The server hands you HTML and you run it in your page. That is somebody else's code executing
@@ -451,7 +486,7 @@
 </p>
 </div>
 
-<h2><span class="n">04</span> Use the SDK on both ends</h2>
+<h2><span class="n">05</span> Use the SDK on both ends</h2>
 <div class="col">
 <p>
   <a href="https://github.com/modelcontextprotocol/ext-apps"><code>@modelcontextprotocol/ext-apps</code></a>
@@ -461,13 +496,12 @@
 </p>
 <p>
   One thing it will not do for you. Given a real MCP client, <code>AppBridge</code> forwards the
-  view's <code>tools/call</code> straight through, which applies neither of the checks in
-  section 02. Construct it with <code>null</code>, register the handlers, and vet the call
-  yourself.
+  view's <code>tools/call</code> straight through, skipping the vetting in section 02.
+  Construct it with <code>null</code>, register the handlers, and check the call yourself.
 </p>
 </div>
 
-<h2><span class="n">05</span> Further reading</h2>
+<h2><span class="n">06</span> Further reading</h2>
 <div class="col">
 <ul>
   <li>
