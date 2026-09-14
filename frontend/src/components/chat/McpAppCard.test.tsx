@@ -32,18 +32,16 @@ vi.mock("@modelcontextprotocol/ext-apps/app-bridge", () => ({
   },
 }));
 
-const fetchMcpApp = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/api", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/api")>()),
-  fetchMcpApp,
+const readMcpApp = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/mcpClients", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/mcpClients")>()),
+  readMcpApp,
 }));
 
 const SERVERS = [{ id: "meridian", label: "Meridian", url: "https://x.ngrok.app/mcp" }];
 
 const APP = {
-  tool_name: "meridian_propose_rebalance",
-  resource_uri: "ui://meridian/rebalance.html",
-  mime_type: "text/html;profile=mcp-app",
+  resourceUri: "ui://meridian/rebalance.html",
   html: "<p>allocation sliders</p>",
 };
 
@@ -61,7 +59,7 @@ function draw(overrides: Partial<Parameters<typeof McpAppCard>[0]> = {}) {
 }
 
 beforeEach(() => {
-  fetchMcpApp.mockReset();
+  readMcpApp.mockReset();
   // Cleared per test, or `waitFor` below resolves instantly against the bridge
   // a previous test built and every assertion counts the wrong card's frames.
   bridge.current = null;
@@ -69,7 +67,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 it("renders the server's HTML in a script-only sandbox", async () => {
-  fetchMcpApp.mockResolvedValue(APP);
+  readMcpApp.mockResolvedValue(APP);
   const { container } = draw();
 
   const frame = await waitFor(() => {
@@ -84,17 +82,17 @@ it("renders the server's HTML in a script-only sandbox", async () => {
 });
 
 it("renders nothing at all when the tool ships no UI", async () => {
-  fetchMcpApp.mockResolvedValue(null);
+  readMcpApp.mockResolvedValue(null);
   const { container } = draw();
   // Not a placeholder. Most tools have no app, so anything visible here would
   // appear beside almost every call.
-  await waitFor(() => expect(fetchMcpApp).toHaveBeenCalled());
+  await waitFor(() => expect(readMcpApp).toHaveBeenCalled());
   expect(container.querySelector("iframe")).toBeNull();
   expect(container.textContent).toBe("");
 });
 
 it("shows the tool's own name, without the server prefix", async () => {
-  fetchMcpApp.mockResolvedValue(APP);
+  readMcpApp.mockResolvedValue(APP);
   const { container } = draw();
   await waitFor(() => expect(container.querySelector("iframe")).toBeTruthy());
   // The prefix is ours, added by the ClientGroup for namespacing. The person
@@ -104,7 +102,7 @@ it("shows the tool's own name, without the server prefix", async () => {
 });
 
 it("mounts while the arguments are still streaming", async () => {
-  fetchMcpApp.mockResolvedValue(APP);
+  readMcpApp.mockResolvedValue(APP);
   // The whole point of mounting on the CALL: the frame has to exist before the
   // arguments finish, or a diagram cannot draw itself as they arrive.
   const { container } = draw({ streaming: true, toolResult: undefined });
@@ -112,12 +110,12 @@ it("mounts while the arguments are still streaming", async () => {
 });
 
 it("does not look for an app when no server is connected", async () => {
-  fetchMcpApp.mockResolvedValue(APP);
+  readMcpApp.mockResolvedValue(APP);
   draw({ servers: [] });
   // A lookup needs a server to ask, so this would be a guaranteed round trip
   // to nothing.
   await new Promise((r) => setTimeout(r, 0));
-  expect(fetchMcpApp).not.toHaveBeenCalled();
+  expect(readMcpApp).not.toHaveBeenCalled();
 });
 
 it("forwards each streamed argument frame as a partial, then one complete input", async () => {
@@ -126,7 +124,7 @@ it("forwards each streamed argument frame as a partial, then one complete input"
   // patches `toolArgs`. Nothing joined them, so a card that failed to re-fire on
   // a changed argument object would still pass both and quietly render the
   // diagram in one jump, which is the exact bug this flow exists to avoid.
-  fetchMcpApp.mockResolvedValue(APP);
+  readMcpApp.mockResolvedValue(APP);
   const { rerender } = draw({ streaming: true, toolResult: undefined, toolArguments: { elements: "[{a" } });
   await waitFor(() => expect(bridge.current).toBeTruthy());
   const b = bridge.current as NonNullable<typeof bridge.current>;

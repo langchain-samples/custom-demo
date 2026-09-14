@@ -14,10 +14,10 @@ import { McpElicitationCard } from "./McpElicitationCard";
 import { describeInterrupt } from "./helpers";
 import { isMcpElicitation, type ReviewInterrupt } from "@/lib/api";
 
-const fetchMcpApp = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/api", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/api")>()),
-  fetchMcpApp,
+const readMcpApp = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/mcpClients", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/mcpClients")>()),
+  readMcpApp,
 }));
 
 const SERVERS = [{ id: "fieldlink", label: "Fieldlink", url: "https://x.ngrok.app/mcp" }];
@@ -53,7 +53,7 @@ const APP_PAUSE: ReviewInterrupt = {
 /** The card resolves its app lookup asynchronously; wait that out before asserting. */
 const settled = () => screen.findByText(/FL-4417|FL-4501/);
 
-beforeEach(() => fetchMcpApp.mockReset());
+beforeEach(() => readMcpApp.mockReset());
 afterEach(cleanup);
 
 describe("recognising an MCP pause", () => {
@@ -70,7 +70,7 @@ describe("recognising an MCP pause", () => {
 
 describe("a server with no UI of its own", () => {
   it("builds a form from the requested schema and resumes under the request key", async () => {
-    fetchMcpApp.mockResolvedValue(null);
+    readMcpApp.mockResolvedValue(null);
     const onApprove = vi.fn();
     render(<McpElicitationCard review={FORM_PAUSE} servers={SERVERS} onApprove={onApprove} />);
     await settled();
@@ -90,7 +90,7 @@ describe("a server with no UI of its own", () => {
   });
 
   it("will not submit until the required fields are filled", async () => {
-    fetchMcpApp.mockResolvedValue(null);
+    readMcpApp.mockResolvedValue(null);
     render(<McpElicitationCard review={FORM_PAUSE} servers={SERVERS} onApprove={vi.fn()} />);
     await settled();
     const send = screen.getByRole("button", { name: /send to the server/i }) as HTMLButtonElement;
@@ -98,7 +98,7 @@ describe("a server with no UI of its own", () => {
   });
 
   it("declines rather than answering when the user skips", async () => {
-    fetchMcpApp.mockResolvedValue(null);
+    readMcpApp.mockResolvedValue(null);
     const onApprove = vi.fn();
     render(<McpElicitationCard review={FORM_PAUSE} servers={SERVERS} onApprove={onApprove} />);
     await settled();
@@ -113,7 +113,7 @@ describe("the boundary with MCP Apps", () => {
     // appears once the call finishes. Rendering one here would put
     // server-authored HTML in front of a paused run it cannot talk to: nothing
     // can enter the conversation mid-interrupt.
-    fetchMcpApp.mockResolvedValue({
+    readMcpApp.mockResolvedValue({
       tool_name: "fieldlink_collect_signature",
       resource_uri: "ui://fieldlink/signature.html",
       mime_type: "text/html;profile=mcp-app",
@@ -127,7 +127,7 @@ describe("the boundary with MCP Apps", () => {
     expect(container.querySelector("iframe")).toBeNull();
     // The card must not even look: a lookup here would be a wasted round trip
     // on every pause.
-    expect(fetchMcpApp).not.toHaveBeenCalled();
+    expect(readMcpApp).not.toHaveBeenCalled();
   });
 
   it("names the server in the header, matching the tool's namespace", async () => {

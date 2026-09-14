@@ -13,13 +13,15 @@
  * display-mode request declined because we never negotiated. Each was a rule we
  * had read and still got wrong. The SDK encodes them once.
  *
- * WHAT REMAINS OURS, and why it cannot be the SDK's. `AppBridge` takes an MCP
- * `Client` to forward the app's `tools/call` and `resources/read` to. We have no
- * client in the browser: the app's iframe has an opaque origin and no network,
- * and the only MCP connection lives in the deployment. So the client is `null`
- * and those two arrive as handlers, answered through `POST /mcp/call` and
- * `POST /mcp/resource`, where the same-server and open-to-apps rules are
- * enforced. A view is server-authored HTML; nothing it sends is trusted.
+ * WHY THE CLIENT IS `null`, WHEN THIS PAGE NOW HAS ONE. `AppBridge` takes an
+ * MCP `Client` and, given one, forwards the view's `tools/call` and
+ * `resources/read` to it automatically. That is exactly what a host must not
+ * do: SEP-1865 makes refusing a call to a tool whose `visibility` omits
+ * `"app"` a MUST, and blocks cross-server calls outright, and automatic
+ * forwarding applies neither. So the client stays `null` and those two arrive
+ * as handlers, answered by `callMcpToolForApp` and `readMcpResource` in
+ * `lib/mcpClients.ts`, which run the checks and then use this page's client.
+ * A view is server-authored HTML; nothing it sends is trusted.
  *
  * ONE DEVIATION, DELIBERATE. SEP-1865 says a web host MUST wrap the view in a
  * different-origin sandbox proxy, so a view can hold `allow-same-origin`

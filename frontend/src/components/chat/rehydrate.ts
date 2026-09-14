@@ -11,7 +11,8 @@
  * Kept pure and separate from `ChatPanel` so the mapping is testable without a
  * DOM: the interesting cases are all about which message becomes which item.
  */
-import type { McpAppBinding, MessageContent, ThreadMessage } from "@/lib/api";
+import type { MessageContent, ThreadMessage } from "@/lib/api";
+import type { McpAppBinding } from "@/lib/mcpClients";
 import { contentToText } from "@/components/chat/helpers";
 
 /** A tool result's structured half, when the text is a JSON object. */

@@ -28,6 +28,7 @@ import {
 } from "@tabler/icons-react";
 import type { QuickAction, ReviewInterrupt, RunContext, ThreadMessage, Widget } from "@/lib/api";
 import { ensureThread, getThreadState, resetThread, runStream, savedThreadId } from "@/lib/api";
+import { mcpAppBindings } from "@/lib/mcpClients";
 import {
   isDeliberateReset,
   rehydrateItems,
@@ -59,7 +60,6 @@ import {
 } from "@/components/chat/helpers";
 import {
   isMcpElicitation,
-  fetchMcpApps,
   type McpServerConfig,
   IMAGE_MIME_TYPES,
   imageContent,
@@ -681,7 +681,7 @@ export default function ChatPanel({
      * do the first, because our tool calls stream token by token out of the
      * model with nowhere to stamp them, so this is the second.
      */
-    const mcpApps = await fetchMcpApps(mcpServers);
+    const mcpApps = await mcpAppBindings(mcpServers);
     // Which app frames this turn has already mounted, so a later argument frame
     // patches rather than opening a second copy.
     const appSeen = new Set<string>();
@@ -1440,7 +1440,7 @@ export default function ChatPanel({
   // cached promise, so this only ever removes latency from the first turn; it is
   // never the thing that makes an app render.
   useEffect(() => {
-    void fetchMcpApps(mcpServers);
+    void mcpAppBindings(mcpServers);
   }, [mcpServers]);
 
   /**
@@ -1467,7 +1467,7 @@ export default function ChatPanel({
         // A thread the server has forgotten is an ordinary outcome of an old
         // link, and means an empty chat rather than an error.
         getThreadState(threadId).catch(() => null),
-        fetchMcpApps(mcpServers),
+        mcpAppBindings(mcpServers),
       ]);
       if (!live || !state || interactedRef.current) return;
 

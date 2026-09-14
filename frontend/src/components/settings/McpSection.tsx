@@ -16,6 +16,7 @@
  * are named what you expect, before a live demo depends on it.
  */
 import { useState } from "react";
+import { testMcpServer } from "@/lib/mcpClients";
 import {
   IconAlertTriangle,
   IconCheck,
@@ -29,7 +30,6 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import {
   mcpServerId,
-  probeMcpServers,
   type McpProbeResult,
   type McpServerConfig,
 } from "@/lib/api";
@@ -206,16 +206,30 @@ export function McpSection({ servers, onChange, defaultOpen }: Props) {
 
   const test = async (index: number) => {
     const server = servers[index];
-    // Give an unnamed server its id now: the probe reports tools under the
+    // Give an unnamed server its id now: the test reports tools under the
     // prefix, and they should read the same here as they will in chat.
     const taken = new Set(servers.filter((_, i) => i !== index).map((s) => s.id || ""));
     const id = server.id || idFor(server.label || "mcp", taken);
     if (id !== server.id) edit(index, { id });
 
     setTesting(id);
-    const [result] = await probeMcpServers([{ ...server, id, enabled: true }]);
+    // Through this page's own MCP client, which reaches the server by ID
+    // through the deployment's proxy. That means SAVED: the proxy resolves the
+    // id against the assistant's stored servers, so a connection still being
+    // typed is not reachable and the failure says so rather than timing out.
+    const result = await testMcpServer({ ...server, id, enabled: true }).catch(
+      (err: unknown): McpProbeResult => ({
+        id,
+        label: server.label,
+        url: server.url,
+        header_names: [],
+        ok: false,
+        tools: [],
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
     setTesting(null);
-    if (result) setResults((prev) => ({ ...prev, [id]: result }));
+    setResults((prev) => ({ ...prev, [id]: result }));
   };
 
   const live = servers.filter((s) => s.enabled !== false && s.url.trim()).length;

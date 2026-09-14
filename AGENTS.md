@@ -49,7 +49,7 @@ custom_demo/
   setup_graph.py              SECOND graph (`assistant_setup`): prepares a customer assistant
   config.py                   env loading, model/prompt/workspace accessors, LangSmith clients
   webapp.py           extra Starlette routes: /feedback /projects /workspaces /agents /tools
-                      /mcp/bootstrap (the SPA cannot speak MCP; the deployment does)
+                      /mcp/proxy/{id} (bytes to the MCP server; the SPA holds the client)
                       /sandbox-files /sandbox-file (read-only browse of the assistant's VM)
                       /evals/run + /evals/status (per-assistant demo eval), /cleanup, /trace-url
   tests/              widgets, prompt composition, tool-registry, sandbox, MCP,
@@ -306,8 +306,8 @@ ask.
 **MCP Apps (a tool that ships its own UI).** A tool can bind a `ui://` HTML resource
 (`_meta.ui.resourceUri`, MIME `text/html;profile=mcp-app`). `collect_signature` does: it needs a
 drawn signature, which no schema-generated form can collect. While the run is paused the SPA
-reads the tool's `resourceUri` from the bootstrap catalogue and POSTs `/mcp/resource`
-and reads the resource over MCP, and the card renders that HTML in an iframe **sandboxed to
+reads the tool's `resourceUri` off its own `tools/list` and fetches that resource with its own
+MCP client, and the card renders that HTML in an iframe **sandboxed to
 `allow-scripts` only** - no `allow-same-origin`, so server-authored HTML cannot touch our origin,
 cookies or storage.
 
@@ -328,8 +328,9 @@ client and the host as its server. The host half (`frontend/src/lib/mcpAppHost.t
 adapter over **`@modelcontextprotocol/ext-apps`**, the extension's official SDK: `AppBridge` owns
 the wire format, version negotiation and ordering, and we supply the host context and the
 handlers. `AppBridge` takes an MCP `Client` to forward `tools/call` and `resources/read` to; ours
-is `null`, because the browser has no MCP client, so those two are answered through
-`POST /mcp/call` and `POST /mcp/resource`.
+is `null` even though this page now has a client, because given one it forwards
+automatically, and automatic forwarding applies neither of the host's two MUSTs. Those two
+are answered by handlers that run `resolveAppCall` first.
 
 The thread id lives in the URL (`?thread=<id>`), so a refresh resumes the same conversation
 rather than starting a new one, and `chat/rehydrate.ts` turns the persisted messages back
@@ -338,48 +339,30 @@ describes a run in progress, and a half-replayed one reads worse than none. Whic
 tool calls become apps is decided by the bootstrap map below, which is the only thing that
 can know.
 
-`POST /mcp/proxy/{server_id}` is one route carrying every MCP message the browser sends,
-and understanding none of them: `initialize`, `tools/list`, `resources/read` and a view's
-`tools/call` are bytes going to a server the assistant is already connected to. It streams,
-because Streamable HTTP answers `text/event-stream`. Addressed by ID and never by URL, so
-it cannot be pointed anywhere the assistant is not already configured for, and the bearer
-token is attached here rather than existing in the browser. Claude reaches the same shape at
-`/v1/toolbox/shttp/mcp/<connection-uuid>`. Once the SPA holds a real MCP client over this,
-the routes below have nothing left to do: everything the deployment currently knows about
-MCP Apps becomes the browser's business, and only `model_visible` stays behind.
+`POST /mcp/proxy/{server_id}` is the only MCP route, and it understands no MCP. The SPA
+holds a real MCP client (`frontend/src/lib/mcpClients.ts`) and this forwards its messages
+to a server the assistant is configured for: `initialize`, `tools/list`, `resources/read`
+and a view's `tools/call` are all bytes going somewhere. It streams, because Streamable
+HTTP answers `text/event-stream`. Addressed by ID and never by URL, so it cannot be pointed
+anywhere the assistant is not already configured for, and the bearer token is attached here
+rather than existing in the browser. Claude reaches the same shape at
+`/v1/toolbox/shttp/mcp/<connection-uuid>`.
 
-`POST /mcp/bootstrap` is the other half of being a two-process Host. `_meta.ui.resourceUri`
-only exists on `tools/list`, so the browser cannot see which tools ship a UI and used to
-guess from the `{server}_` prefix, which answers "is this an MCP tool" instead. It now asks
-once per server set and looks each streamed tool call up in the answer. It returns the WHOLE
-catalogue per server, not only the tools with a UI, shaped like `/mcp/probe` so one renderer
-serves both: Claude's bootstrap does the same, and it is what lets a connector list render
-on page load rather than after a click. It includes app-only tools on purpose, because they
-are hidden from the MODEL but the browser is what authorises a view's `tools/call`. The
-difference from `probe` is cost and promise: bootstrap is served warm and `ok` means only
-"we know this server's tools", while the same route with `refresh: true` (what Test sends)
-reconnects, reports each failure's reason, and is authoritative. Three routes, not five:
-`/mcp/probe` was that refresh flag, and `/mcp/app` only existed because the browser did not
-know a tool's `resourceUri`, which the catalogue now tells it.
+A browser cannot hold the socket itself: an MCP server is a third-party origin that need
+not send CORS headers, and the token would have to be page JavaScript.
 
-The guest half runs on the same SDK. `mcp_demo_server/apps/src/bridge.src.js` imports `App` and
-`apps/build.sh` bundles it to `apps/bridge.js`, which `apps.py` inlines. **The bundle is committed**
-(the server is Python and cannot run esbuild at serve time) and
-`custom_demo/tests/mcp_app_conformance_test.js` fails if it drifts from its source, so rebuild and
-commit whenever the source changes. Cost: an app is ~618KB, against ~32KB hand-rolled and
-Excalidraw's 432KB. That is what MCP Apps cost, because an origin-less iframe can fetch nothing.
+**The deployment knows exactly one thing about MCP Apps**, `model_visible` in
+`runtime/mcp_servers.py`, which keeps `visibility: ["app"]` tools out of the agent's tool
+list. That one cannot move, because the agent is here. Everything else, which tools ship a
+UI, which are open to apps, what a `ui://` resolves to, is the browser's.
 
-Sizing is `autoResize`, on by default, so an app never sends `ui/notifications/size-changed`
-itself. `McpApp.resize()` is retained as a no-op for app files that call it.
-
-    app  -> host   ui/initialize, then ui/notifications/initialized
-    host -> app    McpUiInitializeResult (theme, styles, toolInfo, containerDimensions)
-    host -> app    ui/notifications/tool-input, then ui/notifications/tool-result
-    app  -> host   ui/notifications/size-changed
-    app  -> host   tools/call            proxied via POST /mcp/call
-    app  -> host   resources/read        proxied via POST /mcp/resource
-    app  -> host   ui/open-link, ui/request-display-mode, ping
-    host -> app    ui/resource-teardown  before the frame goes
+Which means the host's two spec MUSTs on a view's `tools/call`, same server and open to
+apps, are enforced in `mcpClients.ts:resolveAppCall`, kept pure so they are testable.
+`AppBridge` is still constructed with a `null` client on purpose: given a real one it
+forwards the view's calls automatically, and automatic forwarding applies neither rule.
+That enforcement is real rather than advisory only because a view has an opaque origin and
+no network, so `postMessage` to the host page is its only way out. Give a view network
+access and both rules become suggestions.
 
 `POST /mcp/call` enforces both of the spec's rules on a view's `tools/call`, as refusals
 rather than filters: the target must be on the **same server** as the app's own tool
@@ -449,11 +432,10 @@ type. `custom_demo/tests/signature_app_test.js` is what pins it: it loads the re
 jsdom and asserts the keys. Any tool with no app falls back to a form generated from the schema,
 which is what every ordinary MCP server gets.
 
-**One boundary worth knowing:** `/mcp/bootstrap` fetches a URL supplied in the request
-body, so the deployment will connect wherever a caller points it. Both sit behind the same app
-token as every other custom route, and any caller who can reach them can already put that URL in
-the assistant's `context.mcp_servers` and have the agent call it, so this adds no reach - but
-do not widen these routes without revisiting that.
+**One boundary worth knowing:** `/mcp/proxy/{server_id}` takes an ID, never a URL, and
+resolves it against the assistant's own `context.mcp_servers`. That is deliberate: a route
+that forwards wherever a caller points it is a general-purpose fetcher wearing the
+deployment's network position. Do not add a URL parameter to it.
 
 **Human-in-the-loop.** `draft_email` generates, then calls `interrupt()` (via `review()` in
 `tools/simulated.py`) - the run genuinely PAUSES. The payload arrives on the stream's `updates`

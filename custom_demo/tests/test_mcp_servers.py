@@ -101,26 +101,6 @@ def test_fingerprint_is_stable_for_the_same_config():
     assert m.fingerprint(m.parse_servers(entry)) == m.fingerprint(m.parse_servers(entry))
 
 
-def test_app_uri_reads_the_mcp_apps_metadata():
-    tool = SimpleNamespace(
-        metadata={"mcp": {"tool": {"_meta": {"ui": {"resourceUri": "ui://a/b.html"}}}}}
-    )
-    assert m.app_uri(tool) == "ui://a/b.html"
-
-
-def test_app_uri_reads_the_deprecated_flat_key():
-    """A server on the extension's earlier spelling still renders its app.
-
-    SEP-1865 deprecates `_meta["ui/resourceUri"]` but keeps it until GA. Ignoring
-    it would show a generic form for a server that does ship a UI, with nothing
-    anywhere saying why.
-    """
-    tool = SimpleNamespace(
-        metadata={"mcp": {"tool": {"_meta": {"ui/resourceUri": "ui://a/b.html"}}}}
-    )
-    assert m.app_uri(tool) == "ui://a/b.html"
-
-
 def _tool(name, visibility=None):
     """A discovered tool carrying the MCP provenance the adapter attaches."""
     ui = {} if visibility is None else {"visibility": visibility}
@@ -147,96 +127,6 @@ def test_model_visible_hides_only_the_app_only_tools(visibility, seen):
     model invites it to call a tool meant for the App's own bookkeeping.
     """
     assert m.model_visible(_tool("t", visibility)) is seen
-
-
-@pytest.mark.parametrize(
-    ("visibility", "callable_by_app"),
-    [
-        # Omitted means ["model", "app"], so an ordinary tool is callable.
-        (None, True),
-        (["model", "app"], True),
-        (["app"], True),
-        # The MUST: a host rejects an app calling a tool not opened to apps.
-        (["model"], False),
-    ],
-)
-def test_app_callable_refuses_only_what_the_server_closed_to_apps(visibility, callable_by_app):
-    assert m.app_callable(_tool("t", visibility)) is callable_by_app
-
-
-def test_visibility_defaults_let_a_tool_be_used_by_both():
-    """The two rules are independent, and both default to permitted.
-
-    Getting this backwards would either hide every ordinary tool from the model
-    or refuse every app call, and neither failure is visible until a demo.
-    """
-    ordinary = _tool("t", None)
-    assert m.model_visible(ordinary) and m.app_callable(ordinary)
-
-
-@pytest.mark.parametrize(
-    ("asked_for", "resolves_to"),
-    [
-        # What an app actually sends: the name ITS SERVER published.
-        ("submit_signature", "meridian_submit_signature"),
-        # A prefixed name still works, for an app that knows the namespace.
-        ("meridian_submit_signature", "meridian_submit_signature"),
-    ],
-)
-def test_an_app_names_tools_the_way_its_own_server_does(monkeypatch, asked_for, resolves_to):
-    """The `{server}_` prefix is ours, and an app has no reason to know it.
-
-    `ClientGroup` adds it so a remote `search` cannot collide with a local one.
-    An app author writes `McpApp.call("submit_signature")`, and a host that only
-    matched the namespaced name left the person looking at a signed pad and the
-    message "submit_signature is not a tool on any connected server".
-    """
-    # `call_app_tool` resolves the OPENER first (for the same-server check) and
-    # the target second, so record both rather than the first.
-    resolved: list[str] = []
-
-    async def tools(*_a, **_k):
-        return [_tool("meridian_sign_document"), _tool("meridian_submit_signature", ["app"])]
-
-    class _Route:
-        server_name = "meridian"
-        upstream_name = "submit_signature"
-
-        class client:
-            @staticmethod
-            async def call_tool(name, args):
-                return SimpleNamespace(structured_content={"ok": True}, is_error=False)
-
-    class _Group:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_):
-            return False
-
-        async def resolve_tool(self, name):
-            resolved.append(name)
-            return _Route()
-
-    monkeypatch.setattr(m, "load_tools", tools)
-    monkeypatch.setattr(m, "build_group", lambda _s: _Group())
-    servers = m.parse_servers([{"label": "Meridian", "url": "https://x/mcp"}])
-
-    out = asyncio.run(m.call_app_tool(servers, "meridian_sign_document", asked_for, {}))
-    assert out["structuredContent"] == {"ok": True}
-    assert resolved[-1] == resolves_to
-
-
-def test_an_app_cannot_reach_a_tool_its_server_does_not_have(monkeypatch):
-    """An unqualified name must not wander onto another server."""
-
-    async def tools(*_a, **_k):
-        return [_tool("meridian_sign_document"), _tool("other_secret_thing")]
-
-    monkeypatch.setattr(m, "load_tools", tools)
-    servers = m.parse_servers([{"label": "Meridian", "url": "https://x/mcp"}])
-    with pytest.raises(LookupError, match="not a tool on meridian"):
-        asyncio.run(m.call_app_tool(servers, "meridian_sign_document", "secret_thing", {}))
 
 
 def test_instructions_are_cached_beside_the_tools(monkeypatch):
@@ -285,82 +175,6 @@ def test_invalidate_drops_instructions_too():
     assert m.instructions_for(servers) == {}
 
 
-def test_read_app_resource_shapes_text_and_binary_blocks_for_the_wire(monkeypatch):
-    """An app gets `resources/read` back in the shape the spec puts on the wire.
-
-    The app is blocked on a JSON-RPC response, and `mcpAppHost` forwards whatever
-    is here straight into it, so the key names matter: camelCase `mimeType`, and
-    `text` or `blob` but never both.
-    """
-
-    async def fake_read(servers, tool_name, uri):
-        return [
-            SimpleNamespace(
-                uri="tips://a", mime_type="application/json", text='{"k":1}', blob=None
-            ),
-            SimpleNamespace(uri="tips://b", mime_type="image/png", text=None, blob="QUJD"),
-        ]
-
-    monkeypatch.setattr(m, "_read_uri", fake_read)
-    got = asyncio.run(m.read_app_resource((), "srv_tool", "tips://a"))
-
-    assert got == [
-        {"uri": "tips://a", "mimeType": "application/json", "text": '{"k":1}'},
-        {"uri": "tips://b", "mimeType": "image/png", "blob": "QUJD"},
-    ]
-
-
-def test_read_app_resource_raises_rather_than_returning_nothing(monkeypatch):
-    """A failed read must reach the app as a reason, not as an empty render.
-
-    `read_app` returns None on failure because the caller falls back to a
-    generated form. There is no fallback for a resource an app asked for: it is
-    holding a promise open, so the error has to propagate.
-    """
-
-    async def boom(servers, tool_name, uri):
-        raise RuntimeError("that server refused the read")
-
-    monkeypatch.setattr(m, "_read_uri", boom)
-    with pytest.raises(RuntimeError, match="refused the read"):
-        asyncio.run(m.read_app_resource((), "srv_tool", "tips://a"))
-
-
-def test_app_uri_prefers_the_current_key_when_a_server_sends_both():
-    tool = SimpleNamespace(
-        metadata={
-            "mcp": {
-                "tool": {
-                    "_meta": {
-                        "ui": {"resourceUri": "ui://a/new.html"},
-                        "ui/resourceUri": "ui://a/old.html",
-                    }
-                }
-            }
-        }
-    )
-    assert m.app_uri(tool) == "ui://a/new.html"
-
-
-@pytest.mark.parametrize(
-    "metadata",
-    [
-        {},
-        {"mcp": {}},
-        {"mcp": {"tool": {"_meta": {}}}},
-        # A non-`ui://` URI is not an MCP App, and must not be fetched as one.
-        {"mcp": {"tool": {"_meta": {"ui": {"resourceUri": "https://evil/x.html"}}}}},
-    ],
-)
-def test_app_uri_is_none_for_an_ordinary_tool(metadata):
-    assert m.app_uri(SimpleNamespace(metadata=metadata)) is None
-
-
-# ---------------------------------------------------------------------------
-# Caching and degradation
-# ---------------------------------------------------------------------------
-
-
 def test_load_tools_returns_nothing_when_no_server_is_configured():
     assert asyncio.run(m.load_tools(())) == []
 
@@ -397,29 +211,6 @@ def test_load_tools_serves_a_second_call_from_cache(monkeypatch):
     assert [t.name for t in first] == [t.name for t in second] == ["x_tool"]
     assert calls == 1, "the second load should not have touched the network"
     m.invalidate(servers)
-
-
-def test_a_refreshed_catalog_reports_the_reason_a_server_failed(monkeypatch):
-    """What "Test connection" is for, and the only authoritative answer.
-
-    The cached arm can say no more than whether we happen to know a server's
-    tools. Reconnecting is the thing that tells a person their tunnel is down,
-    and the reason is the whole point of the button.
-    """
-
-    async def boom(*_args, **_kwargs):
-        raise ConnectionError("refused")
-
-    monkeypatch.setattr(m, "_discover", boom)
-    servers = m.parse_servers([{"label": "Down", "url": "https://nope.invalid/mcp"}])
-    (result,) = asyncio.run(m.tool_catalog(servers, refresh=True))
-    assert result["ok"] is False
-    assert "refused" in result["error"]
-
-
-# ---------------------------------------------------------------------------
-# The demo server, in-process
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -918,94 +709,6 @@ def test_the_signature_png_is_served_over_http(meridian):
         assert ok.headers["content-type"] == "image/png"
         assert ok.content == _PNG_BYTES
         assert http.get("/signatures/MW-DOC-99999.png").status_code == 404
-
-
-def test_tool_catalog_reports_every_tool_and_marks_the_ones_with_a_ui(monkeypatch):
-    """The answer that replaces the SPA's prefix guess.
-
-    A tool-name prefix says a tool came from an MCP server, not that it has a
-    UI, so the browser used to ask about every remote call and get null for most
-    of them. This is the map that makes the question unnecessary.
-    """
-    plain = SimpleNamespace(
-        name="draw_read_me",
-        description="Format reference",
-        metadata={},
-        args_schema={"type": "object"},
-    )
-    app = SimpleNamespace(
-        name="draw_create_view",
-        description="Draw a diagram",
-        metadata={"mcp": {"tool": {"_meta": {"ui": {"resourceUri": "ui://excalidraw/app.html"}}}}},
-        args_schema={"type": "object", "properties": {"elements": {"type": "string"}}},
-    )
-
-    async def fake_load(servers, *, refresh=False, include_app_only=False):
-        return [plain, app]
-
-    monkeypatch.setattr(m, "load_tools", fake_load)
-    out = asyncio.run(m.tool_catalog((m.McpServer(id="draw", label="Draw", url="https://x/mcp"),)))[
-        0
-    ]
-
-    # Every tool, not only the one with a UI: the Settings list renders from
-    # this on page load, and Claude's own bootstrap ships the whole catalogue
-    # for the same reason.
-    assert [t["name"] for t in out["tools"]] == ["draw_read_me", "draw_create_view"]
-    assert out["ok"] is True
-    by_name = {t["name"]: t for t in out["tools"]}
-    assert by_name["draw_read_me"]["app"] is None
-    assert by_name["draw_create_view"]["app"] == "ui://excalidraw/app.html"
-    # Carried so the host can fill `hostContext.toolInfo.tool` before the app
-    # mounts. The app SDK validates it and refuses a handshake without it.
-    assert by_name["draw_create_view"]["inputSchema"]["properties"] == {
-        "elements": {"type": "string"}
-    }
-
-
-def test_tool_catalog_includes_app_only_tools(monkeypatch):
-    """The browser needs the tools the MODEL must never see.
-
-    `visibility: ["app"]` keeps a tool out of the agent's list, which is a MUST.
-    It does not keep it from the host: the browser is the half that authorises a
-    View's `tools/call`, so it has to know the tool exists. Claude's own
-    bootstrap ships Excalidraw's app-only tools for the same reason.
-    """
-    seen = {}
-
-    async def fake_load(servers, *, refresh=False, include_app_only=False):
-        seen["include_app_only"] = include_app_only
-        return [
-            SimpleNamespace(
-                name="draw_save_checkpoint",
-                description="Save",
-                metadata={
-                    "mcp": {
-                        "tool": {
-                            "_meta": {
-                                "ui": {
-                                    "resourceUri": "ui://excalidraw/app.html",
-                                    "visibility": ["app"],
-                                }
-                            }
-                        }
-                    }
-                },
-                args_schema=None,
-            )
-        ]
-
-    monkeypatch.setattr(m, "load_tools", fake_load)
-    out = asyncio.run(m.tool_catalog((m.McpServer(id="draw", label="Draw", url="https://x/mcp"),)))[
-        0
-    ]
-
-    assert seen["include_app_only"] is True
-    tool = out["tools"][0]
-    assert tool["appOnly"] is True
-    # A tool with no published schema still needs one: an empty object schema is
-    # valid, and absent is what an app refuses.
-    assert tool["inputSchema"] == {"type": "object"}
 
 
 def test_one_unreachable_server_does_not_take_the_others_down(monkeypatch):

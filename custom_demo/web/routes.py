@@ -13,7 +13,7 @@ from starlette.routing import Route
 from custom_demo.web.cleanup import cleanup
 from custom_demo.web.evals import evals_run, evals_status
 from custom_demo.web.feedback import feedback
-from custom_demo.web.mcp import mcp_bootstrap, mcp_call, mcp_proxy, mcp_resource
+from custom_demo.web.mcp import mcp_proxy
 from custom_demo.web.metadata import agents, project_url, projects, tools, trace_url, workspaces
 from custom_demo.web.sandbox import sandbox_file, sandbox_files, sandbox_upload
 from custom_demo.web.traffic import demo_traffic, demo_traffic_status
@@ -23,10 +23,7 @@ app = Starlette(
     routes=[
         Route("/feedback", feedback, methods=["POST"]),
         Route("/tools", tools, methods=["GET"]),
-        Route("/mcp/bootstrap", mcp_bootstrap, methods=["POST"]),
         Route("/mcp/proxy/{server_id}", mcp_proxy, methods=["POST"]),
-        Route("/mcp/resource", mcp_resource, methods=["POST"]),
-        Route("/mcp/call", mcp_call, methods=["POST"]),
         Route("/voice/token", voice_token, methods=["POST"]),
         Route("/voice/trace", voice_trace, methods=["POST"]),
         Route("/sandbox-files", sandbox_files, methods=["GET"]),

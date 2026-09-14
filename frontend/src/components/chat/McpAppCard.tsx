@@ -2,10 +2,11 @@
  * An MCP App, rendered for a tool call that finished and ships its own UI.
  *
  * This is the ordinary MCP Apps flow, and the one every third-party server uses.
- * A tool carries `_meta.ui.resourceUri`; the deployment reads that `ui://`
- * resource over MCP (a browser cannot speak it) and hands us the HTML; we render
- * it in a sandboxed iframe and hand it the tool's own result to draw. When a
- * person does something, the app calls a tool and we proxy it.
+ * A tool carries `_meta.ui.resourceUri`; this page reads that `ui://` resource
+ * with its own MCP client (see `lib/mcpClients.ts`, which reaches the server
+ * through the deployment's byte proxy) and renders the HTML in a sandboxed
+ * iframe, then hands it the tool's own result to draw. When a person does
+ * something, the app calls a tool and the same client makes the call.
  *
  * Nothing pauses. The run has already moved on by the time this appears, which
  * is why the app can call tools freely and why there is no answer to give back.
@@ -16,12 +17,8 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { IconApps, IconX } from "@tabler/icons-react";
-import {
-  callMcpAppTool,
-  fetchMcpApp,
-  fetchMcpResource,
-  type McpServerConfig,
-} from "@/lib/api";
+import type { McpServerConfig } from "@/lib/api";
+import { callMcpToolForApp, readMcpApp, readMcpResource } from "@/lib/mcpClients";
 import { createMcpAppHost, type McpToolResult } from "@/lib/mcpAppHost";
 
 export interface McpAppCardProps {
@@ -84,8 +81,8 @@ function AppFrame({
       // Clamped here rather than in the host: the ceiling is this card's
       // layout, and it is the same number the host advertises as maxHeight.
       onHeight: (h) => setHeight(Math.min(Math.max(h, 160), 640)),
-      onToolCall: (name, args) => callMcpAppTool(servers, toolName, name, args),
-      onReadResource: (uri) => fetchMcpResource(servers, toolName, uri),
+      onToolCall: (name, args) => callMcpToolForApp(servers, toolName, name, args),
+      onReadResource: (uri) => readMcpResource(servers, toolName, uri),
       // Excalidraw's Edit button asks for exactly this. Declining it, which is
       // all a host advertising inline-only can do, is why that button did
       // nothing.
@@ -184,8 +181,8 @@ export function McpAppCard(props: McpAppCardProps) {
   useEffect(() => {
     let live = true;
     if (!toolName || !servers.length) return;
-    void fetchMcpApp(servers, toolName).then((found) => {
-      if (live) setApp(found ? { html: found.html, input_schema: found.input_schema } : null);
+    void readMcpApp(servers, toolName).then((found) => {
+      if (live) setApp(found ? { html: found.html, input_schema: found.inputSchema } : null);
     });
     return () => {
       live = false;
