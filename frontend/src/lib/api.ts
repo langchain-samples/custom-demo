@@ -836,16 +836,45 @@ export async function probeMcpServers(servers: McpServerConfig[]): Promise<McpPr
 }
 
 /**
- * The MCP App HTML bound to a paused tool (POST /mcp/app), or null if it has none.
+ * Apps already looked up, by tool and the server it came from.
  *
- * Null is the ordinary answer for an ordinary tool, and the caller falls back to
- * the generic schema form, so a failure here is not worth surfacing.
+ * An app document is large and static: Excalidraw's is 432KB, ours 618KB, and
+ * neither changes between renders. Without this, every card that mounts pulls
+ * the whole thing again, because the deployment opens a fresh `resources/read`
+ * per request and nothing in front of it remembers.
+ *
+ * The PROMISE is cached, not the value, so several cards mounting in the same
+ * frame share one request instead of racing. Keyed on the server URL as well as
+ * the tool, so editing a connection in Settings cannot serve the old server's
+ * HTML. `null` is cached too, since most tools have no app and re-asking on
+ * every render is the commoner waste.
  */
-export async function fetchMcpApp(
+const MCP_APP_CACHE = new Map<string, { at: number; app: Promise<McpAppResource | null> }>();
+
+/** Matches the deployment's tool-list TTL, so the two expire together. */
+const MCP_APP_TTL_MS = 120_000;
+
+/** Forget cached apps. Call when the server list changes under us. */
+export function clearMcpAppCache(): void {
+  MCP_APP_CACHE.clear();
+}
+
+/**
+ * The MCP App HTML bound to a tool (POST /mcp/app), or null if it has none.
+ *
+ * Null is the ordinary answer for an ordinary tool, and the caller renders
+ * nothing, so a failure here is not worth surfacing.
+ */
+export function fetchMcpApp(
   servers: McpServerConfig[],
   toolName: string,
 ): Promise<McpAppResource | null> {
-  try {
+  const owner = servers.find((s) => toolName.startsWith(`${mcpServerId(s)}_`));
+  const key = `${toolName}\n${owner?.url ?? ""}`;
+  const hit = MCP_APP_CACHE.get(key);
+  if (hit && Date.now() - hit.at < MCP_APP_TTL_MS) return hit.app;
+
+  const app = (async () => {
     const res = await fetch(`${getApiBase()}/mcp/app`, {
       method: "POST",
       headers: apiHeaders(),
@@ -854,9 +883,15 @@ export async function fetchMcpApp(
     if (!res.ok) return null;
     const d = await res.json();
     return d?.app?.html ? (d.app as McpAppResource) : null;
-  } catch {
+  })().catch(() => {
+    // A failed lookup must not be remembered: the next render should retry
+    // rather than inherit a network blip for two minutes.
+    MCP_APP_CACHE.delete(key);
     return null;
-  }
+  });
+
+  MCP_APP_CACHE.set(key, { at: Date.now(), app });
+  return app;
 }
 
 /** One content block from a resource an MCP App asked the host to read. */
