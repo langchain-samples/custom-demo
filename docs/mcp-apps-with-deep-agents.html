@@ -300,53 +300,41 @@
 <h2><span class="n">01</span> Two tools, not one</h2>
 <div class="col">
 <p>
-  One tool opens the app and returns the data it draws. A second receives what the person did,
-  marked so only the app may call it.
+  The opener returns the data the app draws. The submit tool receives what the person did, and
+  is marked so only the app may call it.
 </p>
 </div>
 
 <p class="filename">server.py</p>
 <pre><code><span class="k">@mcp</span>.tool(app=AppConfig(resource_uri=<span class="s">"ui://meridian/rebalance.html"</span>))
-<span class="k">def</span> <span class="f">propose_rebalance</span>(account_id: str) -&gt; dict:
-    <span class="c"># The result IS the render data. A tool that both opened an app and</span>
-    <span class="c"># acted would let the model rebalance by looking.</span>
-    <span class="k">return</span> rebalance_view(lookup(account_id))
+<span class="k">def</span> <span class="f">view_balance</span>(account_id: str) -&gt; dict: ...
 
-
-<span class="c"># No resource_uri: this tool does not OPEN an app, it is one the app calls.</span>
 <span class="k">@mcp</span>.tool(app=AppConfig(visibility=[<span class="s">"app"</span>]))
-<span class="k">def</span> <span class="f">submit_rebalance</span>(account_id: str, allocation: dict[str, float]) -&gt; dict:
-    <span class="k">return</span> place_trades(lookup(account_id), allocation)</code></pre>
+<span class="k">def</span> <span class="f">submit_rebalance</span>(account_id: str, allocation: dict[str, float]) -&gt; dict: ...</code></pre>
 
 <div class="col">
 <p>
-  <code>visibility=["app"]</code> is load-bearing. It keeps <code>submit_rebalance</code> out of
-  the model's tool list, which a host <strong>MUST</strong> honour, and that is the point of the
-  app: an allocation is where a person left five sliders. A model that can call the submit tool
-  can skip the person.
+  <code>visibility=["app"]</code> is the load-bearing line. A host <strong>MUST</strong> keep
+  that tool out of the model's list, and that is the whole point: an allocation is where a
+  person left five sliders, and a model that can call the submit tool can skip the person.
 </p>
 <p>
-  A <code>resourceUri</code> means "this tool opens a window", so a tool carrying both it and
-  <code>visibility: ["app"]</code> is claiming to open a second copy of the app that called it.
-  Excalidraw's live <code>tools/list</code> is the convention in one screen:
-  <code>create_view</code> carries a <code>resourceUri</code>; <code>save_checkpoint</code>,
-  <code>read_checkpoint</code> and <code>export_to_excalidraw</code> carry only the visibility.
+  <code>resourceUri</code> means "this tool opens a window", so the submit tool has none.
 </p>
 </div>
 
 <h2><span class="n">02</span> Where the MCP client goes</h2>
 <div class="col">
 <p>
-  SEP-1865 draws the <strong>Host</strong> as one participant. A web host is two: a page and a
-  server. The spec is silent on the seam between them, so that is the one piece you design
-  yourself, and two constraints settle it. An MCP server is a third-party origin that need not
-  send CORS headers, and the bearer token must never be page JavaScript.
+  SEP-1865 draws the <strong>Host</strong> as one participant. A web host is two, a page and a
+  server, and the spec is silent on the seam between them. Two constraints settle it: an MCP
+  server is a third-party origin that need not send CORS headers, and the bearer token must
+  never be page JavaScript.
 </p>
 <p>
-  So the page holds the MCP client and the server holds one route that forwards its bytes.
-  ChatGPT and Claude both land here: capture either rendering an MCP App and <strong>no request
-  leaves the browser for the MCP server</strong>. Claude's forwarder is at
-  <code>/v1/toolbox/shttp/mcp/&lt;connection-uuid&gt;</code>; ours is one line of routing.
+  So the page holds the MCP client, and the server holds one route that forwards its bytes.
+  ChatGPT and Claude both land here: watch either render an MCP App and <strong>no request
+  leaves the browser for the MCP server</strong>.
 </p>
 </div>
 
@@ -414,11 +402,9 @@
 
 <div class="col">
 <p>
-  The agent appears once, to call the tool. Everything after that is the host talking to the
-  View. <strong>MCP Apps need no changes to your agent</strong>, with one exception: keeping
-  <code>visibility: ["app"]</code> tools out of the model's list belongs to whatever turns MCP
-  tools into agent tools, and that runs server-side. It is the only thing your backend needs to
-  know about any of this.
+  The agent appears once, to call the tool. <strong>MCP Apps need no changes to it.</strong>
+  Filtering <code>visibility: ["app"]</code> out of the model's list is the one rule that has to
+  run server-side, and the only thing your backend knows about any of this.
 </p>
 </div>
 
@@ -431,13 +417,11 @@
   storage, no DOM outside its frame, and <strong>no network</strong>.
 </p>
 <p>
-  That last one is what makes the two checks in the diagram enforcement rather than etiquette.
-  A View cannot reach the proxy behind the host's back, so a host that refuses a
-  <code>tools/call</code> has actually refused it. SEP-1865 asks a web host to go further and
-  wrap the View in a different-origin sandbox proxy, which lets a View hold
-  <code>allow-same-origin</code> without holding yours and applies the server's declared
-  <code>ui.csp</code>. Single-origin hosts are stricter on origin and weaker on CSP, and an app
-  that needs same-origin will not run.
+  No network is what makes the two checks in the diagram enforcement rather than etiquette: a
+  View cannot reach the proxy behind the host's back. SEP-1865 asks for more, a different-origin
+  sandbox proxy that lets a View hold <code>allow-same-origin</code> without holding yours and
+  applies the server's declared <code>ui.csp</code>. A single-origin host is stricter on origin
+  and weaker on CSP, and an app that needs same-origin will not run.
 </p>
 </div>
 
@@ -461,11 +445,12 @@
   </p>
 </div>
 <p>
-  Then test against a server you did not write. <a href="https://github.com/excalidraw/excalidraw-mcp">Excalidraw</a>
-  at <code>mcp.excalidraw.com/mcp</code> (a POST endpoint, not a page) and
+  Then test against a server you did not write:
+  <a href="https://github.com/excalidraw/excalidraw-mcp">Excalidraw</a> at
+  <code>mcp.excalidraw.com/mcp</code> (a POST endpoint, not a page) and
   <a href="https://github.com/MCPJam/mcp-apps-everything">mcp-apps-everything</a>, which serves
-  deliberately wrong MIME types to see how strict you are. Neither needs credentials, and
-  between them they exercise every rule above.
+  deliberately wrong MIME types to see how strict you are. No credentials, and between them they
+  exercise every rule above.
 </p>
 </div>
 
@@ -476,28 +461,17 @@
     <a href="https://github.com/modelcontextprotocol/ext-apps"><strong>modelcontextprotocol/ext-apps</strong></a>
     is the one link to keep: the
     <a href="https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx">normative spec</a>,
-    both SDKs, a reference host under <code>examples/basic-host</code>, and a plugin marketplace
-    (<code>create-mcp-app</code>, <code>add-app-to-server</code>, <code>migrate-oai-app</code>).
-    Read the source, not a summary: every write-up we checked got something wrong, including one
-    claiming apps ship declarative JSON rather than HTML.
+    both SDKs, a reference host under <code>examples/basic-host</code>, and skills that scaffold
+    an app or migrate one from the OpenAI Apps SDK.
   </li>
   <li>
-    <a href="https://modelcontextprotocol.io/seps/1865-mcp-apps-interactive-user-interfaces-for-mcp"><strong>SEP-1865</strong></a>
-    is MCP Apps.
-    <a href="https://modelcontextprotocol.io/seps/2322-MRTR"><strong>SEP-2322</strong></a> is
-    elicitation. <strong>SEP-1865 contains no elicitation and needs none</strong>, which is the
-    most common misreading of it.
+    <strong>SEP-1865 is MCP Apps; SEP-2322 is elicitation.</strong> SEP-1865 contains no
+    elicitation and needs none, which is the most common misreading of it.
   </li>
   <li>
-    <code>migrate-oai-app</code> matters more than it looks: Figma and Canva came via the ChatGPT
-    Apps SDK, which uses <code>_meta["openai/outputTemplate"]</code> and
-    <code>text/html+skybridge</code>. The two converged in January 2026.
-  </li>
-  <li>
-    Gentler entries: Burke Holland's
-    <a href="https://www.youtube.com/watch?v=r3UkKVE3gtk">Let's learn about MCP Apps</a> and
-    Reclaim's <a href="https://reclaim.ai/blog/top-mcp-apps">Top 16 MCP Apps</a> for what is
-    shipping (vendor content; they rank themselves first).
+    ChatGPT's Apps SDK uses <code>_meta["openai/outputTemplate"]</code> and
+    <code>text/html+skybridge</code>. The two converged in January 2026, and
+    <code>migrate-oai-app</code> does the conversion.
   </li>
 </ul>
 </div>
