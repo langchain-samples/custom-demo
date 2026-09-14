@@ -339,7 +339,7 @@
 </div>
 
 <figure>
-  <svg viewBox="0 0 800 322" role="img" aria-label="Four lanes: the View, the browser host, the MCP proxy on your server, and the MCP server itself. The browser holds an MCP client and reaches the server through a proxy that forwards bytes without reading them. The host renders the view from the ui resource, talks to it over postMessage, and makes the view's tool calls through the same client after checking them.">
+  <svg viewBox="0 0 800 342" role="img" aria-label="Four lanes: the View, the browser host, the MCP proxy on your server, and the MCP server itself. The browser holds an MCP client and reaches the server through a proxy that forwards bytes without reading them. The host reads the ui resource through the proxy, renders it, talks to it over postMessage, and makes the view's tool calls through the same client after checking them.">
     <defs>
       <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
         <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
@@ -362,10 +362,10 @@
       <text x="722" y="45">declares the _meta</text>
     </g>
     <g stroke="currentColor" stroke-width="1" stroke-dasharray="3 4" opacity="0.45">
-      <line x1="75" y1="54" x2="75" y2="308"/>
-      <line x1="290" y1="54" x2="290" y2="308"/>
-      <line x1="510" y1="54" x2="510" y2="308"/>
-      <line x1="722" y1="54" x2="722" y2="308"/>
+      <line x1="75" y1="54" x2="75" y2="328"/>
+      <line x1="290" y1="54" x2="290" y2="328"/>
+      <line x1="510" y1="54" x2="510" y2="328"/>
+      <line x1="722" y1="54" x2="722" y2="328"/>
     </g>
     <g font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor">
       <line x1="296" y1="76" x2="504" y2="76" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
@@ -376,21 +376,23 @@
       <text x="500" y="112" text-anchor="middle" fill="#7FC8FF">_meta.ui.resourceUri</text>
 
       <text x="16" y="146" font-size="9" opacity="0.75">the model calls the tool, and the browser hears about it in the stream</text>
-      <line x1="284" y1="164" x2="82" y2="164" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
-      <text x="183" y="160" text-anchor="middle" fill="#7FC8FF">iframe srcdoc, from resources/read</text>
+      <line x1="296" y1="164" x2="504" y2="164" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
+      <text x="400" y="160" text-anchor="middle">resources/read ui://…</text>
+      <line x1="284" y1="184" x2="82" y2="184" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
+      <text x="183" y="180" text-anchor="middle" fill="#7FC8FF">iframe srcdoc</text>
 
-      <text x="16" y="194" font-size="9" opacity="0.75">SEP-1865, JSON-RPC over postMessage. No network involved.</text>
-      <line x1="82" y1="212" x2="284" y2="212" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
-      <text x="183" y="208" text-anchor="middle">ui/initialize</text>
-      <line x1="284" y1="232" x2="82" y2="232" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
-      <text x="183" y="228" text-anchor="middle">tool-input-partial, then tool-result</text>
+      <text x="16" y="214" font-size="9" opacity="0.75">SEP-1865, JSON-RPC over postMessage. No network involved.</text>
+      <line x1="82" y1="232" x2="284" y2="232" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
+      <text x="183" y="228" text-anchor="middle">ui/initialize</text>
+      <line x1="284" y1="252" x2="82" y2="252" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
+      <text x="183" y="248" text-anchor="middle">tool-input-partial, then tool-result</text>
 
-      <line x1="82" y1="258" x2="284" y2="258" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
-      <text x="183" y="254" text-anchor="middle">tools/call submit_rebalance</text>
-      <path d="M290 268 h28 v16 h-22" fill="none" stroke="#7FC8FF" stroke-width="1.2" marker-end="url(#a1)"/>
-      <text x="326" y="281" fill="#7FC8FF">same server? open to apps?</text>
-      <line x1="296" y1="302" x2="504" y2="302" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
-      <text x="400" y="298" text-anchor="middle">forwarded, if it passed</text>
+      <line x1="82" y1="278" x2="284" y2="278" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
+      <text x="183" y="274" text-anchor="middle">tools/call submit_rebalance</text>
+      <path d="M290 288 h28 v16 h-22" fill="none" stroke="#7FC8FF" stroke-width="1.2" marker-end="url(#a1)"/>
+      <text x="326" y="301" fill="#7FC8FF">same server? open to apps?</text>
+      <line x1="296" y1="322" x2="504" y2="322" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
+      <text x="400" y="318" text-anchor="middle">forwarded, if it passed</text>
     </g>
   </svg>
   <figcaption>
