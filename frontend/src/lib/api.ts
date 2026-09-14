@@ -444,20 +444,62 @@ export async function createThread(): Promise<string> {
 let THREAD_ID: string | null = null;
 
 /**
+ * The URL is where the thread lives, so a refresh keeps the conversation.
+ *
+ * In the query string rather than storage, on purpose: the link is then worth
+ * sending to someone, Back works, and a second tab is a second conversation
+ * instead of two views fighting over one. claude.ai puts it in the path for
+ * the same reasons; a param is the version of that which needs no routing.
+ */
+const THREAD_PARAM = "thread";
+
+/** The thread this page was opened on, if any. */
+export function savedThreadId(): string | null {
+  try {
+    return new URLSearchParams(window.location.search).get(THREAD_PARAM) || null;
+  } catch {
+    // A non-browser context (tests, SSR) simply has no saved thread.
+    return null;
+  }
+}
+
+/** Put the thread in the URL without adding a history entry. */
+function rememberThread(id: string | null): void {
+  try {
+    const url = new URL(window.location.href);
+    if (id) url.searchParams.set(THREAD_PARAM, id);
+    else url.searchParams.delete(THREAD_PARAM);
+    // `replaceState`, not `pushState`: minting a thread is not a navigation,
+    // and Back should leave the page rather than undo an invisible id.
+    window.history.replaceState(null, "", url.toString());
+  } catch {
+    // Persistence is a convenience; a context without history still chats.
+  }
+}
+
+/**
  * Return a memoized thread id, minting one on first use so follow-up questions
- * share memory. Mirrors the original module-level `ensureThread()`.
+ * share memory, and keeping it in the URL so a refresh resumes the same one.
  */
 export async function ensureThread(): Promise<string> {
   if (THREAD_ID) return THREAD_ID;
+  const saved = savedThreadId();
+  if (saved) {
+    THREAD_ID = saved;
+    return THREAD_ID;
+  }
+
   THREAD_ID = await createThread();
+  rememberThread(THREAD_ID);
   return THREAD_ID;
 }
-
-
 
 /** Drop the memoized thread so the next ensureThread() mints a new one. */
 export function resetThread(): void {
   THREAD_ID = null;
+  // Cleared from the URL too, or "New chat" would resume the old conversation
+  // on the next refresh.
+  rememberThread(null);
 }
 
 /** Fetch a thread's persisted state (its message history). */

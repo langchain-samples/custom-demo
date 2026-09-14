@@ -331,6 +331,13 @@ handlers. `AppBridge` takes an MCP `Client` to forward `tools/call` and `resourc
 is `null`, because the browser has no MCP client, so those two are answered through
 `POST /mcp/call` and `POST /mcp/resource`.
 
+The thread id lives in the URL (`?thread=<id>`), so a refresh resumes the same conversation
+rather than starting a new one, and `chat/rehydrate.ts` turns the persisted messages back
+into cards. Only questions, answers and MCP apps are rebuilt, not the activity trace: that
+describes a run in progress, and a half-replayed one reads worse than none. Which finished
+tool calls become apps is decided by the bootstrap map below, which is the only thing that
+can know.
+
 `POST /mcp/bootstrap` is the other half of being a two-process Host. `_meta.ui.resourceUri`
 only exists on `tools/list`, so the browser cannot see which tools ship a UI and used to
 guess from the `{server}_` prefix, which answers "is this an MCP tool" instead. It now asks

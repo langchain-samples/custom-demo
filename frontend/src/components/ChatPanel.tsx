@@ -27,7 +27,8 @@ import {
   IconUser,
 } from "@tabler/icons-react";
 import type { QuickAction, ReviewInterrupt, RunContext, ThreadMessage, Widget } from "@/lib/api";
-import { ensureThread, resetThread, runStream } from "@/lib/api";
+import { ensureThread, getThreadState, resetThread, runStream, savedThreadId } from "@/lib/api";
+import { rehydrateItems, structuredFromToolMessage } from "@/components/chat/rehydrate";
 import { PROSE_CLS } from "@/lib/markdown";
 import { isHtmlArtifactPath } from "@/lib/artifacts";
 import { ReviewCard } from "@/components/chat/ReviewCard";
@@ -260,26 +261,6 @@ interface FeedbackItem {
   workspace?: string;
 }
 /**
- * A tool result's structured half, recovered from the serialized text.
- *
- * MCP structured content reaches the stream already stringified into the tool
- * message, so an app that reads `structuredContent` needs it parsed back.
- * Returns undefined for anything that is not a JSON object, which is the honest
- * answer: text-only results have no structured half to hand over.
- */
-function parseStructured(text: string): Record<string, unknown> | undefined {
-  if (!text.trim().startsWith("{")) return undefined;
-  try {
-    const parsed = JSON.parse(text) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
  * An MCP App for a tool call that finished.
  *
  * Separate from ReviewItem because it is not a pause: the run has moved on, and
@@ -431,6 +412,8 @@ export default function ChatPanel({
 
   const idRef = useRef(0);
   const busyRef = useRef(false);
+  /** True once this session has sent or resumed anything of its own. */
+  const interactedRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
   const firstRun = useRef(true);
@@ -571,6 +554,9 @@ export default function ChatPanel({
       { kind: "subagents", id: subagentId, groups: [] },
       { kind: "assistant", id: bubbleId, text: PLACEHOLDER_TEXT, streaming: true, markdown: false },
     ]);
+    // From here the on-screen list is this session's, not the persisted
+    // thread's, so restoring must never overwrite it again.
+    interactedRef.current = true;
 
     // Per-run mutable stream state (persists across the whole for-await loop).
     // These maps belong to the MAIN graph ONLY — non-empty-namespace (subagent)
@@ -881,15 +867,16 @@ export default function ChatPanel({
         // `tool-input` the spec requires before a result.
         const appId = cid ? `app:${cid}` : "";
         if (appId && appSeen.has(appId)) {
-          const text = contentToText(msg.content);
           patchItem(appId, (it) =>
             it.kind === "app"
               ? {
                   ...it,
                   streaming: false,
-                  // MCP structured content reaches us serialized in the tool
-                  // message, so parse it back. A non-object result is content only.
-                  toolResult: { structuredContent: parseStructured(text), content: [] },
+                  // Off `ToolMessage.artifact` where `langchain.mcp` puts it,
+                  // falling back to parsing the text. Re-parsing the text alone
+                  // is wrong whenever a server's model-facing `content` differs
+                  // from its `structuredContent`, which the spec encourages.
+                  toolResult: { structuredContent: structuredFromToolMessage(msg), content: [] },
                 }
               : it,
           );
@@ -1443,6 +1430,42 @@ export default function ChatPanel({
   // never the thing that makes an app render.
   useEffect(() => {
     void fetchMcpApps(mcpServers);
+  }, [mcpServers]);
+
+  /**
+   * Put the conversation back after a refresh.
+   *
+   * The thread id is in the URL, so the run's own history survives; this is
+   * what turns that history back into cards. Only apps, answers and questions
+   * come back, not the activity trace: see `rehydrateItems`.
+   *
+   * Re-runs whenever the server list changes, because `getRunContext` is a
+   * prop and the assistant's MCP servers can land after the first render. The
+   * app map is what decides which finished tool calls become cards, so
+   * restoring once against an empty map would drop every app. Re-running is
+   * safe precisely until the person does something, which `interactedRef`
+   * marks, after which the list on screen is this session's and is never
+   * replaced.
+   */
+  useEffect(() => {
+    const threadId = savedThreadId();
+    if (!threadId || interactedRef.current) return;
+    let live = true;
+    void (async () => {
+      const [state, apps] = await Promise.all([
+        // A thread the server has forgotten is an ordinary outcome of an old
+        // link, and means an empty chat rather than an error.
+        getThreadState(threadId).catch(() => null),
+        fetchMcpApps(mcpServers),
+      ]);
+      if (!live || !state || interactedRef.current) return;
+
+      const restored = rehydrateItems(state.values?.messages ?? [], apps);
+      if (restored.length) setItems(restored);
+    })();
+    return () => {
+      live = false;
+    };
   }, [mcpServers]);
 
   /** Human answered a paused artifact — resume the run with their version. */
