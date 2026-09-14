@@ -399,13 +399,20 @@ def test_load_tools_serves_a_second_call_from_cache(monkeypatch):
     m.invalidate(servers)
 
 
-def test_probe_reports_the_reason_a_server_failed(monkeypatch):
+def test_a_refreshed_catalog_reports_the_reason_a_server_failed(monkeypatch):
+    """What "Test connection" is for, and the only authoritative answer.
+
+    The cached arm can say no more than whether we happen to know a server's
+    tools. Reconnecting is the thing that tells a person their tunnel is down,
+    and the reason is the whole point of the button.
+    """
+
     async def boom(*_args, **_kwargs):
         raise ConnectionError("refused")
 
     monkeypatch.setattr(m, "_discover", boom)
     servers = m.parse_servers([{"label": "Down", "url": "https://nope.invalid/mcp"}])
-    (result,) = asyncio.run(m.probe(servers))["servers"]
+    (result,) = asyncio.run(m.tool_catalog(servers, refresh=True))
     assert result["ok"] is False
     assert "refused" in result["error"]
 

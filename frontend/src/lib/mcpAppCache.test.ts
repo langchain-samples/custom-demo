@@ -2,76 +2,96 @@
 /**
  * The app-document cache, which exists because the documents are large.
  *
- * Excalidraw's app is 432KB and ours is 618KB, neither changes between renders,
- * and the deployment opens a fresh `resources/read` for every request. Before
- * this, each card that mounted pulled the whole document again.
+ * Excalidraw's app is 432KB and ours is 618KB, neither changes between
+ * renders, and the deployment opens a fresh `resources/read` for every
+ * request. Reading one is two steps now: the bootstrap catalogue says which
+ * `ui://` URI a tool renders, and `/mcp/resource` reads it. There is no
+ * endpoint that does both, because the only reason one existed was that the
+ * browser did not know the URI.
  *
- * The interesting cases are all about NOT over-caching: a failure must not stick
- * for two minutes, and a different server behind the same tool name must not be
- * served the old one's HTML.
+ * The interesting cases are all about NOT over-caching: a failure must not
+ * stick for two minutes, and two servers publishing the same `ui://` path must
+ * not be served each other's HTML.
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { clearMcpAppCache, fetchMcpApp } from "./api";
+import { clearMcpAppCache, clearMcpAppsCache, fetchMcpApp } from "./api";
 
+const URI = "ui://meridian/a.html";
 const SERVERS = [{ id: "meridian", label: "Meridian", url: "https://a.example/mcp" }];
-const APP = { tool_name: "meridian_x", resource_uri: "ui://m/a.html", mime_type: "text/html", html: "<p>app</p>" };
+const CATALOG = [
+  { id: "meridian", ok: true, tools: [{ name: "meridian_x", app: URI, inputSchema: { type: "object" } }] },
+];
 
-function respond(times: number) {
-  const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ app: APP }) }));
+/** Answers bootstrap and resource reads, counting only the document reads. */
+function stub(opts: { resourceOk?: boolean; app?: string | null } = {}) {
+  const reads = { bootstrap: 0, resource: 0 };
+  const fetchMock = vi.fn(async (url: string, init?: { body?: string }) => {
+    if (String(url).endsWith("/mcp/bootstrap")) {
+      reads.bootstrap += 1;
+      const tools = opts.app === null ? [{ name: "meridian_x", app: null }] : CATALOG[0].tools;
+      return { ok: true, json: async () => ({ servers: [{ ...CATALOG[0], tools }] }) };
+    }
+    reads.resource += 1;
+    if (opts.resourceOk === false) return { ok: false, json: async () => ({ error: "boom" }) };
+    const uri = JSON.parse(init?.body ?? "{}").uri;
+    return { ok: true, json: async () => ({ contents: [{ uri, text: `<p>${uri}</p>` }] }) };
+  });
   vi.stubGlobal("fetch", fetchMock);
-  void times;
-  return fetchMock;
+  return reads;
 }
 
-beforeEach(() => clearMcpAppCache());
+beforeEach(() => {
+  clearMcpAppCache();
+  clearMcpAppsCache();
+});
 afterEach(() => vi.unstubAllGlobals());
 
-it("fetches once and serves the rest from cache", async () => {
-  const f = respond(1);
+it("reads the document once and serves the rest from cache", async () => {
+  const reads = stub();
+  const first = await fetchMcpApp(SERVERS, "meridian_x");
   await fetchMcpApp(SERVERS, "meridian_x");
   await fetchMcpApp(SERVERS, "meridian_x");
-  await fetchMcpApp(SERVERS, "meridian_x");
-  expect(f).toHaveBeenCalledTimes(1);
+  expect(first?.html).toContain(URI);
+  expect(first?.resource_uri).toBe(URI);
+  expect(reads.resource).toBe(1);
 });
 
 it("shares one request between cards mounting in the same frame", async () => {
-  const f = respond(1);
-  // Not awaited between calls: this is the real case, three cards rendering at
-  // once, and without promise caching all three would race.
-  const all = await Promise.all([
+  const reads = stub();
+  await Promise.all([
     fetchMcpApp(SERVERS, "meridian_x"),
     fetchMcpApp(SERVERS, "meridian_x"),
     fetchMcpApp(SERVERS, "meridian_x"),
   ]);
-  expect(f).toHaveBeenCalledTimes(1);
-  expect(all.every((a) => a?.html === "<p>app</p>")).toBe(true);
+  // The promise is cached, not the value, so a race collapses to one read of
+  // a document that can be hundreds of kilobytes.
+  expect(reads.resource).toBe(1);
 });
 
 it("does not serve one server's HTML for another's", async () => {
-  const f = respond(2);
+  const reads = stub();
   await fetchMcpApp(SERVERS, "meridian_x");
-  // Same tool name, connection edited in Settings. Keying on the tool alone
-  // would hand back the previous server's document.
   await fetchMcpApp([{ ...SERVERS[0], url: "https://b.example/mcp" }], "meridian_x");
-  expect(f).toHaveBeenCalledTimes(2);
+  // Keyed on the URI AND the server: two servers can publish the same `ui://`
+  // path, and serving one's document for the other would be silent.
+  expect(reads.resource).toBe(2);
 });
 
 it("does not remember a failure", async () => {
-  const f = vi.fn(async () => {
-    throw new Error("network");
-  });
-  vi.stubGlobal("fetch", f);
+  const reads = stub({ resourceOk: false });
   expect(await fetchMcpApp(SERVERS, "meridian_x")).toBeNull();
-  // A blip must not suppress the app for the whole TTL.
   expect(await fetchMcpApp(SERVERS, "meridian_x")).toBeNull();
-  expect(f).toHaveBeenCalledTimes(2);
+  // The next render should retry rather than inherit a network blip for the
+  // whole TTL.
+  expect(reads.resource).toBe(2);
 });
 
-it("remembers a tool that has no app, which is most of them", async () => {
-  const f = vi.fn(async () => ({ ok: true, json: async () => ({ app: null }) }));
-  vi.stubGlobal("fetch", f);
+it("costs no document read at all for a tool with no app", async () => {
+  const reads = stub({ app: null });
   expect(await fetchMcpApp(SERVERS, "meridian_x")).toBeNull();
   expect(await fetchMcpApp(SERVERS, "meridian_x")).toBeNull();
-  // Re-asking on every render is the commoner waste.
-  expect(f).toHaveBeenCalledTimes(1);
+  // Most tools have no app. The catalogue answers that without anyone reading
+  // a document, which is the whole reason bootstrap exists.
+  expect(reads.resource).toBe(0);
+  expect(reads.bootstrap).toBe(1);
 });

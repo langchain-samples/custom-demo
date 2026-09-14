@@ -49,7 +49,7 @@ custom_demo/
   setup_graph.py              SECOND graph (`assistant_setup`): prepares a customer assistant
   config.py                   env loading, model/prompt/workspace accessors, LangSmith clients
   webapp.py           extra Starlette routes: /feedback /projects /workspaces /agents /tools
-                      /mcp/bootstrap + /mcp/app (the SPA cannot speak MCP; the deployment does)
+                      /mcp/bootstrap (the SPA cannot speak MCP; the deployment does)
                       /sandbox-files /sandbox-file (read-only browse of the assistant's VM)
                       /evals/run + /evals/status (per-assistant demo eval), /cleanup, /trace-url
   tests/              widgets, prompt composition, tool-registry, sandbox, MCP,
@@ -306,7 +306,7 @@ ask.
 **MCP Apps (a tool that ships its own UI).** A tool can bind a `ui://` HTML resource
 (`_meta.ui.resourceUri`, MIME `text/html;profile=mcp-app`). `collect_signature` does: it needs a
 drawn signature, which no schema-generated form can collect. While the run is paused the SPA
-POSTs `/mcp/app` with the paused `tool_name`, the deployment resolves the tool's `resourceUri`
+reads the tool's `resourceUri` from the bootstrap catalogue and POSTs `/mcp/resource`
 and reads the resource over MCP, and the card renders that HTML in an iframe **sandboxed to
 `allow-scripts` only** - no `allow-same-origin`, so server-authored HTML cannot touch our origin,
 cookies or storage.
@@ -347,7 +347,10 @@ serves both: Claude's bootstrap does the same, and it is what lets a connector l
 on page load rather than after a click. It includes app-only tools on purpose, because they
 are hidden from the MODEL but the browser is what authorises a view's `tools/call`. The
 difference from `probe` is cost and promise: bootstrap is served warm and `ok` means only
-"we know this server's tools", while Test reconnects and is authoritative.
+"we know this server's tools", while the same route with `refresh: true` (what Test sends)
+reconnects, reports each failure's reason, and is authoritative. Three routes, not five:
+`/mcp/probe` was that refresh flag, and `/mcp/app` only existed because the browser did not
+know a tool's `resourceUri`, which the catalogue now tells it.
 
 The guest half runs on the same SDK. `mcp_demo_server/apps/src/bridge.src.js` imports `App` and
 `apps/build.sh` bundles it to `apps/bridge.js`, which `apps.py` inlines. **The bundle is committed**
@@ -436,7 +439,7 @@ type. `custom_demo/tests/signature_app_test.js` is what pins it: it loads the re
 jsdom and asserts the keys. Any tool with no app falls back to a form generated from the schema,
 which is what every ordinary MCP server gets.
 
-**One boundary worth knowing:** `/mcp/probe` and `/mcp/app` fetch a URL supplied in the request
+**One boundary worth knowing:** `/mcp/bootstrap` fetches a URL supplied in the request
 body, so the deployment will connect wherever a caller points it. Both sit behind the same app
 token as every other custom route, and any caller who can reach them can already put that URL in
 the assistant's `context.mcp_servers` and have the agent call it, so this adds no reach - but

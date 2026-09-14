@@ -371,10 +371,38 @@ def invalidate(servers: tuple[McpServer, ...] | None = None) -> None:
     _TOOLS.pop(fingerprint(servers), None)
 
 
-async def probe(servers: tuple[McpServer, ...]) -> dict[str, Any]:
-    """Connect and report what each server offers, for the Settings panel.
+def _catalog_tool(tool: Any) -> dict[str, Any]:
+    """One tool as the SPA reads it, from either arm of `tool_catalog`.
 
-    Reports per server so one dead tunnel does not read as "MCP is broken".
+    Shared so the cached and reconnecting arms cannot drift: Settings renders
+    the same row whichever produced it.
+    """
+    return {
+        "name": tool.name,
+        "description": (tool.description or "").strip().split("\n")[0][:200],
+        "app": app_uri(tool),
+        # Carried so the host can fill `hostContext.toolInfo.tool` before the
+        # app mounts. `Tool` requires `inputSchema` and the app SDK validates
+        # the initialize result, so a host that cannot supply it is refused by
+        # every app built on that SDK.
+        "inputSchema": tool.args_schema
+        if isinstance(tool.args_schema, dict)
+        else {"type": "object"},
+        "appOnly": not model_visible(tool),
+    }
+
+
+async def _catalog_refreshed(servers: tuple[McpServer, ...]) -> list[dict[str, Any]]:
+    """Reconnect to each server and report what it offers, or why it cannot.
+
+    What "Test connection" in Settings runs, and the authoritative answer: the
+    cached arm can only say whether we happen to know a server's tools, which
+    is not the same as the tunnel being up right now.
+
+    Per server, so one dead tunnel does not read as "MCP is broken", and each
+    failure carries its own reason. A successful reconnect is a fresh
+    discovery, so both halves of it are handed to the agent's cache rather than
+    thrown away.
     """
     out: list[dict[str, Any]] = []
     for server in servers:
@@ -385,26 +413,17 @@ async def probe(servers: tuple[McpServer, ...]) -> dict[str, Any]:
                 _discover(single, refresh=True), timeout=CONNECT_TIMEOUT_SECONDS
             )
             entry["ok"] = True
-            entry["tools"] = [
-                {
-                    "name": t.name,
-                    "description": (t.description or "").strip().split("\n")[0][:200],
-                    "app": app_uri(t),
-                }
-                for t in tools
-            ]
-            # A successful probe is a fresh discovery; let the agent reuse both
-            # halves of it rather than reconnecting on the next turn.
+            entry["tools"] = [_catalog_tool(tool) for tool in tools]
             _TOOLS[fingerprint(single)] = (time.monotonic() + TOOLS_TTL_SECONDS, tools)
             _INSTRUCTIONS[fingerprint(single)] = said
         except TimeoutError:
             entry["error"] = f"no response within {CONNECT_TIMEOUT_SECONDS:.0f}s"
-        except Exception as exc:  # noqa: BLE001 - the message is the whole point of a probe
+        except Exception as exc:  # noqa: BLE001 - the message is the whole point of a test
             entry["error"] = f"{type(exc).__name__}: {exc}"[:300]
 
         out.append(entry)
 
-    return {"servers": out}
+    return out
 
 
 def app_uri(tool: Any) -> str | None:
@@ -425,51 +444,9 @@ def app_uri(tool: Any) -> str | None:
     return str(uri) if isinstance(uri, str) and uri.startswith("ui://") else None
 
 
-async def read_app(servers: tuple[McpServer, ...], tool_name: str) -> dict[str, Any] | None:
-    """The HTML of the MCP App bound to `tool_name`, or None if it has none.
-
-    Called while a run is paused on that tool's elicitation, so the SPA can render
-    the server's own UI for the pause instead of a generic form. Reads the
-    resource from the server the tool actually came from, which is why it resolves
-    through the group rather than guessing at a member.
-    """
-    tools = await load_tools(servers)
-    tool = next((t for t in tools if t.name == tool_name), None)
-    if tool is None:
-        return None
-
-    uri = app_uri(tool)
-    if uri is None:
-        return None
-
-    result = await _read_uri(servers, tool_name, uri)
-    for item in result:
-        text = getattr(item, "text", None)
-        if isinstance(text, str) and text.strip():
-            return {
-                "tool_name": tool_name,
-                "resource_uri": uri,
-                "mime_type": getattr(item, "mime_type", None) or "text/html",
-                "html": text,
-                # The tool's own JSON Schema, carried through for the host to put
-                # in `hostContext.toolInfo.tool`. NOT optional: `Tool` requires
-                # `inputSchema`, and the official app SDK validates the
-                # initialize result, so a host that omits it is rejected by every
-                # app built on that SDK (Excalidraw's says
-                # `path: ["hostContext","toolInfo","tool","inputSchema"]`).
-                # The adapter keeps the server's schema verbatim on `args_schema`.
-                "input_schema": tool.args_schema
-                if isinstance(tool.args_schema, dict)
-                else {"type": "object"},
-            }
-
-    # A `ui://` URI that resolves to nothing readable is a server bug, and the
-    # caller renders the generic form. Say so rather than returning a blank page.
-    _log(f"{tool_name} declares {uri} but the resource carried no text")
-    return None
-
-
-async def tool_catalog(servers: tuple[McpServer, ...]) -> list[dict[str, Any]]:
+async def tool_catalog(
+    servers: tuple[McpServer, ...], *, refresh: bool = False
+) -> list[dict[str, Any]]:
     """Every server and every tool it offers, off the cached discovery.
 
     The browser is half of one Host and this is the half of discovery it cannot
@@ -493,6 +470,9 @@ async def tool_catalog(servers: tuple[McpServer, ...]) -> list[dict[str, Any]]:
     (`model_visible`), but the browser is the party that authorises a View's
     `tools/call`, so it has to know the tool exists.
     """
+    if refresh:
+        return await _catalog_refreshed(servers)
+
     tools = await load_tools(servers, include_app_only=True)
     # Declared so the appends below type-check. The server's own redacted
     # fields are merged back in at the end rather than carried through.
@@ -507,22 +487,7 @@ async def tool_catalog(servers: tuple[McpServer, ...]) -> list[dict[str, Any]]:
         if owner is None:
             continue
 
-        found[owner.id].append(
-            {
-                "name": tool.name,
-                "description": (tool.description or "").strip().split("\n")[0][:200],
-                # Same key `probe` uses, so one renderer serves both.
-                "app": app_uri(tool),
-                # Carried so the host can fill `hostContext.toolInfo.tool`
-                # before the app mounts. `Tool` requires `inputSchema` and the
-                # app SDK validates the initialize result, so a host that
-                # cannot supply it is refused by every app built on that SDK.
-                "inputSchema": tool.args_schema
-                if isinstance(tool.args_schema, dict)
-                else {"type": "object"},
-                "appOnly": not model_visible(tool),
-            }
-        )
+        found[owner.id].append(_catalog_tool(tool))
 
     return [
         {**server.redacted(), "ok": bool(found[server.id]), "tools": found[server.id]}

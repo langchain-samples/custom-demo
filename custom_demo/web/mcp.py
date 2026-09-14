@@ -1,8 +1,8 @@
-"""Remote MCP servers (`/mcp/probe`, `/mcp/app`, `/mcp/resource`, `/mcp/call`).
+"""Remote MCP servers (`/mcp/bootstrap`, `/mcp/resource`, `/mcp/call`).
 
-Four questions the SPA cannot answer itself, because a browser cannot speak
-MCP: does this connection string work, does a tool ship its own UI, what is
-behind a URI that app asked the host to read, and will we make a call on its
+Three questions the SPA cannot answer itself, because a browser cannot speak
+MCP: what do these servers offer (and which of their tools ship a UI), what is
+behind a URI an app asked the host to read, and will we make a call on its
 behalf. All take the
 server list in the body rather than reading it off the assistant, matching how
 /sandbox-files takes its keys: the SPA is the thing that holds the draft config,
@@ -16,8 +16,6 @@ from starlette.responses import JSONResponse
 from custom_demo.runtime.mcp_servers import (
     call_app_tool,
     parse_servers,
-    probe,
-    read_app,
     read_app_resource,
     tool_catalog,
 )
@@ -26,25 +24,6 @@ from custom_demo.runtime.mcp_servers import (
 def _mcp_servers_from(payload: dict):
     """Parse the `servers` array out of a request body."""
     return parse_servers(payload.get("servers"))
-
-
-async def mcp_probe(request):
-    """Connect to each MCP server and report the tools it offers.
-
-    Powers "Test connection" in Settings. Always 200: a server that refuses is a
-    per-server `ok: false` with the reason, not a failed request, because the SPA
-    renders one row per server and one dead tunnel must not blank the others.
-    """
-    try:
-        payload = await request.json()
-    except Exception:  # noqa: BLE001 - a malformed body is a client error, not a crash
-        return JSONResponse({"error": "expected a JSON body"}, status_code=400)
-
-    servers = _mcp_servers_from(payload)
-    if not servers:
-        return JSONResponse({"servers": []})
-
-    return JSONResponse(await probe(servers))
 
 
 async def mcp_bootstrap(request):
@@ -56,7 +35,13 @@ async def mcp_bootstrap(request):
 
     Always 200 with a `servers` array. Empty is the ordinary answer for no
     configured servers, and a server whose tools are unknown comes back
-    `ok: false` beside the others rather than failing the request.
+    `ok: false` beside the others rather than failing the request, so one dead
+    tunnel never blanks the rest.
+
+    `refresh` in the body reconnects to every server and reports each failure's
+    reason: that is "Test connection", and the only authoritative answer about
+    whether a tunnel is up. Without it, `ok` means no more than "we know this
+    server's tools".
 
     Plain JSON, not SSE. Claude's equivalent streams because it fans out over
     many connectors of which most may be cold or broken, and a page-load
@@ -73,33 +58,13 @@ async def mcp_bootstrap(request):
     if not servers:
         return JSONResponse({"servers": []})
 
+    # `refresh` is what "Test connection" sends. Without it this is served off
+    # the warm cache, which is the page-load path and must stay cheap.
+    refresh = bool(payload.get("refresh"))
     try:
-        return JSONResponse({"servers": await tool_catalog(servers)})
+        return JSONResponse({"servers": await tool_catalog(servers, refresh=refresh)})
     except Exception as exc:  # noqa: BLE001 - a chat must still run when discovery fails
         return JSONResponse({"servers": [], "error": f"{type(exc).__name__}: {exc}"[:300]})
-
-
-async def mcp_app(request):
-    """The HTML of the MCP App bound to `tool_name`, for the SPA to render.
-
-    Called while a run is paused on that tool's elicitation. `app: null` is the
-    ordinary answer for a tool with no UI, and the SPA falls back to the generic
-    schema-driven form, so this is not an error path.
-    """
-    try:
-        payload = await request.json()
-    except Exception:  # noqa: BLE001 - a malformed body is a client error, not a crash
-        return JSONResponse({"error": "expected a JSON body"}, status_code=400)
-
-    tool_name = str(payload.get("tool_name") or "").strip()
-    servers = _mcp_servers_from(payload)
-    if not tool_name or not servers:
-        return JSONResponse({"app": None})
-
-    try:
-        return JSONResponse({"app": await read_app(servers, tool_name)})
-    except Exception as exc:  # noqa: BLE001 - fall back to the generic form, don't strand the pause
-        return JSONResponse({"app": None, "error": f"{type(exc).__name__}: {exc}"[:300]})
 
 
 async def mcp_resource(request):

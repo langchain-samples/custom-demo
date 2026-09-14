@@ -857,17 +857,20 @@ export async function listTools(): Promise<ToolSpec[]> {
 }
 
 /**
- * Connect to each MCP server and report its tools (POST /mcp/probe).
+ * Reconnect to each MCP server and report its tools ("Test connection").
  *
- * A browser cannot speak MCP, so the deployment does the connecting. Per-server
- * results, because one dead tunnel must not read as "MCP is broken".
+ * The same endpoint the page-load catalogue comes from, with `refresh`, which
+ * is the only difference that matters: without it the answer is served off the
+ * deployment's warm cache and says no more than "we know this server's tools".
+ * Reconnecting is what tells a person their tunnel is down, and carries the
+ * reason. Per server, because one dead tunnel must not read as "MCP is broken".
  */
 export async function probeMcpServers(servers: McpServerConfig[]): Promise<McpProbeResult[]> {
   try {
-    const res = await fetch(`${getApiBase()}/mcp/probe`, {
+    const res = await fetch(`${getApiBase()}/mcp/bootstrap`, {
       method: "POST",
       headers: apiHeaders(),
-      body: JSON.stringify({ servers }),
+      body: JSON.stringify({ servers, refresh: true }),
     });
     if (!res.ok) return [];
     const d = await res.json();
@@ -886,12 +889,12 @@ export async function probeMcpServers(servers: McpServerConfig[]): Promise<McpPr
  * per request and nothing in front of it remembers.
  *
  * The PROMISE is cached, not the value, so several cards mounting in the same
- * frame share one request instead of racing. Keyed on the server URL as well as
- * the tool, so editing a connection in Settings cannot serve the old server's
- * HTML. `null` is cached too, since most tools have no app and re-asking on
- * every render is the commoner waste.
+ * frame share one request instead of racing. Keyed on the `ui://` URI and the
+ * server it came from: the URI is OpenAI's own advice ("treat the resource URI
+ * as a cache key"), and the server keeps two of them that publish the same
+ * path apart.
  */
-const MCP_APP_CACHE = new Map<string, { at: number; app: Promise<McpAppResource | null> }>();
+const MCP_APP_CACHE = new Map<string, { at: number; html: Promise<string | null> }>();
 
 /** Matches the deployment's tool-list TTL, so the two expire together. */
 const MCP_APP_TTL_MS = 120_000;
@@ -899,44 +902,6 @@ const MCP_APP_TTL_MS = 120_000;
 /** Forget cached apps. Call when the server list changes under us. */
 export function clearMcpAppCache(): void {
   MCP_APP_CACHE.clear();
-}
-
-/**
- * The MCP App HTML bound to a tool (POST /mcp/app), or null if it has none.
- *
- * Null is the ordinary answer for an ordinary tool, and the caller renders
- * nothing, so a failure here is not worth surfacing.
- */
-export function fetchMcpApp(
-  servers: McpServerConfig[],
-  toolName: string,
-): Promise<McpAppResource | null> {
-  const owner = servers.find((s) => toolName.startsWith(`${mcpServerId(s)}_`));
-  const key = `${toolName}\n${owner?.url ?? ""}`;
-  const hit = MCP_APP_CACHE.get(key);
-  if (hit && Date.now() - hit.at < MCP_APP_TTL_MS) return hit.app;
-
-  const app = (async () => {
-    const res = await fetch(`${getApiBase()}/mcp/app`, {
-      method: "POST",
-      headers: apiHeaders(),
-      body: JSON.stringify({ servers, tool_name: toolName }),
-    });
-    // Thrown rather than returned, so the catch below forgets it. `null` is a
-    // legitimate ANSWER here (most tools have no app) and is cached on purpose;
-    // a 502 is not an answer and must not be.
-    if (!res.ok) throw new Error(`app lookup failed (${res.status})`);
-    const d = await res.json();
-    return d?.app?.html ? (d.app as McpAppResource) : null;
-  })().catch(() => {
-    // A failed lookup must not be remembered: the next render should retry
-    // rather than inherit a network blip for two minutes.
-    MCP_APP_CACHE.delete(key);
-    return null;
-  });
-
-  MCP_APP_CACHE.set(key, { at: Date.now(), app });
-  return app;
 }
 
 /** What a tool's MCP App binding looks like to the host's browser half. */
@@ -1053,6 +1018,68 @@ export async function fetchMcpApps(
 /** Drop the bootstrap cache, for tests and for a Settings change. */
 export function clearMcpAppsCache(): void {
   MCP_BOOTSTRAP_CACHE.clear();
+}
+
+/**
+ * The MCP App HTML bound to a tool, or null if it has none.
+ *
+ * Two steps, one request each and both cached. The bootstrap catalogue says
+ * whether this tool has an app and what its `ui://` URI is; `/mcp/resource`
+ * reads that URI. There is no third endpoint that does both, because the only
+ * reason one existed was that the browser did not know the URI, which
+ * bootstrap fixed.
+ *
+ * Keyed on the RESOURCE URI, which is OpenAI's own advice for their apps:
+ * "treat the resource URI as a cache key. When you make a breaking change to
+ * the HTML, publish a new URI." Two tools sharing one document, as Excalidraw's
+ * do, then share one fetch instead of pulling 432KB twice.
+ */
+export async function fetchMcpApp(
+  servers: McpServerConfig[],
+  toolName: string,
+): Promise<McpAppResource | null> {
+  const binding = (await fetchMcpApps(servers))[toolName];
+  // Null is the ordinary answer for an ordinary tool, and the caller renders
+  // nothing, so this is not a failure worth surfacing.
+  if (!binding) return null;
+
+  const html = await fetchAppHtml(servers, toolName, binding.resourceUri);
+  if (!html) return null;
+  return {
+    tool_name: toolName,
+    resource_uri: binding.resourceUri,
+    mime_type: "text/html;profile=mcp-app",
+    html,
+    input_schema: binding.inputSchema,
+  };
+}
+
+/** The document behind a `ui://` URI, cached by that URI. */
+function fetchAppHtml(
+  servers: McpServerConfig[],
+  toolName: string,
+  uri: string,
+): Promise<string | null> {
+  // The URI, plus the server it came from. Keying on the URI alone is
+  // OpenAI's advice and buys the real win (two tools sharing one document
+  // share one fetch), but two different servers can publish the same
+  // `ui://` path, and serving one's HTML for the other would be silent.
+  const owner = servers.find((srv) => toolName.startsWith(`${mcpServerId(srv)}_`));
+  const key = `${uri}\n${owner?.url ?? ""}`;
+  const hit = MCP_APP_CACHE.get(key);
+  if (hit && Date.now() - hit.at < MCP_APP_TTL_MS) return hit.html;
+
+  const html = fetchMcpResource(servers, toolName, uri)
+    .then((contents) => contents.find((c) => c.text?.trim())?.text ?? null)
+    .catch(() => {
+      // Never remembered: the next render should retry rather than inherit a
+      // network blip for two minutes.
+      MCP_APP_CACHE.delete(key);
+      return null;
+    });
+
+  MCP_APP_CACHE.set(key, { at: Date.now(), html });
+  return html;
 }
 
 /** One content block from a resource an MCP App asked the host to read. */
