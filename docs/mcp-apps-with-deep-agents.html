@@ -339,7 +339,7 @@
 </div>
 
 <figure>
-  <svg viewBox="0 0 800 322" role="img" aria-label="Four lanes: the View, the browser host, the deployment proxy and the MCP server. The browser holds an MCP client and reaches the server through a proxy that forwards bytes without reading them. The host renders the view from the ui resource, talks to it over postMessage, and makes the view's tool calls through the same client after checking them.">
+  <svg viewBox="0 0 800 322" role="img" aria-label="Four lanes: the View, the browser host, the MCP proxy on your server, and the MCP server itself. The browser holds an MCP client and reaches the server through a proxy that forwards bytes without reading them. The host renders the view from the ui resource, talks to it over postMessage, and makes the view's tool calls through the same client after checking them.">
     <defs>
       <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
         <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
@@ -351,7 +351,7 @@
       <rect x="215" y="6" width="150" height="26" rx="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
       <text x="290" y="23">Browser (host)</text>
       <rect x="435" y="6" width="150" height="26" rx="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
-      <text x="510" y="23">Deployment</text>
+      <text x="510" y="23">MCP proxy</text>
       <rect x="655" y="6" width="135" height="26" rx="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
       <text x="722" y="23">MCP server</text>
     </g>
@@ -399,7 +399,7 @@
     <code>initialize</code>, <code>tools/list</code>, <code>resources/read</code> and the View's
     own <code>tools/call</code> are bytes going to a server the assistant is configured for.
     Address it by ID rather than URL, or it is a general-purpose fetcher wearing your
-    deployment's network position, and attach the credential there rather than in the page.
+    server's network position, and attach the credential there rather than in the page.
   </figcaption>
 </figure>
 
