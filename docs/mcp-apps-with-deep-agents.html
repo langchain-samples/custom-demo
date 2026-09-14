@@ -306,7 +306,111 @@
 <div class="col">
 <p>
   <strong>Nothing pauses.</strong> One tool opens the app and returns the data it draws. A second
-  receives what the person did, marked so only the app may call it.
+  receives what the person did, marked so only the app may call it. Four parties, and the useful
+  thing to notice is how little of it the agent is in:
+</p>
+</div>
+
+<figure>
+  <svg viewBox="0 0 800 470" role="img" aria-label="Five lanes: the View, the Host frontend, the Agent, the Deployment and the MCP server. Discovery and the model's tool call run through the Agent and Deployment. Once the result reaches the Host, the Host fetches the ui:// document and talks to the View directly over JSON-RPC, and the View's own tool call is proxied by the Deployment without the Agent taking part.">
+    <defs>
+      <marker id="s1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+      </marker>
+    </defs>
+
+    <!-- lane headers -->
+    <g font-family="IBM Plex Mono, monospace" font-size="10.5" text-anchor="middle" fill="currentColor">
+      <rect x="8"   y="6" width="128" height="26" rx="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <text x="72"  y="23">View (iframe)</text>
+      <rect x="168" y="6" width="128" height="26" rx="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <text x="232" y="23">Host (FE)</text>
+      <rect x="328" y="6" width="128" height="26" rx="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <text x="392" y="23">Agent</text>
+      <rect x="488" y="6" width="128" height="26" rx="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <text x="552" y="23">Deployment</text>
+      <rect x="648" y="6" width="144" height="26" rx="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <text x="720" y="23">MCP server</text>
+    </g>
+
+    <!-- lifelines -->
+    <g stroke="currentColor" stroke-width="1" stroke-dasharray="3 4" opacity="0.45">
+      <line x1="72" y1="32" x2="72" y2="452"/>
+      <line x1="232" y1="32" x2="232" y2="452"/>
+      <line x1="392" y1="32" x2="392" y2="452"/>
+      <line x1="552" y1="32" x2="552" y2="452"/>
+      <line x1="720" y1="32" x2="720" y2="452"/>
+    </g>
+
+    <g font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor">
+
+      <!-- 1. discovery -->
+      <text x="480" y="52" font-size="9" opacity="0.75">1 · discovery, cached 120s</text>
+      <line x1="552" y1="64" x2="714" y2="64" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="633" y="60" text-anchor="middle">tools/list</text>
+      <line x1="720" y1="82" x2="558" y2="82" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="639" y="78" text-anchor="middle" fill="#7FC8FF">_meta.ui.resourceUri</text>
+      <line x1="552" y1="100" x2="398" y2="100" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="475" y="96" text-anchor="middle">tools, app-only filtered out</text>
+
+      <!-- 2. the model's call -->
+      <text x="336" y="128" font-size="9" opacity="0.75">2 · the model calls a tool</text>
+      <line x1="392" y1="140" x2="546" y2="140" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="469" y="136" text-anchor="middle">propose_rebalance</text>
+      <line x1="552" y1="158" x2="714" y2="158" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="633" y="154" text-anchor="middle">tools/call</text>
+      <line x1="720" y1="176" x2="238" y2="176" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="479" y="172" text-anchor="middle">result: the data the app draws (no _meta)</text>
+
+      <!-- agent-out-of-the-loop band -->
+      <rect x="330" y="192" width="124" height="248" rx="6" fill="currentColor" opacity="0.055"/>
+      <text x="392" y="322" text-anchor="middle" font-size="9" opacity="0.75" transform="rotate(-90 392 322)">agent takes no further part</text>
+
+      <!-- 3. fetch the document -->
+      <text x="176" y="212" font-size="9" opacity="0.75">3 · the Host fetches the document</text>
+      <line x1="232" y1="224" x2="546" y2="224" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="389" y="220" text-anchor="middle">POST /mcp/app {tool_name}</text>
+      <line x1="552" y1="242" x2="714" y2="242" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="633" y="238" text-anchor="middle">resources/read ui://…</text>
+      <line x1="720" y1="260" x2="238" y2="260" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="479" y="256" text-anchor="middle">html + inputSchema</text>
+      <line x1="226" y1="278" x2="78" y2="278" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="152" y="274" text-anchor="middle" fill="#7FC8FF">iframe srcdoc</text>
+
+      <!-- 4. the SEP-1865 handshake -->
+      <text x="16" y="306" font-size="9" opacity="0.75">4 · SEP-1865 handshake, JSON-RPC over postMessage</text>
+      <line x1="72" y1="318" x2="226" y2="318" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="149" y="314" text-anchor="middle">ui/initialize {appInfo}</text>
+      <line x1="232" y1="336" x2="78" y2="336" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="155" y="332" text-anchor="middle">hostContext {toolInfo, theme}</text>
+      <line x1="72" y1="354" x2="226" y2="354" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="149" y="350" text-anchor="middle">initialized</text>
+      <line x1="232" y1="372" x2="78" y2="372" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="155" y="368" text-anchor="middle">tool-input, then tool-result</text>
+
+      <!-- 5. the view acts -->
+      <text x="16" y="400" font-size="9" opacity="0.75">5 · a person acts, and the View calls a tool</text>
+      <line x1="72" y1="412" x2="226" y2="412" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="149" y="408" text-anchor="middle">tools/call submit_rebalance</text>
+      <line x1="232" y1="430" x2="546" y2="430" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="389" y="426" text-anchor="middle">POST /mcp/call</text>
+      <line x1="552" y1="448" x2="714" y2="448" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
+      <text x="633" y="444" text-anchor="middle" fill="#7FC8FF">same server? open to apps?</text>
+    </g>
+  </svg>
+  <figcaption>
+    The Agent only appears in steps 1 and 2. Everything after the tool returns is the Host talking
+    to the View, and the Deployment proxying on their behalf, because the browser has no MCP client
+    and the View's frame has no network at all.
+  </figcaption>
+</figure>
+
+<div class="col">
+<p>
+  The agent's whole involvement is steps 1 and 2: it is handed a tool list and it calls a tool.
+  It has no concept of <code>ui://</code>, and <strong>MCP Apps need no changes to it</strong>. The
+  one rule that touches what the model sees, hiding <code>visibility: ["app"]</code> tools, belongs
+  to whatever turns MCP tools into agent tools, which is the deployment.
 </p>
 </div>
 
