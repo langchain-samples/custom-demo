@@ -8,7 +8,7 @@
  * artifact, not in its text.
  */
 import { describe, expect, it } from "vitest";
-import { rehydrateItems, structuredFromToolMessage } from "./rehydrate";
+import { isDeliberateReset, rehydrateItems, structuredFromToolMessage } from "./rehydrate";
 import type { ThreadMessage } from "@/lib/api";
 
 const APPS = { draw_create_view: { resourceUri: "ui://excalidraw/app.html" } };
@@ -93,5 +93,29 @@ describe("a tool result's structured half", () => {
     // The honest answer. An app that reads `structuredContent` should see
     // nothing rather than a shape invented from prose.
     expect(structuredFromToolMessage({ type: "tool", content: "all done" })).toBeUndefined();
+  });
+});
+
+describe("telling a real reset from the assistant loading", () => {
+  it("ignores the assistant id arriving after mount", () => {
+    // The bug this exists to stop: on every page load the key goes from ":0"
+    // to "<uuid>:0" one tick after mount. Treating that as a switch cleared
+    // the thread from the URL and discarded the conversation just restored,
+    // which looked exactly like persistence being broken.
+    expect(isDeliberateReset(":0", "a1b2:0")).toBe(false);
+  });
+
+  it("resets when the person switches assistant", () => {
+    expect(isDeliberateReset("a1b2:0", "c3d4:0")).toBe(true);
+  });
+
+  it("resets when the person asks for a new chat", () => {
+    expect(isDeliberateReset("a1b2:0", "a1b2:1")).toBe(true);
+    // Even while the assistant is still loading: New Chat is explicit.
+    expect(isDeliberateReset(":0", ":1")).toBe(true);
+  });
+
+  it("does nothing when the key has not changed", () => {
+    expect(isDeliberateReset("a1b2:0", "a1b2:0")).toBe(false);
   });
 });

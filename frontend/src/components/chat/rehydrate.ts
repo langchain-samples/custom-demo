@@ -123,3 +123,22 @@ export function rehydrateItems(
 
   return items;
 }
+
+/**
+ * Whether a `resetKey` change means "the person switched assistant or asked
+ * for a new chat", as opposed to "the assistant finally loaded".
+ *
+ * The key is `<assistantId>:<counter>`, and the id is empty until the
+ * assistant list arrives, so every page load produces one change from `":0"`
+ * to `"<uuid>:0"` a tick after mount. Treating that as a switch threw the
+ * thread away on load: the conversation was restored and then immediately
+ * cleared, which looked exactly like persistence not working.
+ */
+export function isDeliberateReset(previous: string, next: string): boolean {
+  if (previous === next) return false;
+  const [wasAssistant, wasCounter] = previous.split(":");
+  const [nowAssistant, nowCounter] = next.split(":");
+  // The assistant arriving for the first time, with nothing else changed.
+  if (!wasAssistant && nowAssistant && wasCounter === nowCounter) return false;
+  return true;
+}

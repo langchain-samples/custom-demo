@@ -28,7 +28,11 @@ import {
 } from "@tabler/icons-react";
 import type { QuickAction, ReviewInterrupt, RunContext, ThreadMessage, Widget } from "@/lib/api";
 import { ensureThread, getThreadState, resetThread, runStream, savedThreadId } from "@/lib/api";
-import { rehydrateItems, structuredFromToolMessage } from "@/components/chat/rehydrate";
+import {
+  isDeliberateReset,
+  rehydrateItems,
+  structuredFromToolMessage,
+} from "@/components/chat/rehydrate";
 import { PROSE_CLS } from "@/lib/markdown";
 import { isHtmlArtifactPath } from "@/lib/artifacts";
 import { ReviewCard } from "@/components/chat/ReviewCard";
@@ -416,7 +420,8 @@ export default function ChatPanel({
   const interactedRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
-  const firstRun = useRef(true);
+  /** The last `resetKey` acted on, so a change can be classified. */
+  const lastResetKey = useRef<string>(String(resetKey ?? ""));
   // Whether to keep the log pinned to the bottom as new content streams in.
   // Flips to false the moment the user scrolls up (so they can read history
   // mid-stream), and back to true when they return to the bottom or send.
@@ -424,12 +429,18 @@ export default function ChatPanel({
 
   const nextId = () => `m${++idRef.current}`;
 
-  // Reset conversation on resetKey change (assistant switch / new chat).
+  // Reset conversation on resetKey change (assistant switch / new chat), but
+  // NOT when the only change is the assistant finishing loading. See
+  // `isDeliberateReset`: that one fires on every page load, and resetting there
+  // drops the thread from the URL and throws away what was just restored.
   useEffect(() => {
-    if (firstRun.current) {
-      firstRun.current = false;
-      return;
-    }
+    const previous = lastResetKey.current;
+    const next = String(resetKey ?? "");
+    lastResetKey.current = next;
+    if (!isDeliberateReset(previous, next)) return;
+    // A real switch: this session owns the list from here, so a late restore
+    // must not put the old conversation back.
+    interactedRef.current = true;
     abortRef.current?.abort();
     resetThread();
     busyRef.current = false;
