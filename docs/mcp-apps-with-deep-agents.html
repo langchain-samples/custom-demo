@@ -455,27 +455,14 @@
 <p>
   <a href="https://github.com/modelcontextprotocol/ext-apps"><code>@modelcontextprotocol/ext-apps</code></a>
   has both halves: <code>AppBridge</code> for the host, <code>App</code> for the view. It owns
-  the wire format, version negotiation and message ordering, and it encodes the rules that are
-  easy to read and still get wrong. <code>hostContext.toolInfo.tool</code> needs a complete
-  <code>Tool</code>, <code>inputSchema</code> included, or an app built on the same SDK refuses
-  the handshake. A display mode the host never advertised is declined, so advertise
-  <code>fullscreen</code> if you want a view's Edit button to work. The view sends
-  <code>appInfo</code>, not <code>clientInfo</code>.
+  the wire format, version negotiation and message ordering, so hand-writing either end means
+  re-deriving a specification you could have imported.
 </p>
-<div class="callout">
-  <p>
-    One thing to keep yourself. Hand <code>AppBridge</code> a real MCP client and it forwards the
-    View's <code>tools/call</code> automatically, which applies neither of the host's two MUSTs.
-    Construct it with <code>null</code>, register the handlers, and run the checks first.
-  </p>
-</div>
 <p>
-  Then test against a server you did not write:
-  <a href="https://github.com/excalidraw/excalidraw-mcp">Excalidraw</a> at
-  <code>mcp.excalidraw.com/mcp</code> (a POST endpoint, not a page) and
-  <a href="https://github.com/MCPJam/mcp-apps-everything">mcp-apps-everything</a>, which serves
-  deliberately wrong MIME types to see how strict you are. No credentials, and between them they
-  exercise every rule above.
+  One thing it will not do for you. Given a real MCP client, <code>AppBridge</code> forwards the
+  view's <code>tools/call</code> straight through, which applies neither of the checks in
+  section 02. Construct it with <code>null</code>, register the handlers, and vet the call
+  yourself.
 </p>
 </div>
 
@@ -492,6 +479,13 @@
   <li>
     <strong>SEP-1865 is MCP Apps; SEP-2322 is elicitation.</strong> SEP-1865 contains no
     elicitation and needs none, which is the most common misreading of it.
+  </li>
+  <li>
+    <strong>Two servers to test a host against, no credentials.</strong>
+    <a href="https://github.com/excalidraw/excalidraw-mcp">Excalidraw</a> at
+    <code>mcp.excalidraw.com/mcp</code> (a POST endpoint, not a page) and
+    <a href="https://github.com/MCPJam/mcp-apps-everything">mcp-apps-everything</a>, which
+    serves deliberately wrong MIME types to see how strict you are.
   </li>
   <li>
     ChatGPT's Apps SDK uses <code>_meta["openai/outputTemplate"]</code> and
