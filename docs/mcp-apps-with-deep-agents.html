@@ -445,8 +445,10 @@
 <p>
   The cost is that an app genuinely needing an origin, for ES modules or
   <code>localStorage</code>, will not run. SEP-1865's answer is to serve the frame from a second
-  domain of your own, so the app gets an origin that is not yours, and to apply the server's
-  declared <code>ui.csp</code> there. One-domain hosts skip it: safer on origin, weaker on CSP.
+  domain of your own, so the app gets an origin that is not yours, and to enforce the server's
+  declared <code>ui.csp</code> there, the list of domains its app is allowed to talk to.
+  One-domain hosts skip both: safer, since the frame reaches nothing, and no use to an app that
+  needs to reach something.
 </p>
 </div>
 
