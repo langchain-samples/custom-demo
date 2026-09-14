@@ -364,6 +364,19 @@
   model all five.
 </p>
 <p>
+  Note <em>when</em> that metadata arrives: at <code>tools/list</code>, during discovery, long
+  before any call. The spec predeclares UI resources so a host can prefetch and review the HTML
+  before the tool runs. A tool <em>result</em> carries data and no <code>_meta</code> at all.
+</p>
+<p>
+  So the browser never sees <code>_meta</code>. It knows the tool <strong>name</strong> off the
+  stream and asks the deployment, which holds the MCP connection and is therefore the only side
+  that saw <code>tools/list</code>. The one thing this needs from the OSS is that
+  <code>langchain.mcp</code> keeps the raw MCP tool on <code>tool.metadata["mcp"]</code>,
+  <code>_meta</code> included; a LangChain <code>BaseTool</code> has no concept of a
+  <code>ui://</code> resource, so without that passthrough the binding is lost in adaptation.
+</p>
+<p>
   Everything is inlined because the iframe has an opaque origin and can fetch nothing: no script
   tag, no stylesheet, no image URL. That is why Excalidraw's app is 430KB, and why ours went from
   32KB to 618KB when we adopted the official SDK.
