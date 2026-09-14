@@ -979,3 +979,45 @@ def test_app_manifest_includes_app_only_tools(monkeypatch):
     # A tool with no published schema still needs one: an empty object schema is
     # valid, and absent is what an app refuses.
     assert out["draw_save_checkpoint"]["inputSchema"] == {"type": "object"}
+
+
+def test_one_unreachable_server_does_not_take_the_others_down(monkeypatch):
+    """A dead tunnel must cost its own tools and nobody else's.
+
+    A `ClientGroup` connects every member together and raises as a unit, so an
+    expired tunnel in the list used to return zero tools for every server. The
+    visible symptom was the agent announcing that a perfectly healthy
+    integration was unavailable, and `/mcp/bootstrap` answering with no apps.
+    """
+    good = m.McpServer(id="excalidraw", label="Excalidraw", url="https://good/mcp")
+    dead = m.McpServer(id="everything", label="Everything", url="https://dead/mcp")
+    tool = SimpleNamespace(name="excalidraw_create_view", metadata={}, args_schema=None)
+
+    async def fake_discover(servers, *, refresh):
+        ids = [s.id for s in servers]
+        if "everything" in ids:
+            raise RuntimeError("Client failed to connect: nodename nor servname provided")
+
+        return [tool], {"excalidraw": "draw things"}
+
+    monkeypatch.setattr(m, "_discover", fake_discover)
+    m._TOOLS.clear()
+    out = asyncio.run(m.load_tools((good, dead), refresh=True))
+
+    # The group pass raises because of `dead`; the per-server retry keeps `good`.
+    assert [t.name for t in out] == ["excalidraw_create_view"]
+    # And what the healthy server said survives the fallback too, or its
+    # guidance would vanish whenever an unrelated server broke.
+    assert m.instructions_for((good, dead)) == {"excalidraw": "draw things"}
+
+
+def test_every_server_unreachable_is_still_an_empty_list(monkeypatch):
+    """No tools, never an exception: a broken connection cannot fail a turn."""
+
+    async def fake_discover(servers, *, refresh):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(m, "_discover", fake_discover)
+    m._TOOLS.clear()
+    dead = m.McpServer(id="everything", label="Everything", url="https://dead/mcp")
+    assert asyncio.run(m.load_tools((dead,), refresh=True)) == []

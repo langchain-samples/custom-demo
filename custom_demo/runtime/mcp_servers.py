@@ -224,18 +224,54 @@ async def load_tools(
                 _discover(servers, refresh=refresh),
                 timeout=CONNECT_TIMEOUT_SECONDS,
             )
-            _INSTRUCTIONS[key] = said
         except Exception as exc:  # noqa: BLE001 - a bad server degrades the turn, never fails it
-            _log(
-                f"tool discovery failed for {[s.id for s in servers]}: {type(exc).__name__}: {exc}"
-            )
-            # Cache the emptiness briefly too, so an unreachable server is not
+            # One group, one connection, and therefore one failure for all of
+            # them: a single server whose DNS is gone or that never answers
+            # takes every other server's tools down with it. Retry one at a
+            # time so the damage is limited to the server that caused it.
+            _log(f"group discovery failed, retrying per server: {type(exc).__name__}: {exc}")
+            tools, said = await _discover_each(servers, refresh=refresh)
+
+        _INSTRUCTIONS[key] = said
+        if not tools:
+            # Cache the emptiness briefly, so an unreachable server is not
             # retried (and re-timed-out) on every single model call in a turn.
             _TOOLS[key] = (time.monotonic() + min(TOOLS_TTL_SECONDS, 30.0), [])
             return []
 
         _TOOLS[key] = (time.monotonic() + TOOLS_TTL_SECONDS, tools)
         return tools if include_app_only else [t for t in tools if model_visible(t)]
+
+
+async def _discover_each(
+    servers: tuple[McpServer, ...], *, refresh: bool
+) -> tuple[list[Any], dict[str, str]]:
+    """Discover each server alone, so one broken server costs only its own tools.
+
+    The fallback for when the single-group pass fails. A `ClientGroup` connects
+    every member together and raises as a unit, which is right when everything
+    works and catastrophic when one member is a tunnel that has expired: the
+    agent loses every MCP tool it had and says the integration is unavailable,
+    naming a server that is perfectly healthy.
+
+    Concurrent, so a server that hangs costs one timeout rather than one per
+    server. Namespacing is unchanged: a one-member group still prefixes its
+    tools with the server id, which is what `probe` has always relied on.
+    """
+
+    async def one(server: McpServer) -> tuple[list[Any], dict[str, str]]:
+        try:
+            return await asyncio.wait_for(
+                _discover((server,), refresh=refresh), timeout=CONNECT_TIMEOUT_SECONDS
+            )
+        except Exception as exc:  # noqa: BLE001 - name the server and keep the others
+            _log(f"{server.id} is unreachable, its tools are missing: {type(exc).__name__}: {exc}")
+            return [], {}
+
+    found = await asyncio.gather(*(one(server) for server in servers))
+    return [tool for tools, _ in found for tool in tools], {
+        sid: text for _, said in found for sid, text in said.items()
+    }
 
 
 async def _discover(
