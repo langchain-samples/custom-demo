@@ -15,6 +15,8 @@ have to live in page JavaScript. Claude reaches the same shape at
 
 from __future__ import annotations
 
+from urllib.parse import urljoin, urlparse
+
 import httpx
 from starlette.responses import JSONResponse, StreamingResponse
 
@@ -28,6 +30,45 @@ _UP = ("content-type", "accept", "mcp-session-id", "mcp-protocol-version", "last
 # What comes back. The session id is how Streamable HTTP keeps a connection,
 # so dropping it would make every message a new session.
 _DOWN = ("content-type", "mcp-session-id", "cache-control")
+
+
+# Only the two redirects that keep the method and body. A 301, 302 or 303 turns a
+# POST into a GET, which for MCP means the message is silently dropped and the
+# browser waits for a reply to a request the server never saw.
+_KEEPS_METHOD = (307, 308)
+
+
+async def _send_following_redirects(client, url: str, body: bytes, headers: dict[str, str]):
+    """POST to `url`, following a redirect the server issues to itself.
+
+    `httpx` does not follow by default, and a bare MCP hostname commonly
+    answers `308` to its real path: `https://mcp.excalidraw.com` sends you to
+    `/mcp`. Handing that back to the browser reads as "the server refused",
+    when the server in fact said where to go.
+
+    SAME HOST ONLY. Following a redirect off-host would let a configured server
+    aim this deployment's network position at an address nobody configured,
+    which is the thing addressing by ID is here to prevent.
+    """
+    for _ in range(3):
+        upstream = await client.send(
+            client.build_request("POST", url, content=body, headers=headers), stream=True
+        )
+        location = upstream.headers.get("location")
+        if upstream.status_code not in _KEEPS_METHOD or not location:
+            return upstream
+
+        target = urljoin(url, location)
+        # Off-host, or pointing at itself. A self-redirect is a misconfigured
+        # server, and retrying it would spend the hop budget to reach the same
+        # answer more slowly.
+        if target == url or urlparse(target).netloc != urlparse(url).netloc:
+            return upstream
+
+        await upstream.aclose()
+        url = target
+
+    return upstream
 
 
 async def mcp_proxy(request):
@@ -76,10 +117,7 @@ async def mcp_proxy(request):
 
     client = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=15.0))
     try:
-        upstream = await client.send(
-            client.build_request("POST", server.url, content=body, headers=headers),
-            stream=True,
-        )
+        upstream = await _send_following_redirects(client, server.url, body, headers)
     except Exception as exc:  # noqa: BLE001 - the browser needs the reason, not a hang
         await client.aclose()
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"[:300]}, status_code=502)

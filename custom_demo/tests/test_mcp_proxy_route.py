@@ -8,6 +8,7 @@ upstream.
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any
 
 import httpx
@@ -162,3 +163,101 @@ def test_a_dead_server_is_a_502_with_the_reason(monkeypatch):
     # like a button that does nothing.
     assert r.status_code == 502
     assert "nodename" in r.json()["error"]
+
+
+@pytest.fixture
+def redirector(monkeypatch):
+    """An upstream that answers a redirect, then the real thing."""
+    seen: dict[str, Any] = {"urls": []}
+
+    class FakeResponse:
+        def __init__(self, status, headers, body=b"ok"):
+            self.status_code = status
+            self.headers = headers
+            self._body = body
+
+        async def aiter_raw(self):
+            yield self._body
+
+        async def aclose(self):
+            return None
+
+    class FakeClient:
+        def __init__(self, *_a, **_k):
+            pass
+
+        def build_request(self, _method, url, content=None, headers=None):
+            seen["urls"].append(url)
+            return url
+
+        async def send(self, url, stream=False):
+            return seen["answer"](url)
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(WM.httpx, "AsyncClient", FakeClient)
+
+    async def resolve(_assistant, _server_id):
+        override = seen.get("resolve")
+        return await override(_assistant, _server_id) if override else SERVER
+
+    monkeypatch.setattr(WM, "resolve_server", resolve)
+    seen["FakeResponse"] = FakeResponse
+    return seen
+
+
+def test_follows_a_redirect_the_server_issues_to_itself(redirector):
+    """A bare MCP hostname commonly answers 308 to its real path.
+
+    `https://mcp.excalidraw.com` sends you to `/mcp`, and httpx does not follow
+    by default. Handing that back to the browser reads as "the server refused",
+    when the server in fact said where to go.
+    """
+    R = redirector["FakeResponse"]
+
+    bare = "https://mcp.example"
+
+    async def resolve(_assistant, _server_id):
+        return dataclasses.replace(SERVER, url=bare)
+
+    def answer(url):
+        if url == bare:
+            return R(308, {"location": "/mcp"})
+        return R(200, {"content-type": "text/event-stream"}, b"event: message\n")
+
+    redirector["answer"] = answer
+    redirector["resolve"] = resolve
+    r = client.post("/mcp/proxy/excalidraw?assistant=a1", json=MESSAGE)
+    assert r.status_code == 200
+    assert redirector["urls"] == [bare, "https://mcp.example/mcp"]
+
+
+def test_does_not_follow_a_redirect_off_the_configured_host(redirector):
+    """Addressing by ID is pointless if the server can then send us anywhere.
+
+    Following off-host would aim the deployment's network position at an
+    address nobody configured, so the redirect goes back to the browser
+    unfollowed instead.
+    """
+    R = redirector["FakeResponse"]
+    redirector["answer"] = lambda _url: R(308, {"location": "https://elsewhere.invalid/mcp"})
+
+    r = client.post("/mcp/proxy/excalidraw?assistant=a1", json=MESSAGE)
+    assert r.status_code == 308
+    assert redirector["urls"] == [SERVER.url]
+
+
+def test_does_not_follow_a_redirect_that_would_drop_the_body(redirector):
+    """301, 302 and 303 turn a POST into a GET.
+
+    For MCP that means the message is silently discarded and the browser waits
+    for a reply to a request the server never saw, which is worse than a
+    visible redirect.
+    """
+    R = redirector["FakeResponse"]
+    redirector["answer"] = lambda _url: R(302, {"location": "/mcp"})
+
+    r = client.post("/mcp/proxy/excalidraw?assistant=a1", json=MESSAGE)
+    assert r.status_code == 302
+    assert redirector["urls"] == [SERVER.url]
