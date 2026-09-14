@@ -339,7 +339,7 @@
 </div>
 
 <figure>
-  <svg viewBox="0 0 800 300" role="img" aria-label="Four lanes: the View, the browser host, the deployment proxy and the MCP server. The browser holds an MCP client and reaches the server through a proxy that forwards bytes without reading them. The host renders the view from the ui resource, talks to it over postMessage, and makes the view's tool calls through the same client after checking them.">
+  <svg viewBox="0 0 800 322" role="img" aria-label="Four lanes: the View, the browser host, the deployment proxy and the MCP server. The browser holds an MCP client and reaches the server through a proxy that forwards bytes without reading them. The host renders the view from the ui resource, talks to it over postMessage, and makes the view's tool calls through the same client after checking them.">
     <defs>
       <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
         <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
@@ -362,10 +362,10 @@
       <text x="722" y="45">declares the _meta</text>
     </g>
     <g stroke="currentColor" stroke-width="1" stroke-dasharray="3 4" opacity="0.45">
-      <line x1="75" y1="54" x2="75" y2="286"/>
-      <line x1="290" y1="54" x2="290" y2="286"/>
-      <line x1="510" y1="54" x2="510" y2="286"/>
-      <line x1="722" y1="54" x2="722" y2="286"/>
+      <line x1="75" y1="54" x2="75" y2="308"/>
+      <line x1="290" y1="54" x2="290" y2="308"/>
+      <line x1="510" y1="54" x2="510" y2="308"/>
+      <line x1="722" y1="54" x2="722" y2="308"/>
     </g>
     <g font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor">
       <line x1="296" y1="76" x2="504" y2="76" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
@@ -387,12 +387,15 @@
 
       <line x1="82" y1="258" x2="284" y2="258" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
       <text x="183" y="254" text-anchor="middle">tools/call submit_rebalance</text>
-      <line x1="296" y1="278" x2="504" y2="278" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
-      <text x="400" y="274" text-anchor="middle" fill="#7FC8FF">same server? open to apps?</text>
+      <path d="M290 268 h28 v16 h-22" fill="none" stroke="#7FC8FF" stroke-width="1.2" marker-end="url(#a1)"/>
+      <text x="326" y="281" fill="#7FC8FF">same server? open to apps?</text>
+      <line x1="296" y1="302" x2="504" y2="302" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
+      <text x="400" y="298" text-anchor="middle">forwarded, if it passed</text>
     </g>
   </svg>
   <figcaption>
-    The deployment's whole job is the middle arrow, and it never parses a body:
+    Both checks are the host's, and they happen in the page: the proxy never parses a body, so
+    it could not apply them. Its whole job is the middle arrow:
     <code>initialize</code>, <code>tools/list</code>, <code>resources/read</code> and the View's
     own <code>tools/call</code> are bytes going to a server the assistant is configured for.
     Address it by ID rather than URL, or it is a general-purpose fetcher wearing your
