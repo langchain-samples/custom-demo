@@ -426,28 +426,26 @@
 
 <p class="filename">agent.py</p>
 <pre><code><span class="k">class</span> <span class="f">McpTools</span>(AgentMiddleware):
+    <span class="k">async def</span> <span class="f">_load</span>(self, runtime):
+        <span class="c"># This assistant's servers, discovered once and cached. Drops any tool the</span>
+        <span class="c"># server marked visibility: ["app"] - the one MCP Apps rule that has to live</span>
+        <span class="c"># here, because the model's tool list is assembled here.</span>
+        servers = parse_servers(get_ctx(runtime).mcp_servers)
+        <span class="k">return await</span> load_tools(servers) <span class="k">if</span> servers <span class="k">else</span> []
+
     <span class="k">async def</span> <span class="f">awrap_model_call</span>(self, request, handler):
-        <span class="c"># What the model sees. Discovery is cached, so a warm call adds no latency.</span>
-        tools = <span class="k">await</span> load_tools(servers_for(request.runtime))
+        <span class="c"># What the model sees. A warm call adds no latency.</span>
+        tools = <span class="k">await</span> self._load(request.runtime)
         <span class="k">return await</span> handler(request.override(tools=[*request.tools, *tools]))
 
     <span class="k">async def</span> <span class="f">awrap_tool_call</span>(self, request, handler):
-        <span class="c"># What actually runs. ToolNode was built without these names, so it</span>
-        <span class="c"># passes tool=None; substituting the real one is what makes the call execute.</span>
+        <span class="c"># What actually runs. ToolNode was built without these names, so it passes</span>
+        <span class="c"># tool=None; substituting the real one is what makes the call execute.</span>
         <span class="k">if</span> request.tool <span class="k">is</span> <span class="k">None</span>:
             name = request.tool_call[<span class="s">"name"</span>]
-            tool = next((t <span class="k">for</span> t <span class="k">in</span> <span class="k">await</span> load_tools(...) <span class="k">if</span> t.name == name), <span class="k">None</span>)
-            request = dataclasses.replace(request, tool=tool)
+            tools = <span class="k">await</span> self._load(request.runtime)
+            request = dataclasses.replace(request, tool=next(t <span class="k">for</span> t <span class="k">in</span> tools <span class="k">if</span> t.name == name))
         <span class="k">return await</span> handler(request)</code></pre>
-
-<div class="col">
-<p>
-  <code>load_tools</code> drops anything the server marked
-  <code>visibility: ["app"]</code> on the way out. That filter is the only thing your agent
-  needs to know about MCP Apps, and it cannot move to the browser, because the model's tool list
-  is assembled here.
-</p>
-</div>
 
 <h2><span class="n">04</span> The app runs in a box with nothing in it</h2>
 <div class="col">
