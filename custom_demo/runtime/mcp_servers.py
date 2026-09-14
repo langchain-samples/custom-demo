@@ -375,7 +375,19 @@ async def resolve_server(assistant_id: str, server_id: str) -> McpServer | None:
     # need, and mcp_servers.py is on the graph's import path.
     from langgraph_sdk import get_client  # noqa: PLC0415
 
-    assistant = await get_client().assistants.get(assistant_id)
+    if not assistant_id:
+        raise LookupError("no assistant was named, so no server list can be read")
+
+    try:
+        assistant = await get_client().assistants.get(assistant_id)
+    except Exception as exc:
+        # The likeliest cause by far, and the one worth naming: the SPA falls
+        # back to the GRAPH id when no assistant has been chosen, and a graph
+        # id is not an assistant id.
+        raise LookupError(
+            f"could not read assistant {assistant_id!r}: {type(exc).__name__}: {exc}"
+        ) from exc
+
     # `getattr`, not dot access: the SDK types an Assistant as a union of
     # TypedDict / dataclass / model shapes, so the checker rejects both
     # subscripting and `.get`, and only the mapping form exists at runtime.

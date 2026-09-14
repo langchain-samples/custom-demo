@@ -54,11 +54,21 @@ async def mcp_proxy(request):
     and a server that reports progress during a long tool call must reach the
     view while it is still running.
     """
-    server = await resolve_server(
-        str(request.query_params.get("assistant") or ""), request.path_params["server_id"]
-    )
+    assistant_id = str(request.query_params.get("assistant") or "")
+    server_id = request.path_params["server_id"]
+    try:
+        server = await resolve_server(assistant_id, server_id)
+    except LookupError as exc:
+        # Named, not swallowed into a bare 404: "no such server" and "that is
+        # not an assistant" look identical from the browser and are fixed in
+        # completely different places.
+        return JSONResponse({"error": str(exc)}, status_code=404)
+
     if server is None:
-        return JSONResponse({"error": "no such server on this assistant"}, status_code=404)
+        return JSONResponse(
+            {"error": f"assistant {assistant_id!r} has no MCP server {server_id!r}"},
+            status_code=404,
+        )
 
     body = await request.body()
     headers = {k: v for k, v in request.headers.items() if k.lower() in _UP}

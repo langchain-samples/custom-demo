@@ -361,7 +361,7 @@ export async function callMcpToolForApp(
 }
 
 /**
- * Connect to one server and report what it offers ("Test connection").
+ * Connect to one server and report what it offers.
  *
  * Goes through this page's own MCP client, so what it reports is the
  * connection the chat will actually use rather than a second opinion from the
@@ -374,12 +374,16 @@ export async function callMcpToolForApp(
  * need the deployment to accept a URL from the browser, which is the hole that
  * design closes, so the caller saves and then tests.
  */
-export async function testMcpServer(server: McpServerConfig): Promise<McpProbeResult> {
+export async function describeMcpServer(
+  server: McpServerConfig,
+  { reconnect = false }: { reconnect?: boolean } = {},
+): Promise<McpProbeResult> {
   const id = mcpServerId(server);
   const base = { id, label: server.label, url: server.url, header_names: [] as string[] };
-  // Always a fresh connection: the point of the button is to find out what is
-  // true now, not what was true within the cache window.
-  resetMcpTools();
+  // "Test" reconnects, because the point of the button is what is true NOW.
+  // Filling the list on page load must not: it would drop the connection the
+  // chat is using and re-handshake every server on every settings render.
+  if (reconnect) resetMcpTools();
   const { entries, errors } = await mcpTools([server]);
   if (errors[id]) return { ...base, ok: false, tools: [], error: errors[id] };
 

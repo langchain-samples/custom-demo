@@ -15,8 +15,8 @@
  * only way to find out whether a tunnel is up, a token is right, and the tools
  * are named what you expect, before a live demo depends on it.
  */
-import { useState } from "react";
-import { testMcpServer } from "@/lib/mcpClients";
+import { useEffect, useState } from "react";
+import { describeMcpServer } from "@/lib/mcpClients";
 import {
   IconAlertTriangle,
   IconCheck,
@@ -204,6 +204,35 @@ export function McpSection({ servers, onChange, defaultOpen }: Props) {
 
   const add = () => onChange([...servers, { label: "", url: "", enabled: true }]);
 
+  /**
+   * Fill each saved server's tool list as soon as the panel is shown.
+   *
+   * The page holds MCP clients of its own now, so this is a cached `tools/list`
+   * rather than a round trip per server, and it is the same connection the chat
+   * uses. Only servers that already have an id and a url: the proxy addresses a
+   * server by id against the assistant's SAVED configuration, so one still
+   * being typed is not reachable and asking would only produce a 404 under a
+   * half-finished name.
+   */
+  useEffect(() => {
+    let live = true;
+    for (const server of servers) {
+      if (!server.id || !server.url.trim() || results[server.id]) continue;
+      void describeMcpServer(server)
+        .then((result) => {
+          if (live) setResults((prev) => ({ ...prev, [result.id]: result }));
+        })
+        .catch(() => {
+          // A server that will not answer is what Test is for; saying nothing
+          // here beats an error beside a server the person has not asked about.
+        });
+    }
+
+    return () => {
+      live = false;
+    };
+  }, [servers, results]);
+
   const test = async (index: number) => {
     const server = servers[index];
     // Give an unnamed server its id now: the test reports tools under the
@@ -217,7 +246,7 @@ export function McpSection({ servers, onChange, defaultOpen }: Props) {
     // through the deployment's proxy. That means SAVED: the proxy resolves the
     // id against the assistant's stored servers, so a connection still being
     // typed is not reachable and the failure says so rather than timing out.
-    const result = await testMcpServer({ ...server, id, enabled: true }).catch(
+    const result = await describeMcpServer({ ...server, id, enabled: true }, { reconnect: true }).catch(
       (err: unknown): McpProbeResult => ({
         id,
         label: server.label,

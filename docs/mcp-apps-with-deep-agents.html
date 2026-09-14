@@ -445,7 +445,7 @@
       <!-- 1 -->
       <text x="238" y="52" font-size="9" opacity="0.75">0 · on connect, and 1 · the discovery behind it, cached 120s</text>
       <line x1="238" y1="64" x2="546" y2="64" stroke="#7FC8FF" stroke-width="1.2" marker-end="url(#s1)"/>
-      <text x="392" y="60" text-anchor="middle" fill="#7FC8FF">POST /mcp/bootstrap: which tools ship a UI?</text>
+      <text x="392" y="60" text-anchor="middle" fill="#7FC8FF">tools/list: which tools ship a UI?</text>
       <line x1="558" y1="64" x2="714" y2="64" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
       <text x="636" y="60" text-anchor="middle">tools/list</text>
       <line x1="714" y1="82" x2="558" y2="82" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
@@ -473,7 +473,7 @@
       <!-- 3 -->
       <text x="16" y="252" font-size="9" opacity="0.75">3 · the Host fetches the document, while the tool is still running</text>
       <line x1="238" y1="264" x2="546" y2="264" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
-      <text x="392" y="260" text-anchor="middle">POST /mcp/app {tool_name}</text>
+      <text x="392" y="260" text-anchor="middle">resources/read ui://…</text>
       <line x1="558" y1="282" x2="714" y2="282" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
       <text x="636" y="278" text-anchor="middle">resources/read ui://…</text>
       <line x1="714" y1="300" x2="238" y2="300" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
@@ -501,7 +501,7 @@
       <line x1="78" y1="484" x2="226" y2="484" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
       <text x="152" y="480" text-anchor="middle">tools/call submit_rebalance</text>
       <line x1="238" y1="502" x2="546" y2="502" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
-      <text x="392" y="498" text-anchor="middle">POST /mcp/call</text>
+      <text x="392" y="498" text-anchor="middle">tools/call, via the proxy</text>
       <line x1="558" y1="520" x2="714" y2="520" stroke="currentColor" stroke-width="1.2" marker-end="url(#s1)"/>
       <text x="636" y="516" text-anchor="middle" fill="#7FC8FF">same server? open to apps?</text>
     </g>
@@ -516,8 +516,9 @@
     token from the model with nowhere to stamp it, so we answer once up front instead.
     <strong>Lanes two and four are one Host.</strong> SEP-1865 draws a single participant; a web
     host that keeps its MCP client on a server is really two processes, and every arrow between
-    those two lanes is a seam the spec does not describe, so <code>/mcp/app</code> and
-    <code>/mcp/call</code> are ours to name. Lane three is a third thing again: the agent runs on
+    those two lanes is a seam the spec does not describe. Ours is one route,
+    <code>POST /mcp/proxy/{server_id}</code>, which forwards bytes and reads none of them:
+    the browser holds the MCP client and the deployment holds the credential. Lane three is a third thing again: the agent runs on
     the same deployment but takes no part in any of this. The document itself is still read lazily, on first use
     and cached: the spec permits prefetching every <code>ui://</code> document at connection
     instead, but they run 400KB to 600KB each and most conversations open none of them.

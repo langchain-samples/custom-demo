@@ -82,7 +82,7 @@ def test_refuses_a_server_the_assistant_does_not_have(upstream):
     """
     r = client.post("/mcp/proxy/not-configured?assistant=a1", json=MESSAGE)
     assert r.status_code == 404
-    assert "no such server" in r.json()["error"]
+    assert "has no MCP server 'not-configured'" in r.json()["error"]
     assert "url" not in upstream
 
 
