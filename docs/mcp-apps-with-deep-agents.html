@@ -542,8 +542,8 @@
     <span class="k">return</span> rebalance_view(lookup(account_id))
 
 
-<span class="k">@mcp</span>.tool(app=AppConfig(resource_uri=<span class="s">"ui://meridian/rebalance.html"</span>,
-                        visibility=[<span class="s">"app"</span>]))
+<span class="c"># No resource_uri: this tool does not OPEN an app, it is one the app calls.</span>
+<span class="k">@mcp</span>.tool(app=AppConfig(visibility=[<span class="s">"app"</span>]))
 <span class="k">def</span> <span class="f">submit_rebalance</span>(account_id: str, allocation: dict[str, float]) -&gt; dict:
     <span class="k">return</span> place_trades(lookup(account_id), allocation)</code></pre>
 

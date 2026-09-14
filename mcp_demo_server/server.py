@@ -412,7 +412,7 @@ def propose_rebalance(
     return _rebalance_view(account)
 
 
-@mcp.tool(app=AppConfig(resource_uri=REBALANCE_URI, visibility=["app"]))
+@mcp.tool(app=AppConfig(visibility=["app"]))
 def submit_rebalance(
     account_id: Annotated[str, Field(description="The account being rebalanced.")],
     allocation: Annotated[
@@ -528,7 +528,7 @@ def project_goal(
     }
 
 
-@mcp.tool(app=AppConfig(resource_uri=PROJECTION_URI, visibility=["app"]))
+@mcp.tool(app=AppConfig(visibility=["app"]))
 def submit_goal_plan(
     account_id: Annotated[str, Field(description="The account the plan belongs to.")],
     plan: GoalPlan,
@@ -618,7 +618,7 @@ def confirm_trade(
     }
 
 
-@mcp.tool(app=AppConfig(resource_uri=TRADE_URI, visibility=["app"]))
+@mcp.tool(app=AppConfig(visibility=["app"]))
 def submit_trade(
     account_id: Annotated[str, Field(description="The account to trade in.")],
     symbol: Annotated[str, Field(description="Ticker being traded.")],
@@ -718,7 +718,7 @@ def sign_document(
     }
 
 
-@mcp.tool(app=AppConfig(resource_uri=SIGNATURE_URI, visibility=["app"]))
+@mcp.tool(app=AppConfig(visibility=["app"]))
 def submit_signature(
     account_id: Annotated[str, Field(description="The account the document belongs to.")],
     document: Annotated[str, Field(description="What was signed.")],
