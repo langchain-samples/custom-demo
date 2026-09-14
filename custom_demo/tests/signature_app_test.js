@@ -1,18 +1,24 @@
-/* Node test for the MCP App's own wire contract (mcp_demo_server/apps/signature.html).
+/* Node test for the MCP App's own wire contract (mcp_demo_server/apps/src/signature.tsx).
  *
- * This is the one seam nothing else can reach. The signature pad is HTML the MCP
- * SERVER ships; the SPA renders it inside a sandboxed iframe, so no TypeScript
- * checks it, and vitest cannot execute a srcdoc. If the app's messages or its
- * content keys drift from what a host sends and what the `sign_document` tool's
- * `requested_schema` asks for, nothing fails loudly: the run just stays paused
- * forever.
+ * This is the one seam nothing else can reach. The signature pad is a React
+ * component the MCP SERVER ships, compiled into apps/app.js and inlined into
+ * the document the SPA renders inside a sandboxed iframe. No type check reaches
+ * the wire, and vitest cannot execute a srcdoc. If the app's messages or its
+ * content keys drift from what a host sends and what the `submit_signature`
+ * tool accepts, nothing fails loudly: the signature is simply lost after
+ * somebody drew it.
  *
  * The harness below is a minimal MCP Apps host, because the contract under test
  * is SEP-1865: the app opens with `ui/initialize`, is handed the finished call
- * over `ui/notifications/tool-input` and `ui/notifications/tool-result`, and
- * submits by calling `submit_signature`, which the server marks
- * `visibility: ["app"]`. Pinning those names here is what keeps the app
- * renderable by any host, not only ours.
+ * over `ui/notifications/tool-result`, and submits by calling
+ * `submit_signature`, which the server marks `visibility: ["app"]`. Pinning
+ * those names here is what keeps the app renderable by any host, not only ours.
+ *
+ * The document under test is the one the server really serves, obtained by
+ * calling `render_app` rather than by composing the pieces here. Composition
+ * order is load-bearing: the bundle's last statement looks `#root` up by id, so
+ * a `<script>` that moved into the head would throw before any app rendered,
+ * and a hand-built copy of the document would never notice.
  *
  * A Node test rather than a vitest one because it needs `node:fs` and `jsdom`
  * directly, and the app's tsconfig has neither in scope (the same reason
@@ -21,27 +27,50 @@
  * Run: node custom_demo/tests/signature_app_test.js
  */
 const assert = require("node:assert");
-const fs = require("node:fs");
+const { execFileSync } = require("node:child_process");
 const path = require("node:path");
 
 const ROOT = path.join(__dirname, "..", "..");
-const APPS = path.join(ROOT, "mcp_demo_server", "apps");
 // jsdom is a devDependency of the SPA, which is the only place node_modules lives.
 const { JSDOM } = require(path.join(ROOT, "frontend", "node_modules", "jsdom"));
 
-/** Compose the app the way apps.py serves it: shared shell + bridge, then the app. */
-const HTML =
-  "<!doctype html><html><head><style>" +
-  fs.readFileSync(path.join(APPS, "shell.css"), "utf8") +
-  "</style><script>" +
-  fs.readFileSync(path.join(APPS, "bridge.js"), "utf8") +
-  "</script></head><body>" +
-  fs.readFileSync(path.join(APPS, "signature.html"), "utf8") +
-  "</body></html>";
+/** The signature app exactly as `apps.py` serves it. */
+const HTML = execFileSync(
+  "python3",
+  [
+    "-c",
+    // apps.py is loaded by path rather than imported, so this needs no
+    // virtualenv: the module itself is stdlib-only, while importing the
+    // package would pull in fastmcp through its `__init__`.
+    "import importlib.util, sys\n" +
+      "spec = importlib.util.spec_from_file_location('apps', 'mcp_demo_server/apps.py')\n" +
+      "mod = importlib.util.module_from_spec(spec)\n" +
+      "spec.loader.exec_module(mod)\n" +
+      "sys.stdout.write(mod.render_app('signature', title='Signature'))\n",
+  ],
+  // The document is most of a megabyte, nearly all of it the React bundle.
+  { cwd: ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+);
 
 let passed = 0;
+
+/**
+ * Every window a test opened, so it can be shut when the test ends.
+ *
+ * Closing matters for the clock, not for tidiness: a `tools/call` the test
+ * never answers leaves the SDK's request timeout pending, and node will not
+ * exit until every one of those has expired. Fifteen abandoned windows turned a
+ * suite that finishes its assertions in a second into a minute of waiting.
+ */
+const live = [];
+
 async function ok(name, fn) {
-  await fn();
+  try {
+    await fn();
+  } finally {
+    while (live.length) live.pop().close();
+  }
+
   passed++;
   console.log("  ok -", name);
 }
@@ -113,6 +142,7 @@ function mount(dataUri, theme) {
       // stroke is observable without a native canvas build.
       window.HTMLCanvasElement.prototype.getContext = () => ({
         setTransform() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, clearRect() {},
+        save() {}, restore() {},
         // Records the crop the export asks for, which is the thing worth checking:
         // a full-pad export is what made the PNG an order of magnitude too big.
         drawImage(...args) {
@@ -141,6 +171,7 @@ function mount(dataUri, theme) {
       Object.defineProperty(window, "parent", { configurable: true, value: host });
     },
   });
+  live.push(dom.window);
   return { dom, posted, draws, doc: dom.window.document, host: () => dom.window.parent };
 }
 
@@ -160,28 +191,18 @@ const sent = (posted, method) => posted.find((m) => m.method === method);
  * result, delivered on the ordinary notification.
  */
 function deliver(dom, document_) {
-  const src = dom.window.parent;
-  reply(dom.window, src, 
-    {
-      jsonrpc: "2.0",
-      method: "ui/notifications/tool-input",
-      params: { arguments: { account_id: "MW-10241", document: document_ || "IPS amendment" } },
-    },
-  );
-  reply(dom.window, src, 
-    {
-      jsonrpc: "2.0",
-      method: "ui/notifications/tool-result",
-      params: {
-        structuredContent: {
-          account_id: "MW-10241",
-          household: "Whitfield Family Trust",
-          document: document_ || "IPS amendment",
-          reference: "MW-DOC-04417",
-        },
+  reply(dom.window, dom.window.parent, {
+    jsonrpc: "2.0",
+    method: "ui/notifications/tool-result",
+    params: {
+      structuredContent: {
+        account_id: "MW-10241",
+        household: "Whitfield Family Trust",
+        document: document_ || "IPS amendment",
+        reference: "MW-DOC-04417",
       },
     },
-  );
+  });
 }
 
 /** What the pad submitted, as the host receives it. */
@@ -190,18 +211,69 @@ function answered(posted) {
   return call ? call.params.arguments.capture : undefined;
 }
 
-/** postMessage is queued, not synchronous: let the queue drain. */
-const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+/**
+ * Let the queues drain.
+ *
+ * Two of them, which is why this is more than one turn: postMessage is
+ * delivered as a task, and React renders on the scheduler's own task rather
+ * than inside the event that queued the state update. Several turns of the
+ * event loop covers a handshake reply landing, a render, and an effect that
+ * sends the next message.
+ */
+const flush = async () => {
+  for (let i = 0; i < 6; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+};
 
-/** Draw one mark on the pad, which is what enables Confirm. */
-function sign(dom) {
+/**
+ * Let the queues drain AND the animation frame the SDK measures on arrive.
+ *
+ * `flush` is macrotask turns, which all run inside the first frame; auto-resize
+ * measures inside a `requestAnimationFrame`, so anything asserting on sizing
+ * has to wait for a real frame rather than a queue.
+ */
+const settle = async () => {
+  await flush();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  await flush();
+};
+
+/**
+ * A mounted pad with the handshake finished and the tool result delivered.
+ *
+ * Every test that touches a control has to get past both. The mount in
+ * src/index.tsx renders a status line and withholds the component until the
+ * result arrives, so there is no moment at which the pad exists with nothing
+ * to label itself: before that point there is no `#who` and no `#submit` to
+ * find.
+ */
+async function open(options = {}) {
+  const harness = mount(options.dataUri, options.theme);
+  await flush();
+  deliver(harness.dom, options.document);
+  await flush();
+  return harness;
+}
+
+/** Make the canvas measurable, since jsdom lays nothing out. */
+function pad(dom, width) {
   const canvas = dom.window.document.getElementById("canvas");
   canvas.setPointerCapture = () => {};
   canvas.hasPointerCapture = () => false;
-  canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 300, height: 150 });
-  const down = new dom.window.Event("pointerdown", { bubbles: true });
-  Object.assign(down, { clientX: 40, clientY: 40, pointerId: 1 });
-  canvas.dispatchEvent(down);
+  canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width, height: 150 });
+  return canvas;
+}
+
+/** Dispatch one pointer event at a point on the pad. */
+async function stroke(dom, canvas, type, x, y) {
+  const event = new dom.window.Event(type, { bubbles: true });
+  Object.assign(event, { clientX: x, clientY: y, pointerId: 1 });
+  canvas.dispatchEvent(event);
+  await flush();
+}
+
+/** Draw one mark on the pad, which is what enables Confirm. */
+async function sign(dom) {
+  await stroke(dom, pad(dom, 300), "pointerdown", 40, 40);
 }
 
 /**
@@ -211,24 +283,32 @@ function sign(dom) {
  * already at its smallest and the retries are a no-op - which is right, and is
  * why watching the ladder work needs a wide mark rather than the single dot.
  */
-function signWide(dom) {
-  const canvas = dom.window.document.getElementById("canvas");
-  canvas.setPointerCapture = () => {};
-  canvas.hasPointerCapture = () => false;
-  canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 600, height: 150 });
-  const down = new dom.window.Event("pointerdown", { bubbles: true });
-  Object.assign(down, { clientX: 20, clientY: 30, pointerId: 1 });
-  canvas.dispatchEvent(down);
-  const move = new dom.window.Event("pointermove", { bubbles: true });
-  Object.assign(move, { clientX: 580, clientY: 120, pointerId: 1 });
-  canvas.dispatchEvent(move);
+async function signWide(dom) {
+  const canvas = pad(dom, 600);
+  await stroke(dom, canvas, "pointerdown", 20, 30);
+  await stroke(dom, canvas, "pointermove", 580, 120);
 }
 
 /** Fill in the name field the way a person would. */
-function name(dom, value) {
+async function name(dom, value) {
   const who = dom.window.document.getElementById("who");
-  who.value = value;
+  // Through the prototype's own setter, because React installs one of its own
+  // on the node to track the value it last rendered. Assigning `who.value`
+  // updates that tracker as a side effect, and React then compares the two,
+  // sees no change, and never calls the input's onChange.
+  const native = Object.getOwnPropertyDescriptor(
+    dom.window.HTMLInputElement.prototype,
+    "value",
+  ).set;
+  native.call(who, value);
   who.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  await flush();
+}
+
+/** Press Confirm and let the submission go out. */
+async function confirm(doc) {
+  doc.getElementById("submit").click();
+  await flush();
 }
 
 (async () => {
@@ -256,23 +336,40 @@ function name(dom, value) {
     assert.strictEqual(done.id, undefined, "a notification must not carry an id");
   });
 
-  await ok("leaves sizing to the SDK rather than hand-rolling it", async () => {
-    const { posted } = mount();
+  await ok("reports its height from one place, not from each app", async () => {
+    const { dom, posted } = mount();
     await flush();
-    // The SDK reports height through a ResizeObserver (`autoResize`, on by
-    // default), so the app sends no size notification of its own. Whether that
-    // observer fires is not testable here: jsdom has no layout, every element
-    // measures 0, and the SDK correctly sends nothing when nothing changed.
-    // What IS ours is not duplicating it.
-    const ours = posted.filter((m) => m.method === "ui/notifications/size-changed");
-    assert.strictEqual(ours.length, 0, "the app should not send its own size notifications");
+    deliver(dom);
+    await settle();
+    // `useApp` in src/index.tsx turns on the SDK's auto-resize, which measures
+    // the document and reports it. That one notification is the whole sizing
+    // story for all four apps, and a component that measured itself as well
+    // would show up here as a second: two reporters fighting over the frame
+    // height is how a pane ends up flickering or clipped.
+    const sizes = posted.filter((m) => m.method === "ui/notifications/size-changed");
+    assert.strictEqual(sizes.length, 1, `expected exactly one reporter, got ${sizes.length}`);
+    assert.strictEqual(sizes[0].params.width, dom.window.innerWidth);
+  });
+
+  await ok("says which app the bundle is to draw", async () => {
+    // One bundle carries all four apps, so the document has to name the one it
+    // is. A missing or misspelled name renders a pane saying there is no such
+    // app, which on stage is a demo with nothing in it.
+    const { doc } = mount();
+    assert.strictEqual(doc.getElementById("root").dataset.app, "signature");
+  });
+
+  await ok("waits for the tool result rather than drawing an empty pad", async () => {
+    // The pad labels itself from the result, and a control that appears before
+    // its data would be a pad captioned with a placeholder.
+    const { doc } = mount();
+    await flush();
+    assert.strictEqual(doc.getElementById("submit"), null);
+    assert.match(doc.querySelector(".msg").textContent, /tool result/i);
   });
 
   await ok("titles itself from the tool's own result", async () => {
-    const { dom, doc } = mount();
-    await flush();
-    deliver(dom, "IPS amendment");
-    await flush();
+    const { doc } = await open({ document: "IPS amendment" });
     // The app titles itself from the result, naming the document and the household.
     const shown = doc.getElementById("msg").textContent;
     assert.ok(shown.includes("IPS amendment"), shown);
@@ -280,29 +377,24 @@ function name(dom, value) {
   });
 
   await ok("follows the host into dark mode", async () => {
-    const { doc } = mount(undefined, "dark");
-    await flush();
+    const { doc } = await open({ theme: "dark" });
     assert.strictEqual(doc.documentElement.getAttribute("data-theme"), "dark");
   });
 
   await ok("stays un-submittable until there is both a signature and a name", async () => {
-    const { dom, doc } = mount();
+    const { dom, doc } = await open();
     assert.strictEqual(doc.getElementById("submit").disabled, true);
-    sign(dom);
+    await sign(dom);
     assert.strictEqual(doc.getElementById("submit").disabled, true, "signed but nobody named");
-    name(dom, "Grace Achieng");
+    await name(dom, "Grace Achieng");
     assert.strictEqual(doc.getElementById("submit").disabled, false);
   });
 
   await ok("posts back exactly the keys the tool's schema asks for", async () => {
-    const { dom, doc, posted } = mount();
-    await flush();
-    deliver(dom);
-    await flush();
-    sign(dom);
-    name(dom, "Grace Achieng");
-    doc.getElementById("submit").click();
-    await flush();
+    const { dom, doc, posted } = await open();
+    await sign(dom);
+    await name(dom, "Grace Achieng");
+    await confirm(doc);
 
     const call = posted.find((m) => m.method === "tools/call");
     assert.ok(call, "nothing was submitted");
@@ -325,14 +417,10 @@ function name(dom, value) {
   });
 
   await ok("exports only the ink, not the whole pad", async () => {
-    const { dom, doc, draws } = mount();
-    await flush();
-    deliver(dom);
-    await flush();
-    sign(dom);
-    name(dom, "Grace Achieng");
-    doc.getElementById("submit").click();
-    await flush();
+    const { dom, doc, draws } = await open();
+    await sign(dom);
+    await name(dom, "Grace Achieng");
+    await confirm(doc);
 
     const [sx, sy, sw, sh] = draws[0];
     // The stroke is a dot at (40, 40) with an 8px margin, so the source rect is
@@ -345,14 +433,12 @@ function name(dom, value) {
   await ok("shrinks the export until it fits the budget", async () => {
     // Every width encodes to 12KB here, over the 10KB budget, so the export
     // should work down the ladder instead of sending the first thing it made.
-    const { dom, doc, draws, posted } = mount("data:image/png;base64," + "A".repeat(12000));
-    await flush();
-    deliver(dom);
-    await flush();
-    signWide(dom);
-    name(dom, "Grace Achieng");
-    doc.getElementById("submit").click();
-    await flush();
+    const { dom, doc, draws, posted } = await open({
+      dataUri: "data:image/png;base64," + "A".repeat(12000),
+    });
+    await signWide(dom);
+    await name(dom, "Grace Achieng");
+    await confirm(doc);
 
     assert.ok(draws.length > 1, `expected retries at smaller widths, got ${draws.length}`);
     // Destination width is the 6th drawImage arg. Non-increasing rather than
@@ -369,20 +455,15 @@ function name(dom, value) {
   });
 
   await ok("sends the first encoding when it already fits", async () => {
-    const { dom, doc, draws } = mount();
-    await flush();
-    deliver(dom);
-    await flush();
-    signWide(dom);
-    name(dom, "Grace Achieng");
-    doc.getElementById("submit").click();
-    await flush();
+    const { dom, doc, draws } = await open();
+    await signWide(dom);
+    await name(dom, "Grace Achieng");
+    await confirm(doc);
     assert.strictEqual(draws.length, 1, "a signature under budget should not be re-encoded");
   });
 
   await ok("offers no way to back out, because nothing is waiting on it", async () => {
-    const { doc } = mount();
-    await flush();
+    const { doc } = await open();
     // The tool call finished before this app was rendered. A Cancel button would
     // be a promise the app cannot keep, so Clear is the only way back.
     assert.strictEqual(doc.getElementById("cancel"), null);
@@ -390,12 +471,33 @@ function name(dom, value) {
   });
 
   await ok("clears a stroke, so a bad signature can be redrawn rather than sent", async () => {
-    const { dom, doc } = mount();
-    sign(dom);
-    name(dom, "Grace Achieng");
+    const { dom, doc } = await open();
+    await sign(dom);
+    await name(dom, "Grace Achieng");
     assert.strictEqual(doc.getElementById("submit").disabled, false);
     doc.getElementById("clear").click();
+    await flush();
     assert.strictEqual(doc.getElementById("submit").disabled, true);
+  });
+
+  await ok("re-arms Confirm when the server refuses, so a refusal is not final", async () => {
+    // The pad holds the only copy of the drawn signature. A submission that
+    // fails and leaves the button dead loses it, with the stroke still on
+    // screen and no way to send it.
+    const { dom, doc, posted } = await open();
+    await sign(dom);
+    await name(dom, "Grace Achieng");
+    await confirm(doc);
+
+    const call = posted.find((m) => m.method === "tools/call");
+    reply(dom.window, dom.window.parent, {
+      jsonrpc: "2.0",
+      id: call.id,
+      result: { content: [], structuredContent: { error: "Signature rejected." } },
+    });
+    await flush();
+    assert.strictEqual(doc.getElementById("msg").textContent, "Signature rejected.");
+    assert.strictEqual(doc.getElementById("submit").disabled, false, "Confirm stayed dead");
   });
 
   console.log(`\n${passed} passed`);

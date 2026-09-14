@@ -1,7 +1,7 @@
 /**
  * The look every MCP App in this server shares: Windows 95.
  *
- * Injected at serve time next to bridge.js (see apps.py), around the window
+ * Injected at serve time next to the app bundle (see apps.py), around the window
  * chrome `render_app` wraps each app in.
  *
  * WHY A PERIOD SKIN, AND NOT THE HOST'S THEME. An app is server-authored HTML
@@ -16,7 +16,8 @@
  * frontend/src/lib/mcpAppHost.ts). Those variables land on the root and this
  * stylesheet deliberately ignores every one of them. That is a View's choice to
  * make: the spec has hosts *offer* theming, not require that a View take it.
- * bridge.js still applies what arrives, because it is the client an app author
+ * The mount in mcp_demo_server/apps/src/index.tsx still applies what arrives,
+ * through the SDK's `useHostStyles`, because it is the client an app author
  * would copy and their app will probably want it.
  *
  * The palette is the 16-colour VGA set Windows 95 actually shipped. Do not
@@ -131,7 +132,7 @@ body {
  * DECORATIVE, and `aria-hidden` so a screen reader is not told about three
  * buttons that do nothing. There is no message in SEP-1865 for a view asking to
  * be dismissed, and inventing one would undo the point of speaking the standard
- * (see mcp_demo_server/apps/bridge.js). A box that looks pressable and is not
+ * (see mcp_demo_server/apps.py). A box that looks pressable and is not
  * would be worse than chrome that plainly is not interactive, so these have no
  * hover or active state at all.
  */

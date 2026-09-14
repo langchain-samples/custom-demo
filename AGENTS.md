@@ -64,8 +64,9 @@ mcp_demo_server/      THE OTHER END: two FastMCP servers on the modern stateless
                       per business (a logistics book with a rebalancer in it convinces nobody).
                       server.py = Fieldlink Logistics; wealth.py = Meridian Wealth, whose three
                       interactive tools are all MCP Apps. elicit.py holds the guard-pattern
-                      helpers both share; apps/ holds the app HTML plus the bridge.js and
-                      shell.css injected into each at serve time. NOT shipped in the wheel.
+                      helpers both share; apps/ holds the four React apps in src/, the app.js
+                      bundle build.sh compiles them into, and the shell.css injected beside it
+                      at serve time. NOT shipped in the wheel.
 scripts/              preflight, judge_doctor, wire_vercel_preview, the two CI doc/style
                       checkers (check_blank_after_block.py, check_doc_paths.py), and
                       run_mcp_server.sh (runs mcp_demo_server, `--tunnel` for a public ngrok URL)

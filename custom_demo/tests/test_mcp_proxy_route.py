@@ -224,6 +224,7 @@ def test_follows_a_redirect_the_server_issues_to_itself(redirector):
     def answer(url):
         if url == bare:
             return R(308, {"location": "/mcp"})
+
         return R(200, {"content-type": "text/event-stream"}, b"event: message\n")
 
     redirector["answer"] = answer
