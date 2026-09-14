@@ -425,13 +425,19 @@
 </div>
 
 <p class="filename">agent.py</p>
-<pre><code><span class="k">class</span> <span class="f">McpTools</span>(AgentMiddleware):
+<pre><code><span class="k">def</span> <span class="f">model_visible</span>(tool) -&gt; bool:
+    ui = (tool.metadata[<span class="s">"mcp"</span>][<span class="s">"tool"</span>][<span class="s">"_meta"</span>] <span class="k">or</span> {}).get(<span class="s">"ui"</span>) <span class="k">or</span> {}
+    <span class="c"># Default is visible: a server that never heard of MCP Apps sets nothing.</span>
+    <span class="k">return not</span> isinstance(ui.get(<span class="s">"visibility"</span>), list) <span class="k">or</span> <span class="s">"model"</span> <span class="k">in</span> ui[<span class="s">"visibility"</span>]
+
+
+<span class="k">class</span> <span class="f">McpTools</span>(AgentMiddleware):
     <span class="k">async def</span> <span class="f">_load</span>(self, runtime):
-        <span class="c"># This assistant's servers, discovered once and cached. Drops any tool the</span>
-        <span class="c"># server marked visibility: ["app"] - the one MCP Apps rule that has to live</span>
-        <span class="c"># here, because the model's tool list is assembled here.</span>
         servers = parse_servers(get_ctx(runtime).mcp_servers)
-        <span class="k">return await</span> load_tools(servers) <span class="k">if</span> servers <span class="k">else</span> []
+        tools = <span class="k">await</span> load_tools(servers) <span class="k">if</span> servers <span class="k">else</span> []
+        <span class="c"># The one MCP Apps rule that has to live here, because this is where the</span>
+        <span class="c"># model's tool list is assembled. An app-only tool is the app's to call.</span>
+        <span class="k">return</span> [t <span class="k">for</span> t <span class="k">in</span> tools <span class="k">if</span> model_visible(t)]
 
     <span class="k">async def</span> <span class="f">awrap_model_call</span>(self, request, handler):
         <span class="c"># What the model sees. A warm call adds no latency.</span>
