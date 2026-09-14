@@ -11,12 +11,14 @@ and Settings has to validate a URL before it is saved.
 
 from __future__ import annotations
 
-from starlette.responses import JSONResponse
+import httpx
+from starlette.responses import JSONResponse, StreamingResponse
 
 from custom_demo.runtime.mcp_servers import (
     call_app_tool,
     parse_servers,
     read_app_resource,
+    resolve_server,
     tool_catalog,
 )
 
@@ -133,3 +135,75 @@ async def mcp_call(request):
         return JSONResponse({"error": str(exc)}, status_code=403)
     except Exception as exc:  # noqa: BLE001 - the app needs the reason, not a dead button
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"[:300]}, status_code=502)
+
+
+# What we pass upstream from the browser's request, and nothing else. Cookies,
+# the deployment's own key and anything else on the way in stay here: the only
+# authority this request carries upstream is the server's own configured
+# headers, added below.
+_UP = ("content-type", "accept", "mcp-session-id", "mcp-protocol-version", "last-event-id")
+# What comes back. The session id is how Streamable HTTP keeps a connection,
+# so dropping it would make every message a new session.
+_DOWN = ("content-type", "mcp-session-id", "cache-control")
+
+
+async def mcp_proxy(request):
+    """Forward one MCP message to a configured server, and stream the answer.
+
+    The whole MCP surface the browser needs, in one route that understands none
+    of it. It does not parse the body: `initialize`, `tools/list`,
+    `resources/read` and a view's `tools/call` are all just bytes going to a
+    server the assistant is already connected to. That is the point. Everything
+    this deployment used to know about MCP Apps (which tools ship a UI, which
+    are open to apps, what a `ui://` resolves to) is the browser's business
+    once it holds a real client, and none of it belongs in a proxy.
+
+    A browser cannot hold the connection itself: an MCP server is a third-party
+    origin that need not send CORS headers, and the bearer token would have to
+    be in page JavaScript. Claude reaches the same shape, at
+    `/v1/toolbox/shttp/mcp/<connection-uuid>`.
+
+    Addressed by server ID, never by URL. See `resolve_server`: a proxy that
+    forwards wherever it is pointed is a general-purpose fetcher wearing the
+    deployment's network position.
+
+    Streams rather than buffers. Streamable HTTP answers `text/event-stream`,
+    and a server that reports progress during a long tool call must reach the
+    view while it is still running.
+    """
+    server = await resolve_server(
+        str(request.query_params.get("assistant") or ""), request.path_params["server_id"]
+    )
+    if server is None:
+        return JSONResponse({"error": "no such server on this assistant"}, status_code=404)
+
+    body = await request.body()
+    headers = {k: v for k, v in request.headers.items() if k.lower() in _UP}
+    headers.update(server.headers or {})
+
+    client = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=15.0))
+    try:
+        upstream = await client.send(
+            client.build_request("POST", server.url, content=body, headers=headers),
+            stream=True,
+        )
+    except Exception as exc:  # noqa: BLE001 - the browser needs the reason, not a hang
+        await client.aclose()
+        return JSONResponse({"error": f"{type(exc).__name__}: {exc}"[:300]}, status_code=502)
+
+    async def pump():
+        # `aiter_raw`, so a `text/event-stream` is relayed byte for byte rather
+        # than decoded and reassembled. The client is closed here because it
+        # has to outlive this handler.
+        try:
+            async for chunk in upstream.aiter_raw():
+                yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
+    return StreamingResponse(
+        pump(),
+        status_code=upstream.status_code,
+        headers={k: v for k, v in upstream.headers.items() if k.lower() in _DOWN},
+    )

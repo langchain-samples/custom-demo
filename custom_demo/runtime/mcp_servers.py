@@ -392,6 +392,33 @@ def _catalog_tool(tool: Any) -> dict[str, Any]:
     }
 
 
+async def resolve_server(assistant_id: str, server_id: str) -> McpServer | None:
+    """The configured server an id names, read off the assistant that owns it.
+
+    The id, not a URL. A proxy that forwards wherever the caller points it is a
+    general-purpose fetcher wearing the deployment's network position, and the
+    browser gains nothing from naming the host: it is choosing between servers
+    the assistant already has. Resolving server-side also keeps the bearer
+    token out of the request entirely.
+
+    `None` for an id the assistant does not have, which the caller answers 404.
+    An unsaved server being edited in Settings is exactly that case, and is why
+    "Test connection" cannot go through here.
+    """
+    # Local: langgraph_sdk pulls an http stack this module does not otherwise
+    # need, and mcp_servers.py is on the graph's import path.
+    from langgraph_sdk import get_client  # noqa: PLC0415
+
+    assistant = await get_client().assistants.get(assistant_id)
+    # `getattr`, not dot access: the SDK types an Assistant as a union of
+    # TypedDict / dataclass / model shapes, so the checker rejects both
+    # subscripting and `.get`, and only the mapping form exists at runtime.
+    context: Any = getattr(assistant, "get", lambda _k, _d=None: None)("context") or {}
+    servers_raw = context.get("mcp_servers") if hasattr(context, "get") else None
+    configured = parse_servers(servers_raw)
+    return next((s for s in configured if s.id == server_id), None)
+
+
 async def _catalog_refreshed(servers: tuple[McpServer, ...]) -> list[dict[str, Any]]:
     """Reconnect to each server and report what it offers, or why it cannot.
 

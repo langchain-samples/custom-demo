@@ -338,6 +338,16 @@ describes a run in progress, and a half-replayed one reads worse than none. Whic
 tool calls become apps is decided by the bootstrap map below, which is the only thing that
 can know.
 
+`POST /mcp/proxy/{server_id}` is one route carrying every MCP message the browser sends,
+and understanding none of them: `initialize`, `tools/list`, `resources/read` and a view's
+`tools/call` are bytes going to a server the assistant is already connected to. It streams,
+because Streamable HTTP answers `text/event-stream`. Addressed by ID and never by URL, so
+it cannot be pointed anywhere the assistant is not already configured for, and the bearer
+token is attached here rather than existing in the browser. Claude reaches the same shape at
+`/v1/toolbox/shttp/mcp/<connection-uuid>`. Once the SPA holds a real MCP client over this,
+the routes below have nothing left to do: everything the deployment currently knows about
+MCP Apps becomes the browser's business, and only `model_visible` stays behind.
+
 `POST /mcp/bootstrap` is the other half of being a two-process Host. `_meta.ui.resourceUri`
 only exists on `tools/list`, so the browser cannot see which tools ship a UI and used to
 guess from the `{server}_` prefix, which answers "is this an MCP tool" instead. It now asks
