@@ -29,6 +29,17 @@ runs in the background; the first turn can be slow while the VM and analysis pac
 Use distinct customer names for independent demos in one workspace: same-customer assistants
 can share prompt/skill repositories and eval datasets.
 
+## What this demos
+
+| Platform | Features |
+|---|---|
+| **Deep Agents** | Skills, sandbox/code execution, dynamic subagents, MCP tools and Apps, human approval |
+| **LangSmith** | Context Hub prompts/skills, tracing, Monitoring, Insights, **Engine** (issue detection), Evals and live prompt fixes |
+
+Dynamic subagents require `DYNAMIC_SUBAGENTS=1`; MCP requires a connected server.
+Optional demo traffic populates Monitoring and attempts to start Insights and Engine, subject to
+workspace permissions and availability.
+
 ## Ways to run and demo
 
 | Mode | How |
