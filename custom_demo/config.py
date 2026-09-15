@@ -246,15 +246,6 @@ def sandbox_enabled() -> bool:
     return _env_raw("SANDBOX_ENABLED", "DA_SANDBOX", "1") != "0"
 
 
-def dynamic_subagents_enabled() -> bool:
-    """Whether `task` can spin up subagents (`DYNAMIC_SUBAGENTS=1`).
-
-    Note the polarity is the opposite of the sandbox's: off unless exactly `"1"`.
-    Preserved as it was, and no `load_env()`, for the same reasons.
-    """
-    return _env_raw("DYNAMIC_SUBAGENTS", "DA_DYNAMIC_SUBAGENTS", "0") == "1"
-
-
 def sandbox_files_root() -> str:
     """Configured root for the sandbox file browser, unvalidated.
 

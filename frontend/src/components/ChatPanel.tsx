@@ -42,6 +42,7 @@ import { McpAppCard } from "@/components/chat/McpAppCard";
 import { Button } from "@/components/motion/button";
 import { ToolChip, type ChipData } from "@/components/chat/ToolChip";
 import { ToolChipGroup } from "@/components/chat/ToolChipGroup";
+import { ToolActivity, freezePendingChips } from "@/components/chat/toolActivity";
 import type { GraphSubagent } from "@/lib/agentGraph";
 import { FeedbackRow } from "@/components/chat/FeedbackRow";
 import { IconChevronDown, IconChevronRight } from "@tabler/icons-react";
@@ -51,8 +52,6 @@ import { StreamingResponse } from "@/components/agents/streaming-response";
 import { ReasoningText } from "@/components/agents/loading-states/reasoning-text";
 import { PromptInput } from "@/components/agents/prompt-input";
 import {
-  chipArgSummary,
-  chipCode,
   contentToText,
   widgetFromArgs,
   widgetLooksComplete,
@@ -573,8 +572,7 @@ export default function ChatPanel({
     // These maps belong to the MAIN graph ONLY — non-empty-namespace (subagent)
     // frames are routed to `subState` below and must never touch these, or a
     // subagent's own model/tool output would leak into the answer/dashboard.
-    const chipOrder: string[] = [];
-    const chipMap: Record<string, ChipData> = {};
+    const activity = new ToolActivity({ includeCode: true });
 
     // A resume continues a tool call that is still OPEN: the tool is blocked
     // inside `interrupt()`, so its chip sits in the previous turn's activity
@@ -591,12 +589,7 @@ export default function ChatPanel({
             it.kind === "activity" && it.chips.some((c) => c.result === null),
         );
       if (paused) {
-        for (const chip of paused.chips) {
-          if (chip.result !== null) continue;
-          // Un-freeze: the run is moving again, so it is not stopped after all.
-          chipMap[chip.id] = { ...chip, stopped: false };
-          chipOrder.push(chip.id);
-        }
+        activity.resume(paused.chips);
         patchItem(paused.id, (it) =>
           it.kind === "activity" ? { ...it, chips: it.chips.filter((c) => c.result !== null) } : it,
         );
@@ -634,8 +627,7 @@ export default function ChatPanel({
       string,
       {
         label: string;
-        chipOrder: string[];
-        chipMap: Record<string, ChipData>;
+        activity: ToolActivity;
         nodeById: Record<string, string>;
         text: string;
       }
@@ -688,7 +680,7 @@ export default function ChatPanel({
 
     const syncChips = () =>
       patchItem(activityId, (it) =>
-        it.kind === "activity" ? { ...it, chips: chipOrder.map((id) => ({ ...chipMap[id] })) } : it,
+        it.kind === "activity" ? { ...it, chips: activity.snapshot() } : it,
       );
     const setBubble = (patch: Partial<Omit<AssistantItem, "kind" | "id">>) =>
       patchItem(bubbleId, (it) => (it.kind === "assistant" ? { ...it, ...patch } : it));
@@ -822,23 +814,7 @@ export default function ChatPanel({
                 description: a.description || "",
               };
             }
-            const summary = chipArgSummary(name, args);
-            // Carry the source/command a code-running tool executed (eval's `code`,
-            // execute's `command`) so the expanded chip can show it highlighted.
-            // Accumulates across partial frames just like the summary.
-            const ci = chipCode(name, args);
-            if (!chipMap[id]) {
-              chipMap[id] = { id, name, arg: summary, result: null, code: ci?.code, codeLang: ci?.lang };
-              chipOrder.push(id);
-              // Real progress, from the agent's own tool calls (the shell throttles it).
-              onProgress?.(name);
-            } else {
-              chipMap[id] = {
-                ...chipMap[id],
-                arg: summary,
-                ...(ci && { code: ci.code, codeLang: ci.lang }),
-              };
-            }
+            if (activity.upsert(tc)) onProgress?.(name);
             syncChips();
           }
         }
@@ -869,10 +845,7 @@ export default function ChatPanel({
         if (cid && artifactPathByCall[cid]) {
           onArtifact?.({ path: artifactPathByCall[cid], content: "", streaming: false });
         }
-        if (cid && chipMap[cid]) {
-          chipMap[cid] = { ...chipMap[cid], result: contentToText(msg.content) };
-          syncChips();
-        }
+        if (activity.complete(cid, contentToText(msg.content))) syncChips();
         // The app was mounted when the call started; this closes it. Marking
         // `streaming` false is what turns the last partial into the single
         // `tool-input` the spec requires before a result.
@@ -900,7 +873,7 @@ export default function ChatPanel({
     const ensureSub = (ns: string[]) => {
       const { key, label } = subagentIdentity(ns);
       if (!subState[key]) {
-        subState[key] = { label, chipOrder: [], chipMap: {}, nodeById: {}, text: "" };
+        subState[key] = { label, activity: new ToolActivity(), nodeById: {}, text: "" };
         subOrder.push(key);
       }
       return key;
@@ -923,7 +896,7 @@ export default function ChatPanel({
      */
     const dispatchFor = (key: string): TaskDispatch | undefined => {
       const sources = dispatchOrder
-        .map((id) => (taskArgs[id] ? [taskArgs[id]] : parseTaskDispatches(chipMap[id]?.code || "")))
+        .map((id) => (taskArgs[id] ? [taskArgs[id]] : parseTaskDispatches(activity.codeFor(id))))
         .filter((list) => list.length);
       const roots = [...new Set(subOrder.map(subagentRoot))];
       const list = sources[roots.indexOf(subagentRoot(key))];
@@ -947,7 +920,7 @@ export default function ChatPanel({
                   // of the fleet ran is the point of showing the card at all.
                   label: type ? type[0].toUpperCase() + type.slice(1) : subState[k].label,
                   type: type || undefined,
-                  chips: subState[k].chipOrder.map((id) => ({ ...subState[k].chipMap[id] })),
+                  chips: subState[k].activity.snapshot(),
                   text: subState[k].text,
                   invokedWith: dispatch?.description || undefined,
                   done: false,
@@ -964,29 +937,12 @@ export default function ChatPanel({
       const node = msg.id ? st.nodeById[msg.id] : undefined;
       if (msg.type === "ai") {
         const tcs = msg.tool_calls || [];
-        for (const tc of tcs) {
-          // Same keying rule as main chips: a chip MUST carry the real tool_call
-          // id so the matching ToolMessage can clear its spinner.
-          const id = tc.id;
-          if (!id) continue;
-          const name = tc.name || "";
-          const summary = chipArgSummary(name, tc.args || {});
-          if (!st.chipMap[id]) {
-            st.chipMap[id] = { id, name, arg: summary, result: null };
-            st.chipOrder.push(id);
-          } else {
-            st.chipMap[id] = { ...st.chipMap[id], arg: summary };
-          }
-        }
+        for (const tc of tcs) st.activity.upsert(tc);
         const text = contentToText(msg.content);
         if (text && tcs.length === 0 && node !== "tools") st.text = text;
         syncSubagents();
       } else if (msg.type === "tool") {
-        const cid = msg.tool_call_id;
-        if (cid && st.chipMap[cid]) {
-          st.chipMap[cid] = { ...st.chipMap[cid], result: contentToText(msg.content) };
-          syncSubagents();
-        }
+        if (st.activity.complete(msg.tool_call_id, contentToText(msg.content))) syncSubagents();
       }
     };
 
@@ -1218,12 +1174,7 @@ export default function ChatPanel({
       // inside `finally` replaces the value the `try` already returned.)
       if (!interrupt) {
         patchItem(activityId, (it) =>
-          it.kind === "activity"
-            ? {
-                ...it,
-                chips: it.chips.map((c) => (c.result === null ? { ...c, stopped: true } : c)),
-              }
-            : it,
+          it.kind === "activity" ? { ...it, chips: freezePendingChips(it.chips) } : it,
         );
         // Same freeze for each subagent: mark done (stops the card spinner) and
         // stop any chip whose result never streamed.
@@ -1234,7 +1185,7 @@ export default function ChatPanel({
                 groups: it.groups.map((g) => ({
                   ...g,
                   done: true,
-                  chips: g.chips.map((c) => (c.result === null ? { ...c, stopped: true } : c)),
+                  chips: freezePendingChips(g.chips),
                 })),
               }
             : it,

@@ -1,18 +1,11 @@
-"""Agent Server entrypoint.
+"""Shared Agent Server graph with per-run trace routing.
 
-`langgraph.json` points at `custom_demo/graph.py:graph`. Agent Server imports
-this module and serves the graph with its own persistence (so it's built without a
-checkpointer). Demo variants are modeled as **assistants** — configuration
-instances that set the `Context` fields (prompt/model/tools) at runtime, created from
-the SPA or the `assistant_setup` graph.
+`langgraph.json` registers this factory as `dashboard_agent`. The compiled graph is
+built once; Agent Server supplies persistence and each assistant supplies configuration.
+The factory routes traces using `configurable.ls_workspace` and `ls_project`.
 
-`graph` is a **factory**: Agent Server calls it with each run's config, so we can
-read `configurable.ls_workspace` / `ls_project` and route that run's LangSmith
-traces to a chosen workspace/project via `tracing_context`. It also reads
-`langsmith-trace` (the distributed-tracing header Agent Server surfaces into
-`configurable`) so a run started inside someone else's span nests under it rather
-than starting its own trace — see voice/trace.py. The compiled graph itself is built
-once (`base_graph`) and reused — the factory only wraps the run in a tracing context.
+Agent runs keep independent trace roots. Voice records their run IDs for navigation
+rather than assigning an inbound distributed-tracing parent.
 """
 
 from __future__ import annotations

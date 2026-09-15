@@ -2,16 +2,19 @@
 
 The handles travel as the `ls_artifacts` dict that `provisioning/setup.py` writes,
 the SPA stores on the assistant and POSTs back verbatim. `test_cleanup_contract.py`
-pins the three sides against each other, and reads this file to do it — the guard
-keys below are half of that contract.
+pins the manifest against the ordered deletion behavior.
 """
 
 from __future__ import annotations
+
+import asyncio
+from collections.abc import Callable
 
 import httpx
 from starlette.responses import JSONResponse
 
 from custom_demo.config import scoped_client
+from custom_demo.core.demo import LsArtifacts
 from custom_demo.provisioning.evals import _rules_api, delete_judge_evaluator
 
 
@@ -61,85 +64,53 @@ async def cleanup(request):
     except Exception:  # noqa: BLE001 - an unreadable body is a client error; answer 400, not 500
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
 
-    client = scoped_client(body.get("workspace"))
+    return JSONResponse(await asyncio.to_thread(_delete_artifacts, body))
+
+
+def _delete_artifacts(body: dict) -> dict:
+    """Delete manifest artifacts sequentially, collecting independent failures."""
+    artifacts = LsArtifacts.from_mapping(body)
+    workspace = artifacts.workspace
+    client = scoped_client(workspace)
     deleted: list[str] = []
     failed: list[dict] = []
 
-    def _try(kind: str, name: str, fn):
+    def _try(kind: str, name: str | None, fn: Callable[[str], object]) -> None:
+        """Pass a nonempty handle to its deletion and record the outcome."""
         if not name:
             return
 
         try:
-            fn()
+            fn(name)
             deleted.append(f"{kind}:{name}")
         except Exception as exc:  # noqa: BLE001 - per-artifact: collected into `failed` so the rest of the cascade runs
             failed.append({"artifact": f"{kind}:{name}", "error": _delete_error(exc)})
 
-    _try(
-        "project", body.get("project"), lambda: client.delete_project(project_name=body["project"])
-    )
-    _try("agent", body.get("agent_repo"), lambda: client.delete_agent(body["agent_repo"]))
-    # The skills bundle is an agent-type repo (push_agent) → delete_agent, not delete_skill.
-    _try(
-        "skills bundle",
-        body.get("skills_repo"),
-        lambda: client.delete_agent(body["skills_repo"]),
-    )
-    for skill in body.get("skills") or []:  # legacy per-skill repos
-        _try("skill", skill, lambda s=skill: client.delete_skill(s))
+    _try("project", artifacts.project, lambda name: client.delete_project(project_name=name))
+    _try("agent", artifacts.agent_repo, lambda name: client.delete_agent(name))
+    _try("skills bundle", artifacts.skills_repo, lambda name: client.delete_agent(name))
+    for skill in artifacts.skills or []:
+        _try("skill", skill, lambda name: client.delete_skill(name))
 
-    # The per-assistant eval dataset (provisioning/setup.py writes it into
-    # `ls_artifacts.eval_dataset`). Absent for assistants created before that
-    # feature, and `_try` no-ops on a falsy name — so this stays a silent skip.
     _try(
         "eval dataset",
-        body.get("eval_dataset"),
-        lambda: client.delete_dataset(dataset_name=body["eval_dataset"]),
+        artifacts.eval_dataset,
+        lambda name: client.delete_dataset(dataset_name=name),
     )
-    # The run rule that attached the judge to that dataset. Deleted explicitly because
-    # dropping the dataset is not documented to cascade to it, and a leftover rule shows
-    # up as a stray evaluator in the customer's workspace.
-    _try(
-        "eval rule",
-        body.get("eval_rule_id"),
-        lambda: _delete_eval_rule(body.get("workspace"), body["eval_rule_id"]),
-    )
-    # The evaluator the rule pointed at — a separate workspace-level object, and the row
-    # on the Evaluators page. Deleting the rule does not remove it, so without this every
-    # torn-down demo leaves one behind in the customer's workspace. After the rule, since
-    # an evaluator with a live attachment may refuse to go.
+    _try("eval rule", artifacts.eval_rule_id, lambda name: _delete_eval_rule(workspace, name))
     _try(
         "eval evaluator",
-        body.get("eval_evaluator_id"),
-        lambda: _delete_judge_evaluator(body.get("workspace"), body["eval_evaluator_id"]),
+        artifacts.eval_evaluator_id,
+        lambda name: delete_judge_evaluator(workspace, name),
     )
-    # The human-review queue over the trace project. Recorded by name (it is created on
-    # the backfill thread, after the assistant's metadata is written), so this resolves
-    # the name to an id first. Deleting the project does not take the queue with it.
     _try(
         "annotation queue",
-        body.get("annotation_queue"),
-        lambda: _delete_annotation_queue(body.get("workspace"), body["annotation_queue"]),
+        artifacts.annotation_queue,
+        lambda name: _delete_annotation_queue(workspace, name),
     )
-    # The judge prompt the evaluator referenced. Deleted after it, since a prompt with a
-    # live reference may refuse to go.
-    _try(
-        "eval judge prompt",
-        body.get("eval_judge_prompt"),
-        lambda: client.delete_prompt(body["eval_judge_prompt"]),
-    )
+    _try("eval judge prompt", artifacts.eval_judge_prompt, lambda name: client.delete_prompt(name))
 
-    return JSONResponse({"deleted": deleted, "failed": failed})
-
-
-def _delete_judge_evaluator(workspace: str | None, evaluator_id: str) -> None:
-    """DELETE the workspace evaluator `evaluator_id`. Raises so `_try` records it.
-
-    Kept as a wrapper despite forwarding both arguments unchanged. An audit
-    flagged it as a pure pass-through, but two tests patch this name, so removing
-    it would take the seam they use with it.
-    """
-    delete_judge_evaluator(workspace, evaluator_id)
+    return {"deleted": deleted, "failed": failed}
 
 
 def _delete_eval_rule(workspace: str | None, rule_id: str) -> None:

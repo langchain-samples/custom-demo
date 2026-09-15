@@ -31,3 +31,4 @@ chat-langchain-lite/
 *.pem
 *.key
 *.crt
+credentials.json

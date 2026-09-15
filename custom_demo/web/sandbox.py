@@ -20,7 +20,7 @@ import posixpath
 from starlette.responses import JSONResponse
 
 from custom_demo.config import load_env
-from custom_demo.runtime.agent import _ensure_sandbox, _sandbox_enabled, _sandbox_key_from
+from custom_demo.resources.sandbox import attach_sandbox, sandbox_enabled, sandbox_key_from
 from custom_demo.web.errors import err, route_error
 from custom_demo.web.files import (
     EMPTY_FILE_REMINDER,
@@ -97,12 +97,12 @@ async def _resolve_backend(request, params: dict | None = None):
     `params` overrides the query string, for POST routes that carry the keys in a JSON
     body instead.
 
-    Keyed exactly like the runtime (`agent_repo` → `customer` → "default") so the
+    Keyed by sandbox_key, with agent_repo/customer fallbacks shared with runtime so the
     browser sees the SAME VM a chat turn warmed — and, because this app and the
     graph share one process, usually straight out of `_SANDBOX_CACHE` with no network.
     """
-    load_env()  # `_sandbox_enabled()` reads os.getenv directly and never loads .env itself
-    if not _sandbox_enabled():
+    load_env()  # `sandbox_enabled()` reads os.getenv directly and never loads .env itself
+    if not sandbox_enabled():
         return None, err(
             503, "sandbox_disabled", "Agent file access is turned off for this deployment."
         )
@@ -118,7 +118,7 @@ async def _resolve_backend(request, params: dict | None = None):
     # attach-only: a toolbar click must never provision a VM (~30s boot + pip install).
     # Sync + network → to_thread so it can't block the event loop.
     backend = await asyncio.to_thread(
-        _ensure_sandbox, _sandbox_key_from(sandbox_key, agent_repo, customer), create=False
+        attach_sandbox, sandbox_key_from(sandbox_key, agent_repo, customer)
     )
     if backend is None:
         return None, err(503, "sandbox_unavailable", "No sandbox files for this assistant.")

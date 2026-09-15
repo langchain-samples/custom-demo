@@ -12,7 +12,7 @@ The contract:
   unbounded base64 branch. Binary/oversized/non-UTF-8 are 200 placeholders, not errors.
 - Paths are confined to the root by normpath + prefix (so `..` can't escape).
 - Sandbox off / never provisioned → a calm 503 with a `reason` slug, never a 500 stack.
-- The browse path is attach-only: `_ensure_sandbox(key, create=False)` must never
+- The browse path is attach-only: `attach_sandbox(key)` must never
   provision a VM, and the key mirrors the runtime (agent_repo → customer → default).
 """
 
@@ -33,7 +33,7 @@ from deepagents.backends.protocol import (
 )
 from starlette.testclient import TestClient
 
-import custom_demo.runtime.agent as A
+import custom_demo.resources.sandbox as S
 import custom_demo.web.sandbox as WS
 from custom_demo.webapp import app
 
@@ -42,9 +42,9 @@ client = TestClient(app)
 
 @pytest.fixture(autouse=True)
 def _clear_sandbox_cache():
-    A._SANDBOX_CACHE.clear()
+    S._SANDBOX_CACHE.clear()
     yield
-    A._SANDBOX_CACHE.clear()
+    S._SANDBOX_CACHE.clear()
 
 
 class _FakeBackend:
@@ -85,8 +85,8 @@ class _FakeBackend:
 
 def _install(monkeypatch, backend, enabled: bool = True):
     """Patch out the sandbox plumbing, on web.sandbox — where the routes look it up."""
-    monkeypatch.setattr(WS, "_sandbox_enabled", lambda: enabled)
-    monkeypatch.setattr(WS, "_ensure_sandbox", lambda key, *, create=True: backend)
+    monkeypatch.setattr(WS, "sandbox_enabled", lambda: enabled)
+    monkeypatch.setattr(WS, "attach_sandbox", lambda key: backend)
     return backend
 
 
@@ -426,22 +426,22 @@ def test_read_maps_backend_errors(monkeypatch, detail, status, reason):
 )
 def test_sandbox_key_mirrors_the_runtime(monkeypatch, query, key):
     seen: list[tuple] = []
-    monkeypatch.setattr(WS, "_sandbox_enabled", lambda: True)
+    monkeypatch.setattr(WS, "sandbox_enabled", lambda: True)
 
-    def _spy(k, *, create=True):
-        seen.append((k, create))
+    def _spy(k):
+        seen.append(k)
         return _FakeBackend()
 
-    monkeypatch.setattr(WS, "_ensure_sandbox", _spy)
+    monkeypatch.setattr(WS, "attach_sandbox", _spy)
     client.get(f"/sandbox-files?{query}")
-    assert seen == [(key, False)]  # attach-only: a UI click never provisions a VM
+    assert seen == [key]  # attach-only: a UI click never provisions a VM
 
 
 @pytest.mark.parametrize("url", ["/sandbox-files", "/sandbox-file?path=/workspace/a.md"])
 def test_sandbox_disabled_degrades_calmly(monkeypatch, url):
-    # conftest sets SANDBOX_ENABLED=0 for the whole suite — don't patch _sandbox_enabled.
+    # conftest sets SANDBOX_ENABLED=0 for the whole suite — don't patch sandbox_enabled.
     called: list = []
-    monkeypatch.setattr(WS, "_ensure_sandbox", lambda *a, **k: called.append(a))
+    monkeypatch.setattr(WS, "attach_sandbox", lambda *a, **k: called.append(a))
     resp = client.get(url)
     assert resp.status_code == 503
     assert resp.json()["reason"] == "sandbox_disabled"
@@ -458,12 +458,12 @@ def test_sandbox_unavailable_degrades_calmly(monkeypatch, url):
 
 @pytest.mark.parametrize("url", ["/sandbox-files", "/sandbox-file?path=/workspace/a.md"])
 def test_no_stack_ever_escapes(monkeypatch, url):
-    monkeypatch.setattr(WS, "_sandbox_enabled", lambda: True)
+    monkeypatch.setattr(WS, "sandbox_enabled", lambda: True)
 
-    def _boom(key, *, create=True):
+    def _boom(key):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(WS, "_ensure_sandbox", _boom)
+    monkeypatch.setattr(WS, "attach_sandbox", _boom)
     resp = client.get(url)
     assert resp.status_code == 500
     assert resp.json()["error"] == "RuntimeError: boom"
@@ -620,36 +620,36 @@ class _FakeClient:
         return sb
 
 
-def test_ensure_sandbox_create_false_never_provisions(monkeypatch):
+def test_attach_sandbox_never_provisions(monkeypatch):
     ls_client = _FakeClient()
     monkeypatch.setenv("SANDBOX_ENABLED", "1")
     monkeypatch.setenv("LANGSMITH_API_KEY", "test-key")
-    monkeypatch.setattr(A, "SandboxClient", lambda **kw: ls_client)
-    assert A._ensure_sandbox("acme", create=False) is None
+    monkeypatch.setattr(S, "SandboxClient", lambda **kw: ls_client)
+    assert S.attach_sandbox("acme") is None
     assert ls_client.created == []  # no VM, no ~30s boot, no pip install
-    assert A._SANDBOX_CACHE == {}  # and nothing poisoned the cache
+    assert S._SANDBOX_CACHE == {}  # and nothing poisoned the cache
 
 
-def test_ensure_sandbox_create_false_reattaches_existing(monkeypatch):
+def test_attach_sandbox_reattaches_existing(monkeypatch):
     ls_client = _FakeClient(existing=[_FakeVM("da-acme")])
     monkeypatch.setenv("SANDBOX_ENABLED", "1")
     monkeypatch.setenv("LANGSMITH_API_KEY", "test-key")
-    monkeypatch.setattr(A, "SandboxClient", lambda **kw: ls_client)
-    backend = A._ensure_sandbox("acme", create=False)
+    monkeypatch.setattr(S, "SandboxClient", lambda **kw: ls_client)
+    backend = S.attach_sandbox("acme")
     assert isinstance(backend, LangSmithSandbox)
     assert ls_client.created == []
     assert [c for vm in ls_client.existing for c in vm.runs] == []  # attach ⇒ no re-seed
 
 
-def test_ensure_sandbox_still_creates_by_default(monkeypatch):
+def test_ensure_sandbox_provisions_with_explicit_seed(monkeypatch):
     ls_client = _FakeClient()
     monkeypatch.setenv("SANDBOX_ENABLED", "1")
     monkeypatch.setenv("LANGSMITH_API_KEY", "test-key")
-    monkeypatch.setattr(A, "SandboxClient", lambda **kw: ls_client)
+    monkeypatch.setattr(S, "SandboxClient", lambda **kw: ls_client)
     # A create needs the assistant's own starting-files spec: there is no generic
     # dataset to fall back on, so `_ensure_sandbox` raises without one.
     seed = [{"name": "orders.csv", "kind": "csv", "columns": ["id"], "rows": [["1"]]}]
-    assert A._ensure_sandbox("acme", seed=seed) is not None
+    assert S.ensure_sandbox("acme", seed=seed) is not None
     assert ls_client.created == ["da-acme"]  # existing callers keep today's behaviour
 
 
@@ -782,31 +782,31 @@ def test_upload_reports_a_per_file_backend_failure(monkeypatch):
 
 def test_upload_is_attach_only_and_says_what_to_do(monkeypatch):
     # A cold start is a ~30s boot plus a pip install, which would outlive the request.
-    monkeypatch.setattr(WS, "_sandbox_enabled", lambda: True)
+    monkeypatch.setattr(WS, "sandbox_enabled", lambda: True)
     seen: list = []
 
-    def _ensure(key, *, create=True):
-        seen.append(create)
+    def _ensure(key):
+        seen.append(key)
         return None
 
-    monkeypatch.setattr(WS, "_ensure_sandbox", _ensure)
+    monkeypatch.setattr(WS, "attach_sandbox", _ensure)
     res = _post_upload(customer="Acme", files=[{"name": "a.csv", "content_b64": _b64(b"a")}])
     assert res.status_code == 503
     assert res.json()["reason"] == "sandbox_unavailable"
-    assert seen == [False]
+    assert seen == ["Acme"]
 
 
 def test_upload_keys_the_vm_like_the_runtime(monkeypatch):
     # agent_repo → customer, read from the JSON body rather than the query string.
-    monkeypatch.setattr(WS, "_sandbox_enabled", lambda: True)
+    monkeypatch.setattr(WS, "sandbox_enabled", lambda: True)
     keys: list[str] = []
     backend = _UploadBackend()
 
-    def _ensure(key, *, create=True):
+    def _ensure(key):
         keys.append(key)
         return backend
 
-    monkeypatch.setattr(WS, "_ensure_sandbox", _ensure)
+    monkeypatch.setattr(WS, "attach_sandbox", _ensure)
     _post_upload(
         agent_repo="acme-agent",
         customer="Acme",

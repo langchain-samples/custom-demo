@@ -11,9 +11,8 @@
  *
  * Nodes light up as calls arrive (dashed + pulsing while pending, solid once the
  * tool result lands) and each is clickable to see the argument and the result.
- * Subagent lanes appear only when the agent actually dispatches `task`, which
- * needs DYNAMIC_SUBAGENTS=1 on the server; without it you get the single-lane
- * view, which is still the real picture: plan, skills, sandbox, data, output.
+ * Subagent lanes appear when the agent dispatches work, directly through `task`
+ * or through QuickJS orchestration. A turn without delegation stays single-lane.
  *
  * This file exports ONLY components. The pure helpers live in `lib/agentGraph.ts`
  * because a mixed export breaks Fast Refresh and makes Vite full-reload on edit,

@@ -1,59 +1,10 @@
-/**
- * SETTINGS panel, ported from the SPA's gear panel into a shadcn Sheet.
- *
- * Sections, top-to-bottom (the whole config block below the assistant selector
- * is hidden until a real assistant — a UUID — is selected):
- *   1. WORKSPACE  — required <Select> from GET /workspaces; scopes prompts.
- *   2. ASSISTANT  — <Select> of assistants + inline "+ New" create flow
- *                   (assistant_setup graph → POST /assistants → select).
- *   3. VISUAL     — display name / accent / logo / quick actions; branding lives
- *                   in the assistant metadata and is debounce-PATCHed on edit.
- *   4. AGENT CFG  — Context Hub agent repo (the system prompt) + model.
- *   5. DELETE     — danger delete with confirm.
- *
- * All data goes through src/lib/api.ts. The selected assistant + resolved run
- * context are surfaced to the parent (App/ChatPanel) via `onActiveAssistantChange`
- * and the imperative `getRunContext()`/`getGuards()` handle. Send-guards are
- * enforced by the parent; this panel only exposes the state they need.
- */
-import {
-  forwardRef,
-  useCallback,
-  useEffect,
-  useImperativeHandle,
-  useRef,
-  useState,
-} from "react";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
-import {
-  cleanupAssistantArtifacts,
-  createAssistant,
-  deleteAssistant,
-  runEvalExperiment,
-  runSetup,
-  updateAssistant,
-  type Assistant,
-  type AssistantMetadata,
-  type McpServerConfig,
-  type QuickAction,
-  type RunContext,
-  type ToolSpec,
-  type Workspace,
-} from "@/lib/api";
-import {
-  useAgents,
-  useAssistants,
-  useRefetchAssistants,
-  useReplaceAssistantInCache,
-  useTools,
-  useWorkspaces,
-} from "@/lib/queries";
-import { getAssistantId, isAssistantId, setAssistantId } from "@/lib/config";
+/** Settings is an editor for the app-owned assistant session, plus presentation dialogs. */
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { useAgents, useTools } from "@/lib/queries";
+import { LAST_OWNER_LS_KEY, readSessionPreference } from "@/lib/assistantSession";
+import type { AssistantSession } from "@/lib/hooks/useAssistantSession";
+import type { ToolSpec } from "@/lib/api";
 import { WorkspaceSelect } from "./settings/WorkspaceSelect";
 import { AssistantSelect } from "./settings/AssistantSelect";
 import { NewAssistantDialog, type NewAssistantValues } from "./settings/NewAssistantDialog";
@@ -66,746 +17,126 @@ import { ToolsSection } from "./settings/ToolsSection";
 import { McpSection } from "./settings/McpSection";
 import { DeleteAssistant } from "./settings/DeleteAssistant";
 import { DemoTraffic } from "./settings/DemoTraffic";
-import type { PanelConfig } from "./settings/types";
-import { VoicePicker } from "@/components/settings/VoicePicker";
-import { coerceTheme } from "@/lib/theme";
-import type { Theme } from "@/lib/theme";
-import { applyBrand, DEFAULT_TINT } from "@/lib/branding";
-import { traceProject } from "@/lib/trace";
-import { applyTypography, DEFAULT_CURATED, type FontStatus } from "@/lib/fonts";
+import { VoicePicker } from "./settings/VoicePicker";
 
-/* --------------------------- Public prop surface --------------------------- */
-
-/** Send-guard flags the parent (App/ChatPanel) enforces before a run. */
-export interface SettingsGuards {
-  /** A real assistant (UUID) is selected. */
-  hasAssistant: boolean;
-  /** A workspace is chosen. */
-  hasWorkspace: boolean;
-  /** A Context Hub agent repo is selected, so the run has a system prompt. */
-  hasPrompt: boolean;
-}
-
-/** Imperative handle for send-time resolution (parent holds a ref). */
-export interface SettingsHandle {
-  /** Resolve the per-run context to send in the run body (non-empty fields only). */
-  getRunContext: () => RunContext;
-  /** Current send-guard flags. */
-  getGuards: () => SettingsGuards;
-  /** Set + persist the active assistant's theme (light/dark). */
-  setTheme: (theme: Theme) => void;
-}
-
-export interface SettingsPanelProps {
-  /** Whether the settings Sheet is open. */
+interface SettingsPanelProps {
   open: boolean;
-  /** Open/close the Sheet. */
   onOpenChange: (open: boolean) => void;
-  /**
-   * Fires whenever the active assistant changes OR its branding is edited. The
-   * assistant's metadata carries the live branding (display_name / accent / logo
-   * / actions) the header + presets should reflect. `null` when no real
-   * assistant is selected.
-   */
-  onActiveAssistantChange?: (assistant: Assistant | null) => void;
-  /**
-   * Fires when the assistant is switched or a new one is created — the parent
-   * should reset the dashboard + chat and mint a fresh thread.
-   */
-  onResetConversation?: () => void;
+  session: AssistantSession;
 }
 
-/* ------------------------------- Defaults -------------------------------- */
-
-// No stock quick actions. Do NOT put defaults here: a fallback set (the three about
-// aid in Egypt, Iran and Canada) is what a McKesson assistant showed when its setup
-// analysis failed and left `metadata.actions` empty, so someone else's demo was
-// presented as this assistant's own suggestions. An assistant with no actions shows
-// none, and setup refuses to create one without them (see prepare_assistant).
-const DEFAULT_ACTIONS: QuickAction[] = [];
-
-// Only reached by an assistant whose metadata carries no display_name.
-const DEFAULT_NAME = "AI Assistant";
-const DEFAULT_ACCENT = "#0072BC";
-const DEFAULT_LOGO = "";
-
-const WORKSPACE_LS_KEY = "dashboardWorkspace";
-
-/**
- * Stable fallbacks for a query that has not resolved. `?? []` inline would allocate a
- * new array on every render, which re-runs every effect and memo keyed on the list.
- */
-const EMPTY_ASSISTANTS: Assistant[] = [];
-const EMPTY_WORKSPACES: Workspace[] = [];
 const EMPTY_NAMES: string[] = [];
-const LAST_OWNER_LS_KEY = "lastOwner";
+const EMPTY_TOOLS: ToolSpec[] = [];
 
-/* ------------------------------- Helpers --------------------------------- */
-
-
-function readLS(key: string): string {
-  try {
-    return localStorage.getItem(key) || "";
-  } catch {
-    return "";
-  }
-}
-function writeLS(key: string, value: string): void {
-  try {
-    if (value) localStorage.setItem(key, value);
-    else localStorage.removeItem(key);
-  } catch {
-    /* ignore */
-  }
+function errMsg(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
-function errMsg(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
+export function SettingsPanel({ open, onOpenChange, session }: SettingsPanelProps) {
+  const {
+    draft: cfg, selectedId, selectedAssistant, visibleAssistants, workspaces, organization,
+    workspaceReset, fontStatus, editBranding, previewPrompt, editModel, editTools, editMcpServers,
+  } = session;
+  const agents = useAgents(cfg.lsWorkspace).data ?? EMPTY_NAMES;
+  const toolSpecs = useTools().data ?? EMPTY_TOOLS;
+  const [showNewForm, setShowNewForm] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [demoBrief, setDemoBrief] = useState<DemoBrief | null>(null);
+  const onboardingCheckedRef = useRef(false);
+  const [panelWidth, setPanelWidth] = useState(() => {
+    try {
+      const width = Number(localStorage.getItem("settingsPanelWidth"));
+      return width >= 320 && width <= 760 ? width : 380;
+    } catch {
+      return 380;
+    }
+  });
+  const [resizing, setResizing] = useState(false);
 
+  const startResize = useCallback((event: React.PointerEvent) => {
+    event.preventDefault();
+    setResizing(true);
+    const onMove = (ev: PointerEvent) => {
+      setPanelWidth(Math.min(Math.max(window.innerWidth - ev.clientX, 320), Math.min(760, window.innerWidth - 120)));
+    };
+    const onUp = () => {
+      setResizing(false);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }, []);
 
-/** Branding+config derived from an assistant's metadata/context (keep workspace). */
-function configFromAssistant(a: Assistant, workspace: string): PanelConfig {
-  const m = a.metadata || {};
-  const ctx = a.context || {};
-  return {
-    lsWorkspace: workspace,
-    name: m.display_name || DEFAULT_NAME,
-    accent: m.accent || DEFAULT_ACCENT,
-    accent2: m.accent2 || "",
-    brandNeutral: (m.brand_neutral as string) || "",
-    brandTint: typeof m.brand_tint === "number" ? m.brand_tint : DEFAULT_TINT,
-    logo: m.logo || DEFAULT_LOGO,
-    actions: Array.isArray(m.actions) && m.actions.length ? m.actions : DEFAULT_ACTIONS,
-    theme: coerceTheme(m.theme),
-    voiceName: ((m.voice as { voice_name?: string } | undefined)?.voice_name as string) || "",
-    fontHeading: (m.font_heading as string) || "",
-    fontHeadingFallback: (m.font_heading_fallback as string) || DEFAULT_CURATED,
-    fontBody: (m.font_body as string) || "",
-    fontBodyFallback: (m.font_body_fallback as string) || DEFAULT_CURATED,
-    fontSource: m.font_source === "curated" ? "curated" : "google",
-    agentRepo: (ctx.agent_repo as string) || "",
-    model: (ctx.model as string) || "",
-    // null = no saved selection (backend defaults); [] = everything optional off.
-    enabledTools: Array.isArray(ctx.enabled_tools) ? (ctx.enabled_tools as string[]) : null,
-    mcpServers: Array.isArray(ctx.mcp_servers) ? (ctx.mcp_servers as McpServerConfig[]) : [],
-  };
-}
+  useEffect(() => {
+    if (resizing) return;
+    try {
+      localStorage.setItem("settingsPanelWidth", String(panelWidth));
+    } catch {
+      // Resizing remains available without browser persistence.
+    }
+  }, [resizing, panelWidth]);
 
-/** Blank config (no assistant selected), preserving the chosen workspace. */
-function blankConfig(workspace: string): PanelConfig {
-  return {
-    lsWorkspace: workspace,
-    name: "",
-    accent: DEFAULT_ACCENT,
-    accent2: "",
-    brandNeutral: "",
-    brandTint: DEFAULT_TINT,
-    voiceName: "",
-    logo: "",
-    actions: [],
-    theme: "dark",
-    fontHeading: "",
-    fontHeadingFallback: DEFAULT_CURATED,
-    fontBody: "",
-    fontBodyFallback: DEFAULT_CURATED,
-    fontSource: "google",
-    agentRepo: "",
-    model: "",
-    enabledTools: null,
-    mcpServers: [],
-  };
-}
+  useEffect(() => {
+    if (workspaceReset) setShowNewForm(true);
+  }, [workspaceReset]);
 
-/** Resolve the per-run context — mirrors the SPA's `runContext()`. */
-function resolveRunContext(cfg: PanelConfig, project: string): RunContext {
-  const ctx: RunContext = {};
-  // Context Hub is the only prompt source: the repo's AGENTS.md is the prompt.
-  if (cfg.agentRepo) ctx.agent_repo = cfg.agentRepo;
-  // Omitted when empty, so the deployment default applies rather than an id pinned
-  // by whichever build of the SPA the presenter happens to be running.
-  if (cfg.model) ctx.model = cfg.model;
-  if (cfg.lsWorkspace) ctx.ls_workspace = cfg.lsWorkspace;
-  // Not user-editable here; see traceProject() for how it's derived.
-  if (project) ctx.ls_project = project;
-  // Deliberately a null check, NOT a length check: [] means "every optional tool
-  // off" and must reach the backend. Omitting it would restore the defaults.
-  if (cfg.enabledTools !== null) ctx.enabled_tools = cfg.enabledTools;
-  // Only the ones actually switched on and pointed somewhere: a half-typed row in
-  // the settings form must not reach the agent as a server to connect to.
-  const servers = cfg.mcpServers.filter((s) => s.enabled !== false && s.url.trim());
-  if (servers.length) ctx.mcp_servers = servers;
-  return ctx;
-}
+  useEffect(() => {
+    if (session.assistantsPending || onboardingCheckedRef.current) return;
+    onboardingCheckedRef.current = true;
+    if (!readSessionPreference(LAST_OWNER_LS_KEY)) setShowNewForm(true);
+  }, [session.assistantsPending]);
 
-/* ------------------------------- Component ------------------------------- */
-
-export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
-  function SettingsPanel(
-    { open, onOpenChange, onActiveAssistantChange, onResetConversation },
-    ref,
-  ) {
-    /**
-     * Server state lives in react-query (see lib/queries.ts), not in useState. The
-     * local `const`s below let the ~15 read sites in this file read it plainly, and the
-     * mutations further down invalidate rather than re-fetching by hand.
-     */
-    const assistantsQuery = useAssistants();
-    const assistants = assistantsQuery.data ?? EMPTY_ASSISTANTS;
-    const workspacesQuery = useWorkspaces();
-    const workspaces = workspacesQuery.data?.workspaces ?? EMPTY_WORKSPACES;
-    const organization = workspacesQuery.data?.organization ?? "";
-    // Org the workspaces belong to, for labelling the create form's picker.
-
-    // Set when a saved workspace id turned out not to exist any more, so the create
-    // form can say why it is asking for one instead of looking arbitrary.
-    const [workspaceReset, setWorkspaceReset] = useState(false);
-
-    // Width (px) of the Customize panel — drag-resizable from its left edge,
-    // mirroring the chat rail (see App.tsx). Persisted across sessions.
-    const [panelWidth, setPanelWidth] = useState<number>(() => {
-      try {
-        const v = Number(localStorage.getItem("settingsPanelWidth"));
-        return v >= 320 && v <= 760 ? v : 380;
-      } catch {
-        return 380;
-      }
-    });
-    const [resizing, setResizing] = useState(false);
-
-    const startResize = useCallback((e: React.PointerEvent) => {
-      e.preventDefault();
-      setResizing(true);
-      const onMove = (ev: PointerEvent) => {
-        // Panel is pinned to the right edge, so width grows as the pointer
-        // moves left. Clamp so it never fully covers the app.
-        const w = Math.min(
-          Math.max(window.innerWidth - ev.clientX, 320),
-          Math.min(760, window.innerWidth - 120),
-        );
-        setPanelWidth(w);
-      };
-      const onUp = () => {
-        setResizing(false);
-        window.removeEventListener("pointermove", onMove);
-        window.removeEventListener("pointerup", onUp);
-      };
-      window.addEventListener("pointermove", onMove);
-      window.addEventListener("pointerup", onUp);
-    }, []);
-
-    // Persist the width once a drag settles.
-    useEffect(() => {
-      if (resizing) return;
-      try {
-        localStorage.setItem("settingsPanelWidth", String(panelWidth));
-      } catch {
-        /* ignore */
-      }
-    }, [resizing, panelWidth]);
-
-    const [toolSpecsFallback] = useState<ToolSpec[]>([]);
-    const [fontStatus, setFontStatus] = useState<{ heading: FontStatus; body: FontStatus }>({
-      heading: "curated",
-      body: "curated",
-    });
-    const [selectedId, setSelectedId] = useState<string>(() => {
-      const saved = getAssistantId();
-      return isAssistantId(saved) ? saved : "";
-    });
-    const [cfg, setCfg] = useState<PanelConfig>(() =>
-      blankConfig(readLS(WORKSPACE_LS_KEY)),
-    );
-    // Workspace-scoped reads. Keyed on the workspace, which is what replaced calling a
-    // loader by hand from every path that could change it.
-    const agentsQuery = useAgents(cfg.lsWorkspace);
-    const agents = agentsQuery.data ?? EMPTY_NAMES;
-    const toolsQuery = useTools();
-    // Cache writers for the mutation sites below. The debounced saves patch one entry;
-    // create and delete invalidate, which is what replaced their manual re-fetch.
-    const replaceAssistant = useReplaceAssistantInCache();
-    const refetchAssistants = useRefetchAssistants();
-    const toolSpecs = toolsQuery.data ?? toolSpecsFallback;
-
-    const [showNewForm, setShowNewForm] = useState(false);
-    const [creating, setCreating] = useState(false);
-    // Post-setup presenter brief popup (null = hidden).
-    const [demoBrief, setDemoBrief] = useState<DemoBrief | null>(null);
-    // First run (no owner name saved yet) opens the create form, once.
-    const onboardingCheckedRef = useRef(false);
-
-    // Latest-value refs for async callbacks (debounced save, create/delete).
-    const cfgRef = useRef(cfg);
-    cfgRef.current = cfg;
-    const assistantsRef = useRef(assistants);
-    assistantsRef.current = assistants;
-    const selectedIdRef = useRef(selectedId);
-    selectedIdRef.current = selectedId;
-    const brandingTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-    /* ---- Data loading ---- */
-
-    // Apply a selection: load its config, persist the id, notify the parent, and
-    // optionally reset the conversation (on switch/create, not delete/restore).
-    const applySelection = useCallback(
-      (id: string, list: Assistant[], reset: boolean) => {
-        setSelectedId(id);
-        setAssistantId(id); // persist (blank clears it)
-        const a = id ? list.find((x) => x.assistant_id === id) || null : null;
-        setCfg((c) => (a ? configFromAssistant(a, c.lsWorkspace) : blankConfig(c.lsWorkspace)));
-        if (reset) onResetConversation?.();
-      },
-      [onResetConversation],
-    );
-
-    /**
-     * A saved workspace id outlives the org it belonged to. Send a stored id this key
-     * cannot see (which is what an org move leaves behind) and the setup graph asks
-     * LangSmith about that workspace and fails the whole run with a raw "403 Forbidden
-     * on /settings" 30 seconds in. An id absent from the list is not recoverable, so
-     * drop it and let the picker ask again.
-     */
-    useEffect(() => {
-      if (!cfg.lsWorkspace || workspaces.length === 0) return;
-      if (workspaces.some((w) => w.id === cfg.lsWorkspace)) return;
-      setCfg((c) => ({ ...c, lsWorkspace: "" }));
-      writeLS(WORKSPACE_LS_KEY, "");
-      setWorkspaceReset(true);
-      setShowNewForm(true);
-    }, [cfg.lsWorkspace, workspaces]);
-
-    /**
-     * First run (no owner name saved) opens the ordinary create form, once. There used
-     * to be a separate onboarding dialog: the same form with fewer fields plus a
-     * workspace picker, two things to keep in step, and a new user's first screen was
-     * the one nobody ever edited. The picker moved into this form instead.
-     */
-    useEffect(() => {
-      if (assistantsQuery.isPending || onboardingCheckedRef.current) return;
-      onboardingCheckedRef.current = true;
-      if (!readLS(LAST_OWNER_LS_KEY)) setShowNewForm(true);
-    }, [assistantsQuery.isPending]);
-
-    /** Restore the saved assistant's config once the list arrives (no reset). */
-    const restoredRef = useRef(false);
-    useEffect(() => {
-      if (restoredRef.current || assistants.length === 0) return;
-      const saved = selectedIdRef.current;
-      const a = isAssistantId(saved)
-        ? assistants.find((x) => x.assistant_id === saved)
-        : undefined;
-      if (!a) return;
-      restoredRef.current = true;
-      setCfg((c) => configFromAssistant(a, c.lsWorkspace));
-    }, [assistants]);
-
-    /* ---- Live branding → parent (header/presets) + accent CSS vars ---- */
-    useEffect(() => {
-      const base = selectedId ? assistants.find((a) => a.assistant_id === selectedId) : null;
-      if (base) {
-        const merged: Assistant = {
-          ...base,
-          metadata: {
-            ...(base.metadata || {}),
-            display_name: cfg.name,
-            accent: cfg.accent,
-            accent2: cfg.accent2,
-            logo: cfg.logo,
-            actions: cfg.actions,
-            theme: cfg.theme,
-            // From `cfg`, not `base`, so a voice change applies to the next session
-            // immediately rather than 600ms later when the PATCH lands.
-            voice: { ...((base.metadata?.voice as object) || {}), voice_name: cfg.voiceName },
-          },
-        };
-        // One call writes every brand token (seeds, contrast foreground, derived
-        // chart series). See lib/branding.ts for the rules it follows.
-        applyBrand({
-          primary: cfg.accent,
-          secondary: cfg.accent2,
-          neutral: cfg.brandNeutral,
-          tint: cfg.brandTint,
-        });
-        onActiveAssistantChange?.(merged);
-      } else {
-        applyBrand(null); // clear overrides → the unbranded defaults in index.css
-        onActiveAssistantChange?.(null);
-      }
-    }, [selectedId, assistants, cfg.name, cfg.accent, cfg.accent2, cfg.brandNeutral, cfg.brandTint, cfg.logo, cfg.actions, cfg.theme, cfg.voiceName, onActiveAssistantChange]);
-
-    /* ---- Typography: async (may hit the font CDN), so kept separate ---- */
-    useEffect(() => {
-      let cancelled = false;
-      const active = isAssistantId(selectedId);
-      void applyTypography(
-        active
-          ? {
-              heading: { family: cfg.fontHeading, fallback: cfg.fontHeadingFallback },
-              body: { family: cfg.fontBody, fallback: cfg.fontBodyFallback },
-              source: cfg.fontSource,
-            }
-          : null,
-      ).then((status) => {
-        // A rapid edit can resolve out of order; only the latest wins.
-        if (!cancelled) setFontStatus(status);
+  async function handleCreate(values: NewAssistantValues) {
+    const workspace = values.workspace || cfg.lsWorkspace;
+    if (!values.customer) {
+      window.alert("Customer is required - it's used as the assistant name.");
+      return;
+    }
+    if (!workspace) {
+      window.alert("Pick a Workspace first (top of the panel) - setup needs it.");
+      return;
+    }
+    if (values.workspace) session.selectWorkspace(values.workspace);
+    setCreating(true);
+    try {
+      const { metadata } = await session.create({
+        workspace, customer: values.customer, owner: values.owner, website: values.website,
+        use_case: values.useCase, failure_mode: values.failureMode,
+        push_prompts: true, demo_traffic: values.demoTraffic,
       });
-      return () => {
-        cancelled = true;
-      };
-    }, [selectedId, cfg.fontHeading, cfg.fontHeadingFallback, cfg.fontBody, cfg.fontBodyFallback, cfg.fontSource]);
-
-    /* ---- Imperative handle: defined below, after editBranding ---- */
-
-    /* ---- Branding edits: update state + debounced metadata PATCH ---- */
-    const scheduleBrandingSave = useCallback((next: PanelConfig) => {
-      const id = selectedIdRef.current;
-      if (!isAssistantId(id)) return;
-      clearTimeout(brandingTimer.current);
-      brandingTimer.current = setTimeout(async () => {
-        const src = assistantsRef.current.find((a) => a.assistant_id === id);
-        const meta: AssistantMetadata = {
-          ...(src?.metadata || {}),
-          display_name: next.name,
-          accent: next.accent,
-          accent2: next.accent2,
-          brand_neutral: next.brandNeutral,
-          brand_tint: next.brandTint,
-          font_heading: next.fontHeading,
-          font_heading_fallback: next.fontHeadingFallback,
-          font_body: next.fontBody,
-          font_body_fallback: next.fontBodyFallback,
-          font_source: next.fontSource,
-          logo: next.logo,
-          actions: next.actions,
-          theme: next.theme,
-          // Merge, never replace: whatever else setup wrote under `voice` (nothing today,
-          // but this is the one metadata key another writer is likely to extend) survives.
-          voice: { ...((src?.metadata?.voice as object) || {}), voice_name: next.voiceName },
-        };
-        try {
-          replaceAssistant(await updateAssistant(id, { metadata: meta }));
-        } catch {
-          /* non-fatal: branding still applied locally */
-        }
-      }, 600);
-    }, [replaceAssistant]);
-
-    const editBranding = useCallback(
-      (patch: Partial<PanelConfig>) => {
-        setCfg((c) => {
-          const next = { ...c, ...patch };
-          scheduleBrandingSave(next);
-          return next;
-        });
-      },
-      [scheduleBrandingSave],
-    );
-
-    // Agent-config edits feed the run context only (not saved to the assistant).
-    const editConfig = useCallback((patch: Partial<PanelConfig>) => {
-      setCfg((c) => ({ ...c, ...patch }));
-    }, []);
-
-    /* ---- Tool selection: run context AND persisted onto the assistant ---- */
-    const toolsTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-    const editTools = useCallback((ids: string[]) => {
-      setCfg((c) => ({ ...c, enabledTools: ids }));
-      const id = selectedIdRef.current;
-      if (!isAssistantId(id)) return;
-      clearTimeout(toolsTimer.current);
-      toolsTimer.current = setTimeout(async () => {
-        const src = assistantsRef.current.find((a) => a.assistant_id === id);
-        try {
-          // PATCH replaces `context` wholesale — spread the existing one or this
-          // wipes agent_repo / ls_workspace / mcp_servers.
-          replaceAssistant(
-            await updateAssistant(id, {
-              context: { ...(src?.context || {}), enabled_tools: ids },
-            }),
-          );
-        } catch {
-          /* non-fatal: the selection still applies to this session's runs */
-        }
-      }, 600);
-    }, [replaceAssistant]);
-
-    /* ---- Model: run context AND persisted onto the assistant ---- */
-
-    const modelTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-    // Persisted, not just applied to the next run: a model picked in Settings has to
-    // survive selecting another assistant and coming back, the same way the tool
-    // selection does. Debounced for the same reason as the others, so a quick
-    // there-and-back does not fire two PATCHes.
-    const editModel = useCallback(
-      (model: string) => {
-        setCfg((c) => ({ ...c, model }));
-        const id = selectedIdRef.current;
-        if (!isAssistantId(id)) return;
-        clearTimeout(modelTimer.current);
-        modelTimer.current = setTimeout(async () => {
-          const src = assistantsRef.current.find((a) => a.assistant_id === id);
-          const next = { ...(src?.context || {}) };
-          // Deleted rather than set to "": the backend treats a present-but-empty
-          // `model` the same way, but leaving the key behind makes the saved context
-          // read as if a choice had been made.
-          if (model) next.model = model;
-          else delete next.model;
-          try {
-            // PATCH replaces `context` wholesale - spread the existing one or this
-            // wipes agent_repo / ls_workspace / enabled_tools.
-            replaceAssistant(await updateAssistant(id, { context: next }));
-          } catch {
-            /* non-fatal: the choice still applies to this session's runs */
-          }
-        }, 600);
-      },
-      [replaceAssistant],
-    );
-
-    /* ---- MCP servers: run context AND persisted onto the assistant ---- */
-    const mcpTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-    const editMcpServers = useCallback(
-      (servers: McpServerConfig[]) => {
-        setCfg((c) => ({ ...c, mcpServers: servers }));
-        const id = selectedIdRef.current;
-        if (!isAssistantId(id)) return;
-        clearTimeout(mcpTimer.current);
-        // Debounced like the tool selection, and for a stronger reason: this form
-        // is text fields, so an un-debounced PATCH would fire per keystroke.
-        mcpTimer.current = setTimeout(async () => {
-          const src = assistantsRef.current.find((a) => a.assistant_id === id);
-          try {
-            // PATCH replaces `context` wholesale - spread the existing one or this
-            // wipes agent_repo / ls_workspace / enabled_tools.
-            replaceAssistant(
-              await updateAssistant(id, {
-                context: { ...(src?.context || {}), mcp_servers: servers },
-              }),
-            );
-          } catch {
-            /* non-fatal: the connection still applies to this session's runs */
-          }
-        }, 800);
-      },
-      [replaceAssistant],
-    );
-
-    /* ---- Imperative handle (send-time context + guards + theme) ---- */
-    useImperativeHandle(
-      ref,
-      () => ({
-        getRunContext: () => {
-          const c = cfgRef.current;
-          const id = selectedIdRef.current;
-          const a = assistantsRef.current.find((x) => x.assistant_id === id) || null;
-          return resolveRunContext(c, traceProject(a, id));
-        },
-        getGuards: () => {
-          const c = cfgRef.current;
-          return {
-            hasAssistant: isAssistantId(selectedIdRef.current),
-            hasWorkspace: !!c.lsWorkspace,
-            hasPrompt: !!c.agentRepo,
-          };
-        },
-        // Persist a theme choice into the active assistant's metadata (so it
-        // becomes that brand's default) and reflect it live via onActiveAssistantChange.
-        setTheme: (t) => editBranding({ theme: t }),
-      }),
-      [editBranding],
-    );
-
-    /* ---- Workspace ---- */
-    const handleWorkspace = useCallback(
-      (id: string) => {
-        setCfg((c) => ({ ...c, lsWorkspace: id }));
-        writeLS(WORKSPACE_LS_KEY, id);
-        // No explicit refetch: the agent-repo query is keyed on the workspace, so
-        // changing it here is the fetch. That is the whole reason it is a query.
-
-        // An assistant belonging to the workspace we just left cannot stay selected. It
-        // looks harmless, since the picker still shows it, but every run it drives traces
-        // into, and reads its agent repo from, a workspace that does not contain it, which
-        // is how the stale-id 403 above happens in the first place.
-        //
-        // Only cleared when the assistant actually records a DIFFERENT workspace. Plenty
-        // of assistants carry no ls_workspace at all (created before it was recorded, or
-        // left behind by the org move), and yanking the selection out from under those
-        // would be a worse bug than this one: the list is not filtered by workspace, so
-        // there would be nothing obviously wrong with the screen to explain why the
-        // selection vanished.
-        const current = assistantsRef.current.find(
-          (a) => a.assistant_id === selectedIdRef.current,
-        );
-        const owner = current?.context?.ls_workspace;
-        if (current && typeof owner === "string" && owner && owner !== id) {
-          applySelection("", assistantsRef.current, true);
-        }
-      },
-      [applySelection],
-    );
-
-    /* ---- Assistant selection / create / delete ---- */
-    const handleSelectAssistant = useCallback(
-      (id: string) => {
-        setShowNewForm(false);
-        applySelection(id, assistantsRef.current, true);
-      },
-      [applySelection],
-    );
-
-    // Shared create path: run the setup agent, create the assistant, select it,
-    // and surface the presenter brief. Used by both the Settings "+ New" form and
-    // the first-run onboarding. Throws on failure so callers can react.
-    const runCreate = useCallback(
-      async (v: NewAssistantValues, workspace: string) => {
-        if (v.owner) writeLS(LAST_OWNER_LS_KEY, v.owner);
-        // The deployed setup agent fetches branding + generates quick actions
-        // (and optionally pushes prompts); we then create the assistant from it.
-        const result = await runSetup({
-          workspace,
-          customer: v.customer,
-          owner: v.owner,
-          website: v.website,
-          use_case: v.useCase,
-          failure_mode: v.failureMode,
-          push_prompts: true,
-          // Off unless the presenter asked for it: it fills the customer's project
-          // with runs they never made, priced like they did.
-          demo_traffic: v.demoTraffic,
-        });
-        // Hoisted so the baseline experiment below runs against the SAME context
-        // the assistant was created with.
-        const assistantContext = result.context || { ls_workspace: workspace };
-        const a = await createAssistant({
-          name: v.customer,
-          context: assistantContext,
-          metadata: result.metadata || { owner_name: v.owner, customer: v.customer },
-        });
-        // Kick off the BASELINE experiment over the dataset setup just planted,
-        // so the presenter finds a score already waiting (red, 2/3, for the
-        // hallucination demo). Fire-and-forget on purpose: it is three real
-        // agent turns, and nothing here may delay or break the create path —
-        // runEvalExperiment resolves with { ok: false } instead of throwing, so
-        // there is no rejection to swallow. Skipped when setup planted no
-        // dataset (best-effort creation, or a failure mode without evals).
-        const evalDataset = (result.metadata || a.metadata)?.ls_artifacts?.eval_dataset;
-        if (evalDataset) {
-          void runEvalExperiment({
-            assistant_id: a.assistant_id,
-            dataset: evalDataset,
-            workspace,
-            // Without this the baseline grades a default agent and the planted
-            // bug never fires — the run would come back a meaningless 3/3.
-            context: assistantContext,
-          });
-        }
-        // refetch rather than invalidate-then-fetch: applySelection needs the fresh
-        // list in hand, and this is one request instead of two.
-        const list = await refetchAssistants();
-        applySelection(a.assistant_id, list, true);
-        // Surface the presenter brief the setup agent generated. Close the
-        // settings sheet so it lands front-and-centre over the fresh demo.
-        const meta = result.metadata || a.metadata || {};
-        const briefLines = meta.demo_brief || [];
-        const flowLines = meta.demo_flow || [];
-        if (briefLines.length || flowLines.length) {
-          onOpenChange(false);
-          setDemoBrief({ customer: v.customer, brief: briefLines, flow: flowLines });
-        }
-      },
-      [applySelection, onOpenChange, refetchAssistants],
-    );
-
-    const handleCreate = useCallback(
-      async (v: NewAssistantValues) => {
-        // The dialog only offers a workspace when the panel has none, so its value wins
-        // when present and the panel's is the steady-state answer.
-        const workspace = v.workspace || cfgRef.current.lsWorkspace;
-        if (!v.customer) {
-          window.alert("Customer is required - it's used as the assistant name.");
-          return;
-        }
-        if (!workspace) {
-          window.alert("Pick a Workspace first (top of the panel) - setup needs it.");
-          return;
-        }
-        // Persist it and load that workspace's prompts, exactly as picking it in the panel
-        // would have - otherwise a first-run user creates into a workspace the panel does
-        // not know it is pointed at.
-        if (v.workspace) handleWorkspace(v.workspace);
-        setCreating(true);
-        try {
-          await runCreate(v, workspace);
-          setShowNewForm(false);
-        } catch (e) {
-          window.alert("Setup failed: " + errMsg(e));
-        } finally {
-          setCreating(false);
-        }
-      },
-      [runCreate, handleWorkspace],
-    );
-
-    const handleDelete = useCallback(async () => {
-      const id = selectedIdRef.current;
-      if (!isAssistantId(id)) return;
-      try {
-        // Cascade-delete the LangSmith artifacts this assistant created (trace
-        // project, prompt/agent repo, skills) before dropping the record. Best
-        // effort: report any that couldn't be removed, but still delete the
-        // assistant so a permission gap can't leave it undeletable.
-        const src = assistantsRef.current.find((a) => a.assistant_id === id);
-        const artifacts = src?.metadata?.ls_artifacts;
-        if (artifacts) {
-          const { failed } = await cleanupAssistantArtifacts(artifacts);
-          if (failed.length) {
-            window.alert(
-              "Some LangSmith artifacts could not be deleted:\n" +
-                failed.map((f) => `- ${f.artifact}: ${f.error}`).join("\n"),
-            );
-          }
-        }
-        await deleteAssistant(id);
-        const list = await refetchAssistants();
-        applySelection("", list, false);
-      } catch (e) {
-        window.alert("Delete failed: " + errMsg(e));
+      const brief = metadata.demo_brief || [];
+      const flow = metadata.demo_flow || [];
+      if (brief.length || flow.length) {
+        onOpenChange(false);
+        setDemoBrief({ customer: values.customer, brief, flow });
       }
-    }, [applySelection, refetchAssistants]);
+      setShowNewForm(false);
+    } catch (error) {
+      window.alert("Setup failed: " + errMsg(error));
+    } finally {
+      setCreating(false);
+    }
+  }
 
-    /* ---- Derived ---- */
-    const hasAssistant = isAssistantId(selectedId);
-    const selectedAssistant = hasAssistant
-      ? assistants.find((a) => a.assistant_id === selectedId) || null
-      : null;
-    const deleteLabel =
-      (selectedAssistant &&
-        (selectedAssistant.metadata?.display_name || selectedAssistant.name)) ||
-      selectedId;
+  async function handleDelete() {
+    try {
+      await session.remove((failed) => window.alert(
+        "Some LangSmith artifacts could not be deleted:\n" +
+        failed.map((f) => `- ${f.artifact}: ${f.error}`).join("\n"),
+      ));
+    } catch (error) {
+      window.alert("Delete failed: " + errMsg(error));
+    }
+  }
 
-    // Scope the assistant dropdown to the chosen workspace (there's no server-side
-    // filter, so we match on the ls_workspace we record in each assistant's
-    // context). Keep legacy assistants that never recorded one, and always keep
-    // the active selection so it can't vanish mid-edit.
-    const visibleAssistants = cfg.lsWorkspace
-      ? assistants.filter((a) => {
-          const ws = (a.context?.ls_workspace as string) || "";
-          return !ws || ws === cfg.lsWorkspace || a.assistant_id === selectedId;
-        })
-      : assistants;
-
-    return (
-      <>
+  const deleteLabel = selectedAssistant?.metadata?.display_name || selectedAssistant?.name || selectedId;
+  return (
+    <>
       <DemoBriefDialog brief={demoBrief} onClose={() => setDemoBrief(null)} />
-      {/* Outside the Sheet on purpose: a modal here covers the settings panel and the
-          page, so the only editable thing on screen is the customer being created. */}
       {showNewForm && (
         <NewAssistantDialog
-          initialOwner={readLS(LAST_OWNER_LS_KEY)}
+          initialOwner={readSessionPreference(LAST_OWNER_LS_KEY)}
           initialWorkspace={cfg.lsWorkspace}
           workspaces={workspaces}
           organization={organization}
@@ -820,7 +151,6 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           style={{ width: panelWidth, maxWidth: panelWidth }}
           className={"gap-0 p-0" + (resizing ? " select-none" : "")}
         >
-          {/* Drag the left edge to resize the panel (mirrors the chat rail). */}
           <div
             onPointerDown={startResize}
             title="Drag to resize"
@@ -829,28 +159,21 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
           <SheetHeader className="p-4 pb-2">
             <SheetTitle>Customize</SheetTitle>
           </SheetHeader>
-
           <div className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto p-4 pt-0">
-            {/* 1. Workspace */}
             <WorkspaceSelect
               value={cfg.lsWorkspace}
               workspaces={workspaces}
               organization={organization}
-              onChange={handleWorkspace}
+              onChange={session.selectWorkspace}
             />
-
             <div className="border-t border-border" />
-
-            {/* 2. Assistant */}
             <AssistantSelect
               value={selectedId}
               assistants={visibleAssistants}
-              onChange={handleSelectAssistant}
-              onNewClick={() => setShowNewForm((s) => !s)}
+              onChange={(id) => { setShowNewForm(false); session.selectAssistant(id); }}
+              onNewClick={() => setShowNewForm((shown) => !shown)}
             />
-
-            {/* 3–5. Config block — hidden until a real assistant is selected */}
-            {hasAssistant && (
+            {session.guards.hasAssistant && (
               <>
                 <VisualSection
                   name={cfg.name}
@@ -859,25 +182,20 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
                   theme={cfg.theme}
                   onName={(v) => editBranding({ name: v })}
                   onLogo={(v) => editBranding({ logo: v })}
-                  onActions={(a) => editBranding({ actions: a })}
-                  onTheme={(t) => editBranding({ theme: t })}
+                  onActions={(actions) => editBranding({ actions })}
+                  onTheme={(theme) => editBranding({ theme })}
                 />
-
                 <BrandSection
                   accent={cfg.accent}
                   accent2={cfg.accent2}
                   neutral={cfg.brandNeutral}
                   tint={cfg.brandTint}
-                  onAccent={(v) => editBranding({ accent: v })}
-                  onAccent2={(v) => editBranding({ accent2: v })}
-                  onNeutral={(v) => editBranding({ brandNeutral: v })}
-                  onTint={(v) => editBranding({ brandTint: v })}
+                  onAccent={(accent) => editBranding({ accent })}
+                  onAccent2={(accent2) => editBranding({ accent2 })}
+                  onNeutral={(brandNeutral) => editBranding({ brandNeutral })}
+                  onTint={(brandTint) => editBranding({ brandTint })}
                 >
-                  {/* Every assistant can be spoken to, so this always applies. */}
-                  <VoicePicker
-                    value={cfg.voiceName}
-                    onChange={(v) => editBranding({ voiceName: v })}
-                  />
+                  <VoicePicker value={cfg.voiceName} onChange={(voiceName) => editBranding({ voiceName })} />
                   <TypographySection
                     headingFont={cfg.fontHeading}
                     headingFallback={cfg.fontHeadingFallback}
@@ -885,56 +203,38 @@ export const SettingsPanel = forwardRef<SettingsHandle, SettingsPanelProps>(
                     bodyFallback={cfg.fontBodyFallback}
                     useGoogle={cfg.fontSource === "google"}
                     status={fontStatus}
-                    onHeadingFont={(v) => editBranding({ fontHeading: v })}
-                    onHeadingFallback={(v) => editBranding({ fontHeadingFallback: v })}
-                    onBodyFont={(v) => editBranding({ fontBody: v })}
-                    onBodyFallback={(v) => editBranding({ fontBodyFallback: v })}
+                    onHeadingFont={(fontHeading) => editBranding({ fontHeading })}
+                    onHeadingFallback={(fontHeadingFallback) => editBranding({ fontHeadingFallback })}
+                    onBodyFont={(fontBody) => editBranding({ fontBody })}
+                    onBodyFallback={(fontBodyFallback) => editBranding({ fontBodyFallback })}
                     onUseGoogle={(v) => editBranding({ fontSource: v ? "google" : "curated" })}
                   />
                 </BrandSection>
-
                 <AgentConfig
                   agentRepo={cfg.agentRepo}
                   model={cfg.model}
                   agents={agents}
-                  onAgentRepo={(v) => editConfig({ agentRepo: v })}
+                  onAgentRepo={previewPrompt}
                   onModel={editModel}
                 />
-
-                <ToolsSection
-                  specs={toolSpecs}
-                  enabled={cfg.enabledTools}
-                  onChange={editTools}
-                />
-
+                <ToolsSection specs={toolSpecs} enabled={cfg.enabledTools} onChange={editTools} />
                 <McpSection servers={cfg.mcpServers} onChange={editMcpServers} />
-
                 <DemoTraffic
-                  target={
-                    selectedAssistant
-                      ? {
-                          project:
-                            (selectedAssistant.context?.ls_project as string) ||
-                            selectedAssistant.metadata?.customer ||
-                            selectedAssistant.name ||
-                            "",
-                          workspace: selectedAssistant.context?.ls_workspace as string,
-                          context: selectedAssistant.context,
-                          actions: selectedAssistant.metadata?.actions,
-                          data_gap: selectedAssistant.context?.data_gap as string,
-                          customer: selectedAssistant.metadata?.customer,
-                        }
-                      : null
-                  }
+                  target={selectedAssistant ? {
+                    project: (selectedAssistant.context?.ls_project as string) || selectedAssistant.metadata?.customer || selectedAssistant.name || "",
+                    workspace: selectedAssistant.context?.ls_workspace as string,
+                    context: selectedAssistant.context,
+                    actions: selectedAssistant.metadata?.actions,
+                    data_gap: selectedAssistant.context?.data_gap as string,
+                    customer: selectedAssistant.metadata?.customer,
+                  } : null}
                 />
-
                 <DeleteAssistant label={deleteLabel} onDelete={handleDelete} />
               </>
             )}
           </div>
         </SheetContent>
       </Sheet>
-      </>
-    );
-  },
-);
+    </>
+  );
+}

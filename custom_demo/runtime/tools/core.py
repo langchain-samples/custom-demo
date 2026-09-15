@@ -1,8 +1,8 @@
-"""The dashboard tool: `push_widget`.
+"""Validated dashboard output and an invocation-local collector for executed widgets.
 
-Moved out of `agent.py` so the tool catalogue (`registry.py`) can reference every
-tool without importing the agent. Behaviour — including the tool docstrings,
-which the model sees as the tool descriptions — is unchanged.
+The catalogue imports this tool independently of graph construction. Tool descriptions
+are model-visible behavior; the collector supports in-process evaluation without parsing
+frontend stream frames.
 """
 
 from __future__ import annotations
@@ -13,9 +13,8 @@ from langchain.tools import tool
 
 from custom_demo.runtime.widgets import validate_widget
 
-# Per-invocation collector for widgets emitted by push_widget. Set by
-# `agent.run()`; the streaming path re-parses widgets from the token stream
-# instead, so it leaves this unset.
+# In-process consumers set this collector around an invocation and reset it afterward.
+# The frontend independently reconstructs widgets from streamed tool-call arguments.
 widget_sink: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar(
     "widget_sink", default=None
 )

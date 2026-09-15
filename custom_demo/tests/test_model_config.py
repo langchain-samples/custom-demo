@@ -275,17 +275,9 @@ def test_the_dead_data_model_fallback_is_gone(isolated):
     assert config.simulated_model() == _HAIKU
 
 
-# --- the DA_* -> plain-name rename ----------------------------------------------
-#
-# The `DA` stood for "Dashboard Agent", so these were the same problem as the
-# `DASHBOARD_*` block above and got the same treatment. What is NOT the same is the
-# shape: two flags compared against a literal, two numbers, and a path. `_env`'s
-# `or`-chain is built for model ids, and forcing all five through it would have moved
-# behaviour, so the flags go through `_env_raw` (precedence by presence) and keep their
-# exact literal comparison. These pin that, not just the fallback.
-#
-# No `load_env` stub on the flag tests: `sandbox_enabled` and `dynamic_subagents_enabled`
-# deliberately do not call it, matching the inline reads they replaced.
+# --- compatibility for sandbox, path and timeout configuration ---
+# The sandbox switch uses precedence by presence, without loading environment files.
+# Path and numeric settings retain their separate empty-value fallback rules.
 
 
 def _clear(monkeypatch, *names):
@@ -339,34 +331,6 @@ def test_an_explicitly_empty_new_name_beats_a_set_old_one(monkeypatch):
     monkeypatch.setenv("SANDBOX_ENABLED", "")
     monkeypatch.setenv("DA_SANDBOX", "0")
     assert config.sandbox_enabled() is True
-
-
-# --- DYNAMIC_SUBAGENTS (opposite polarity: off unless exactly "1") ---
-
-
-def test_dynamic_subagents_new_name_wins(monkeypatch):
-    monkeypatch.setenv("DYNAMIC_SUBAGENTS", "1")
-    monkeypatch.setenv("DA_DYNAMIC_SUBAGENTS", "0")
-    assert config.dynamic_subagents_enabled() is True
-
-
-def test_dynamic_subagents_deprecated_name_still_works(monkeypatch):
-    _clear(monkeypatch, "DYNAMIC_SUBAGENTS")
-    monkeypatch.setenv("DA_DYNAMIC_SUBAGENTS", "1")
-    assert config.dynamic_subagents_enabled() is True
-
-
-def test_dynamic_subagents_defaults_to_off(monkeypatch):
-    _clear(monkeypatch, "DYNAMIC_SUBAGENTS", "DA_DYNAMIC_SUBAGENTS")
-    assert config.dynamic_subagents_enabled() is False
-
-
-@pytest.mark.parametrize("value", ["true", "yes", "on", "", "0", "11"])
-def test_only_the_literal_one_enables_dynamic_subagents(monkeypatch, value):
-    """The mirror image of the sandbox gate, and easy to get backwards when moving both."""
-    _clear(monkeypatch, "DA_DYNAMIC_SUBAGENTS")
-    monkeypatch.setenv("DYNAMIC_SUBAGENTS", value)
-    assert config.dynamic_subagents_enabled() is False
 
 
 # --- SANDBOX_FILES_ROOT (a path, and `or`-chained as it always was) ---
