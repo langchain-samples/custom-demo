@@ -52,6 +52,58 @@ function toolLabel(toolName: string): string {
 }
 
 /**
+ * Motion for the waiting state, borrowed from the artifact skeleton.
+ *
+ * Each bar is DRAWN left to right rather than appearing at full width, which
+ * reads as something being produced instead of a box being filled. Reduced
+ * motion keeps the bars and drops the movement.
+ */
+const SKELETON_KEYFRAMES = `
+@keyframes mcp-app-bar-in {
+  from { transform: scaleX(0.06); opacity: 0.45; }
+  to { transform: scaleX(1); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mcp-app-bar { animation: none !important; }
+}
+`;
+
+/**
+ * What the pane shows between mounting and the first arguments arriving.
+ *
+ * The frame is mounted on the tool CALL so the app can draw as the arguments
+ * stream, which means there is a window where the document is live and has
+ * nothing to draw yet. Left alone that window is the app's own empty state, and
+ * for a canvas app it is a black rectangle the height of the pane, which reads
+ * as broken rather than as pending.
+ *
+ * Deliberately NOT a spinner. The bars stand where the app's own controls will
+ * be, so the pane keeps its shape and the swap is a fill rather than a jump.
+ */
+function Waiting() {
+  return (
+    <div
+      aria-hidden
+      className="pointer-events-none absolute inset-0 flex flex-col gap-3 rounded-lg bg-panel-2 p-4"
+    >
+      <style>{SKELETON_KEYFRAMES}</style>
+      {[
+        ["45%", "0ms"],
+        ["78%", "90ms"],
+        ["62%", "180ms"],
+        ["88%", "270ms"],
+      ].map(([width, delay]) => (
+        <div
+          key={delay}
+          className="mcp-app-bar h-2.5 origin-left rounded-full bg-border"
+          style={{ width, animation: `mcp-app-bar-in 420ms ease-out ${delay} both` }}
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
  * The app's own frame, once its HTML has been read.
  *
  * Fullscreen is a CSS change on a wrapper that is ALREADY in the tree, never a
@@ -73,6 +125,10 @@ function AppFrame({
   const host = useRef<ReturnType<typeof createMcpAppHost> | null>(null);
   const [height, setHeight] = useState(320);
   const [mode, setMode] = useState("inline");
+  // The app has something to draw once the model has written any arguments.
+  // Sticky: a later frame that momentarily parses to `{}` must not put the
+  // waiting state back over a drawing the person is already looking at.
+  const [hasInput, setHasInput] = useState(false);
 
   useEffect(() => {
     const bridge = createMcpAppHost({
@@ -111,6 +167,7 @@ function AppFrame({
   // Feed the call in as it arrives.
   useEffect(() => {
     host.current?.setToolInput(toolArguments, !streaming);
+    if (Object.keys(toolArguments).length > 0) setHasInput(true);
   }, [toolArguments, streaming]);
 
   useEffect(() => {
@@ -150,17 +207,23 @@ function AppFrame({
           <IconX size={13} /> Exit (Esc)
         </button>
       </div>
-      <iframe
-        ref={ref}
-        title={`MCP app for ${toolName}`}
-        srcDoc={html}
-        // See the note above: allow-same-origin must never be added here.
-        sandbox="allow-scripts"
-        className={`w-full rounded-lg border border-border bg-background${
-          full ? " min-h-0 flex-1" : ""
-        }`}
+      <div
+        // Always rendered, never conditional: a tree shape that changed would
+        // re-parent the iframe, reloading the document and throwing away
+        // whatever the person had done in it.
+        className={`relative w-full${full ? " min-h-0 flex-1" : ""}`}
         style={full ? undefined : { height }}
-      />
+      >
+        <iframe
+          ref={ref}
+          title={`MCP app for ${toolName}`}
+          srcDoc={html}
+          // See the note above: allow-same-origin must never be added here.
+          sandbox="allow-scripts"
+          className="h-full w-full rounded-lg border border-border bg-background"
+        />
+        {!hasInput && <Waiting />}
+      </div>
     </div>
   );
 }

@@ -162,3 +162,41 @@ it("forwards each streamed argument frame as a partial, then one complete input"
     b.sendToolInput.mock.invocationCallOrder[0],
   );
 });
+
+it("waits with a skeleton until the model has written any arguments", async () => {
+  // The frame is mounted on the tool CALL so the app can draw as the arguments
+  // stream, which leaves a window where the document is live with nothing to
+  // draw. For a canvas app that window is a black rectangle the height of the
+  // pane, and it reads as broken rather than as pending.
+  readMcpApp.mockResolvedValue(APP);
+  const { container, rerender } = draw({ streaming: true, toolArguments: {}, toolResult: undefined });
+  await waitFor(() => expect(container.querySelector("iframe")).toBeTruthy());
+  const frame = container.querySelector("iframe");
+  expect(container.querySelector("[aria-hidden]")).toBeTruthy();
+
+  rerender(
+    <McpAppCard
+      toolName="meridian_propose_rebalance"
+      toolArguments={{ elements: "[{a" }}
+      streaming
+      servers={SERVERS}
+    />,
+  );
+  // Gone once there is something to draw, and the SAME iframe throughout:
+  // re-parenting it would reload the document and lose the person's work.
+  await waitFor(() => expect(container.querySelector("[aria-hidden]")).toBeNull());
+  expect(container.querySelector("iframe")).toBe(frame);
+});
+
+it("does not put the skeleton back when a later frame parses to nothing", async () => {
+  readMcpApp.mockResolvedValue(APP);
+  const { container, rerender } = draw({ streaming: true, toolArguments: { a: 1 }, toolResult: undefined });
+  await waitFor(() => expect(container.querySelector("[aria-hidden]")).toBeNull());
+
+  rerender(
+    <McpAppCard toolName="meridian_propose_rebalance" toolArguments={{}} streaming servers={SERVERS} />,
+  );
+  // Sticky on purpose: a skeleton reappearing over a drawing already on screen
+  // is worse than the wait it was there to explain.
+  expect(container.querySelector("[aria-hidden]")).toBeNull();
+});
