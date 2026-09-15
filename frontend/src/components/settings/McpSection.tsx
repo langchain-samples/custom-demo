@@ -15,7 +15,8 @@
  * only way to find out whether a tunnel is up, a token is right, and the tools
  * are named what you expect, before a live demo depends on it.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { describeMcpServer } from "@/lib/mcpClients";
 import {
   IconAlertTriangle,
   IconCheck,
@@ -27,7 +28,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { probeMcpServers, type McpProbeResult, type McpServerConfig } from "@/lib/api";
+import {
+  mcpServerId,
+  type McpProbeResult,
+  type McpServerConfig,
+} from "@/lib/api";
 import { CollapseSection } from "./CollapseSection";
 import { HINT_CLS, LABEL_CLS } from "./types";
 
@@ -43,9 +48,9 @@ interface Props {
  * renames every tool, which invalidates the model's memory of them mid-demo.
  */
 function idFor(label: string, taken: Set<string>): string {
-  // "mcp" only when there is nothing to derive from: an unnamed server still
-  // needs a prefix, and the backend's slugify falls back the same way.
-  const base = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "mcp";
+  // One derivation, in `mcpServerId`, so this and the tool-name matching in
+  // ChatPanel cannot drift from each other or from the backend's slugify.
+  const base = mcpServerId({ label, url: "" });
   let id = base;
   let n = 2;
   while (taken.has(id)) id = `${base}_${n++}`;
@@ -199,18 +204,61 @@ export function McpSection({ servers, onChange, defaultOpen }: Props) {
 
   const add = () => onChange([...servers, { label: "", url: "", enabled: true }]);
 
+  /**
+   * Fill each saved server's tool list as soon as the panel is shown.
+   *
+   * The page holds MCP clients of its own now, so this is a cached `tools/list`
+   * rather than a round trip per server, and it is the same connection the chat
+   * uses. Only servers that already have an id and a url: the proxy addresses a
+   * server by id against the assistant's SAVED configuration, so one still
+   * being typed is not reachable and asking would only produce a 404 under a
+   * half-finished name.
+   */
+  useEffect(() => {
+    let live = true;
+    for (const server of servers) {
+      if (!server.id || !server.url.trim() || results[server.id]) continue;
+      void describeMcpServer(server)
+        .then((result) => {
+          if (live) setResults((prev) => ({ ...prev, [result.id]: result }));
+        })
+        .catch(() => {
+          // A server that will not answer is what Test is for; saying nothing
+          // here beats an error beside a server the person has not asked about.
+        });
+    }
+
+    return () => {
+      live = false;
+    };
+  }, [servers, results]);
+
   const test = async (index: number) => {
     const server = servers[index];
-    // Give an unnamed server its id now: the probe reports tools under the
+    // Give an unnamed server its id now: the test reports tools under the
     // prefix, and they should read the same here as they will in chat.
     const taken = new Set(servers.filter((_, i) => i !== index).map((s) => s.id || ""));
     const id = server.id || idFor(server.label || "mcp", taken);
     if (id !== server.id) edit(index, { id });
 
     setTesting(id);
-    const [result] = await probeMcpServers([{ ...server, id, enabled: true }]);
+    // Through this page's own MCP client, which reaches the server by ID
+    // through the deployment's proxy. That means SAVED: the proxy resolves the
+    // id against the assistant's stored servers, so a connection still being
+    // typed is not reachable and the failure says so rather than timing out.
+    const result = await describeMcpServer({ ...server, id, enabled: true }, { reconnect: true }).catch(
+      (err: unknown): McpProbeResult => ({
+        id,
+        label: server.label,
+        url: server.url,
+        header_names: [],
+        ok: false,
+        tools: [],
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
     setTesting(null);
-    if (result) setResults((prev) => ({ ...prev, [id]: result }));
+    setResults((prev) => ({ ...prev, [id]: result }));
   };
 
   const live = servers.filter((s) => s.enabled !== false && s.url.trim()).length;

@@ -50,6 +50,9 @@ class ToolSpec:
     explicit_only: bool = False
     run_limit: int | None = None  # per-run call cap, enforced by middleware
     guidance: str = ""  # appended to the system prompt when enabled
+    # Pauses the run with `interrupt()` to wait for a human. Only the main agent can
+    # do that safely, so these are withheld from subagents: see `subagent_tools()`.
+    hitl: bool = False
 
 
 TOOL_REGISTRY: tuple[ToolSpec, ...] = (
@@ -70,6 +73,7 @@ TOOL_REGISTRY: tuple[ToolSpec, ...] = (
         description="Compose a ready-to-send email from what the data shows.",
         group="Comms",
         tool=draft_email,
+        hitl=True,  # pauses for the user's approval of the draft
         guidance=(
             "Use `draft_email` when the user wants to communicate a finding. It "
             "includes its own approval step, so the result is the user's OWN "
@@ -89,6 +93,7 @@ TOOL_REGISTRY: tuple[ToolSpec, ...] = (
         # stuck in a clarify-loop.
         always_on=True,
         run_limit=3,
+        hitl=True,  # pauses for the user's answer
         guidance=(
             "Use `ask_user` to ask ONE short clarifying question when the request is ambiguous or "
             "needs information only the user has; wait for their answer before proceeding. Don't "
@@ -120,6 +125,9 @@ DEFAULT_ENABLED: frozenset[str] = frozenset(
 )
 # Tools the setup auto-picker (and defaults) must never turn on — user opt-in only.
 EXPLICIT_ONLY: frozenset[str] = frozenset(s.id for s in TOOL_REGISTRY if s.explicit_only)
+# Tools that pause the run for a human. Named here so `subagent_tools()` and its test
+# read the same set the rows declare, rather than a second list of names to keep in step.
+HITL_IDS: frozenset[str] = frozenset(s.id for s in TOOL_REGISTRY if s.hitl)
 
 _BY_ID: dict[str, ToolSpec] = {s.id: s for s in TOOL_REGISTRY}
 
@@ -131,6 +139,24 @@ def all_tools() -> list[BaseTool]:
     unselected ones per run.
     """
     return [s.tool for s in TOOL_REGISTRY]
+
+
+def subagent_tools() -> list[BaseTool]:
+    """Every catalogue tool a subagent may be handed: the whole table bar the HITL rows.
+
+    A subagent has no route to the user. `interrupt()` suspends the WHOLE graph and the
+    resume value is delivered to the top-level turn, while the SPA renders the question
+    and draft-approval cards for the main agent's turn only. So a subagent that pauses
+    strands the run: the graph waits forever for an answer nobody was asked for, the
+    orchestration above it never resumes, and the user is left with whatever narration
+    preceded the pause instead of the finished answer. Withholding the tool is what
+    keeps that unreachable, because none of this app's own middleware reaches inside a
+    subagent to stop it: neither `ToolSelection` nor the `run_limit` caps apply there.
+
+    Read off the `hitl` flag rather than a name list, so a new pausing capability is
+    kept out of subagents by the row that declares it and nothing here needs editing.
+    """
+    return [s.tool for s in TOOL_REGISTRY if not s.hitl]
 
 
 def registry_json() -> list[dict[str, Any]]:

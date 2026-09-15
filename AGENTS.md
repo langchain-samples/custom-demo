@@ -20,10 +20,11 @@ demos belong in assistant configuration and referenced resources, not new graphs
 | Saved assistant | LangGraph assistant API | Persistent execution `context` and display/demo `metadata` |
 | Presenter session | App's `useAssistantSession` | Selection, editable draft, immediate previews and temporary overrides |
 | Acknowledged assistant state | React Query | Cached server records, updated after successful writes |
-| Conversation | LangGraph thread and ChatPanel | Messages, interrupts, goal and streamed output |
+| Conversation | LangGraph thread and ChatPanel | Messages, interrupts, goal and streamed output; thread ID in the URL |
 | Working files | `custom_demo/resources/sandbox.py` | Assistant VM, independent of individual conversations |
 | Execution topology | `custom_demo/runtime/backends.py` | Filesystems resolved from each current run |
 | Compiled graph | `custom_demo/runtime/agent.py` | Shared execution engine, not an assistant-resource container |
+| Browser MCP connections | `frontend/src/lib/mcpClients.ts` | Reused clients, tool metadata and app documents for configured servers |
 
 Dependency direction:
 - `core/` contains domain/configuration records, not orchestration or SDK clients.
@@ -36,6 +37,8 @@ Dependency direction:
 - `evals/` may import `custom_demo`, never the reverse.
 - App owns assistant-session state; Settings edits it. Execution must not depend on an
   imperative handle into a settings view.
+- The browser owns MCP App discovery and interaction. The deployment owns model tool filtering
+  and a configured-server byte proxy, not a second implementation of the app protocol.
 
 Backend-relative paths below are under `custom_demo/`; frontend paths name their full repo path.
 
@@ -47,13 +50,13 @@ custom_demo/
   core/demo.py               DemoPlan and LsArtifacts
   resources/sandbox.py       VM identity, credentials, seed scripts, lifecycle/cache
   runtime/backends.py        DynamicBackend and Context Hub filesystem routing
-  runtime/agent.py           Shared model/middleware/agent construction
+  runtime/agent.py           Shared model/middleware/agent construction and safe subagent specs
   runtime/prompt.py          Prompt templates and fresh Context Hub reads
-  runtime/tools/registry.py  Catalogue, guidance, selection and call caps
+  runtime/tools/registry.py  Catalogue, guidance, selection, call caps and HITL flags
   runtime/tools/core.py      push_widget and invocation-local widget collection
   runtime/tools/simulated.py Draft generation and human interrupts
   runtime/tools/web_search.py Real Tavily results
-  runtime/mcp_servers.py     Remote discovery, adaptation, cache and app resources
+  runtime/mcp_servers.py     Remote discovery, adaptation, instructions and server lookup
   runtime/widgets.py         Validated widget contract
   runtime/mocking.py         Per-invocation tool mocking
   provisioning/setup.py     Discovery, pure planning and resource preparation
@@ -61,6 +64,7 @@ custom_demo/
   provisioning/traffic.py   Optional synthetic traffic and review queue
   provisioning/resource_tags.py  Application tagging
   web/routes.py             HTTP route assembly
+  web/mcp.py                Streaming byte proxy to configured MCP servers
   web/                      Metadata, cleanup, sandbox, MCP, voice and eval handlers
   voice/                    Voice token minting and trace support
   config.py                 Environment, model and scoped-client configuration
@@ -77,11 +81,19 @@ frontend/src/
   lib/hooks/useAssistantSession.ts    Selection, edits and readiness
   lib/hooks/useAssistantAppearance.ts Brand and typography effects
   components/SettingsPanel.tsx        Settings view and dialogs
-  components/ChatPanel.tsx            Conversation and stream reconstruction
-  components/chat/toolActivity.ts     Ordered main/subagent tool activity
-  lib/api.ts                HTTP transport and frontend wire types
+  components/ChatPanel.tsx            Conversation, streaming and app lifecycle
+  components/chat/toolActivity.ts    Ordered main/subagent tool activity
+  components/chat/rehydrate.ts       Persisted messages to conversation cards
+  components/chat/McpAppCard.tsx     Streaming MCP Apps and stable iframe presentation
+  components/chat/McpElicitationCard.tsx  Schema form for MCP interrupts
+  lib/mcpClients.ts         Browser MCP clients, metadata, resources and app-call checks
+  lib/mcpAppHost.ts         Official AppBridge adapter for SEP-1865
+  lib/api.ts                HTTP transport, thread URL persistence and frontend wire types
   lib/queries.ts            React Query reads and cache keys
 mcp_demo_server/             Fieldlink Logistics and Meridian Wealth examples
+  apps/src/                 Four React MCP Apps using the official extension hooks
+  apps/build.sh             Build the shared apps/app.js bundle
+  apps.py                   Inline the bundle and styles into served app documents
 scripts/                    Local runners, connectivity and repository checks
 ```
 
@@ -92,10 +104,11 @@ image and managed with uv; frontend dependencies use npm. The `deepagents` 0.7 a
 ## 3. Prepare, publish and retire
 
 `prepare_assistant` runs brand discovery and customer analysis concurrently, copying the tracing
-context into each worker. Analysis proposes customer-specific skills, starting files, persona
-questions, capabilities and a data gap; brand discovery contributes visual values.
+context into each worker. Analysis uses the supplied homepage as company context and proposes
+customer-specific skills, starting files, persona questions, capabilities and a data gap;
+brand discovery contributes visual values. An outage page is not usable company context.
 
-`plan_demo` resolves them into `DemoPlan` without clients, network calls or background tasks.
+`plan_demo` resolves these into `DemoPlan` without clients, network calls or background tasks.
 Missing starting data or an unusable analysis fails before resource creation. Plan collections
 retain caller/provider fields rather than creating a second validation schema. Downstream
 consumers treat them as read-only; the frozen record is not deeply immutable.
@@ -156,8 +169,12 @@ incompatible workspace clears the assistant, but restoration retains the browser
 Changing either policy is a product decision, not an incidental refactor.
 
 Creation and retirement sequences are testable outside Settings. Conversation reset belongs
-to App/ChatPanel. The transport's thread cache and some delayed UI completions still lack full
-generation scoping; the per-assistant write queue does not make all switching races impossible.
+to App/ChatPanel. `api.ts` stores the thread ID in `?thread=<id>` and clears it on reset, so a
+refresh can resume the conversation. `rehydrate.ts` rebuilds user turns, assistant text and MCP
+Apps from persisted messages plus browser-discovered app bindings, not dashboard widgets or the
+live activity/subagent trace. Initial assistant loading must not count as a deliberate reset;
+a late history response must not replace a newly started turn. In-flight thread creation and
+other delayed output/lifecycle completions still need their own generation scoping.
 
 ## 5. Runtime, configuration and assistant resources
 
@@ -180,10 +197,11 @@ pass through without discovery; synchronous in-process eval/traffic runs do not 
 MCP tools through that middleware. The async tool-call hook must supply adapted tool objects
 as well as the model-call hook advertising them.
 
-No `write_todos` is installed. `DYNAMIC_SUBAGENTS` enables QuickJS orchestration and named
-specialists; an explicitly enabled but unbuildable interpreter raises. Python `execute` does
-data work, while QuickJS orchestrates task calls. Do not infer production flags from CI/local
-defaults or change prompts to advertise tools that the installed graph does not provide.
+No `write_todos` is installed. `_subagent_specs` always supplies an explicit `general-purpose`
+subagent, its skills sources and a safe tool list; it does not rely on the framework's automatic
+copy. `DYNAMIC_SUBAGENTS` additionally enables QuickJS orchestration and named specialists;
+an explicitly enabled but unbuildable interpreter raises. Python `execute` does data work,
+while QuickJS orchestrates task calls. Do not infer production flags from CI/local defaults.
 
 ### Configuration and prompt sources
 
@@ -223,7 +241,8 @@ payloads are sanitized; model-authored values must not be interpolated as shell 
 every access, not at graph build. `execute` is offered only when its actual default is a sandbox.
 The skills bundle mounts at `/skills/`; routing strips that prefix, so bundle files live at
 `<skill>/SKILL.md` at the repo root. Hub construction errors raise `BackendSourceError`; later
-Hub I/O errors surface during access. Off-run resolution uses StateBackend.
+Hub I/O errors surface during access. Off-run resolution uses StateBackend, including when a
+runnable config remains available after its runtime has ended.
 
 An assistant with `agent_repo` but no `skills_repo` uses the whole Hub repo as default and does
 not acquire a sandbox. Preserve that compatibility branch until a migration is designed.
@@ -239,9 +258,11 @@ creates an approved draft, not a delivery. `web_search` uses real Tavily results
 
 Unset runtime selection uses defaults; `[]` leaves only always-on tools. Setup separately
 unions picks with defaults and retains empty-input truthiness. Names outside the catalogue
-pass through, including built-ins and namespaced MCP tools. The auto-added general-purpose
-subagent does not inherit this app's selection middleware; catalogue selection is not a full
-subagent permission boundary.
+pass through, including built-ins and namespaced MCP tools. `ToolSelection` and catalogue call
+caps govern the main agent, not its subagents. Every subagent spec receives `subagent_tools()`,
+the catalogue without `hitl=True` rows, with mocking wrappers. A new pausing tool must carry
+that flag. Never omit a subagent's `tools` key: framework inheritance would reintroduce human
+interrupts that no subagent UI can answer. Skills must also be declared on inline specs.
 
 Widget schemas in `runtime/widgets.py` and frontend API types/renderers must agree. ChatPanel
 alone reconstructs partial widget arguments and flushes complete widgets as the stream advances.
@@ -266,21 +287,69 @@ messages, updates and custom.
 
 ## 7. MCP protocol and browser boundaries
 
+### Discovery and the byte proxy
+
 Remote URLs are outbound from the deployment; local servers need a public tunnel for deployed
-agents. Tools use `{server_id}_{tool}` names to avoid catalogue collisions. Discovery and
-adapted-tool caches include connection configuration. Failed discovery temporarily removes the
-server's tools instead of failing the turn; diagnose it through the Settings probe.
+agents. Tools use `{server_id}_{tool}` names; the browser and backend must derive the same ID.
+Backend discovery caches adapted tools and server `instructions` together. It enters the client
+group around the adapter so initialize instructions are available, and `_mcp_note` includes
+them with complete tool descriptions. Failed group discovery retries servers independently:
+one dead tunnel must not remove healthy servers' tools. `McpTools` excludes tools whose explicit
+`_meta.ui.visibility` omits `model`; an omitted visibility field allows both model and app use.
 
-The stateless demo servers use guard-based `InputRequiredResult`, not server-push `ctx.elicit()`.
-Do no irreversible work before the guard: the client re-calls the tool with answers. Resume
-responses must be keyed by the server's request key. Elicitation values must be primitives;
-nested objects are invalid. Schema render context belongs on a property because root-level
-custom fields are normalized away by the SDK.
+The browser holds real MCP clients in `mcpClients.ts` and uses `tools/list` to determine which
+tools have apps, which calls apps may make and the complete input schemas for handshakes.
+It recognizes `_meta.ui.resourceUri` and the deprecated flat `ui/resourceUri`, preferring the
+nested spelling. Client, tool-list and app-document caches avoid repeated handshakes/reads;
+settings refreshes explicitly invalidate them. Connection failures remain per server.
 
-MCP App `ui://` HTML runs in an iframe with `sandbox="allow-scripts"`, never `allow-same-origin`.
-Keep message-source validation and the bridge contract: init carries request/theme/accent;
-ready, resize, submit and cancel return to the host. Submitted content must match the requested
-schema. Signature app tests pin this cross-language contract.
+`POST /mcp/proxy/{server_id}?assistant=<id>` is the only MCP route. `web/mcp.py` resolves the
+server against the stored assistant's `context.mcp_servers`, forwards the request bytes and
+streams the response. It does not interpret MCP messages or enforce app-tool visibility.
+Never add a caller-supplied URL parameter. Upstream headers are allowlisted and configured
+server authorization is attached here; browser cookies and the deployment key are not forwarded.
+Method-preserving 307/308 redirects are bounded and restricted to the same network location.
+Save connection changes before testing them: the proxy cannot resolve an unsaved draft server.
+
+### Ordinary MCP Apps
+
+The four demo apps use the ordinary flow: a model-visible opener returns data for its UI, and
+an app-only submit tool performs the user's action. Opening an app does not interrupt the run.
+`McpAppCard` can mount while arguments stream, send partial inputs, then final input and result;
+its growing skeleton covers the empty-input phase. `structuredFromToolMessage` reads the MCP
+artifact's `structured_content` before falling back to parsing JSON text. Do not mistake the
+model-facing text for the app's structured result, in either live streaming or rehydration.
+
+`mcpAppHost.ts` uses the official `@modelcontextprotocol/ext-apps` `AppBridge` and
+`PostMessageTransport`: SEP-1865 JSON-RPC, negotiation, notification ordering and source-window
+validation belong to the SDK. Send a complete `toolInfo.tool`, including `inputSchema`.
+Keep the bridge's MCP client argument `null` even though the browser has clients: automatic
+forwarding would bypass our `resolveAppCall` checks. Explicit handlers resolve unprefixed tool
+names within the opener's server and refuse cross-server or non-app-visible calls. Missing
+visibility permits app calls; an explicit list must include `app`. Resource reads use the
+opener's server. Unsupported `ui/message` and model-context requests fail rather than being
+silently accepted; the current app card does not wire those optional handlers.
+
+The iframe uses `srcDoc` and `sandbox="allow-scripts"`, never `allow-same-origin`. This prevents
+access to the host DOM/storage but is not, by itself, a complete network-egress restriction.
+This host does not implement the spec's separate-origin sandbox proxy or enforce `ui.csp`;
+do not describe it as supporting every third-party app or as having no possible network access.
+Keep fullscreen changes on a stable wrapper: reparenting the iframe reloads it and loses edits.
+
+`mcp_demo_server/apps/src/` contains four React views using the official `useApp` hooks.
+`apps/build.sh` builds one shared `apps/app.js`; `apps.py` inlines it and `shell.css` into the
+served document. Register input/result listeners before connecting so the first notification
+is not lost. Components receive data, arguments and a call function rather than hand-written
+protocol handlers. Signature and MCP conformance tests exercise the served bundle and wire contract.
+
+### Elicitation and media
+
+MCP elicitation is separate from app interaction. A server can return a guard-based
+`InputRequiredResult`; LangChain surfaces the pause as an interrupt and `McpElicitationCard`
+renders its schema form. Resume answers are keyed by the server's request key. Stateless
+servers cannot use server-push `ctx.elicit()`; do no irreversible work before a retryable guard.
+Elicitation content must match its schema and contain primitive values. Do not reintroduce
+elicitation into the four ordinary app opener/submitter pairs or invent custom app messages.
 
 Signature results include text and image content; document images use served URLs rather than
 requiring the model to reproduce base64. Drop undersized images that providers reject. URLs
@@ -310,16 +379,18 @@ Operational limits requiring explicit policy decisions:
 - Shared resource names, publication rollback and complete partial-provisioning receipts are
   unresolved lifecycle questions; do not imply per-assistant resource ownership everywhere.
 - Temporary prompt/workspace previews can differ from saved eval configuration.
-- Thread creation, delayed artifact reads and lifecycle completions are not fully scoped to
-  conversation generations; the settings write queue does not fix those separate lifetimes.
+- URL thread persistence and history rehydration do not fully scope thread creation, delayed
+  artifact reads or lifecycle completions to conversation generations.
 - `http.enable_custom_route_auth` protects custom routes with deployment auth, but the token
   is shared and shipped in the SPA. CORS is broad. Bundle access is not tenant isolation;
   sandbox uploads and model/eval/traffic operations add write and cost exposure.
-- `/mcp/probe` and `/mcp/app` fetch caller-supplied URLs. Their outbound-request/SSRF exposure
-  must be reviewed before widening access; iframe isolation does not protect backend requests.
-- Google Fonts loads third-party assets unless curated fonts are selected; no CSP is configured.
-  Branding JS writes theme-independent seeds. Resolve computed sRGB through `resolveColor` and
-  `toLegacyRgb`, not raw `getPropertyValue`; preserve zero-tint and curated-font fallbacks.
+- The MCP proxy only reaches saved connection targets, but anyone allowed to change that
+  configuration can influence outbound destinations. App-call checks belong to the browser
+  host, not the byte proxy. Iframe origin isolation does not establish backend authorization.
+- Google Fonts loads third-party assets unless curated fonts are selected; no application-wide
+  CSP is configured. Branding JS writes theme-independent seeds. Resolve computed sRGB through
+  `resolveColor` and `toLegacyRgb`, not raw `getPropertyValue`, for charts/export consumers;
+  preserve zero-tint and curated-font fallbacks.
 - `config.py` can load a sibling project's environment. SDK startup can attempt network even
   in otherwise mocked tests; explicit network isolation is required for a guaranteed offline run.
 
@@ -331,8 +402,9 @@ when-prompted → response → world and write the cheapest failing test/eval th
 
 Put scenario policy in planning, resource mechanics in the resource owner, and presentation
 controls behind the session/view boundary. New capabilities need a tool implementation, registry
-entry and frontend vocabulary/renderer. New failure modes need matching prompt/eval registry
-entries. Widget changes require both schema sides and both existing collection paths to agree.
+entry and frontend vocabulary/renderer; pausing tools need `hitl=True`. New failure modes need
+matching prompt/eval registry entries. Widget changes require both schema sides and both existing
+collection paths to agree. New MCP views use the official protocol and shared app entry point.
 
 For internal refactors, characterize outputs and side-effect order before moving ownership.
 Resource-boundary tests check graph-independent acquisition; setup-policy tests pin prepared

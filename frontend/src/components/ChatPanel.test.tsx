@@ -1,19 +1,30 @@
 // @vitest-environment jsdom
 import { createRef, type ReactNode } from "react";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ChatPanel, { type ChatPanelHandle, type ChatPanelProps, type TurnResult } from "./ChatPanel";
 import type { ThreadMessage } from "@/lib/api";
+import type { McpAppCardProps } from "./chat/McpAppCard";
 
-const { runStream, ensureThread } = vi.hoisted(() => ({
+const { runStream, ensureThread, getThreadState, savedThreadId, resetThread, mcpAppBindings, McpAppCard } = vi.hoisted(() => ({
   runStream: vi.fn(),
   ensureThread: vi.fn(),
+  getThreadState: vi.fn(),
+  savedThreadId: vi.fn(),
+  resetThread: vi.fn(),
+  mcpAppBindings: vi.fn(),
+  McpAppCard: vi.fn<(props: McpAppCardProps) => ReactNode>(),
 }));
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api")>()),
   runStream,
   ensureThread,
+  getThreadState,
+  savedThreadId,
+  resetThread,
 }));
+vi.mock("@/lib/mcpClients", () => ({ mcpAppBindings }));
+vi.mock("@/components/chat/McpAppCard", () => ({ McpAppCard }));
 vi.mock("streamdown", () => ({ Streamdown: ({ children }: { children: ReactNode }) => children }));
 vi.mock("@/components/chat/ToolChip", () => ({ ToolChip: () => null }));
 vi.mock("@/components/chat/ToolChipGroup", () => ({ ToolChipGroup: () => null }));
@@ -56,16 +67,23 @@ function stream() {
   };
 }
 
-function panel() {
+function panel(overrides: Partial<ChatPanelProps> = {}) {
   const handle = createRef<ChatPanelHandle>();
   const onActivity = vi.fn<NonNullable<ChatPanelProps["onActivity"]>>();
   const onWidget = vi.fn();
   const onArtifact = vi.fn();
-  render(<ChatPanel handleRef={handle} assistantId="assistant" hasAssistant
-    getRunContext={() => ({ ls_workspace: "workspace" })}
-    onActivity={onActivity} onWidget={onWidget} onArtifact={onArtifact} />);
+  let props: ChatPanelProps = {
+    handleRef: handle, assistantId: "assistant", hasAssistant: true,
+    getRunContext: () => ({ ls_workspace: "workspace" }),
+    onActivity, onWidget, onArtifact, ...overrides,
+  };
+  const view = render(<ChatPanel {...props} />);
   return {
     handle, onWidget, onArtifact,
+    rerender(patch: Partial<ChatPanelProps>) {
+      props = { ...props, ...patch };
+      view.rerender(<ChatPanel {...props} />);
+    },
     activity: () => onActivity.mock.calls.at(-1)![0],
     async start(resume?: unknown, onProgress?: (name: string) => void) {
       const source = stream();
@@ -92,7 +110,12 @@ function panel() {
 
 beforeEach(() => {
   runStream.mockReset();
-  ensureThread.mockResolvedValue("thread");
+  ensureThread.mockReset().mockResolvedValue("thread");
+  getThreadState.mockReset().mockResolvedValue({ values: { messages: [] } });
+  savedThreadId.mockReset().mockReturnValue(null);
+  resetThread.mockReset();
+  mcpAppBindings.mockReset().mockResolvedValue({});
+  McpAppCard.mockReset().mockReturnValue(null);
 });
 afterEach(cleanup);
 
@@ -205,5 +228,95 @@ describe("streamed tool activity", () => {
     await resumed.finish();
     expect(ui.activity().chips[0]).toMatchObject({ id: "read", result: "data" });
     expect(ui.activity().chips[1].stopped).toBe(false);
+  });
+
+  it("finalizes the main chip and MCP app from the same result without accepting a subagent result", async () => {
+    const servers = [{ id: "ops", label: "Operations", url: "https://ops.example/mcp" }];
+    mcpAppBindings.mockResolvedValue({ ops_open_record: { resourceUri: "ui://ops/record" } });
+    const ui = panel({ getRunContext: () => ({ mcp_servers: servers }) });
+    const progress = vi.fn();
+    const run = await ui.start(undefined, progress);
+    const app = () => McpAppCard.mock.calls.at(-1)![0];
+    await run.send(message({ type: "ai", tool_calls: [
+      { id: "record", name: "ops_open_record", args: { query: "par" } },
+    ] }));
+    expect(app()).toMatchObject({ toolName: "ops_open_record", toolArguments: { query: "par" }, streaming: true, servers });
+    await run.send(message({ type: "ai", tool_calls: [
+      { id: "record", name: "ops_open_record", args: { query: "partial" } },
+    ] }));
+    expect(app().toolArguments).toEqual({ query: "partial" });
+    await run.send(message({ type: "ai", tool_calls: [
+      { id: "record", name: "ops_open_record", args: {} },
+    ] }, ["tools:delegate"]));
+    await run.send(message({ type: "tool", name: "ops_open_record", tool_call_id: "record", content: "subagent record" }, ["tools:delegate"]));
+    expect(ui.activity().subagents[0].chips[0].result).toBe("subagent record");
+    expect(ui.activity().chips[0].result).toBeNull();
+    expect(app().streaming).toBe(true);
+    expect(app().toolResult).toBeUndefined();
+    const completed = {
+      type: "tool", name: "ops_open_record", tool_call_id: "record",
+      content: "The model-facing summary",
+      artifact: { structured_content: { record_id: 42, status: "ready" } },
+    };
+    await run.send(message(completed));
+    expect(ui.activity().chips).toHaveLength(1);
+    expect(ui.activity().chips[0]).toMatchObject({ id: "record", result: "The model-facing summary" });
+    expect(app()).toMatchObject({
+      streaming: false,
+      toolArguments: { query: "partial" },
+      toolResult: { structuredContent: { record_id: 42, status: "ready" }, content: [] },
+    });
+    expect(progress.mock.calls).toEqual([["ops_open_record"]]);
+    await run.finish();
+    expect(ui.activity().chips[0].stopped).toBeUndefined();
+    expect(app().streaming).toBe(false);
+  });
+});
+
+const HISTORY = [
+  { type: "human", content: "Open the saved record" },
+  { type: "ai", content: "Opening it", tool_calls: [{ id: "saved-record", name: "ops_open_record", args: { id: 42 } }] },
+  { type: "tool", tool_call_id: "saved-record", content: "Saved summary", artifact: { structured_content: { record_id: 42 } } },
+  { type: "ai", content: "Saved answer" },
+];
+
+describe("persisted conversations", () => {
+  it("restores answers and MCP apps as the assistant loads, resetting only on a deliberate switch", async () => {
+    savedThreadId.mockReturnValue("saved-thread");
+    getThreadState.mockResolvedValue({ values: { messages: HISTORY } });
+    mcpAppBindings.mockImplementation(async (servers) => servers.length
+      ? { ops_open_record: { resourceUri: "ui://ops/record" } }
+      : {});
+    const ui = panel({ assistantId: "", hasAssistant: false, resetKey: ":0" });
+    await screen.findByText("Saved answer");
+    expect(McpAppCard).not.toHaveBeenCalled();
+    const servers = [{ id: "ops", label: "Operations", url: "https://ops.example/mcp" }];
+    ui.rerender({ assistantId: "assistant", hasAssistant: true, resetKey: "assistant:0", getRunContext: () => ({ mcp_servers: servers }) });
+    await waitFor(() => expect(McpAppCard).toHaveBeenCalled());
+    expect(McpAppCard.mock.calls.at(-1)![0]).toMatchObject({
+      toolName: "ops_open_record", streaming: false, toolArguments: { id: 42 },
+      toolResult: { structuredContent: { record_id: 42 }, content: [] },
+    });
+    expect(getThreadState).toHaveBeenCalledWith("saved-thread");
+    expect(screen.queryByText("Saved answer")).not.toBeNull();
+    expect(resetThread).not.toHaveBeenCalled();
+    expect(ui.activity()).toEqual({ chips: [], subagents: [], running: false });
+    ui.rerender({ assistantId: "other", resetKey: "other:1" });
+    expect(resetThread).toHaveBeenCalledOnce();
+    expect(screen.queryByText("Saved answer")).toBeNull();
+  });
+
+  it("does not replace a new streamed turn with late restored history", async () => {
+    savedThreadId.mockReturnValue("saved-thread");
+    let restore!: (state: { values: { messages: typeof HISTORY } }) => void;
+    getThreadState.mockReturnValue(new Promise((resolve) => { restore = resolve; }));
+    const ui = panel({ resetKey: "assistant:0" });
+    const run = await ui.start();
+    await run.send(message({ type: "ai", tool_calls: [{ id: "current", name: "execute", args: { command: "current work" } }] }));
+    await act(async () => { restore({ values: { messages: HISTORY } }); });
+    expect(screen.queryByText("Saved answer")).toBeNull();
+    expect(screen.queryByText("Analyze this")).not.toBeNull();
+    expect(ui.activity().chips[0]).toMatchObject({ id: "current", result: null });
+    await run.finish();
   });
 });

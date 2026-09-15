@@ -51,6 +51,10 @@ CONNECT_TIMEOUT_SECONDS = mcp_timeout_seconds()
 
 _SLUG = re.compile(r"[^a-z0-9]+")
 
+# Each server set's `instructions`, by the same fingerprint the tools are cached
+# under, so editing a URL or a token re-reads both together.
+_INSTRUCTIONS: dict[str, dict[str, str]] = {}
+
 
 @dataclass(frozen=True)
 class McpServer:
@@ -185,6 +189,13 @@ _LOCKS: dict[str, asyncio.Lock] = {}
 async def load_tools(servers: tuple[McpServer, ...], *, refresh: bool = False) -> list[Any]:
     """Adapted LangChain tools for `servers`, cached for `TOOLS_TTL_SECONDS`.
 
+    App-only tools are dropped: the agent must not see them, and that filter is
+    the ONE thing about MCP Apps this deployment still knows (see
+    `model_visible`). Everything else, which tools ship a UI and which are open
+    to apps, is the browser's business now that it holds its own MCP client.
+    The cache holds every tool the server published and the filter runs on the
+    way out.
+
     Never raises: a server that is down, tunnelled to nothing, or refusing the
     token yields no tools and leaves the rest of the agent working. The SPA's
     `probe()` is where a connection problem is meant to be visible; a chat turn
@@ -198,7 +209,7 @@ async def load_tools(servers: tuple[McpServer, ...], *, refresh: bool = False) -
     if not refresh:
         hit = _TOOLS.get(key)
         if hit and hit[0] > now:
-            return hit[1]
+            return [t for t in hit[1] if model_visible(t)]
 
     lock = _LOCKS.setdefault(key, asyncio.Lock())
     async with lock:
@@ -206,128 +217,184 @@ async def load_tools(servers: tuple[McpServer, ...], *, refresh: bool = False) -
         # should use what it produced, not load again.
         hit = _TOOLS.get(key)
         if not refresh and hit and hit[0] > time.monotonic():
-            return hit[1]
+            return [t for t in hit[1] if model_visible(t)]
 
         try:
-            tools = await asyncio.wait_for(
+            tools, said = await asyncio.wait_for(
                 _discover(servers, refresh=refresh),
                 timeout=CONNECT_TIMEOUT_SECONDS,
             )
         except Exception as exc:  # noqa: BLE001 - a bad server degrades the turn, never fails it
-            _log(
-                f"tool discovery failed for {[s.id for s in servers]}: {type(exc).__name__}: {exc}"
-            )
-            # Cache the emptiness briefly too, so an unreachable server is not
+            # One group, one connection, and therefore one failure for all of
+            # them: a single server whose DNS is gone or that never answers
+            # takes every other server's tools down with it. Retry one at a
+            # time so the damage is limited to the server that caused it.
+            _log(f"group discovery failed, retrying per server: {type(exc).__name__}: {exc}")
+            tools, said = await _discover_each(servers, refresh=refresh)
+
+        _INSTRUCTIONS[key] = said
+        if not tools:
+            # Cache the emptiness briefly, so an unreachable server is not
             # retried (and re-timed-out) on every single model call in a turn.
             _TOOLS[key] = (time.monotonic() + min(TOOLS_TTL_SECONDS, 30.0), [])
             return []
 
         _TOOLS[key] = (time.monotonic() + TOOLS_TTL_SECONDS, tools)
-        return tools
+        return [t for t in tools if model_visible(t)]
 
 
-async def _discover(servers: tuple[McpServer, ...], *, refresh: bool) -> list[Any]:
-    """One real discovery pass: connect, list, adapt."""
+async def _discover_each(
+    servers: tuple[McpServer, ...], *, refresh: bool
+) -> tuple[list[Any], dict[str, str]]:
+    """Discover each server alone, so one broken server costs only its own tools.
+
+    The fallback for when the single-group pass fails. A `ClientGroup` connects
+    every member together and raises as a unit, which is right when everything
+    works and catastrophic when one member is a tunnel that has expired: the
+    agent loses every MCP tool it had and says the integration is unavailable,
+    naming a server that is perfectly healthy.
+
+    Concurrent, so a server that hangs costs one timeout rather than one per
+    server. Namespacing is unchanged: a one-member group still prefixes its
+    tools with the server id, which is what `probe` has always relied on.
+    """
+
+    async def one(server: McpServer) -> tuple[list[Any], dict[str, str]]:
+        try:
+            return await asyncio.wait_for(
+                _discover((server,), refresh=refresh), timeout=CONNECT_TIMEOUT_SECONDS
+            )
+        except Exception as exc:  # noqa: BLE001 - name the server and keep the others
+            _log(f"{server.id} is unreachable, its tools are missing: {type(exc).__name__}: {exc}")
+            return [], {}
+
+    found = await asyncio.gather(*(one(server) for server in servers))
+    return [tool for tools, _ in found for tool in tools], {
+        sid: text for _, said in found for sid, text in said.items()
+    }
+
+
+async def _discover(
+    servers: tuple[McpServer, ...], *, refresh: bool
+) -> tuple[list[Any], dict[str, str]]:
+    """One real discovery pass: connect, list, adapt, and read what each server says.
+
+    Both results come from the same connection on purpose. `awrap_model_call`
+    fires on every model call, so a second pass just for `instructions` would be
+    a round trip per call, which is the thing this module exists to avoid.
+    """
     # Local like `build_group`'s: keeps the mcp client stack off graph load.
     from langchain.mcp import MCPAdapter  # noqa: PLC0415
 
-    async with MCPAdapter(build_group(servers)) as adapter:
+    group = build_group(servers)
+    # The group is entered HERE, with the adapter working inside it, and that
+    # nesting is load-bearing: `MCPAdapter(group)` alone leaves
+    # `group.clients[...].instructions` empty, so the guidance would silently be
+    # lost while the tools came back fine. One connection still, not two.
+    async with group, MCPAdapter(group) as adapter:
         # `use` reads the client-side cache when the server's TTL hint says it is
         # still fresh; `refresh` is what the SPA's "reload tools" button sends.
-        return await adapter.list_tools(cache_mode="refresh" if refresh else "use")
+        tools = await adapter.list_tools(cache_mode="refresh" if refresh else "use")
+        # `instructions` is declared on the client, and `clients` is keyed by the
+        # id we namespaced the tools with, so the two line up by construction.
+        said = {
+            str(sid): client.instructions.strip()
+            for sid, client in group.clients.items()
+            if isinstance(client.instructions, str) and client.instructions.strip()
+        }
+
+    return tools, said
+
+
+def instructions_for(servers: tuple[McpServer, ...]) -> dict[str, str]:
+    """Each server's `instructions`, by server id, from the last discovery.
+
+    A server returns this in its initialize result, and it is the only place it
+    can say how its tools relate to each other: a tool description covers one
+    tool, while "call get_project before updating one" or "these four open a UI
+    and do no work" is a statement about the set. A host that drops it makes the
+    server work around it, which is why Excalidraw ships a `read_me` tool.
+
+    Reads the cache `load_tools` filled, so it costs nothing and must be called
+    after it. Empty until then, and empty for a server with nothing to say,
+    which is most of them.
+    """
+    return dict(_INSTRUCTIONS.get(fingerprint(servers), {}))
+
+
+def _ui_meta(tool: Any) -> dict[str, Any]:
+    """The `_meta.ui` block the adapter carried through, or an empty one."""
+    meta = (tool.metadata or {}).get("mcp") or {}
+    return (((meta.get("tool") or {}).get("_meta") or {}).get("ui")) or {}
+
+
+def model_visible(tool: Any) -> bool:
+    """Whether the agent is allowed to see this tool.
+
+    MCP Apps (SEP-1865) lets a server mark a tool `_meta.ui.visibility: ["app"]`,
+    meaning only its own App may call it, and the rule for a host is a MUST: a
+    tool whose visibility omits `"model"` is kept out of the agent's tool list.
+    Excalidraw's server is the worked example, publishing `create_view` to the
+    model and `save_checkpoint` / `read_checkpoint` / `export_to_excalidraw` to
+    the app alone.
+
+    Defaults to visible. Omitting the key means `["model", "app"]`, which is
+    every ordinary tool on every server that has never heard of the extension.
+    """
+    visibility = _ui_meta(tool).get("visibility")
+    if not isinstance(visibility, list):
+        return True
+
+    return "model" in visibility
 
 
 def invalidate(servers: tuple[McpServer, ...] | None = None) -> None:
     """Drop cached tools, for one server set or all of them."""
     if servers is None:
         _TOOLS.clear()
+        _INSTRUCTIONS.clear()
         return
 
     _TOOLS.pop(fingerprint(servers), None)
 
 
-async def probe(servers: tuple[McpServer, ...]) -> dict[str, Any]:
-    """Connect and report what each server offers, for the Settings panel.
+async def resolve_server(assistant_id: str, server_id: str) -> McpServer | None:
+    """The configured server an id names, read off the assistant that owns it.
 
-    Reports per server so one dead tunnel does not read as "MCP is broken".
+    The id, not a URL. A proxy that forwards wherever the caller points it is a
+    general-purpose fetcher wearing the deployment's network position, and the
+    browser gains nothing from naming the host: it is choosing between servers
+    the assistant already has. Resolving server-side also keeps the bearer
+    token out of the request entirely.
+
+    `None` for an id the assistant does not have, which the caller answers 404.
+    An unsaved server being edited in Settings is exactly that case, and is why
+    "Test connection" cannot go through here.
     """
-    out: list[dict[str, Any]] = []
-    for server in servers:
-        single = (server,)
-        entry: dict[str, Any] = {**server.redacted(), "ok": False, "tools": []}
-        try:
-            tools = await asyncio.wait_for(
-                _discover(single, refresh=True), timeout=CONNECT_TIMEOUT_SECONDS
-            )
-            entry["ok"] = True
-            entry["tools"] = [
-                {
-                    "name": t.name,
-                    "description": (t.description or "").strip().split("\n")[0][:200],
-                    "app": app_uri(t),
-                }
-                for t in tools
-            ]
-            # A successful probe is a fresh discovery; let the agent reuse it.
-            _TOOLS[fingerprint(single)] = (time.monotonic() + TOOLS_TTL_SECONDS, tools)
-        except TimeoutError:
-            entry["error"] = f"no response within {CONNECT_TIMEOUT_SECONDS:.0f}s"
-        except Exception as exc:  # noqa: BLE001 - the message is the whole point of a probe
-            entry["error"] = f"{type(exc).__name__}: {exc}"[:300]
+    # Local: langgraph_sdk pulls an http stack this module does not otherwise
+    # need, and mcp_servers.py is on the graph's import path.
+    from langgraph_sdk import get_client  # noqa: PLC0415
 
-        out.append(entry)
+    if not assistant_id:
+        raise LookupError("no assistant was named, so no server list can be read")
 
-    return {"servers": out}
+    try:
+        assistant = await get_client().assistants.get(assistant_id)
+    except Exception as exc:
+        # The likeliest cause by far, and the one worth naming: the SPA falls
+        # back to the GRAPH id when no assistant has been chosen, and a graph
+        # id is not an assistant id.
+        raise LookupError(
+            f"could not read assistant {assistant_id!r}: {type(exc).__name__}: {exc}"
+        ) from exc
 
-
-def app_uri(tool: Any) -> str | None:
-    """The `ui://` resource an MCP App tool renders, or None for an ordinary tool.
-
-    The MCP Apps extension stamps `_meta.ui.resourceUri` on the tool, and the
-    adapter carries the tool's MCP provenance through on `metadata["mcp"]`.
-    """
-    meta = (tool.metadata or {}).get("mcp") or {}
-    ui = ((meta.get("tool") or {}).get("_meta") or {}).get("ui") or {}
-    uri = ui.get("resourceUri")
-    return str(uri) if isinstance(uri, str) and uri.startswith("ui://") else None
-
-
-async def read_app(servers: tuple[McpServer, ...], tool_name: str) -> dict[str, Any] | None:
-    """The HTML of the MCP App bound to `tool_name`, or None if it has none.
-
-    Called while a run is paused on that tool's elicitation, so the SPA can render
-    the server's own UI for the pause instead of a generic form. Reads the
-    resource from the server the tool actually came from, which is why it resolves
-    through the group rather than guessing at a member.
-    """
-    tools = await load_tools(servers)
-    tool = next((t for t in tools if t.name == tool_name), None)
-    if tool is None:
-        return None
-
-    uri = app_uri(tool)
-    if uri is None:
-        return None
-
-    group = build_group(servers)
-    async with group:
-        route = await group.resolve_tool(tool_name)
-        result = await route.client.read_resource(uri)
-
-    for item in result:
-        text = getattr(item, "text", None)
-        if isinstance(text, str) and text.strip():
-            return {
-                "tool_name": tool_name,
-                "resource_uri": uri,
-                "mime_type": getattr(item, "mime_type", None) or "text/html",
-                "html": text,
-            }
-
-    # A `ui://` URI that resolves to nothing readable is a server bug, and the
-    # caller renders the generic form. Say so rather than returning a blank page.
-    _log(f"{tool_name} declares {uri} but the resource carried no text")
-    return None
+    # `getattr`, not dot access: the SDK types an Assistant as a union of
+    # TypedDict / dataclass / model shapes, so the checker rejects both
+    # subscripting and `.get`, and only the mapping form exists at runtime.
+    context: Any = getattr(assistant, "get", lambda _k, _d=None: None)("context") or {}
+    servers_raw = context.get("mcp_servers") if hasattr(context, "get") else None
+    configured = parse_servers(servers_raw)
+    return next((s for s in configured if s.id == server_id), None)
 
 
 def _log(message: str) -> None:

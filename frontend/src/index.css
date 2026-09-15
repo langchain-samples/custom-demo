@@ -71,6 +71,12 @@
  * --brand-primary is the runtime-overridable accent the gear panel sets per-assistant.
  */
 :root {
+    /* Tells the browser which way the UI leans, which is what native scrollbars,
+       form controls and spell-check underlines are drawn from. Without it the
+       browser assumes light and paints a light scrollbar track over the dark
+       theme. `.dark` flips it below. */
+    color-scheme: light;
+
     --radius: 0.625rem;
 
     /* ---- Typography. lib/fonts.ts overrides the two stacks per assistant,
@@ -169,6 +175,8 @@
 
 /* Dark theme — applied via the `dark` class on <html> (toggled at runtime). */
 .dark {
+    color-scheme: dark;
+
     /* Same derivation, dark bases. Brand seeds are theme-independent and stay
        on :root — only the surfaces they tint change here. */
     --bg: color-mix(in srgb, var(--brand-neutral) calc(var(--brand-tint) * 0.3), #0a0a0b);

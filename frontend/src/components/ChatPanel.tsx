@@ -27,11 +27,18 @@ import {
   IconUser,
 } from "@tabler/icons-react";
 import type { QuickAction, ReviewInterrupt, RunContext, ThreadMessage, Widget } from "@/lib/api";
-import { ensureThread, resetThread, runStream } from "@/lib/api";
+import { ensureThread, getThreadState, resetThread, runStream, savedThreadId } from "@/lib/api";
+import { mcpAppBindings } from "@/lib/mcpClients";
+import {
+  isDeliberateReset,
+  rehydrateItems,
+  structuredFromToolMessage,
+} from "@/components/chat/rehydrate";
 import { PROSE_CLS } from "@/lib/markdown";
 import { isHtmlArtifactPath } from "@/lib/artifacts";
 import { ReviewCard } from "@/components/chat/ReviewCard";
 import { McpElicitationCard } from "@/components/chat/McpElicitationCard";
+import { McpAppCard } from "@/components/chat/McpAppCard";
 import { Button } from "@/components/motion/button";
 import { ToolChip, type ChipData } from "@/components/chat/ToolChip";
 import { ToolChipGroup } from "@/components/chat/ToolChipGroup";
@@ -256,15 +263,48 @@ interface FeedbackItem {
   /** Workspace the run traced to — feedback must target the same tenant. */
   workspace?: string;
 }
+/**
+ * An MCP App for a tool call that finished.
+ *
+ * Separate from ReviewItem because it is not a pause: the run has moved on, and
+ * the app interacts by calling tools rather than by answering anything. The card
+ * renders nothing when the tool ships no UI, which is most of them.
+ */
+interface AppItem {
+  kind: "app";
+  id: string;
+  toolName: string;
+  toolArgs: Record<string, unknown>;
+  /** True while the model is still writing the arguments. */
+  streaming?: boolean;
+  /** Absent until the call returns. */
+  toolResult?: { structuredContent?: unknown; content?: unknown[] };
+}
 /** A tool paused the run for human review; resolved by resuming the thread. */
 interface ReviewItem {
   kind: "review";
   id: string;
   review: ReviewInterrupt;
+  /**
+   * Arguments the paused tool was called with, snapshotted when the pause
+   * arrived. An MCP App is told them over `ui/notifications/tool-input`, and
+   * needs them again to answer: SEP-2322 has the client re-call the same tool
+   * with the same arguments plus the response, so they have to survive the
+   * pause. The interrupt itself does not carry them, so they come off the
+   * stream.
+   */
+  toolArgs?: Record<string, unknown>;
   /** Cleared once approved, so the editor collapses to a read-only card. */
   done: boolean;
 }
-type Item = UserItem | ActivityItem | SubagentItem | AssistantItem | FeedbackItem | ReviewItem;
+type Item =
+  | UserItem
+  | ActivityItem
+  | SubagentItem
+  | AssistantItem
+  | FeedbackItem
+  | ReviewItem
+  | AppItem;
 
 /* ------------------------------- Goals ---------------------------------- */
 
@@ -375,9 +415,12 @@ export default function ChatPanel({
 
   const idRef = useRef(0);
   const busyRef = useRef(false);
+  /** True once this session has sent or resumed anything of its own. */
+  const interactedRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
-  const firstRun = useRef(true);
+  /** The last `resetKey` acted on, so a change can be classified. */
+  const lastResetKey = useRef<string>(String(resetKey ?? ""));
   // Whether to keep the log pinned to the bottom as new content streams in.
   // Flips to false the moment the user scrolls up (so they can read history
   // mid-stream), and back to true when they return to the bottom or send.
@@ -385,12 +428,18 @@ export default function ChatPanel({
 
   const nextId = () => `m${++idRef.current}`;
 
-  // Reset conversation on resetKey change (assistant switch / new chat).
+  // Reset conversation on resetKey change (assistant switch / new chat), but
+  // NOT when the only change is the assistant finishing loading. See
+  // `isDeliberateReset`: that one fires on every page load, and resetting there
+  // drops the thread from the URL and throws away what was just restored.
   useEffect(() => {
-    if (firstRun.current) {
-      firstRun.current = false;
-      return;
-    }
+    const previous = lastResetKey.current;
+    const next = String(resetKey ?? "");
+    lastResetKey.current = next;
+    if (!isDeliberateReset(previous, next)) return;
+    // A real switch: this session owns the list from here, so a late restore
+    // must not put the old conversation back.
+    interactedRef.current = true;
     abortRef.current?.abort();
     resetThread();
     busyRef.current = false;
@@ -515,6 +564,9 @@ export default function ChatPanel({
       { kind: "subagents", id: subagentId, groups: [] },
       { kind: "assistant", id: bubbleId, text: PLACEHOLDER_TEXT, streaming: true, markdown: false },
     ]);
+    // From here the on-screen list is this session's, not the persisted
+    // thread's, so restoring must never overwrite it again.
+    interactedRef.current = true;
 
     // Per-run mutable stream state (persists across the whole for-await loop).
     // These maps belong to the MAIN graph ONLY — non-empty-namespace (subagent)
@@ -603,6 +655,28 @@ export default function ChatPanel({
     let runId: string | null = null;
     let errorMsg: string | null = null;
     let interrupt: ReviewInterrupt | null = null;
+    // Every tool call's arguments this turn, by tool name, latest frame wins.
+    const argsByTool: Record<string, Record<string, unknown>> = {};
+    /**
+     * Which tools on the connected servers ship a UI, by namespaced tool name.
+     *
+     * Answered once per server set by the deployment, which is the only half of
+     * this Host that can read `_meta.ui.resourceUri`. Awaited here rather than
+     * held in a ref so the first turn after a page load cannot race it: the
+     * lookup is cached, and warmed on mount, so this is free after the first.
+     *
+     * What it replaces was a guess. Matching `{server}_` prefixes answers "is
+     * this an MCP tool", not "does it have a UI", so every remote call mounted
+     * a card that then asked the deployment and was usually told null. Both
+     * ChatGPT and Claude tell their browser half instead: a pointer pushed down
+     * the stream, and a bootstrap request at page load respectively. We cannot
+     * do the first, because our tool calls stream token by token out of the
+     * model with nowhere to stamp them, so this is the second.
+     */
+    const mcpApps = await mcpAppBindings(mcpServers);
+    // Which app frames this turn has already mounted, so a later argument frame
+    // patches rather than opening a second copy.
+    const appSeen = new Set<string>();
 
     const syncChips = () =>
       patchItem(activityId, (it) =>
@@ -640,6 +714,26 @@ export default function ChatPanel({
         for (const tc of tcs) {
           const name = tc.name || "";
           const args = tc.args || {};
+          if (name) argsByTool[name] = args;
+          // An MCP tool that ships a UI gets its frame NOW, while the model is
+          // still writing the arguments, so the app can draw as they arrive.
+          // Waiting for the result is what made a streamed diagram appear all at
+          // once. Keyed by tool_call_id so every later frame patches the same
+          // item and the iframe is never remounted.
+          const appId = tc.id ? `app:${tc.id}` : "";
+          if (appId && mcpApps[name]) {
+            if (appSeen.has(appId)) {
+              patchItem(appId, (it) =>
+                it.kind === "app" ? { ...it, toolArgs: args } : it,
+              );
+            } else {
+              appSeen.add(appId);
+              setItems((prev) => [
+                ...prev,
+                { kind: "app", id: appId, toolName: name, toolArgs: args, streaming: true },
+              ]);
+            }
+          }
           if (name === "push_widget") {
             // The real tool_call id, never a fallback. `toolCallKey` falls back to
             // `<msgId>:<name>`, and using that fallback here mangles dashboards: the
@@ -752,6 +846,25 @@ export default function ChatPanel({
           onArtifact?.({ path: artifactPathByCall[cid], content: "", streaming: false });
         }
         if (activity.complete(cid, contentToText(msg.content))) syncChips();
+        // The app was mounted when the call started; this closes it. Marking
+        // `streaming` false is what turns the last partial into the single
+        // `tool-input` the spec requires before a result.
+        const appId = cid ? `app:${cid}` : "";
+        if (appId && appSeen.has(appId)) {
+          patchItem(appId, (it) =>
+            it.kind === "app"
+              ? {
+                  ...it,
+                  streaming: false,
+                  // Off `ToolMessage.artifact` where `langchain.mcp` puts it,
+                  // falling back to parsing the text. Re-parsing the text alone
+                  // is wrong whenever a server's model-facing `content` differs
+                  // from its `structuredContent`, which the spec encourages.
+                  toolResult: { structuredContent: structuredFromToolMessage(msg), content: [] },
+                }
+              : it,
+          );
+        }
       }
     };
 
@@ -991,7 +1104,13 @@ export default function ChatPanel({
         setBubble({ streaming: false, markdown: false });
         setItems((prev) => [
           ...prev.filter((it) => spoke || it.id !== bubbleId),
-          { kind: "review", id: nextId(), review: pending, done: false },
+          {
+            kind: "review",
+            id: nextId(),
+            review: pending,
+            toolArgs: pending.tool_name ? argsByTool[pending.tool_name] : undefined,
+            done: false,
+          },
         ]);
         // A caller driving this by voice cannot see the review card, so hand back a
         // line it can read out. The card is still rendered for whoever is looking.
@@ -1267,6 +1386,49 @@ export default function ChatPanel({
    * between turns, and the value is a small array off an existing call.
    */
   const mcpServers = getRunContext().mcp_servers ?? EMPTY_MCP_SERVERS;
+
+  // Warm the app lookup as soon as servers are known. `runTurn` awaits the same
+  // cached promise, so this only ever removes latency from the first turn; it is
+  // never the thing that makes an app render.
+  useEffect(() => {
+    void mcpAppBindings(mcpServers);
+  }, [mcpServers]);
+
+  /**
+   * Put the conversation back after a refresh.
+   *
+   * The thread id is in the URL, so the run's own history survives; this is
+   * what turns that history back into cards. Only apps, answers and questions
+   * come back, not the activity trace: see `rehydrateItems`.
+   *
+   * Re-runs whenever the server list changes, because `getRunContext` is a
+   * prop and the assistant's MCP servers can land after the first render. The
+   * app map is what decides which finished tool calls become cards, so
+   * restoring once against an empty map would drop every app. Re-running is
+   * safe precisely until the person does something, which `interactedRef`
+   * marks, after which the list on screen is this session's and is never
+   * replaced.
+   */
+  useEffect(() => {
+    const threadId = savedThreadId();
+    if (!threadId || interactedRef.current) return;
+    let live = true;
+    void (async () => {
+      const [state, apps] = await Promise.all([
+        // A thread the server has forgotten is an ordinary outcome of an old
+        // link, and means an empty chat rather than an error.
+        getThreadState(threadId).catch(() => null),
+        mcpAppBindings(mcpServers),
+      ]);
+      if (!live || !state || interactedRef.current) return;
+
+      const restored = rehydrateItems(state.values?.messages ?? [], apps);
+      if (restored.length) setItems(restored);
+    })();
+    return () => {
+      live = false;
+    };
+  }, [mcpServers]);
 
   /** Human answered a paused artifact — resume the run with their version. */
   const approveReview = (itemId: string, value: Record<string, unknown>) => {
@@ -1715,6 +1877,17 @@ function ItemView({
         review={item.review}
         busy={busy}
         onApprove={(v) => onApproveReview?.(item.id, v)}
+      />
+    );
+  }
+  if (item.kind === "app") {
+    return (
+      <McpAppCard
+        toolName={item.toolName}
+        toolArguments={item.toolArgs}
+        toolResult={item.toolResult}
+        streaming={item.streaming}
+        servers={mcpServers}
       />
     );
   }

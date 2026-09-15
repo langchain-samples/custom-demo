@@ -101,30 +101,78 @@ def test_fingerprint_is_stable_for_the_same_config():
     assert m.fingerprint(m.parse_servers(entry)) == m.fingerprint(m.parse_servers(entry))
 
 
-def test_app_uri_reads_the_mcp_apps_metadata():
-    tool = SimpleNamespace(
-        metadata={"mcp": {"tool": {"_meta": {"ui": {"resourceUri": "ui://a/b.html"}}}}}
-    )
-    assert m.app_uri(tool) == "ui://a/b.html"
+def _tool(name, visibility=None):
+    """A discovered tool carrying the MCP provenance the adapter attaches."""
+    ui = {} if visibility is None else {"visibility": visibility}
+    return SimpleNamespace(name=name, metadata={"mcp": {"tool": {"_meta": {"ui": ui}}}})
 
 
 @pytest.mark.parametrize(
-    "metadata",
+    ("visibility", "seen"),
     [
-        {},
-        {"mcp": {}},
-        {"mcp": {"tool": {"_meta": {}}}},
-        # A non-`ui://` URI is not an MCP App, and must not be fetched as one.
-        {"mcp": {"tool": {"_meta": {"ui": {"resourceUri": "https://evil/x.html"}}}}},
+        (None, True),
+        (["model", "app"], True),
+        (["model"], True),
+        # The MUST: a tool the server published to its App alone.
+        (["app"], False),
+        # Junk is not a reason to hide a working tool.
+        ("model", True),
     ],
 )
-def test_app_uri_is_none_for_an_ordinary_tool(metadata):
-    assert m.app_uri(SimpleNamespace(metadata=metadata)) is None
+def test_model_visible_hides_only_the_app_only_tools(visibility, seen):
+    """SEP-1865 forbids putting an app-only tool in the agent's tool list.
+
+    Excalidraw is the live case: `create_view` is for the model, while
+    `save_checkpoint` and friends are `visibility: ["app"]`. Handing those to the
+    model invites it to call a tool meant for the App's own bookkeeping.
+    """
+    assert m.model_visible(_tool("t", visibility)) is seen
 
 
-# ---------------------------------------------------------------------------
-# Caching and degradation
-# ---------------------------------------------------------------------------
+def test_instructions_are_cached_beside_the_tools(monkeypatch):
+    """One discovery fills both, so guidance costs no extra round trip.
+
+    `awrap_model_call` fires on every model call, so reading `instructions` on
+    its own connection would be a round trip per call, which is the thing the
+    tools cache exists to avoid.
+    """
+    calls = 0
+
+    async def once(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return [_tool("srv_thing")], {"srv": "Call get_project before updating one."}
+
+    monkeypatch.setattr(m, "_discover", once)
+    servers = m.parse_servers([{"label": "Srv", "url": "https://x/mcp"}])
+    m.invalidate(servers)
+
+    asyncio.run(m.load_tools(servers))
+    assert m.instructions_for(servers) == {"srv": "Call get_project before updating one."}
+    # Served from the same cache, so no second connection.
+    asyncio.run(m.load_tools(servers))
+    assert calls == 1
+
+
+def test_instructions_are_empty_for_a_server_with_nothing_to_say(monkeypatch):
+    """Most servers publish none, Excalidraw included, and that is not an error."""
+
+    async def quiet(*_args, **_kwargs):
+        return [_tool("srv_thing")], {}
+
+    monkeypatch.setattr(m, "_discover", quiet)
+    servers = m.parse_servers([{"label": "Srv", "url": "https://y/mcp"}])
+    m.invalidate(servers)
+    asyncio.run(m.load_tools(servers))
+    assert m.instructions_for(servers) == {}
+
+
+def test_invalidate_drops_instructions_too():
+    """Stale guidance outliving a token change would be worse than none."""
+    servers = m.parse_servers([{"label": "Srv", "url": "https://z/mcp"}])
+    m._INSTRUCTIONS[m.fingerprint(servers)] = {"srv": "old"}
+    m.invalidate()
+    assert m.instructions_for(servers) == {}
 
 
 def test_load_tools_returns_nothing_when_no_server_is_configured():
@@ -149,7 +197,8 @@ def test_load_tools_serves_a_second_call_from_cache(monkeypatch):
     async def once(*_args, **_kwargs):
         nonlocal calls
         calls += 1
-        return [SimpleNamespace(name="x_tool")]
+        # `_discover` returns tools AND what each server said, in one pass.
+        return [_tool("x_tool")], {}
 
     monkeypatch.setattr(m, "_discover", once)
     servers = m.parse_servers([{"label": "Cached", "url": "https://x/mcp"}])
@@ -162,22 +211,6 @@ def test_load_tools_serves_a_second_call_from_cache(monkeypatch):
     assert [t.name for t in first] == [t.name for t in second] == ["x_tool"]
     assert calls == 1, "the second load should not have touched the network"
     m.invalidate(servers)
-
-
-def test_probe_reports_the_reason_a_server_failed(monkeypatch):
-    async def boom(*_args, **_kwargs):
-        raise ConnectionError("refused")
-
-    monkeypatch.setattr(m, "_discover", boom)
-    servers = m.parse_servers([{"label": "Down", "url": "https://nope.invalid/mcp"}])
-    (result,) = asyncio.run(m.probe(servers))["servers"]
-    assert result["ok"] is False
-    assert "refused" in result["error"]
-
-
-# ---------------------------------------------------------------------------
-# The demo server, in-process
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -228,6 +261,8 @@ _BALANCED = {
     "approved": True,
 }
 
+_BALANCED_ALLOCATION = {k: v for k, v in _BALANCED.items() if k != "approved"}
+
 _SLOT = {
     "review_date": "2026-10-14",
     "window": "morning",
@@ -247,9 +282,13 @@ def test_the_demo_server_advertises_exactly_the_tools_it_has(meridian):
         "get_account",
         "schedule_review",
         "propose_rebalance",
+        "submit_rebalance",
         "project_goal",
+        "submit_goal_plan",
         "confirm_trade",
+        "submit_trade",
         "sign_document",
+        "submit_signature",
     }
 
 
@@ -341,18 +380,25 @@ def test_a_refused_ask_books_nothing(meridian, action: _Action, status: str):
 # ---------------------------------------------------------------------------
 
 
-def test_an_app_gets_its_render_context_on_a_property(meridian):
-    """The context has to survive the wire, and only property extras do.
+def _call(client, tool: str, args: dict):
+    """One ordinary tool call. Returns the result."""
 
-    The SDK strips unknown ROOT keys off `requested_schema`. This is the test
-    that catches someone moving the context back there, where it vanishes with
-    no error and the app renders empty.
+    async def go():
+        async with client as c:
+            return await c.call_tool(tool, args)
+
+    return asyncio.run(go())
+
+
+def test_an_app_gets_its_render_context_as_the_tool_result(meridian):
+    """Presentation data travels as the result, which is the ordinary Apps route.
+
+    Nothing is bolted onto a schema and nothing is flattened: the app reads
+    `structuredContent` off `ui/notifications/tool-result`. This is the test that
+    catches someone moving the context somewhere an app cannot reach.
     """
-    schema, _ = _rounds(
-        meridian, "propose_rebalance", {"account_id": "MW-10241"}, "rebalance", _BALANCED
-    )
-    assert "x-app" not in schema, "context at the schema root is dropped in transit"
-    context = schema["properties"]["approved"]["x-app"]
+    result = _call(meridian, "propose_rebalance", {"account_id": "MW-10241"})
+    context = result.structured_content
     assert [s["label"] for s in context["sleeves"]] == [
         "US equity",
         "Intl equity",
@@ -361,31 +407,51 @@ def test_an_app_gets_its_render_context_on_a_property(meridian):
         "Cash",
     ]
     assert context["portfolio_value"] == 4_820_000
+    assert context["account_id"] == "MW-10241"
 
 
-def test_the_rebalance_schema_is_flat(meridian):
-    """One number per sleeve, because elicitation content allows only primitives.
+def test_opening_the_rebalance_app_submits_nothing(meridian):
+    """The tool that opens an app must not also act.
 
-    A nested `allocation` object is rejected by `ElicitResult` before it ever
-    reaches the server, so the schema cannot ask for one.
+    `propose_rebalance` draws the sliders; the trades exist only once a person
+    has moved them and `submit_rebalance` is called. A tool that did both would
+    let the model rebalance a portfolio by looking at it.
     """
-    schema, _ = _rounds(
-        meridian, "propose_rebalance", {"account_id": "MW-10241"}, "rebalance", _BALANCED
-    )
-    kinds = {k: v["type"] for k, v in schema["properties"].items()}
-    assert kinds == {
-        "us_equity": "number",
-        "intl_equity": "number",
-        "fixed_income": "number",
-        "alternatives": "number",
-        "cash": "number",
-        "approved": "boolean",
-    }
+    result = _call(meridian, "propose_rebalance", {"account_id": "MW-10241"})
+    assert "trades" not in result.structured_content
+    assert "status" not in result.structured_content
 
 
-def test_an_approved_rebalance_comes_back_as_trades(meridian):
-    _, result = _rounds(
-        meridian, "propose_rebalance", {"account_id": "MW-10241"}, "rebalance", _BALANCED
+def test_the_submit_tool_is_the_apps_alone(meridian):
+    """`visibility: ["app"]` is what keeps the model from guessing the weights.
+
+    The whole reason the app exists is that an allocation comes from a person
+    moving sliders. A model that can call the submit tool can skip that.
+    """
+
+    async def go():
+        async with meridian as c:
+            return {
+                t.name: ((t.meta or {}).get("ui") or {}).get("visibility")
+                for t in await c.list_tools()
+            }
+
+    visibility = asyncio.run(go())
+    assert visibility["submit_rebalance"] == ["app"]
+    # The tool that opens the app stays callable by the model, or nothing starts.
+    assert visibility.get("propose_rebalance") is None
+
+
+def test_a_submitted_allocation_comes_back_as_trades(meridian):
+    """The allocation is NESTED, which is the simplification the normal flow buys.
+
+    An elicitation answer allows primitives only, so the same data once had to be
+    flattened to one key per sleeve. An ordinary tool call has no such limit.
+    """
+    result = _call(
+        meridian,
+        "submit_rebalance",
+        {"account_id": "MW-10241", "allocation": _BALANCED_ALLOCATION},
     )
     record = result.structured_content
     assert record["status"] == "approved"
@@ -398,69 +464,91 @@ def test_an_approved_rebalance_comes_back_as_trades(meridian):
 
 
 def test_an_allocation_that_is_not_a_portfolio_is_refused(meridian):
-    _, result = _rounds(
+    result = _call(
         meridian,
-        "propose_rebalance",
-        {"account_id": "MW-10241"},
-        "rebalance",
-        {**_BALANCED, "us_equity": 80.0},
+        "submit_rebalance",
+        {
+            "account_id": "MW-10241",
+            "allocation": {**_BALANCED_ALLOCATION, "us_equity": 80.0},
+        },
     )
     assert "not 100%" in result.structured_content["error"]
     assert "Nothing was submitted" in result.structured_content["error"]
 
 
-def test_a_goal_plan_is_saved_against_the_account(meridian):
-    schema, result = _rounds(
-        meridian,
-        "project_goal",
-        {"account_id": "MW-10388"},
-        "plan",
-        {"retirement_age": 62, "monthly_contribution": 3000, "risk_level": "Growth"},
-    )
-    context = schema["properties"]["retirement_age"]["x-app"]
+def test_the_goal_app_is_drawn_from_where_the_account_stands(meridian):
+    context = _call(meridian, "project_goal", {"account_id": "MW-10388"}).structured_content
     assert context["current_age"] == 45
     assert context["goal"] == 2_000_000
-    record = result.structured_content
+    # A projection cannot start before the client is older than they are now.
+    assert context["default_age"] > context["current_age"]
+
+
+def test_a_goal_plan_is_saved_against_the_account(meridian):
+    record = _call(
+        meridian,
+        "submit_goal_plan",
+        {
+            "account_id": "MW-10388",
+            "plan": {
+                "retirement_age": 62,
+                "monthly_contribution": 3000,
+                "risk_level": "Growth",
+            },
+        },
+    ).structured_content
     assert record["status"] == "saved"
     assert record["years_to_goal"] == 17
 
 
-def test_a_confirmed_ticket_becomes_an_order(meridian):
-    schema, result = _rounds(
+def test_the_ticket_is_drawn_from_the_quote_and_the_position(meridian):
+    context = _call(
         meridian,
         "confirm_trade",
         {"account_id": "MW-10241", "symbol": "AAPL", "side": "sell"},
-        "ticket",
-        {
-            "quantity": 500,
-            "order_type": "limit",
-            "limit_price": 230.0,
-            "time_in_force": "gtc",
-            "confirmed": True,
-        },
-    )
-    context = schema["properties"]["quantity"]["x-app"]
+    ).structured_content
     # The ticket needs the position to stop the advisor overselling it.
     assert context["max_qty"] == 4200
     assert context["last"] == 227.14
-    order = result.structured_content
+
+
+def test_a_confirmed_ticket_becomes_an_order(meridian):
+    order = _call(
+        meridian,
+        "submit_trade",
+        {
+            "account_id": "MW-10241",
+            "symbol": "AAPL",
+            "side": "sell",
+            "ticket": {
+                "quantity": 500,
+                "order_type": "limit",
+                "limit_price": 230.0,
+                "time_in_force": "gtc",
+                "confirmed": True,
+            },
+        },
+    ).structured_content
     assert order["status"] == "accepted"
     assert order["estimated_principal"] == 500 * 230.0
 
 
 def test_an_order_cannot_sell_more_than_is_held(meridian):
     """The app blocks it, and so does the server: the app is not the boundary."""
-    _, result = _rounds(
+    result = _call(
         meridian,
-        "confirm_trade",
-        {"account_id": "MW-10241", "symbol": "AAPL", "side": "sell"},
-        "ticket",
+        "submit_trade",
         {
-            "quantity": 99_999,
-            "order_type": "market",
-            "limit_price": None,
-            "time_in_force": "day",
-            "confirmed": True,
+            "account_id": "MW-10241",
+            "symbol": "AAPL",
+            "side": "sell",
+            "ticket": {
+                "quantity": 99_999,
+                "order_type": "market",
+                "limit_price": None,
+                "time_in_force": "day",
+                "confirmed": True,
+            },
         },
     )
     assert "only 4200 held" in result.structured_content["error"]
@@ -484,10 +572,14 @@ def test_every_app_resource_is_a_complete_document(meridian):
     }
     for uri, html in docs.items():
         assert html.startswith("<!doctype html>"), uri
-        # The bridge is injected, not imported: the iframe has no origin to
+        # The bundle is injected, not imported: the iframe has no origin to
         # fetch a script from.
-        assert "window.McpApp" in html, uri
-        assert "McpApp.ready()" in html, uri
+        assert "GENERATED by apps/build.sh" in html, uri
+        # One bundle serves all four, so the document has to say which of them
+        # to draw. A wrong or missing name here renders a pane that explains it
+        # has no such app, which is a demo with nothing on stage.
+        name = uri.removeprefix("ui://meridian/").removesuffix(".html")
+        assert f'data-app="{name}"' in html, uri
 
 
 # ---------------------------------------------------------------------------
@@ -528,23 +620,21 @@ def _data_uri(png: bytes) -> str:
     return "data:image/png;base64," + base64.b64encode(png).decode()
 
 
-def _sign(client, document: str, signature: str, action: _Action = "accept"):
-    """Both rounds of `sign_document`, with the pad handing over `signature`."""
-    _, result = _rounds(
+def _sign(client, document: str, signature: str):
+    """What the pad does when someone signs: one call to the app-only tool."""
+    return _call(
         client,
-        "sign_document",
-        {"account_id": "MW-10241", "document": document},
-        "signature",
-        None
-        if action != "accept"
-        else {
-            "signature": signature,
-            "signed_by": "Dana Whitfield",
-            "signed_at": "2026-09-07T14:02:00Z",
+        "submit_signature",
+        {
+            "account_id": "MW-10241",
+            "document": document,
+            "capture": {
+                "signature": signature,
+                "signed_by": "Dana Whitfield",
+                "signed_at": "2026-09-07T14:02:00Z",
+            },
         },
-        action,
     )
-    return result
 
 
 def test_a_signature_comes_back_as_an_image_and_a_url(meridian):
@@ -598,9 +688,20 @@ def test_a_signature_the_pad_mangled_is_recorded_without_promising_an_image(meri
     assert record["signature_data_uri"] is None
 
 
-def test_a_declined_signature_leaves_the_document_unsigned(meridian):
-    record = _sign(meridian, "Fee schedule", "", action="decline").structured_content
-    assert record["status"] == "unsigned"
+def test_opening_the_pad_signs_nothing(meridian):
+    """The tool that opens the pad must not also sign.
+
+    It hands over the document's label and its stable reference so the pad can
+    title itself. A signature exists only once a person has drawn one and
+    `submit_signature` is called.
+    """
+    context = _call(
+        meridian, "sign_document", {"account_id": "MW-10241", "document": "Fee schedule"}
+    ).structured_content
+    assert context["document"] == "Fee schedule"
+    assert context["reference"].startswith("MW-DOC-")
+    assert "status" not in context
+    assert "signature_url" not in context
 
 
 def test_the_signature_png_is_served_over_http(meridian):
@@ -612,3 +713,45 @@ def test_the_signature_png_is_served_over_http(meridian):
         assert ok.headers["content-type"] == "image/png"
         assert ok.content == _PNG_BYTES
         assert http.get("/signatures/MW-DOC-99999.png").status_code == 404
+
+
+def test_one_unreachable_server_does_not_take_the_others_down(monkeypatch):
+    """A dead tunnel must cost its own tools and nobody else's.
+
+    A `ClientGroup` connects every member together and raises as a unit, so an
+    expired tunnel in the list used to return zero tools for every server. The
+    visible symptom was the agent announcing that a perfectly healthy
+    integration was unavailable, and `/mcp/bootstrap` answering with no apps.
+    """
+    good = m.McpServer(id="excalidraw", label="Excalidraw", url="https://good/mcp")
+    dead = m.McpServer(id="everything", label="Everything", url="https://dead/mcp")
+    tool = SimpleNamespace(name="excalidraw_create_view", metadata={}, args_schema=None)
+
+    async def fake_discover(servers, *, refresh):
+        ids = [s.id for s in servers]
+        if "everything" in ids:
+            raise RuntimeError("Client failed to connect: nodename nor servname provided")
+
+        return [tool], {"excalidraw": "draw things"}
+
+    monkeypatch.setattr(m, "_discover", fake_discover)
+    m._TOOLS.clear()
+    out = asyncio.run(m.load_tools((good, dead), refresh=True))
+
+    # The group pass raises because of `dead`; the per-server retry keeps `good`.
+    assert [t.name for t in out] == ["excalidraw_create_view"]
+    # And what the healthy server said survives the fallback too, or its
+    # guidance would vanish whenever an unrelated server broke.
+    assert m.instructions_for((good, dead)) == {"excalidraw": "draw things"}
+
+
+def test_every_server_unreachable_is_still_an_empty_list(monkeypatch):
+    """No tools, never an exception: a broken connection cannot fail a turn."""
+
+    async def fake_discover(servers, *, refresh):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(m, "_discover", fake_discover)
+    m._TOOLS.clear()
+    dead = m.McpServer(id="everything", label="Everything", url="https://dead/mcp")
+    assert asyncio.run(m.load_tools((dead,), refresh=True)) == []

@@ -178,6 +178,28 @@ export const MODEL_CHOICES: { value: string; label: string }[] = [
  * point of view: the backend turns it into an Authorization header and only ever
  * reports back the header NAMES.
  */
+/**
+ * The prefix the backend namespaces a server's tools with (`{id}_{tool}`).
+ *
+ * Mirrors `slugify` in custom_demo/runtime/mcp_servers.py, including the "mcp"
+ * fallback for a server with nothing to derive from. `id` is optional on a
+ * saved server while the backend always derives one, so anything matching tool
+ * names has to derive it the same way or it silently matches nothing.
+ *
+ * Does NOT reproduce the backend's collision suffixes (`_2`), which only occur
+ * when two servers slugify alike.
+ */
+export function mcpServerId(server: McpServerConfig): string {
+  const from = server.id || server.label || server.url;
+  return (
+    from
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_|_$/g, "") || "mcp"
+  );
+}
+
 export interface McpServerConfig {
   id?: string;
   label: string;
@@ -202,14 +224,6 @@ export interface McpProbeResult {
   ok: boolean;
   tools: McpToolInfo[];
   error?: string;
-}
-
-/** The HTML an MCP App tool ships, from POST /mcp/app. */
-export interface McpAppResource {
-  tool_name: string;
-  resource_uri: string;
-  mime_type: string;
-  html: string;
 }
 
 /** One selectable capability, from GET /tools (the backend registry). */
@@ -410,20 +424,62 @@ export async function createThread(): Promise<string> {
 let THREAD_ID: string | null = null;
 
 /**
+ * The URL is where the thread lives, so a refresh keeps the conversation.
+ *
+ * In the query string rather than storage, on purpose: the link is then worth
+ * sending to someone, Back works, and a second tab is a second conversation
+ * instead of two views fighting over one. claude.ai puts it in the path for
+ * the same reasons; a param is the version of that which needs no routing.
+ */
+const THREAD_PARAM = "thread";
+
+/** The thread this page was opened on, if any. */
+export function savedThreadId(): string | null {
+  try {
+    return new URLSearchParams(window.location.search).get(THREAD_PARAM) || null;
+  } catch {
+    // A non-browser context (tests, SSR) simply has no saved thread.
+    return null;
+  }
+}
+
+/** Put the thread in the URL without adding a history entry. */
+function rememberThread(id: string | null): void {
+  try {
+    const url = new URL(window.location.href);
+    if (id) url.searchParams.set(THREAD_PARAM, id);
+    else url.searchParams.delete(THREAD_PARAM);
+    // `replaceState`, not `pushState`: minting a thread is not a navigation,
+    // and Back should leave the page rather than undo an invisible id.
+    window.history.replaceState(null, "", url.toString());
+  } catch {
+    // Persistence is a convenience; a context without history still chats.
+  }
+}
+
+/**
  * Return a memoized thread id, minting one on first use so follow-up questions
- * share memory. Mirrors the original module-level `ensureThread()`.
+ * share memory, and keeping it in the URL so a refresh resumes the same one.
  */
 export async function ensureThread(): Promise<string> {
   if (THREAD_ID) return THREAD_ID;
+  const saved = savedThreadId();
+  if (saved) {
+    THREAD_ID = saved;
+    return THREAD_ID;
+  }
+
   THREAD_ID = await createThread();
+  rememberThread(THREAD_ID);
   return THREAD_ID;
 }
-
-
 
 /** Drop the memoized thread so the next ensureThread() mints a new one. */
 export function resetThread(): void {
   THREAD_ID = null;
+  // Cleared from the URL too, or "New chat" would resume the old conversation
+  // on the next refresh.
+  rememberThread(null);
 }
 
 /** Fetch a thread's persisted state (its message history). */
@@ -777,51 +833,6 @@ export async function listTools(): Promise<ToolSpec[]> {
     return Array.isArray(d.tools) ? d.tools : [];
   } catch {
     return [];
-  }
-}
-
-/**
- * Connect to each MCP server and report its tools (POST /mcp/probe).
- *
- * A browser cannot speak MCP, so the deployment does the connecting. Per-server
- * results, because one dead tunnel must not read as "MCP is broken".
- */
-export async function probeMcpServers(servers: McpServerConfig[]): Promise<McpProbeResult[]> {
-  try {
-    const res = await fetch(`${getApiBase()}/mcp/probe`, {
-      method: "POST",
-      headers: apiHeaders(),
-      body: JSON.stringify({ servers }),
-    });
-    if (!res.ok) return [];
-    const d = await res.json();
-    return Array.isArray(d.servers) ? d.servers : [];
-  } catch {
-    return [];
-  }
-}
-
-/**
- * The MCP App HTML bound to a paused tool (POST /mcp/app), or null if it has none.
- *
- * Null is the ordinary answer for an ordinary tool, and the caller falls back to
- * the generic schema form, so a failure here is not worth surfacing.
- */
-export async function fetchMcpApp(
-  servers: McpServerConfig[],
-  toolName: string,
-): Promise<McpAppResource | null> {
-  try {
-    const res = await fetch(`${getApiBase()}/mcp/app`, {
-      method: "POST",
-      headers: apiHeaders(),
-      body: JSON.stringify({ servers, tool_name: toolName }),
-    });
-    if (!res.ok) return null;
-    const d = await res.json();
-    return d?.app?.html ? (d.app as McpAppResource) : null;
-  } catch {
-    return null;
   }
 }
 

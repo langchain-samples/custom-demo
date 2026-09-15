@@ -10,6 +10,7 @@ from custom_demo.runtime.tools.registry import (
     CATALOGUE_IDS,
     DEFAULT_ENABLED,
     EXPLICIT_ONLY,
+    HITL_IDS,
     TOOL_REGISTRY,
     ToolSpec,
     all_tools,
@@ -19,6 +20,7 @@ from custom_demo.runtime.tools.registry import (
     is_allowed,
     parse_enabled,
     registry_json,
+    subagent_tools,
 )
 
 __all__ = [
@@ -26,6 +28,7 @@ __all__ = [
     "CATALOGUE_IDS",
     "DEFAULT_ENABLED",
     "EXPLICIT_ONLY",
+    "HITL_IDS",
     "TOOL_REGISTRY",
     "ToolSpec",
     "all_tools",
@@ -36,5 +39,6 @@ __all__ = [
     "parse_enabled",
     "push_widget",
     "registry_json",
+    "subagent_tools",
     "widget_sink",
 ]

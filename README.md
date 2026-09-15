@@ -61,6 +61,7 @@ For a local MCP demo server:
 
 Paste the printed URL **including `/mcp`**. Omit `--tunnel` when the agent also runs locally;
 a deployed agent cannot reach your laptop's `localhost`. Protect publicly exposed servers.
+MCP Apps use the official MCP Apps extension (SEP-1865), not a custom UI protocol.
 
 Try a sample question, request a dashboard for metrics, or ask for an **HTML report/one-pager**
 when a document fits better. **Demo traffic → Generate** populates LangSmith monitoring with

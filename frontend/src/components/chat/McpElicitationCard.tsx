@@ -6,29 +6,23 @@
  * so it reaches us exactly like our own HITL pauses do, and answering it resumes
  * the run: the server re-runs the tool with the answer attached and carries on.
  *
- * Two ways to render the same pause:
+ * The UI is a form built from the request's JSON schema. Every MCP server gets
+ * that for free, which is what matters: elicitation is a protocol feature any
+ * server may use, and most ship no UI at all.
  *
- * 1. **The server's own UI.** If the paused tool is an MCP App, it declares a
- *    `ui://` HTML resource. We fetch that HTML (the deployment reads it over MCP
- *    for us) and run it in a sandboxed iframe. That is the only way to collect
- *    something a form cannot express, like a drawn signature.
- * 2. **A generic form**, built from the request's JSON schema. Every MCP server
- *    gets this for free, which matters because most ship no UI at all.
- *
- * The iframe is sandboxed to `allow-scripts` ONLY. No `allow-same-origin`, so the
- * server's HTML has no access to this page's origin, cookies, or storage, and it
- * talks to us solely over `postMessage`. Nothing it sends is trusted beyond being
- * shaped into the elicitation answer, which the server itself has to validate
- * against the schema it asked for.
+ * An MCP App is a different thing and renders elsewhere, in `McpAppCard`. Apps
+ * are bound to a tool RESULT, so they appear once a call has finished, whereas
+ * this card exists only while one is paused. Do not put an app here: nothing can
+ * enter the conversation mid-interrupt, so an app that called a tool or sent a
+ * message would be talking into a run that cannot hear it.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { IconPlugConnected, IconExternalLink } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  fetchMcpApp,
   type JsonSchema,
   type McpElicitationRequest,
   type McpElicitationResponse,
@@ -41,7 +35,7 @@ const LABEL = "text-[11px] font-bold uppercase tracking-[0.03em] text-muted-fore
 interface Props {
   review: ReviewInterrupt;
   busy?: boolean;
-  /** MCP servers on the active assistant, needed to read the paused tool's app. */
+  /** MCP servers on the active assistant, used to name the one that is asking. */
   servers: McpServerConfig[];
   /** Resume the run. The value is the `{responses: {...}}` the adapter expects. */
   onApprove: (value: Record<string, unknown>) => void;
@@ -197,108 +191,20 @@ function SchemaForm({
   );
 }
 
-/* --------------------------- The server's own UI -------------------------- */
-
-function AppFrame({
-  request,
-  html,
-  busy,
-  onSubmit,
-  onCancel,
-}: {
-  request: McpElicitationRequest;
-  html: string;
-  busy?: boolean;
-  onSubmit: (content: Record<string, unknown>) => void;
-  onCancel: () => void;
-}) {
-  const ref = useRef<HTMLIFrameElement | null>(null);
-  const [height, setHeight] = useState(300);
-
-  useEffect(() => {
-    function onMessage(event: MessageEvent) {
-      // A sandboxed iframe without allow-same-origin posts from a null origin, so
-      // the origin cannot identify it. Match on the frame's own window instead,
-      // which no other document can forge.
-      if (!ref.current || event.source !== ref.current.contentWindow) return;
-      const data = event.data as { type?: string; height?: number; content?: unknown };
-      if (data?.type === "mcp-app:ready") {
-        // Hand the app the question it is being rendered for, plus enough of the
-        // host's look that it does not read as a foreign page.
-        const dark = document.documentElement.classList.contains("dark");
-        const styles = getComputedStyle(document.documentElement);
-        ref.current.contentWindow?.postMessage(
-          {
-            type: "mcp-app:init",
-            request,
-            theme: dark ? "dark" : "light",
-            accent: styles.getPropertyValue("--brand-primary").trim() || undefined,
-            accentFg: styles.getPropertyValue("--brand-fg").trim() || undefined,
-          },
-          "*",
-        );
-        return;
-      }
-      if (data?.type === "mcp-app:resize" && typeof data.height === "number") {
-        setHeight(Math.min(Math.max(data.height, 160), 640));
-        return;
-      }
-      if (data?.type === "mcp-app:submit" && data.content && typeof data.content === "object") {
-        onSubmit(data.content as Record<string, unknown>);
-        return;
-      }
-      if (data?.type === "mcp-app:cancel") onCancel();
-    }
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [request, onSubmit, onCancel]);
-
-  return (
-    <div className="flex flex-col gap-2">
-      <iframe
-        ref={ref}
-        title="MCP app"
-        srcDoc={html}
-        // Scripts only. Without allow-same-origin the frame is its own opaque
-        // origin, so the server's HTML cannot touch this page or its storage.
-        sandbox="allow-scripts"
-        className="w-full rounded-lg border border-border bg-background"
-        style={{ height }}
-      />
-      {busy && <span className="text-[11px] text-muted-foreground">Sending to the server…</span>}
-    </div>
-  );
-}
-
 /* --------------------------------- Shell --------------------------------- */
 
-export function McpElicitationCard({ review, busy, servers, onApprove }: Props) {
+export function McpElicitationCard({
+  review,
+  busy,
+  servers,
+  onApprove,
+}: Props) {
   // Memoized so `answer` below keeps a stable identity across renders.
   const requests = useMemo(() => review.requests || [], [review]);
   const toolName = String(review.tool_name || "");
-  const [app, setApp] = useState<{ html: string } | null>(null);
-  const [looking, setLooking] = useState(true);
-
-  // Only the first request gets a custom UI: an MCP App is bound to the tool, so
-  // it answers the tool's question, and a second one in the same round would have
-  // nothing to render. In practice a round carries one.
+  // Only the first request is rendered. A round carries one in practice, and the
+  // rest are declined below so the resume is still complete.
   const first: McpElicitationRequest | undefined = requests[0];
-
-  useEffect(() => {
-    let live = true;
-    if (!toolName || !servers.length) {
-      setLooking(false);
-      return;
-    }
-    void fetchMcpApp(servers, toolName).then((found) => {
-      if (!live) return;
-      setApp(found ? { html: found.html } : null);
-      setLooking(false);
-    });
-    return () => {
-      live = false;
-    };
-  }, [toolName, servers]);
 
   const answer = useCallback(
     (response: McpElicitationResponse) => {
@@ -315,11 +221,6 @@ export function McpElicitationCard({ review, busy, servers, onApprove }: Props) 
   if (!first) return null;
 
   const server = servers.find((s) => !!s.id && toolName.startsWith(`${s.id}_`));
-  // When the server ships a UI it owns the presentation, including the prompt:
-  // the app is handed `request.message` on init and renders it itself. Printing
-  // it here too showed the same sentence twice. Held back while the app lookup
-  // is still in flight, so it does not flash in and out on the way.
-  const ownsPresentation = first.mode !== "url" && (looking || !!app);
 
   return (
     <div className="flex animate-in flex-col gap-2.5 rounded-xl border border-brand/40 bg-panel-2 p-3 duration-200 fade-in slide-in-from-bottom-1">
@@ -331,7 +232,7 @@ export function McpElicitationCard({ review, busy, servers, onApprove }: Props) 
         </span>
       </div>
 
-      {first.message && !ownsPresentation && (
+      {first.message && (
         <p className="m-0 text-sm leading-relaxed text-foreground">{first.message}</p>
       )}
 
@@ -354,16 +255,6 @@ export function McpElicitationCard({ review, busy, servers, onApprove }: Props) 
             </Button>
           </div>
         </div>
-      ) : looking ? (
-        <div className="h-6 text-[12px] text-muted-foreground">Loading the tool's interface…</div>
-      ) : app ? (
-        <AppFrame
-          request={first}
-          html={app.html}
-          busy={busy}
-          onSubmit={(content) => answer({ action: "accept", content })}
-          onCancel={() => answer({ action: "cancel" })}
-        />
       ) : (
         <SchemaForm
           request={first}

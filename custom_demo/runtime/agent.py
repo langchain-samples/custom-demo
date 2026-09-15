@@ -13,6 +13,7 @@ import dataclasses
 from typing import Any, cast
 
 from deepagents import RubricMiddleware, SubAgent, create_deep_agent
+from deepagents.middleware.subagents import GENERAL_PURPOSE_SUBAGENT
 from langchain.agents.middleware import (
     AgentMiddleware,
     ModelRequest,
@@ -33,7 +34,7 @@ from custom_demo.config import (
 from custom_demo.core.ctx import Context, get_ctx
 from custom_demo.resources.sandbox import SEED_MAX_FILES
 from custom_demo.runtime.backends import DynamicBackend
-from custom_demo.runtime.mcp_servers import load_tools, parse_servers
+from custom_demo.runtime.mcp_servers import instructions_for, load_tools, parse_servers
 from custom_demo.runtime.mocking import enable_mocking
 from custom_demo.runtime.prompt import ARTIFACT_NOTE, FALLBACK_PROMPT, pull_agent_prompt
 from custom_demo.runtime.tools import (
@@ -42,6 +43,7 @@ from custom_demo.runtime.tools import (
     call_limit_middlewares,
     guidance_for,
     is_allowed,
+    subagent_tools,
 )
 
 
@@ -274,16 +276,32 @@ def _mcp_note(runtime) -> str:
         owner = next(
             (label for sid, label in servers.items() if tool.name.startswith(f"{sid}_")), ""
         )
-        summary = (tool.description or "").strip().split("\n")[0][:160]
+        # The WHOLE description, not a first line clipped to 160 characters. That
+        # clip was silently cutting the back half off every remote tool, which is
+        # where the cautions live: `propose_rebalance` opens with "Open the
+        # rebalance app" and only later says not to propose weights. A remote
+        # server's description is not ours to summarise.
+        summary = (tool.description or "").strip()
         lines.append(f"- `{tool.name}`{f' ({owner})' if owner else ''}: {summary}")
 
     names = ", ".join(sorted(servers.values())) or "a connected MCP server"
-    return (
+    note = (
         f"\n\nCONNECTED SYSTEMS ({names}). These tools reach the customer's own live systems "
         "through MCP. Prefer them over your local data files for anything they cover, and never "
         "invent a "
         "value one of them could return (a tracking id, a status, a date):\n" + "\n".join(lines)
     )
+
+    # A server's own `instructions` last, so it qualifies the tools just listed.
+    # This is the only place a server can say how its tools RELATE to each other
+    # ("call get_project before updating one"), which no single tool description
+    # can express, and a host that drops it makes the server work around it.
+    said = instructions_for(_mcp_parse(get_ctx(runtime).mcp_servers))
+    for server_id, text in sorted(said.items()):
+        label = servers.get(server_id, server_id)
+        note += f"\n\n{label.upper()} SAYS (the server's own instructions, follow them):\n{text}"
+
+    return note
 
 
 def _mcp_parse(raw: Any):
@@ -461,19 +479,41 @@ class ToolSelection(AgentMiddleware):
         return await handler(self._apply(request))
 
 
+# Where deepagents looks for SKILL.md bundles. One prefix, resolved per run by
+# DynamicBackend to the assistant's Context Hub skills repo (empty for a StateBackend
+# assistant, so a no-op). Named once because the main agent and the general-purpose
+# subagent both declare it and they have to agree.
+_SKILL_SOURCES: tuple[str, ...] = ("/skills/",)
+
+# Appended to every subagent's prompt. The tools are already withheld (see
+# `_subagent_specs`), so this is not the enforcement: it is what stops the model
+# SPENDING a step reaching for a pause it cannot have, and names the alternative.
+# A subagent that treats its reply as a status update rather than the deliverable
+# is the failure this closes: its caller has nothing to synthesize from.
+_SUBAGENT_SOLO_CLAUSE = (
+    " You are working alone: nobody reads your output but the agent that called you, and "
+    "you cannot pause for a human, ask a question or hand anything to the user. Never "
+    "narrate what you are about to do next. Your reply IS the deliverable, so return the "
+    "finished result, and if you cannot get it, say what stopped you and what you did get."
+)
+
 # Dynamic subagents (deepagents + a QuickJS code-interpreter, langchain-quickjs):
 # the agent writes a JS orchestration script that fans work out to these subagents
 # via a `task()` global. A small fixed generalist set — the value is the
 # orchestration, not per-domain specialization. Gated behind DYNAMIC_SUBAGENTS
 # (build-time env; off by default) because the interpreter middleware is fixed at
 # build and we want a deploy-safe default we can flip on after verification.
+#
+# `tools` is deliberately absent from these literals: `_subagent_specs` stamps it on
+# every spec, so a new entry here cannot reintroduce the inherit-everything default.
 _SUBAGENTS: list[SubAgent] = [
     {
         "name": "researcher",
         "description": "Researches ONE focused question and returns concise, grounded findings.",
         "system_prompt": (
             "You are a focused researcher. Look up the requested information and return concise, "
-            "grounded findings with the concrete figures. Do not build dashboards or ask questions."
+            "grounded findings with the concrete figures. Do not build dashboards."
+            + _SUBAGENT_SOLO_CLAUSE
         ),
     },
     {
@@ -482,9 +522,54 @@ _SUBAGENTS: list[SubAgent] = [
         "system_prompt": (
             "You are a data analyst. Compute the requested result (use the `execute` tool for "
             "Python, pandas/numpy/statsmodels are available) and return it succinctly."
+            + _SUBAGENT_SOLO_CLAUSE
         ),
     },
 ]
+
+
+def _subagent_specs(*, dynamic: bool) -> list[SubAgent]:
+    """Every subagent the main agent can dispatch to, each pinned to safe tools.
+
+    Three things are settled here rather than in the literals above.
+
+    `tools` is stamped on EVERY spec. A `SubAgent` that omits the key inherits the
+    main agent's entire tool list, which is how `ask_user` reached a subagent and hung
+    the graph on a question no client could answer; `subagent_tools()` is that list
+    minus the rows that pause for a human. Stamping it centrally, rather than writing
+    the key into each literal, is what makes the guarantee hold for the next subagent
+    somebody adds.
+
+    `general-purpose` is listed WHATEVER `dynamic` says, and that is the load-bearing
+    part. deepagents appends its own copy whenever the caller names none, built from
+    the main agent's tools and carrying the same fault, and `FilesystemMiddleware`
+    offers `task` either way: a deployment with the flag off therefore still has a
+    dispatchable subagent holding `ask_user`. Naming it here replaces that copy on
+    both paths. Its identity comes from the framework's own spec so it keeps the
+    description and prompt the framework advertises, and `skills` is re-declared
+    because an inline spec only mounts the sources it asks for.
+
+    The `researcher`/`analyst` pair stays gated: they exist to be fanned out to by the
+    QuickJS orchestration script, so advertising them without the interpreter would
+    offer the model dispatch targets its prompt never explains.
+
+    Args:
+        dynamic: Whether the QuickJS orchestration stack is wired in
+            (`DYNAMIC_SUBAGENTS`).
+
+    Returns:
+        Specs for `create_deep_agent`, in dispatch-menu order.
+    """
+    # Mock-wrapped like the main agent's, so a dataset row's `mock_tools` reaches a
+    # tool call made inside a subagent too. Inert with no spec installed.
+    tools = enable_mocking(subagent_tools())
+    general_purpose: SubAgent = {
+        **GENERAL_PURPOSE_SUBAGENT,
+        "system_prompt": GENERAL_PURPOSE_SUBAGENT["system_prompt"] + _SUBAGENT_SOLO_CLAUSE,
+        "skills": list(_SKILL_SOURCES),
+    }
+    specs = (*_SUBAGENTS, general_purpose) if dynamic else (general_purpose,)
+    return [cast("SubAgent", {**spec, "tools": tools}) for spec in specs]
 
 
 class DynamicSubagentsError(RuntimeError):
@@ -555,8 +640,13 @@ def _build_agent(model: str | None, checkpointer):
     # `langchain_quickjs` pulls a native quickjs-rs and costs ~430ms to import, which
     # a deployment with DYNAMIC_SUBAGENTS off must not pay at every cold start (same
     # reason as the fastmcp imports in mcp_servers.py).
-    subagents = None
-    if _dynamic_subagents_enabled():
+    #
+    # `subagents` is passed either way, never None: deepagents fills a None in with a
+    # general-purpose subagent holding every main-agent tool, and `task` is offered
+    # whatever this flag says, so leaving it None is what would put `ask_user` back
+    # inside a subagent on the default configuration.
+    dynamic = _dynamic_subagents_enabled()
+    if dynamic:
         try:
             from langchain_quickjs import CodeInterpreterMiddleware  # noqa: PLC0415
 
@@ -578,7 +668,8 @@ def _build_agent(model: str | None, checkpointer):
             "list[AgentMiddleware]",
             [*middleware[:-1], interpreter, middleware[-1]],
         )
-        subagents = _SUBAGENTS
+
+    subagents = _subagent_specs(dynamic=dynamic)
 
     return create_deep_agent(
         model=llm,
@@ -597,7 +688,7 @@ def _build_agent(model: str | None, checkpointer):
         # this tells deepagents to surface. For default (StateBackend) assistants
         # /skills/ is empty — a no-op.
         backend=DynamicBackend(),
-        skills=["/skills/"],
+        skills=list(_SKILL_SOURCES),
         context_schema=Context,
         checkpointer=checkpointer,
     )
