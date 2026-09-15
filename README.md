@@ -9,8 +9,7 @@ and use connected tools. Each customer gets their own branding, instructions and
 
 - **uv** and **Python 3.13** (uv installs the pinned Python version).
 - **Node 22.12+ and npm** for the frontend.
-- A **LangSmith key** and a **model-provider key** (Anthropic by default).
-  See `.env.example` for configuration, including other providers and cross-workspace access.
+- Set `LANGSMITH_API_KEY` and `ANTHROPIC_API_KEY` in the root `.env` (for the default model).
 
 ## Run locally
 
