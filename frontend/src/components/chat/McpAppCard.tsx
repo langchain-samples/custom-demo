@@ -20,6 +20,7 @@ import { IconApps, IconX } from "@tabler/icons-react";
 import type { McpServerConfig } from "@/lib/api";
 import { callMcpToolForApp, readMcpApp, readMcpResource } from "@/lib/mcpClients";
 import { createMcpAppHost, type McpToolResult } from "@/lib/mcpAppHost";
+import { skeletonReveal } from "@/lib/artifacts";
 
 export interface McpAppCardProps {
   /** The tool whose app this is, namespaced as `{server}_{tool}`. */
@@ -52,21 +53,35 @@ function toolLabel(toolName: string): string {
 }
 
 /**
- * Motion for the waiting state, borrowed from the artifact skeleton.
+ * Motion for the waiting state, shared with the artifact skeleton.
  *
  * Each bar is DRAWN left to right rather than appearing at full width, which
  * reads as something being produced instead of a box being filled. Reduced
  * motion keeps the bars and drops the movement.
  */
 const SKELETON_KEYFRAMES = `
+@keyframes mcp-app-row-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
 @keyframes mcp-app-bar-in {
   from { transform: scaleX(0.06); opacity: 0.45; }
   to { transform: scaleX(1); opacity: 1; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .mcp-app-bar { animation: none !important; }
+  .mcp-app-row, .mcp-app-bar { animation: none !important; }
 }
 `;
+
+/** Bar widths per row, so the pane fills unevenly the way a UI does. */
+const SKELETON_ROWS = [
+  ["46%"],
+  ["88%", "64%"],
+  ["72%"],
+  ["94%", "52%"],
+  ["60%"],
+  ["82%", "70%"],
+];
 
 /**
  * What the pane shows between mounting and the first arguments arriving.
@@ -77,27 +92,38 @@ const SKELETON_KEYFRAMES = `
  * for a canvas app it is a black rectangle the height of the pane, which reads
  * as broken rather than as pending.
  *
- * Deliberately NOT a spinner. The bars stand where the app's own controls will
+ * It GROWS on a clock, like the artifact skeleton and for the same reason: a
+ * fixed set of bars that draws once and then sits there says the pane is
+ * finished and empty. Rows arriving say something is still coming.
+ *
+ * Deliberately not a spinner. The bars stand where the app's own controls will
  * be, so the pane keeps its shape and the swap is a fill rather than a jump.
  */
-function Waiting() {
+function Waiting({ reveal }: { reveal: number }) {
+  // At least one row from the start, so the pane is never blank.
+  const shown = Math.max(1, Math.round(reveal * SKELETON_ROWS.length));
   return (
     <div
       aria-hidden
-      className="pointer-events-none absolute inset-0 flex flex-col gap-3 rounded-lg bg-panel-2 p-4"
+      className="pointer-events-none absolute inset-0 flex flex-col gap-5 overflow-hidden rounded-lg bg-panel-2 p-5"
     >
       <style>{SKELETON_KEYFRAMES}</style>
-      {[
-        ["45%", "0ms"],
-        ["78%", "90ms"],
-        ["62%", "180ms"],
-        ["88%", "270ms"],
-      ].map(([width, delay]) => (
+      {SKELETON_ROWS.slice(0, shown).map((widths, row) => (
         <div
-          key={delay}
-          className="mcp-app-bar h-2.5 origin-left rounded-full bg-border"
-          style={{ width, animation: `mcp-app-bar-in 420ms ease-out ${delay} both` }}
-        />
+          key={row}
+          // Only the newest row pulses. Pulsing all of them makes the whole
+          // pane throb and hides the fact that rows are arriving at all.
+          className={`mcp-app-row flex flex-col gap-2${row === shown - 1 ? " animate-pulse" : ""}`}
+          style={{ animation: "mcp-app-row-in 420ms cubic-bezier(0.22, 1, 0.36, 1) both" }}
+        >
+          {widths.map((width, bar) => (
+            <div
+              key={width}
+              className="mcp-app-bar h-2.5 origin-left rounded-full bg-border"
+              style={{ width, animation: `mcp-app-bar-in 420ms ease-out ${bar * 90}ms both` }}
+            />
+          ))}
+        </div>
       ))}
     </div>
   );
@@ -129,6 +155,9 @@ function AppFrame({
   // Sticky: a later frame that momentarily parses to `{}` must not put the
   // waiting state back over a drawing the person is already looking at.
   const [hasInput, setHasInput] = useState(false);
+  // Drives the skeleton's growth. Only ticks while there is nothing to draw,
+  // so a rendered app is not re-rendering on a timer.
+  const [waitedMs, setWaitedMs] = useState(0);
 
   useEffect(() => {
     const bridge = createMcpAppHost({
@@ -163,6 +192,13 @@ function AppFrame({
     // the iframe never repeats: its document does not reload, so the app would
     // sit there talking to a host that had forgotten it.
   }, [toolName, servers, inputSchema]);
+
+  useEffect(() => {
+    if (hasInput) return;
+    const startedAt = Date.now();
+    const tick = setInterval(() => setWaitedMs(Date.now() - startedAt), 120);
+    return () => clearInterval(tick);
+  }, [hasInput]);
 
   // Feed the call in as it arrives.
   useEffect(() => {
@@ -222,7 +258,7 @@ function AppFrame({
           sandbox="allow-scripts"
           className="h-full w-full rounded-lg border border-border bg-background"
         />
-        {!hasInput && <Waiting />}
+        {!hasInput && <Waiting reveal={skeletonReveal(waitedMs)} />}
       </div>
     </div>
   );
