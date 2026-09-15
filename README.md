@@ -33,7 +33,7 @@ can share prompt/skill repositories and eval datasets.
 
 | Platform | Features |
 |---|---|
-| **Deep Agents** | Skills, sandbox/code execution, dynamic subagents, MCP tools and Apps, human approval |
+| **Deep Agents** | Skills, sandbox/code execution, dynamic subagents, MCP tools and Apps, human approval, generative UI (streamed dashboards and HTML assets) |
 | **LangSmith** | Context Hub prompts/skills, tracing, Monitoring, Insights, **Engine** (issue detection), Evals and live prompt fixes |
 
 Dynamic subagents require `DYNAMIC_SUBAGENTS=1`; MCP requires a connected server.
