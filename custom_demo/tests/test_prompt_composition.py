@@ -27,7 +27,7 @@ class _RecordingModel(BaseChatModel):
     """
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-        _CAPTURED.setdefault("system", messages[0].content if messages else "")
+        _CAPTURED.setdefault("system", messages[0].text if messages else "")
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content="ok"))])
 
     def bind_tools(self, *args, **kwargs):
@@ -44,9 +44,9 @@ def _capture(monkeypatch, context, *, mock_ctxhub=False):
     # Patch the single model-construction seam, so this stays provider-agnostic
     # (patching ChatAnthropic directly would pin the test to Anthropic).
     monkeypatch.setattr(A, "build_chat_model", lambda model_id: _RecordingModel())
+    # Keep filesystem discovery local for both skills-only and prompt-repo contexts.
+    monkeypatch.setattr(B, "_resolve_backends", lambda runtime: (StateBackend(), {}))
     if mock_ctxhub:
-        # Avoid the real Context Hub network: an in-state backend + a canned AGENTS.md.
-        monkeypatch.setattr(B, "_resolve_backends", lambda runtime: (StateBackend(), {}))
         monkeypatch.setattr(A, "pull_agent_prompt", lambda repo, workspace=None: _AGENTS_MD)
 
     agent = A.build_agent()

@@ -189,7 +189,7 @@ The build order in `runtime/agent.py` is load-bearing:
 | 3 | `McpTools` | Discover tools before the prompt describes them |
 | 4 | `_hub_system_prompt` | Fetch the configured prompt per model call and append runtime notes |
 | 5 | Catalogue call limits | Apply each enabled tool's caps |
-| 6 | Optional QuickJS interpreter | Add orchestration before final filtering |
+| 6 | QuickJS interpreter | Required orchestration before final filtering |
 | 7 | `ToolSelection` | Final say on tools offered to the model |
 
 After-hooks run in reverse. Both sync and async hooks must remain callable. MCP's sync hooks
@@ -197,11 +197,10 @@ pass through without discovery; synchronous in-process eval/traffic runs do not 
 MCP tools through that middleware. The async tool-call hook must supply adapted tool objects
 as well as the model-call hook advertising them.
 
-No `write_todos` is installed. `_subagent_specs` always supplies an explicit `general-purpose`
-subagent, its skills sources and a safe tool list; it does not rely on the framework's automatic
-copy. `DYNAMIC_SUBAGENTS` additionally enables QuickJS orchestration and named specialists;
-an explicitly enabled but unbuildable interpreter raises. Python `execute` does data work,
-while QuickJS orchestrates task calls. Do not infer production flags from CI/local defaults.
+No `write_todos` is installed. `_subagent_specs` always supplies `researcher`, `analyst` and an
+explicit `general-purpose` subagent, with safe tools on every spec and skills sources on the
+general-purpose agent. QuickJS orchestration is required on every build; an unbuildable
+interpreter raises. Python `execute` does data work, while QuickJS orchestrates task calls.
 
 ### Configuration and prompt sources
 

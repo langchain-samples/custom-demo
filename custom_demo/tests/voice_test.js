@@ -153,9 +153,6 @@ function ok(name, fn) {
       // be SPOKEN OVER that. The gap is deliberate; do not "fix" it by adding one back.
       "ask_user",
       "draft_email",
-      // Not exempt for that reason but for a duller one: langchain-quickjs binds `eval`
-      // only when DYNAMIC_SUBAGENTS=1, so it is not a tool the agent can always call.
-      "eval",
     ]);
     const unspoken = Object.keys(TOOL_LABELS)
       .filter((name) => !EXEMPT.has(name))

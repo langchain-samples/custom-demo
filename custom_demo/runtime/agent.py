@@ -24,7 +24,6 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from custom_demo.config import (
     MODEL,
-    dynamic_subagents_enabled,
     goal_max_iterations,
     goal_model,
     model_provider,
@@ -149,14 +148,7 @@ def _sandbox_note(runtime) -> str:
 
 
 def _subagents_note() -> str:
-    """When dynamic subagents are on, explain orchestration vs. the data sandbox.
-
-    Build-time gated (same env as the interpreter middleware), so it only appears
-    when the JS interpreter + subagents are actually wired in.
-    """
-    if not _dynamic_subagents_enabled():
-        return ""
-
+    """Explain the always-available JS orchestration and its separate Python data sandbox."""
     return (
         "\n\nSUBAGENTS & WORKFLOWS: For a large task with independent parts, orchestrate the "
         "specialist subagents (`researcher`, `analyst`), write a short JavaScript workflow script "
@@ -497,15 +489,8 @@ _SUBAGENT_SOLO_CLAUSE = (
     "finished result, and if you cannot get it, say what stopped you and what you did get."
 )
 
-# Dynamic subagents (deepagents + a QuickJS code-interpreter, langchain-quickjs):
-# the agent writes a JS orchestration script that fans work out to these subagents
-# via a `task()` global. A small fixed generalist set — the value is the
-# orchestration, not per-domain specialization. Gated behind DYNAMIC_SUBAGENTS
-# (build-time env; off by default) because the interpreter middleware is fixed at
-# build and we want a deploy-safe default we can flip on after verification.
-#
-# `tools` is deliberately absent from these literals: `_subagent_specs` stamps it on
-# every spec, so a new entry here cannot reintroduce the inherit-everything default.
+# Every agent can dispatch these specialists through QuickJS or the task tool.
+# `_subagent_specs` supplies explicit tools so no spec inherits pausing capabilities.
 _SUBAGENTS: list[SubAgent] = [
     {
         "name": "researcher",
@@ -528,60 +513,24 @@ _SUBAGENTS: list[SubAgent] = [
 ]
 
 
-def _subagent_specs(*, dynamic: bool) -> list[SubAgent]:
-    """Every subagent the main agent can dispatch to, each pinned to safe tools.
+def _subagent_specs() -> list[SubAgent]:
+    """Return all specialists and the general-purpose agent with explicit safe tools.
 
-    Three things are settled here rather than in the literals above.
-
-    `tools` is stamped on EVERY spec. A `SubAgent` that omits the key inherits the
-    main agent's entire tool list, which is how `ask_user` reached a subagent and hung
-    the graph on a question no client could answer; `subagent_tools()` is that list
-    minus the rows that pause for a human. Stamping it centrally, rather than writing
-    the key into each literal, is what makes the guarantee hold for the next subagent
-    somebody adds.
-
-    `general-purpose` is listed WHATEVER `dynamic` says, and that is the load-bearing
-    part. deepagents appends its own copy whenever the caller names none, built from
-    the main agent's tools and carrying the same fault, and `FilesystemMiddleware`
-    offers `task` either way: a deployment with the flag off therefore still has a
-    dispatchable subagent holding `ask_user`. Naming it here replaces that copy on
-    both paths. Its identity comes from the framework's own spec so it keeps the
-    description and prompt the framework advertises, and `skills` is re-declared
-    because an inline spec only mounts the sources it asks for.
-
-    The `researcher`/`analyst` pair stays gated: they exist to be fanned out to by the
-    QuickJS orchestration script, so advertising them without the interpreter would
-    offer the model dispatch targets its prompt never explains.
-
-    Args:
-        dynamic: Whether the QuickJS orchestration stack is wired in
-            (`DYNAMIC_SUBAGENTS`).
-
-    Returns:
-        Specs for `create_deep_agent`, in dispatch-menu order.
+    Every spec excludes human-interrupt tools. Declaring general-purpose prevents
+    framework inheritance from reintroducing those tools, and explicitly supplies
+    its skill sources. Tool wrappers preserve per-invocation evaluation mocking.
     """
-    # Mock-wrapped like the main agent's, so a dataset row's `mock_tools` reaches a
-    # tool call made inside a subagent too. Inert with no spec installed.
     tools = enable_mocking(subagent_tools())
     general_purpose: SubAgent = {
         **GENERAL_PURPOSE_SUBAGENT,
         "system_prompt": GENERAL_PURPOSE_SUBAGENT["system_prompt"] + _SUBAGENT_SOLO_CLAUSE,
         "skills": list(_SKILL_SOURCES),
     }
-    specs = (*_SUBAGENTS, general_purpose) if dynamic else (general_purpose,)
-    return [cast("SubAgent", {**spec, "tools": tools}) for spec in specs]
+    return [cast("SubAgent", {**spec, "tools": tools}) for spec in (*_SUBAGENTS, general_purpose)]
 
 
 class DynamicSubagentsError(RuntimeError):
-    """`DYNAMIC_SUBAGENTS` is on but the dynamic-subagent stack could not be built.
-
-    Typed so callers and tests can recognize it without reading its message (the
-    message is for the operator who set the flag, and is free to change).
-    """
-
-
-def _dynamic_subagents_enabled() -> bool:
-    return dynamic_subagents_enabled()
+    """The required QuickJS orchestration stack could not be built."""
 
 
 def _rubric_middleware() -> RubricMiddleware:
@@ -634,42 +583,23 @@ def _build_agent(model: str | None, checkpointer):
     # decides whether the turn is finished at all. Inert without a `rubric`.
     middleware = [_rubric_middleware(), *middleware]
 
-    # Dynamic subagents (opt-in): add the QuickJS interpreter middleware BEFORE
-    # ToolSelection, which must stay LAST so it keeps the final word on which tools
-    # reach the model. The import is function-local for COST, not safety:
-    # `langchain_quickjs` pulls a native quickjs-rs and costs ~430ms to import, which
-    # a deployment with DYNAMIC_SUBAGENTS off must not pay at every cold start (same
-    # reason as the fastmcp imports in mcp_servers.py).
-    #
-    # `subagents` is passed either way, never None: deepagents fills a None in with a
-    # general-purpose subagent holding every main-agent tool, and `task` is offered
-    # whatever this flag says, so leaving it None is what would put `ask_user` back
-    # inside a subagent on the default configuration.
-    dynamic = _dynamic_subagents_enabled()
-    if dynamic:
-        try:
-            from langchain_quickjs import CodeInterpreterMiddleware  # noqa: PLC0415
+    # The interpreter is required and precedes ToolSelection, which retains final filtering.
+    try:
+        from langchain_quickjs import CodeInterpreterMiddleware  # noqa: PLC0415 - native errors
 
-            interpreter = CodeInterpreterMiddleware()
-        except Exception as exc:
-            # An OPT-IN capability, so silence is not an option: somebody set
-            # DYNAMIC_SUBAGENTS and would otherwise get an agent with no subagents,
-            # no error, and skills whose workflows tell it to fan work out to them.
-            # `langchain-quickjs` is a hard pin (>=0.3,<0.4), so this is a broken
-            # install or a bad build, and the operator who set the flag is the one
-            # who can act on it.
-            raise DynamicSubagentsError(
-                "DYNAMIC_SUBAGENTS is on, but the QuickJS code interpreter behind the "
-                f"dynamic subagents could not be built: {type(exc).__name__}: {exc}. "
-                "Unset DYNAMIC_SUBAGENTS to run without them."
-            ) from exc
+        interpreter = CodeInterpreterMiddleware()
+    except Exception as exc:
+        raise DynamicSubagentsError(
+            "The required QuickJS interpreter for dynamic subagents could not be built: "
+            f"{type(exc).__name__}: {exc}. Check the langchain-quickjs installation and "
+            "its native dependencies."
+        ) from exc
 
-        middleware = cast(
-            "list[AgentMiddleware]",
-            [*middleware[:-1], interpreter, middleware[-1]],
-        )
-
-    subagents = _subagent_specs(dynamic=dynamic)
+    middleware = cast(
+        "list[AgentMiddleware]",
+        [*middleware[:-1], interpreter, middleware[-1]],
+    )
+    subagents = _subagent_specs()
 
     return create_deep_agent(
         model=llm,

@@ -30,9 +30,8 @@ dependencies = [
     "starlette>=0.37",
     # Dynamic subagents: the QuickJS code-interpreter (CodeInterpreterMiddleware).
     # 0.3.x requires deepagents>=0.7 and makes `task()`-from-code dispatches stream as
-    # named, namespaced delegated subagents (the point of the 0.7 upgrade — so the SPA
-    # panel can see eval-launched subagents). Gated by DYNAMIC_SUBAGENTS (default
-    # off); the native quickjs-rs dep ships cp313 wheels for the deploy image.
+    # named, namespaced delegated subagents visible in the SPA. Required on every
+    # agent build; the native quickjs-rs dep ships cp313 wheels for the deploy image.
     "langchain-quickjs>=0.3,<0.4",
     # Real web search behind the `web_search` tool (tools/web_search.py). Without
     # TAVILY_API_KEY the tool returns an error rather than inventing results.

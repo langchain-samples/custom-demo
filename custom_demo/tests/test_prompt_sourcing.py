@@ -118,7 +118,7 @@ class _RecordingModel(BaseChatModel):
     """Stub model: record the system prompt it is handed, then end the loop."""
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-        _CAPTURED.setdefault("system", messages[0].content if messages else "")
+        _CAPTURED.setdefault("system", messages[0].text if messages else "")
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content="ok"))])
 
     def bind_tools(self, *args, **kwargs):

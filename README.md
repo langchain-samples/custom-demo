@@ -36,7 +36,7 @@ can share prompt/skill repositories and eval datasets.
 | **Deep Agents** | Skills, sandbox/code execution, dynamic subagents, MCP tools and Apps, human approval, generative UI (streamed dashboards and HTML assets) |
 | **LangSmith** | Context Hub prompts/skills, tracing, Monitoring, Insights, **Engine** (issue detection), Evals and live prompt fixes |
 
-Dynamic subagents require `DYNAMIC_SUBAGENTS=1`; MCP requires a connected server.
+Dynamic subagents are always available; MCP requires a connected server.
 Optional demo traffic populates Monitoring and attempts to start Insights and Engine, subject to
 workspace permissions and availability.
 
@@ -107,8 +107,8 @@ provided records faithfully; they do not establish facts about the real customer
 | Filesystem + `execute` | Read/write files, run analysis and produce HTML assets; execution requires a sandbox |
 | `task` / MCP tools | Delegate work or call configured external systems |
 
-Choose optional tools in Settings. `SANDBOX_ENABLED=0` disables code execution;
-`DYNAMIC_SUBAGENTS=1` enables QuickJS orchestration of named subagents.
+Choose optional tools in Settings. `SANDBOX_ENABLED=0` disables Python code execution;
+QuickJS orchestration and named subagents remain available.
 
 ## Assistants and configuration
 

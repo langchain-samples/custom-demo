@@ -83,56 +83,55 @@ def test_capability_note_empty_for_unset_selection():
     assert A._capability_note(_rt(None)) == ""  # default selection → no note (unchanged path)
 
 
-# --- dynamic-subagents gate (DYNAMIC_SUBAGENTS, build-time env) ---
+# --- dynamic subagents are part of every agent ---
 
 
-def test_subagents_note_off_by_default(monkeypatch):
-    monkeypatch.delenv("DYNAMIC_SUBAGENTS", raising=False)
-    assert A._subagents_note() == ""  # gated off → no orchestration note
-
-
-def test_subagents_note_on_when_enabled(monkeypatch):
-    monkeypatch.setenv("DYNAMIC_SUBAGENTS", "1")
+def test_subagents_note_always_explains_orchestration():
     note = A._subagents_note()
-    assert "task()" in note and "orchestrat" in note.lower()  # distinguishes JS orchestration
-    assert "execute" in note  # ...from the Python data sandbox
+    assert "task()" in note and "orchestrat" in note.lower()
+    assert "researcher" in note and "analyst" in note
+    assert "Python `execute`" in note
+    assert "Don't over-orchestrate simple requests" in note
 
 
-def test_subagents_that_cannot_be_built_fail_the_flag_that_asked_for_them(monkeypatch):
-    """An OPT-IN capability must not opt itself back out.
+@pytest.mark.parametrize("deployed", [False, True])
+def test_every_build_installs_the_interpreter_before_final_tool_selection(monkeypatch, deployed):
+    captured = {}
+    monkeypatch.setattr(A, "require_model_key", lambda *_: None)
+    monkeypatch.setattr(A, "build_chat_model", lambda *_: None)
+    monkeypatch.setattr(A, "create_deep_agent", lambda **kwargs: captured.update(kwargs))
 
-    This used to catch every exception and set `subagents = None`, so an operator who
-    deliberately set DYNAMIC_SUBAGENTS got an agent with no subagents, no error, and
-    skills whose workflows tell it to fan work out to them. `langchain-quickjs` is a
-    hard pin, so a failure here is a broken install and the operator who set the flag
-    is the one who can act on the message.
-    """
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setenv("DYNAMIC_SUBAGENTS", "1")
+    A.build_agent(deployed=deployed)
+
+    middleware_names = [type(middleware).__name__ for middleware in captured["middleware"]]
+    assert middleware_names[0] == "RubricMiddleware"
+    assert middleware_names[-2:] == ["CodeInterpreterMiddleware", "ToolSelection"]
+    assert middleware_names.count("CodeInterpreterMiddleware") == 1
+    specs = {spec["name"]: spec for spec in captured["subagents"]}
+    assert set(specs) == {"researcher", "analyst", "general-purpose"}
+    for spec in specs.values():
+        assert not _offered_to(spec) & HITL_IDS
+
+    assert specs["general-purpose"]["skills"] == captured["skills"]
+
+
+def test_a_required_interpreter_failure_stops_graph_construction(monkeypatch):
+    monkeypatch.setattr(A, "require_model_key", lambda *_: None)
+    monkeypatch.setattr(A, "build_chat_model", lambda *_: None)
     import langchain_quickjs  # noqa: PLC0415
 
-    def _boom(*_a, **_k):
-        raise RuntimeError("no quickjs-rs wheel for this platform")
-
-    monkeypatch.setattr(langchain_quickjs, "CodeInterpreterMiddleware", _boom)
-    with pytest.raises(A.DynamicSubagentsError, match="DYNAMIC_SUBAGENTS"):
-        A.build_agent(deployed=True)
-
-
-def test_the_subagent_failure_names_the_underlying_cause(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setenv("DYNAMIC_SUBAGENTS", "1")
-    import langchain_quickjs  # noqa: PLC0415
+    cause = RuntimeError("no quickjs-rs wheel for this platform")
 
     def _boom(*_a, **_k):
-        raise RuntimeError("no quickjs-rs wheel")
+        raise cause
 
     monkeypatch.setattr(langchain_quickjs, "CodeInterpreterMiddleware", _boom)
-    with pytest.raises(A.DynamicSubagentsError) as exc:
+    with pytest.raises(A.DynamicSubagentsError, match="required QuickJS") as exc:
         A.build_agent(deployed=True)
 
-    assert "no quickjs-rs wheel" in str(exc.value)
-    assert isinstance(exc.value.__cause__, RuntimeError)
+    assert "no quickjs-rs wheel for this platform" in str(exc.value)
+    assert "Unset" not in str(exc.value)
+    assert exc.value.__cause__ is cause
 
 
 # --- goal grading (RubricMiddleware, drives the SPA's goal pill) ---
@@ -152,7 +151,6 @@ def test_graph_accepts_a_rubric_on_its_input(monkeypatch):
     If it isn't in the input schema the server drops it and nothing is graded.
     """
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setenv("DYNAMIC_SUBAGENTS", "0")
     props = A.build_agent(deployed=True).get_input_jsonschema()["properties"]
     assert "rubric" in props
 
@@ -167,7 +165,6 @@ def test_a_grader_that_cannot_be_built_fails_the_graph_instead_of_going_quiet(mo
     look like one.
     """
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setenv("DYNAMIC_SUBAGENTS", "0")
 
     def _boom(**_):
         raise RuntimeError("no grader model")
@@ -180,7 +177,6 @@ def test_a_grader_that_cannot_be_built_fails_the_graph_instead_of_going_quiet(mo
 def test_the_goal_grader_is_always_in_the_graph(monkeypatch):
     """`rubric` is in the input schema unconditionally — it is not opt-in."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setenv("DYNAMIC_SUBAGENTS", "0")
     assert "rubric" in A.build_agent(deployed=True).get_input_jsonschema()["properties"]
 
 
@@ -208,7 +204,6 @@ def test_deployed_agent_has_no_write_todos_tool(monkeypatch):
     # Compiling the graph never calls the model, so a fake key is enough and this
     # runs in key-stripped CI. Asserts the real assembled harness, not just config.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setenv("DYNAMIC_SUBAGENTS", "0")
     names = _bound_tool_names(A.build_agent(deployed=True))
     assert "write_todos" not in names  # TodoListMiddleware not opted in on 0.7
     # Sanity: other built-ins/tools are present (only the todo one is absent).
@@ -418,124 +413,72 @@ def test_a_malformed_stored_context_fails_at_run_start_naming_the_field():
 
 # --- subagents cannot pause the run ---
 
-# Both build paths. `DYNAMIC_SUBAGENTS` off is the DEFAULT and the one that hid this:
-# with no specs of ours, deepagents fills in a general-purpose subagent holding every
-# main-agent tool, and `FilesystemMiddleware` offers `task` either way, so the flag
-# being off never meant "no subagent to worry about".
-BOTH_PATHS = [True, False]
-
 
 def _offered_to(spec) -> set[str]:
-    """The tool names a subagent spec offers its model.
-
-    `SubAgent.tools` is typed to accept bare callables and dicts as well as tools.
-    Everything this app puts there is a `BaseTool`, so read `.name` through a cast
-    rather than widening the assertions to cope with shapes that never arrive.
-    """
+    """The tool names offered by this app's explicitly declared BaseTool instances."""
     return {cast("BaseTool", t).name for t in spec["tools"]}
 
 
-@pytest.mark.parametrize("dynamic", BOTH_PATHS)
-def test_every_subagent_spec_declares_its_own_tools(dynamic):
-    """A spec that omits `tools` inherits the main agent's entire list.
-
-    That default is what put `ask_user` inside an `analyst`, where a placeholder
-    question interrupted the graph and the fan-out above it never resumed: the run was
-    stranded on mid-workflow narration with the answer never delivered. The key is
-    stamped centrally, so this asserts the stamping reached every spec rather than
-    trusting each literal to remember it.
-    """
-    specs = A._subagent_specs(dynamic=dynamic)
-    assert specs, "there is always at least general-purpose, so always something to constrain"
+def test_every_subagent_spec_declares_its_own_tools():
+    specs = A._subagent_specs()
+    assert specs
     for spec in specs:
         assert "tools" in spec, f"{spec['name']} would inherit every main-agent tool"
 
 
-@pytest.mark.parametrize("dynamic", BOTH_PATHS)
-def test_no_subagent_can_reach_a_human_in_the_loop_tool(dynamic):
-    for spec in A._subagent_specs(dynamic=dynamic):
+def test_no_subagent_can_reach_a_human_in_the_loop_tool():
+    for spec in A._subagent_specs():
         leaked = _offered_to(spec) & HITL_IDS
         assert not leaked, f"{spec['name']} can pause the run via {sorted(leaked)}"
 
 
 def test_the_main_agent_keeps_the_tools_its_subagents_lose():
-    """The fix withholds pausing from subagents ONLY.
-
-    `ask_user` is always-on for the main agent, which is the one turn a client can
-    answer, so a change that took it away everywhere would pass the test above and
-    still be wrong.
-    """
     main = {t.name for t in all_tools()}
     assert HITL_IDS <= main
     assert {t.name for t in subagent_tools()} == main - HITL_IDS
 
 
-@pytest.mark.parametrize("dynamic", BOTH_PATHS)
-def test_general_purpose_is_declared_on_both_paths(dynamic):
-    """The framework appends its own `general-purpose` when the caller names none.
-
-    That auto-added copy is built from the main agent's tools, so it carries the same
-    fault the other specs were fixed for, and no assertion about `_SUBAGENTS` alone
-    would catch it. Declaring it is what replaces that copy; `skills` is re-declared
-    with it because an inline spec only mounts the sources it asks for.
-    """
-    specs = {spec["name"]: spec for spec in A._subagent_specs(dynamic=dynamic)}
+def test_general_purpose_declares_its_skill_sources():
+    specs = {spec["name"]: spec for spec in A._subagent_specs()}
     assert GENERAL_PURPOSE_SUBAGENT["name"] in specs
     assert specs[GENERAL_PURPOSE_SUBAGENT["name"]].get("skills") == list(A._SKILL_SOURCES)
 
 
-def test_the_specialists_stay_behind_the_flag():
-    """Only `general-purpose` is unconditional.
-
-    `researcher` and `analyst` exist to be fanned out to by the QuickJS orchestration
-    script, so offering them without the interpreter would advertise dispatch targets
-    the prompt never explains (`_subagents_note` is gated on the same flag).
-    """
-    off = {spec["name"] for spec in A._subagent_specs(dynamic=False)}
-    on = {spec["name"] for spec in A._subagent_specs(dynamic=True)}
-    assert off == {GENERAL_PURPOSE_SUBAGENT["name"]}
-    assert on - off == {"researcher", "analyst"}
+def test_all_specialists_are_always_available():
+    assert [spec["name"] for spec in A._subagent_specs()] == [
+        "researcher",
+        "analyst",
+        GENERAL_PURPOSE_SUBAGENT["name"],
+    ]
 
 
-@pytest.mark.parametrize("dynamic", BOTH_PATHS)
-def test_the_built_graph_never_hands_a_subagent_a_pausing_tool(dynamic, monkeypatch):
-    """The end-to-end guard, on the tools deepagents actually compiles the subagent with.
-
-    Everything above reads our specs. This reads what the framework did with them, so
-    a deepagents change that stopped honouring a spec's `tools`, or renamed the default
-    subagent our name-match suppresses, fails here instead of shipping a subagent that
-    quietly regained `ask_user`.
-    """
+@pytest.mark.parametrize("deployed", [False, True])
+def test_the_built_graph_has_an_interpreter_and_safe_subagents(monkeypatch, deployed):
+    """Inspect the real compiled children, not just the input specifications."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setenv("DYNAMIC_SUBAGENTS", "1" if dynamic else "0")
     import deepagents.middleware.subagents as subagents_module  # noqa: PLC0415
 
     compiled: dict[str, set[str]] = {}
     real = subagents_module.create_agent
 
     def spy(model, **kwargs):
-        # Subscript, not `.get`: every subagent compile passes a name, and a deepagents
-        # that stopped should fail here rather than collapse the specs onto one key.
         compiled[kwargs["name"]] = {cast("BaseTool", t).name for t in (kwargs.get("tools") or [])}
         return real(model, **kwargs)
 
     monkeypatch.setattr(subagents_module, "create_agent", spy)
-    A.build_agent(deployed=True)
+    graph = A.build_agent(deployed=deployed)
 
-    assert compiled, "no subagent was compiled, so this asserted nothing"
-    assert GENERAL_PURPOSE_SUBAGENT["name"] in compiled  # the default was replaced, not added to
+    assert set(compiled) == {"researcher", "analyst", GENERAL_PURPOSE_SUBAGENT["name"]}
     for name, offered in compiled.items():
         assert not offered & HITL_IDS, f"{name} was compiled with {sorted(offered & HITL_IDS)}"
 
+    names = _bound_tool_names(graph)
+    assert {"eval", "task", "read_file", "push_widget"} <= names
+    assert "write_todos" not in names
 
-@pytest.mark.parametrize("dynamic", BOTH_PATHS)
-def test_a_subagent_is_told_it_has_nobody_to_ask(dynamic):
-    """Withholding the tool stops the interrupt; the prompt stops the wasted reach.
 
-    Also the half that addresses the narration itself: a subagent whose reply is a
-    progress note leaves its caller nothing to synthesize, whether or not it paused.
-    """
-    for spec in A._subagent_specs(dynamic=dynamic):
+def test_a_subagent_is_told_it_has_nobody_to_ask():
+    for spec in A._subagent_specs():
         prompt = spec["system_prompt"]
         assert "working alone" in prompt, spec["name"]
         assert "reply IS the deliverable" in prompt, spec["name"]

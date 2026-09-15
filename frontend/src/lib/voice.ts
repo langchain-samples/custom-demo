@@ -575,6 +575,7 @@ const PROGRESS_LABELS: Record<string, string> = {
   glob: "looking through the files",
   grep: "searching the files",
   task: "handing part of this to a specialist",
+  eval: "coordinating the specialist tasks",
   write_file: "writing this out to a file",
   edit_file: "making changes to a file",
   delete: "clearing out a file that is no longer needed",
