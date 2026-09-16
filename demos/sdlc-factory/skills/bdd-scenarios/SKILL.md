@@ -50,6 +50,20 @@ Rules that make the difference between usable Gherkin and decoration:
 - **Every term comes from the spec.** If a word is not in the brief or the spec, it is
   not in a scenario.
 
+## How much to write
+
+Depth comes from `request.md`:
+
+| Depth | Coverage |
+|---|---|
+| `minimal` | The happy path plus the single most likely refusal, per acceptance criterion. |
+| `standard` | Every acceptance criterion, with its refusal and limit cases. |
+| `comprehensive` | The above, plus a `Scenario Outline` wherever a threshold or tier varies, and a scenario for each non-functional requirement that can be observed. |
+
+Minimal depth is the one case where a feature may ship with a thin negative path. It is
+never a licence to skip refusals altogether: a criterion with no way to fail has not been
+specified.
+
 ## What to write
 
 Write `/workspace/artifacts/<request-id>/bdd-features.md`: a short heading, a
@@ -78,7 +92,14 @@ yet, with the reason.
 
 ## Then hand it on
 
-Update the progress diagram (read `progress-diagram`), then ask for review. Once the
-scenarios are agreed, product definition is complete: say that the next phase is
-technical and experience alignment, name the documents the architecture and design teams
-will receive, and stop.
+This is stage 2.5. Mark it `[x]` in `request.md`, set the current stage to 2.7, and
+regenerate the diagram (read `progress-diagram`).
+
+Stage 2.6 Delivery Planning runs on the fuller profiles: when it is in this request,
+write `delivery-plan.md` naming the units of work, their order and what each one depends
+on, then mark it too.
+
+Then ask for the 2.7 Definition Ready approval. Once a person gives it, your part is
+complete: say that the next phase is technical and experience alignment, name the
+documents the architecture and design teams receive, and stop. Do not start a stage past
+2.7.

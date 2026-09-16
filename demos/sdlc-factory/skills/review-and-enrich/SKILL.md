@@ -32,6 +32,25 @@ quoted passage:
 "Tighten this up", "this is too vague", "say it in their words" are all edits to that
 passage. Make them.
 
+## How hard to review
+
+`request.md` records this request's review level, and it decides how you answer "is this
+ready?":
+
+| Review | What you do |
+|---|---|
+| `adversarial` | Hunt for contradictions, missing cases and unstated assumptions. Report them as blocking, and say the gate should not pass until they are answered. |
+| `advisory` | One pass. Report what you find. Say plainly that none of it blocks the gate. |
+| `none` | Do not review unasked. If someone asks directly, answer their question and nothing more. |
+
+The effective level is the LOWEST of what the stage declares, what the profile caps, and
+what the person asked for on this request. So a team on `express` gets no reviews even at
+a stage that would normally run one, and asking for an advisory pass on an `enterprise`
+request lowers that one request rather than the profile.
+
+Every finding names the section it came from. A finding a reader cannot locate is an
+opinion, and the point of a review is that someone can go and look.
+
 ## Validate before a gate
 
 When someone asks whether a document is ready, check it against its phase and answer
@@ -55,5 +74,8 @@ wrong, say so plainly and ask for the approval.
 
 You validate; a person approves. Writing "approved" into a document because the checklist
 passed forges a decision that was never made, and the whole process exists to record
-those decisions. Update the progress diagram (read `progress-diagram`) only once the
-approval has actually been given.
+those decisions.
+
+So mark a gate `[x]` in `request.md` only once a person has actually approved it, and
+record who, in their words. Until then it stays `[>]`, however finished the document
+looks. Then regenerate the diagram (read `progress-diagram`).

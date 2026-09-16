@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -83,6 +84,22 @@ def push(workspace: str | None, repo: str, files: dict[str, FileEntry], descript
     print(f"  {repo}: pushed {len(files)} file(s)")
 
 
+def default_owner() -> str:
+    """Who to credit in the assistant picker, which lists rows as customer - industry - owner.
+
+    Defaults to the repository's configured git user, so the row reads like every other
+    assistant in the list without the name being written into the script.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "config", "user.name"], capture_output=True, text=True, timeout=5, check=False
+        )
+    except OSError:
+        return ""
+
+    return result.stdout.strip()
+
+
 def app_token() -> str | None:
     """The deployment's app token, when it is enforcing one.
 
@@ -122,6 +139,7 @@ def main() -> int:
     parser.add_argument("--customer", default="Mary Kay", help="customer name for branding")
     parser.add_argument("--workspace", default=None, help="LangSmith workspace id")
     parser.add_argument("--url", default="http://127.0.0.1:2024", help="Agent Server URL")
+    parser.add_argument("--owner", default=None, help="name shown in the assistant picker")
     parser.add_argument(
         "--skip-assistant", action="store_true", help="push Hub content only, create nothing"
     )
@@ -175,6 +193,7 @@ def main() -> int:
         "customer": args.customer,
         "display_name": f"{args.customer} Software Factory",
         "industry": "Beauty and direct sales",
+        "owner_name": args.owner if args.owner is not None else default_owner(),
         "ls_artifacts": artifacts.to_dict(),
     }
 

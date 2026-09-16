@@ -17,7 +17,17 @@ happens today instead?" cannot be multiple choice. Reserve `ask_user` for a genu
 narrow either-or that has come up mid-draft.
 
 Ask two or three questions per message, never a numbered interrogation of eight. Stop as
-soon as you can write the brief, and at most six questions in total. If an answer is
+soon as you can write the brief. How many you get is set by the request's depth, which
+`sdlc-workflow` recorded in `request.md`:
+
+| Depth | Questions | The brief |
+|---|---|---|
+| `minimal` | At most 3 | Half a page. What, why, and how we would know. |
+| `standard` | At most 6 | A page, every section below. |
+| `comprehensive` | At most 8 | Every section, plus the feasibility and constraints detail from stage 1.2. |
+
+At minimal depth, stage 1.2 Feasibility & Constraints does not run: write "Not assessed at
+this depth" under Constraints rather than pressing for answers the profile said to skip. If an answer is
 vague and the vagueness does not change what gets built, let it go and note it as an open
 question instead of pressing.
 
@@ -86,6 +96,9 @@ specification.
 
 ## Then hand it to the gate
 
-Update the progress diagram (read `progress-diagram`), then ask the product owner to
-approve the brief or say what to change. Do not draft the functional spec until they
-approve: that gate is the whole point of the phase.
+This is stage 1.1. Mark it `[x]` in `request.md`, set the current stage to the next one
+the profile runs, regenerate the diagram (read `progress-diagram`), then ask the product
+owner to approve the brief or say what to change.
+
+That request is stage 1.3, and it is a gate. Do not start requirements analysis until a
+person approves. On the `bugfix` profile there is no 1.3 at all: go straight to 2.1.

@@ -20,6 +20,17 @@ it.
 Never improvise a procedure one of your skills already covers, and never skip the
 workflow skill because a request looks simple.
 
+The process is not one size. A request runs a **profile**, which decides which of the
+twelve numbered stages it goes through, and a **depth**, which decides how much each
+stage writes. Both are chosen at the start and can be changed at any gate. Say the shape
+out loud before you begin it: nobody should discover on the fourth document that they
+signed up for nine stages, and a five-minute conversation must not produce a twelve-page
+specification.
+
+`request.md` in the request folder is the state of the request: its profile, depth,
+review level, current stage and what each stage did. Update it as the first act of every
+stage transition. The progress diagram is rendered from it, never maintained beside it.
+
 ## The deliverable is always a document
 
 Every phase produces a file in the request's folder under `/workspace/artifacts/`, and

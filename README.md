@@ -57,9 +57,25 @@ editor rather than a viewer:
 Saving asks which role the revision is recorded as. There is no signed-in user in this
 deployment, so that choice is a label on the revision and not a permission.
 
-The **software factory** demo in `demos/sdlc-factory/` is built on this: one skill per phase of a
-software development process, from a one-sentence request to Gherkin acceptance criteria. Seed it
-with `uv run python scripts/seed_sdlc_demo.py` and walk it end to end with
+The **software factory** demo in `demos/sdlc-factory/` is built on this: a software development
+process from a one-sentence request to Gherkin acceptance criteria, as one skill per phase.
+
+It runs a roster of twelve numbered stages, and two dials decide how much process a request gets:
+
+- **Profile** picks which stages run. `feature` and `enterprise` run all twelve; `change` runs
+  nine; `express` six; `bugfix` five; `poc` three. The agent names the shape ("9 of 12 stages,
+  2 approval gates") before starting, so nobody discovers the process on their fourth document.
+- **Depth** (`minimal`, `standard`, `comprehensive`) decides how much each stage writes, so a
+  five-minute conversation does not produce a twelve-page specification.
+
+Review intensity is a third dial (`adversarial`, `advisory`, `none`), and the effective level is
+the lowest of the stage's own declaration, the profile's cap and what the person asked for.
+Conditional stages self-skip and record why: reverse engineering is skipped, visibly, on a request
+with nothing to read. `request.md` in each request folder is the state, and the progress diagram is
+rendered from it.
+
+Seed it with `uv run python scripts/seed_sdlc_demo.py` (add `--url <deployment>` to bind the
+assistant somewhere other than a local server) and walk it end to end with
 `uv run python scripts/e2e_sdlc.py`.
 
 ## Ways to run and demo
