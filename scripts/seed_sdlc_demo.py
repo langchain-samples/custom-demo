@@ -40,6 +40,13 @@ DEMO = ROOT / "demos" / "sdlc-factory"
 # from the name.
 WEBSITE = "marykay.com"
 
+# What this assistant is ABOUT, which is not what the customer sells. The SPA builds its
+# opening placeholder from this field ("Ask me anything about ..."), and for most demos
+# the two coincide: a Walmart assistant really is about retail. This one is a software
+# delivery assistant that happens to work for a beauty company, so naming the sector
+# would invite exactly the questions it cannot answer.
+INDUSTRY = "software delivery"
+
 # Files planted in the VM at /workspace/data. The sandbox refuses to create a VM for an
 # assistant with no seed spec at all, and these are not filler: stage 0.2 Practices
 # Discovery reads them, so the team's own vocabulary and section conventions reach the
@@ -260,7 +267,7 @@ def main() -> int:
         "skills_repo": skills_repo,
         "docs_repo": docs_repo,
         "customer": args.customer,
-        "industry": "Beauty and direct sales",
+        "industry": INDUSTRY,
         "enabled_tools": ENABLED_TOOLS,
         "ls_workspace": args.workspace,
         "ls_project": args.customer,
@@ -269,12 +276,12 @@ def main() -> int:
     }
     print(f"Looking up {args.customer} branding")
     brand = fetch_brand(args.customer, WEBSITE)
-    branding = _brand_metadata(brand, {})
+    branding = {**_brand_metadata(brand, {}), "theme": "light"}
     print(f"  accent {branding['accent']} | logo {'found' if branding['logo'] else 'none'}")
     metadata = {
         "customer": args.customer,
         "display_name": f"{args.customer} Software Factory",
-        "industry": "Beauty and direct sales",
+        "industry": INDUSTRY,
         "owner_name": args.owner if args.owner is not None else default_owner(),
         **branding,
         "ls_artifacts": artifacts.to_dict(),
