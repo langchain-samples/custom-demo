@@ -11,6 +11,7 @@ from starlette.applications import Starlette
 from starlette.routing import Route
 
 from custom_demo.web.cleanup import cleanup
+from custom_demo.web.docs import docs_file, docs_files, docs_save, docs_versions
 from custom_demo.web.evals import evals_run, evals_status
 from custom_demo.web.feedback import feedback
 from custom_demo.web.mcp import mcp_proxy
@@ -29,6 +30,10 @@ app = Starlette(
         Route("/sandbox-files", sandbox_files, methods=["GET"]),
         Route("/sandbox-file", sandbox_file, methods=["GET"]),
         Route("/sandbox-upload", sandbox_upload, methods=["POST"]),
+        Route("/docs-files", docs_files, methods=["GET"]),
+        Route("/docs-file", docs_file, methods=["GET"]),
+        Route("/docs-file", docs_save, methods=["POST"]),
+        Route("/docs-versions", docs_versions, methods=["GET"]),
         Route("/projects", projects, methods=["GET", "POST"]),
         Route("/workspaces", workspaces, methods=["GET"]),
         Route("/agents", agents, methods=["GET"]),

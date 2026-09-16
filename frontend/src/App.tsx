@@ -18,12 +18,12 @@ import {
 } from "@tabler/icons-react";
 import { Button } from "@/components/motion/button";
 import { Tooltip } from "@/components/motion/tooltip";
-import ChatPanel, { type ChatPanelHandle } from "@/components/ChatPanel";
+import ChatPanel, { type ChatPanelHandle, type Quote } from "@/components/ChatPanel";
 import { usePointerLockGuard } from "@/lib/pointerLock";
 import { VoiceButton } from "@/components/VoiceButton";
 import { VoiceStage } from "@/components/VoiceStage";
 import { useVoiceSession } from "@/lib/hooks/use-voice-session";
-import { provisionalDuplicates } from "@/lib/artifacts";
+import { isMarkdownArtifactPath, provisionalDuplicates } from "@/lib/artifacts";
 import { DashboardPane, type ArtifactState } from "@/components/DashboardPane";
 import { AboutPanel } from "@/components/AboutPanel";
 import { GraphInspector } from "@/components/GraphInspector";
@@ -37,7 +37,7 @@ import { applyTheme, getStoredTheme, setStoredTheme, type Theme } from "@/lib/th
 import { invalidateColorCache } from "@/lib/branding";
 import type { Widget } from "@/lib/api";
 import { getProjectUrl, readSandboxTextFile } from "@/lib/api";
-import type { SandboxTarget } from "@/lib/api";
+import type { DocsTarget, SandboxTarget } from "@/lib/api";
 
 const DEFAULT_NAME = "Corebot";
 const DEFAULT_LOGO = "";
@@ -308,6 +308,26 @@ export default function App() {
     ],
   );
 
+  /** Markdown tabs read, save and version through this assistant's documents repo. */
+  const docsTarget = useMemo<DocsTarget>(
+    () => ({
+      docs_repo: activeAssistant?.metadata?.ls_artifacts?.docs_repo || undefined,
+      workspace: activeAssistant?.metadata?.ls_artifacts?.workspace || undefined,
+    }),
+    [
+      activeAssistant?.metadata?.ls_artifacts?.docs_repo,
+      activeAssistant?.metadata?.ls_artifacts?.workspace,
+    ],
+  );
+
+  /**
+   * Passages the reader selected in a document, waiting to be quoted into a question.
+   *
+   * Held here because the two panes that need them are siblings: the document editor
+   * collects a selection and the chat composer sends it.
+   */
+  const [quotes, setQuotes] = useState<Quote[]>([]);
+
   const resetKey = useMemo(
     () => `${activeAssistant?.assistant_id ?? ""}:${resetCounter}`,
     [activeAssistant?.assistant_id, resetCounter],
@@ -513,6 +533,7 @@ export default function App() {
                 return next;
               });
               if (streaming) return;
+              if (isMarkdownArtifactPath(path) && docsTarget.docs_repo) return;
               // The write completed. Re-read the file, because what streamed is the
               // TOOL ARGUMENT, and for edit_file that is a diff rather than the
               // document. Best effort: with no sandbox (SANDBOX_ENABLED=0, no entitlement)
@@ -527,6 +548,9 @@ export default function App() {
                   /* keep the streamed content */
                 });
             }}
+            quotes={quotes}
+            onQuotesSent={() => setQuotes([])}
+            onRemoveQuote={(index) => setQuotes((prev) => prev.filter((_, i) => i !== index))}
             guard={guard}
             resetKey={resetKey}
             logo={logo}
@@ -553,6 +577,16 @@ export default function App() {
               widgets={widgets}
               theme={effectiveTheme}
               artifacts={artifacts}
+              docsTarget={docsTarget}
+              onAskAbout={(excerpt, path) =>
+                setQuotes((prev) =>
+                  // One chip per passage, and the same passage twice is the reader
+                  // clicking again rather than a second thing to ask about.
+                  prev.some((q) => q.path === path && q.text === excerpt)
+                    ? prev
+                    : [...prev, { path, text: excerpt }],
+                )
+              }
             />
           </section>
         )}

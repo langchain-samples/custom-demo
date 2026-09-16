@@ -11,6 +11,7 @@ import asyncio
 from collections.abc import Callable
 
 import httpx
+from langsmith.utils import LangSmithNotFoundError
 from starlette.responses import JSONResponse
 
 from custom_demo.config import scoped_client
@@ -89,6 +90,7 @@ def _delete_artifacts(body: dict) -> dict:
     _try("project", artifacts.project, lambda name: client.delete_project(project_name=name))
     _try("agent", artifacts.agent_repo, lambda name: client.delete_agent(name))
     _try("skills bundle", artifacts.skills_repo, lambda name: client.delete_agent(name))
+    _try("documents", artifacts.docs_repo, lambda name: _delete_docs_repo(client, name))
     for skill in artifacts.skills or []:
         _try("skill", skill, lambda name: client.delete_skill(name))
 
@@ -111,6 +113,20 @@ def _delete_artifacts(body: dict) -> dict:
     _try("eval judge prompt", artifacts.eval_judge_prompt, lambda name: client.delete_prompt(name))
 
     return {"deleted": deleted, "failed": failed}
+
+
+def _delete_docs_repo(client, name: str) -> None:
+    """Delete the documents repo. A repo no document was ever written to is a noop.
+
+    The handle is assigned at preparation but the repo is created by the first write,
+    so an assistant that was never used has a named documents repo that does not exist.
+    That is not a cleanup failure, and reporting it as one would put a red line in
+    every retirement of an unused demo.
+    """
+    try:
+        client.delete_agent(name)
+    except LangSmithNotFoundError:
+        return
 
 
 def _delete_eval_rule(workspace: str | None, rule_id: str) -> None:

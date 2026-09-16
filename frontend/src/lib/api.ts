@@ -58,6 +58,13 @@ export interface LsArtifacts {
   project?: string;
   agent_repo?: string;
   skills_repo?: string;
+  /**
+   * Context Hub repo holding this assistant's documents, mounted at the artifacts
+   * directory so every write is a commit. Absent on assistants created before
+   * versioned documents existed, which simply means their artifacts live on the
+   * sandbox VM and have no revision history to show.
+   */
+  docs_repo?: string;
   skills?: string[];
   /**
    * LangSmith dataset the setup run provisioned for this assistant's demo
@@ -1079,6 +1086,183 @@ export async function uploadSandboxFiles(
     written: body.written ?? [],
     failed: body.failed ?? [],
   };
+}
+
+/* ------------------------------- Documents ------------------------------- */
+
+/**
+ * Which assistant's documents to read or write. `docs_repo` is the Context Hub repo
+ * from the assistant's own manifest, so the browser and the agent address the same
+ * store; `workspace` scopes the Hub client the same way tracing is scoped.
+ */
+export interface DocsTarget {
+  docs_repo?: string;
+  workspace?: string;
+}
+
+/** One document in the assistant's repo, with the folder that bundles its request. */
+export interface AgentDocEntry {
+  path: string;
+  folder: string;
+  name: string;
+  bytes: number;
+}
+
+/** Every document in the repo at one revision. */
+export interface AgentDocListing {
+  repo: string;
+  version: string;
+  entries: AgentDocEntry[];
+}
+
+/** One revision of one document, as the history panel lists it. */
+export interface DocVersion {
+  version: string;
+  /** ISO timestamp, or "" when the commit carried none. */
+  created_at: string;
+  message: string;
+  author: string;
+}
+
+/** One document's text at one revision. */
+export interface AgentDoc {
+  path: string;
+  content: string;
+  version: string;
+  message: string;
+  author: string;
+}
+
+/** The revision a save created. */
+export interface AgentDocSaved {
+  path: string;
+  version: string;
+  message: string;
+}
+
+/**
+ * A documents-route failure that kept the server's `reason` slug.
+ *
+ * The editor has to tell three failures apart and cannot do it from prose: a 409 means
+ * offer to reload, a 404 means the document is gone, and anything else means Hub is
+ * unreachable and the text in the buffer is still the only copy.
+ */
+export class DocsError extends Error {
+  reason: string;
+  status: number;
+
+  constructor(message: string, reason: string, status: number) {
+    super(message);
+    this.name = "DocsError";
+    this.reason = reason;
+    this.status = status;
+  }
+}
+
+/** Read `error` and `reason` off a failed documents response. */
+async function docsError(res: Response): Promise<DocsError> {
+  const d = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+  return new DocsError(d.error || `HTTP ${res.status}`, d.reason || "", res.status);
+}
+
+/** Query string shared by the documents reads. */
+function docsQuery(target: DocsTarget, extra: Record<string, string> = {}): URLSearchParams {
+  const qs = new URLSearchParams(extra);
+  if (target.docs_repo) qs.set("docs_repo", target.docs_repo);
+  if (target.workspace) qs.set("workspace", target.workspace);
+  return qs;
+}
+
+/**
+ * List every document in the assistant's repo (GET /docs-files).
+ *
+ * Never throws: an assistant with no documents repo is the ordinary case, not a
+ * failure, so it comes back as an empty listing carrying the reason.
+ */
+export async function listAgentDocs(target: DocsTarget): Promise<AgentDocListing> {
+  if (!target.docs_repo) return { repo: "", version: "", entries: [] };
+  try {
+    const res = await fetch(`${getApiBase()}/docs-files?${docsQuery(target)}`, {
+      headers: apiHeaders(),
+    });
+    if (!res.ok) return { repo: target.docs_repo, version: "", entries: [] };
+    const d = (await res.json()) as Partial<AgentDocListing>;
+    return {
+      repo: d.repo ?? target.docs_repo,
+      version: d.version ?? "",
+      entries: Array.isArray(d.entries) ? d.entries : [],
+    };
+  } catch {
+    return { repo: target.docs_repo, version: "", entries: [] };
+  }
+}
+
+/**
+ * Read one document (GET /docs-file), at `version` when given, else at HEAD.
+ *
+ * Throws `DocsError` so the editor can distinguish a missing document from an
+ * unreachable Hub rather than showing an empty buffer for both.
+ */
+export async function readAgentDoc(
+  target: DocsTarget,
+  path: string,
+  version?: string,
+): Promise<AgentDoc> {
+  const extra: Record<string, string> = { path };
+  if (version) extra.version = version;
+  const res = await fetch(`${getApiBase()}/docs-file?${docsQuery(target, extra)}`, {
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw await docsError(res);
+  return res.json();
+}
+
+/**
+ * Save an edit as the next revision (POST /docs-file).
+ *
+ * `base_version` is the revision the editor loaded. Sending it is what turns a lost
+ * race into a refused save the reader is told about, instead of quietly discarding
+ * whatever the other person wrote.
+ */
+export async function saveAgentDoc(
+  target: DocsTarget,
+  input: { path: string; content: string; message?: string; author?: string; baseVersion?: string },
+): Promise<AgentDocSaved> {
+  const res = await fetch(`${getApiBase()}/docs-file`, {
+    method: "POST",
+    headers: apiHeaders(),
+    body: JSON.stringify({
+      docs_repo: target.docs_repo || undefined,
+      workspace: target.workspace || undefined,
+      path: input.path,
+      content: input.content,
+      message: input.message || undefined,
+      author: input.author || undefined,
+      base_version: input.baseVersion || undefined,
+    }),
+  });
+  if (!res.ok) throw await docsError(res);
+  return res.json();
+}
+
+/**
+ * List the revisions in which one document changed (GET /docs-versions).
+ *
+ * Never throws: an empty history is what a document with no repo, or one the agent
+ * only just wrote, correctly has.
+ */
+export async function listDocVersions(target: DocsTarget, path: string): Promise<DocVersion[]> {
+  if (!target.docs_repo) return [];
+  try {
+    const res = await fetch(`${getApiBase()}/docs-versions?${docsQuery(target, { path })}`, {
+      headers: apiHeaders(),
+    });
+    if (!res.ok) return [];
+    const d = (await res.json()) as { versions?: DocVersion[] };
+    return Array.isArray(d.versions) ? d.versions : [];
+  } catch {
+    return [];
+  }
 }
 
 /* ------------------------------ Image input ------------------------------ */

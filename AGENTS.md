@@ -22,6 +22,7 @@ demos belong in assistant configuration and referenced resources, not new graphs
 | Acknowledged assistant state | React Query | Cached server records, updated after successful writes |
 | Conversation | LangGraph thread and ChatPanel | Messages, interrupts, goal and streamed output; thread ID in the URL |
 | Working files | `custom_demo/resources/sandbox.py` | Assistant VM, independent of individual conversations |
+| Documents | `custom_demo/resources/docs.py` | Context Hub repo; every write is a commit, so revisions outlive the assistant |
 | Execution topology | `custom_demo/runtime/backends.py` | Filesystems resolved from each current run |
 | Compiled graph | `custom_demo/runtime/agent.py` | Shared execution engine, not an assistant-resource container |
 | Browser MCP connections | `frontend/src/lib/mcpClients.ts` | Reused clients, tool metadata and app documents for configured servers |
@@ -49,6 +50,7 @@ custom_demo/
   core/ctx.py                Pydantic assistant configuration supplied per run
   core/demo.py               DemoPlan and LsArtifacts
   resources/sandbox.py       VM identity, credentials, seed scripts, lifecycle/cache
+  resources/docs.py          Versioned documents in a Context Hub repo, and their revisions
   runtime/backends.py        DynamicBackend and Context Hub filesystem routing
   runtime/agent.py           Shared model/middleware/agent construction and safe subagent specs
   runtime/prompt.py          Prompt templates and fresh Context Hub reads
@@ -65,6 +67,7 @@ custom_demo/
   provisioning/resource_tags.py  Application tagging
   web/routes.py             HTTP route assembly
   web/mcp.py                Streaming byte proxy to configured MCP servers
+  web/docs.py               List, read, save and revision routes for documents
   web/                      Metadata, cleanup, sandbox, MCP, voice and eval handlers
   voice/                    Voice token minting and trace support
   config.py                 Environment, model and scoped-client configuration
@@ -81,6 +84,7 @@ frontend/src/
   lib/hooks/useAssistantSession.ts    Selection, edits and readiness
   lib/hooks/useAssistantAppearance.ts Brand and typography effects
   components/SettingsPanel.tsx        Settings view and dialogs
+  components/MarkdownArtifact.tsx     Document reading, editing, revisions and quoting
   components/ChatPanel.tsx            Conversation, streaming and app lifecycle
   components/chat/toolActivity.ts    Ordered main/subagent tool activity
   components/chat/rehydrate.ts       Persisted messages to conversation cards
@@ -90,6 +94,7 @@ frontend/src/
   lib/mcpAppHost.ts         Official AppBridge adapter for SEP-1865
   lib/api.ts                HTTP transport, thread URL persistence and frontend wire types
   lib/queries.ts            React Query reads and cache keys
+demos/sdlc-factory/          Software-factory demo: agent prompt and one skill per SDLC phase
 mcp_demo_server/             Fieldlink Logistics and Meridian Wealth examples
   apps/src/                 Four React MCP Apps using the official extension hooks
   apps/build.sh             Build the shared apps/app.js bundle
@@ -398,6 +403,11 @@ Operational limits requiring explicit policy decisions:
 Follow CLAUDE.md for commands, formatting, error handling, source references and stable names.
 For behavior changes, first use [docs/agent-development.md](docs/agent-development.md): specify
 when-prompted → response → world and write the cheapest failing test/eval that holds the behavior.
+
+Documents have TWO writers: the agent through the filesystem mount, and a person saving in
+the browser through `web/docs.py`. So a documents backend is never cached across runs, and a
+save from the browser carries the revision it was based on. New document behaviour belongs in
+`resources/docs.py` with the route as a thin adapter, the same split as the sandbox.
 
 Put scenario policy in planning, resource mechanics in the resource owner, and presentation
 controls behind the session/view boundary. New capabilities need a tool implementation, registry

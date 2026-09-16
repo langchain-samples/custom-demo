@@ -26,6 +26,84 @@ export function isHtmlArtifactPath(path: string | undefined | null): boolean {
   return path.startsWith(ARTIFACT_DIR) && /\.html?$/i.test(path);
 }
 
+/** How a pane should present an artifact: an iframe for HTML, an editor for Markdown. */
+export type ArtifactFormat = "html" | "markdown";
+
+/** Whether `path` is a Markdown artifact, which opens in the document editor. */
+export function isMarkdownArtifactPath(path: string | undefined | null): boolean {
+  if (!path) return false;
+  return path.startsWith(ARTIFACT_DIR) && /\.(md|markdown)$/i.test(path);
+}
+
+/**
+ * The format `path` opens as, or null when it is not an artifact at all.
+ *
+ * One predicate the whole pane branches on, so a third format later means adding an
+ * arm here rather than hunting for every place that tested an extension.
+ */
+export function artifactFormat(path: string | undefined | null): ArtifactFormat | null {
+  if (isHtmlArtifactPath(path)) return "html";
+  if (isMarkdownArtifactPath(path)) return "markdown";
+  return null;
+}
+
+/** Whether `path` is an artifact in any supported format. */
+export function isArtifactPath(path: string | undefined | null): boolean {
+  return artifactFormat(path) !== null;
+}
+
+/**
+ * The folder that bundles `path`, or "" for an artifact written to the root.
+ *
+ * A folder under the artifacts directory is how a request, ticket or feature packages
+ * its documents: the brief, the spec and the acceptance criteria travel together. Only
+ * the FIRST segment counts, so `req-204/design/ux.md` still belongs to `req-204` and a
+ * request's tabs stay in one group however deeply the agent nests inside it.
+ */
+export function artifactFolder(path: string): string {
+  if (!path.startsWith(ARTIFACT_DIR)) return "";
+  const rest = path.slice(ARTIFACT_DIR.length);
+  const slash = rest.indexOf("/");
+  return slash < 0 ? "" : rest.slice(0, slash);
+}
+
+/** A run of tabs under one folder label, or loose tabs when `folder` is "". */
+export interface ArtifactGroup {
+  folder: string;
+  paths: string[];
+}
+
+/**
+ * Artifact paths gathered into folder groups, in the order their folders first appear.
+ *
+ * Grouping REORDERS the tab strip, which is the point: the agent writes a request's
+ * brief, goes away to draft a spec for another request, then comes back, and interleaved
+ * tabs would scatter one request's documents across the bar. Folders first appear in the
+ * order the work started, so a group's position still reflects when its request began.
+ */
+export function groupArtifacts(paths: Iterable<string>): ArtifactGroup[] {
+  const groups: ArtifactGroup[] = [];
+  const byFolder = new Map<string, ArtifactGroup>();
+  for (const path of paths) {
+    const folder = artifactFolder(path);
+    // Loose artifacts each stand alone, so they keep their own place in the strip
+    // instead of collecting into one unnamed group.
+    if (!folder) {
+      groups.push({ folder: "", paths: [path] });
+      continue;
+    }
+    const existing = byFolder.get(folder);
+    if (existing) {
+      existing.paths.push(path);
+      continue;
+    }
+    const group: ArtifactGroup = { folder, paths: [path] };
+    byFolder.set(folder, group);
+    groups.push(group);
+  }
+  return groups;
+}
+
 /** Tab label for an artifact: its basename, which is what the agent named it. */
 export function artifactName(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1) || path;

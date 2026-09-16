@@ -31,6 +31,9 @@ class Context(BaseModel):
     skills_repo: str | None = (
         None  # Context Hub skills-bundle repo mounted at /skills/ (all assistants)
     )
+    # Context Hub repo mounted at the artifacts directory, so every document the agent
+    # writes is a commit with history. Unset means artifacts stay on the sandbox VM.
+    docs_repo: str | None = None
     customer: str | None = None  # customer name - steers customer-specific synthetic data
     industry: str | None = None  # customer industry - steers synthetic data
     ls_workspace: str | None = None  # workspace to pull Hub prompts from (matches trace routing)

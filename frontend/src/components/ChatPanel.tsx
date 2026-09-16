@@ -20,6 +20,7 @@ import {
   IconAlertTriangle,
   IconCircleCheck,
   IconFileText,
+  IconQuote,
   IconLoader2,
   IconPaperclip,
   IconRobot,
@@ -35,7 +36,7 @@ import {
   structuredFromToolMessage,
 } from "@/components/chat/rehydrate";
 import { PROSE_CLS } from "@/lib/markdown";
-import { isHtmlArtifactPath } from "@/lib/artifacts";
+import { isArtifactPath } from "@/lib/artifacts";
 import { ReviewCard } from "@/components/chat/ReviewCard";
 import { McpElicitationCard } from "@/components/chat/McpElicitationCard";
 import { McpAppCard } from "@/components/chat/McpAppCard";
@@ -195,6 +196,18 @@ export interface ChatPanelProps {
    */
   sandboxTarget?: SandboxTarget;
   /**
+   * Passages the reader selected in a document, to be quoted into the next question.
+   *
+   * Owned by App rather than here because the selection happens in the OTHER pane: the
+   * document editor is a sibling of this panel, not a child, and a ref reaching across
+   * would make the composer's contents depend on which pane mounted first.
+   */
+  quotes?: Quote[];
+  /** Called once the quotes have been sent, so App can clear them. */
+  onQuotesSent?: () => void;
+  /** Drop one quote chip before sending. */
+  onRemoveQuote?: (index: number) => void;
+  /**
    * Mirrors the current turn's tool chips and subagent groups out to the parent so the
    * Graph tab (`AgentGraph`) can draw them. Read-only: the callback never feeds anything
    * back in, so omitting it leaves ChatPanel behaving exactly as before.
@@ -204,6 +217,13 @@ export interface ChatPanelProps {
     subagents: GraphSubagent[];
     running: boolean;
   }) => void;
+}
+
+/** A passage quoted from a document into a question. */
+export interface Quote {
+  /** Absolute artifact path, so the agent can open the document the passage came from. */
+  path: string;
+  text: string;
 }
 
 /* ---- Internal message-list model ---- */
@@ -216,6 +236,8 @@ interface UserItem {
   images?: string[];
   /** Documents uploaded to the VM for this turn, so the log shows what the agent got. */
   docs?: { name: string; path: string }[];
+  /** Passages quoted into this turn, so the log shows what was being asked about. */
+  quotes?: Quote[];
 }
 interface ActivityItem {
   kind: "activity";
@@ -390,6 +412,9 @@ export default function ChatPanel({
   getRunContext,
   onWidget,
   onArtifact,
+  quotes = [],
+  onQuotesSent,
+  onRemoveQuote,
   guard,
   resetKey,
   logo,
@@ -524,6 +549,8 @@ export default function ChatPanel({
      * attachment the composer had just confirmed.
      */
     docs?: { name: string; path: string }[];
+    /** Passages the reader selected in a document, quoted into this turn. */
+    quotes?: Quote[];
     /** Distributed-tracing headers, so a voice-driven run nests under its tool span. */
     headers?: Record<string, string>;
     /**
@@ -532,7 +559,15 @@ export default function ChatPanel({
      */
     onProgress?: (toolName: string) => void;
   }): Promise<TurnResult> => {
-    const { question, resume, images = [], docs: sent = [], headers, onProgress } = opts;
+    const {
+      question,
+      resume,
+      images = [],
+      docs: sent = [],
+      quotes: quoted = [],
+      headers,
+      onProgress,
+    } = opts;
     const isResume = resume !== undefined;
     // Returned rather than thrown: a programmatic caller (voice) needs something to say,
     // and "a turn was already running" is a normal race there, not a failure.
@@ -557,6 +592,7 @@ export default function ChatPanel({
               text: question,
               images: images.map((img) => `data:${img.mime};base64,${img.data}`),
               docs: sent,
+              quotes: quoted,
             },
           ]
         : []),
@@ -771,7 +807,7 @@ export default function ChatPanel({
               // On the CALL, not the result: the tab is showing a file the agent has
               // decided to remove either way, and a delete that fails leaves a tab the
               // next write recreates.
-              if (isHtmlArtifactPath(a.file_path)) {
+              if (isArtifactPath(a.file_path)) {
                 onArtifact?.({
                   path: a.file_path as string,
                   content: "",
@@ -782,7 +818,7 @@ export default function ChatPanel({
             }
             if (name === "write_file" || name === "edit_file") {
               const a = args as { file_path?: string; content?: string };
-              if (isHtmlArtifactPath(a.file_path)) {
+              if (isArtifactPath(a.file_path)) {
                 const path = a.file_path as string;
                 if (tc.id) artifactPathByCall[tc.id] = path;
                 // edit_file carries old_string/new_string, not the document, so it has
@@ -957,7 +993,14 @@ export default function ChatPanel({
         assistantId,
         ...(isResume
           ? { resume }
-          : { messages: [{ role: "user", content: imageContent(withDocs(question!, sent), images) }] }),
+          : {
+              messages: [
+                {
+                  role: "user",
+                  content: imageContent(withQuotes(withDocs(question!, sent), quoted), images),
+                },
+              ],
+            }),
         context: runContext,
         signal: controller.signal,
         headers,
@@ -1280,6 +1323,22 @@ export default function ChatPanel({
     return `${question}\n\n[The user just uploaded ${sent.length} ${files} to your filesystem: ${list}. Open and use it to answer.]`;
   };
 
+  /**
+   * Quoted passages appended to the question, naming the document each came from.
+   *
+   * Appended to the text for the same reason as uploaded documents: "tighten this up"
+   * is meaningless without the passage beside it, and the agent needs the path too so
+   * it can edit the document in place rather than answer about it in chat. The user's
+   * own bubble shows the quotes as chips, so this plumbing never appears in the
+   * transcript.
+   */
+  const withQuotes = (question: string, sent: Quote[]) => {
+    if (!sent.length) return question;
+    const blocks = sent.map((q) => `From ${q.path}:\n"""\n${q.text}\n"""`).join("\n\n");
+    const passages = sent.length === 1 ? "passage" : "passages";
+    return `${question}\n\n[The user selected ${sent.length} ${passages} in a document they are reading. Edit the document itself when the request is a change to it.]\n\n${blocks}`;
+  };
+
   /** A line the user typed that the agent never sees (a `/goal` ack). */
   const note = (text: string) =>
     setItems((prev) => [
@@ -1346,8 +1405,10 @@ export default function ChatPanel({
     // panel remains the durable record.
     const sent = docs;
     setDocs([]);
+    const quoted = quotes;
+    onQuotesSent?.();
     setAttachError("");
-    void runTurn({ question, images, docs: sent });
+    void runTurn({ question, images, docs: sent, quotes: quoted });
   };
 
   /**
@@ -1562,7 +1623,7 @@ export default function ChatPanel({
       {goal && <GoalPill goal={goal} onClear={() => setGoal(null)} />}
       {/* What is riding with the next turn: images the model will see, documents now
           sitting in its VM. Above the box because they are content, not controls. */}
-      {attached.length || docs.length || attachError ? (
+      {attached.length || docs.length || quotes.length || attachError ? (
         <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
           {attached.map((img, i) => (
             <span
@@ -1594,6 +1655,24 @@ export default function ChatPanel({
               <IconFileText size={12} />
               <span className="max-w-[12rem] truncate text-foreground">{doc.name}</span>
               <span className="hidden sm:inline">in the agent&apos;s files</span>
+            </span>
+          ))}
+          {quotes.map((quote, i) => (
+            <span
+              key={`${quote.path}-${i}`}
+              className="inline-flex max-w-72 items-center gap-1 rounded-md border border-border bg-panel-2 px-1.5 py-0.5 text-[11px] text-muted-foreground"
+              title={quote.text}
+            >
+              <IconQuote size={12} />
+              <span className="truncate text-foreground">{quote.text}</span>
+              <button
+                type="button"
+                aria-label="Remove this quote"
+                onClick={() => onRemoveQuote?.(i)}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                ×
+              </button>
             </span>
           ))}
           {attachError ? <span className="text-[11px] text-destructive">{attachError}</span> : null}
@@ -1916,6 +1995,19 @@ function ItemView({
               >
                 <IconFileText size={12} />
                 {doc.name}
+              </span>
+            ))}
+          </div>
+        ) : null}
+        {item.quotes?.length ? (
+          <div className="mb-2 flex flex-col gap-1">
+            {item.quotes.map((quote, i) => (
+              <span
+                key={`${quote.path}-${i}`}
+                title={quote.path}
+                className="border-l-2 border-border pl-2 text-[12px] text-muted-foreground italic"
+              >
+                {quote.text}
               </span>
             ))}
           </div>

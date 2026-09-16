@@ -93,7 +93,11 @@ def test_complete_setup_payload_prompt_and_effect_order(setup_case, mode, push):
         "sandbox_key": "acme-co-abcdef",
     }
     if push:
-        context.update(skills_repo="acme-co-skills", agent_repo="acme-co-agent")
+        context.update(
+            skills_repo="acme-co-skills",
+            docs_repo="acme-co-docs",
+            agent_repo="acme-co-agent",
+        )
 
     demo = S.build_demo_brief("Acme Co", "", actions, context["enabled_tools"], mode, gap)
     metadata = {
@@ -120,6 +124,7 @@ def test_complete_setup_payload_prompt_and_effect_order(setup_case, mode, push):
             "project": "Acme Co",
             "agent_repo": "acme-co-agent" if push else "",
             "skills_repo": "acme-co-skills" if push else "",
+            "docs_repo": "acme-co-docs" if push else "",
             "skills": [],
             "eval_dataset": "acme-dataset" if push else "",
             "eval_rule_id": "rule-1" if push else "",

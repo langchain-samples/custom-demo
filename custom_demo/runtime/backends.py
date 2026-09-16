@@ -1,7 +1,8 @@
 """Adapt per-run configuration to assistant resources and Context Hub filesystems.
 
 The resource layer owns VM lifetime. This module owns only the execution topology:
-a sandbox default exposes execute, and a /skills/ route exposes the Hub bundle.
+a sandbox default exposes execute, a /skills/ route exposes the Hub bundle, and the
+artifacts directory routes to a Hub documents repo when the assistant names one.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from typing import Any
 from deepagents.backends import CompositeBackend, ContextHubBackend, StateBackend
 from deepagents.backends.protocol import BackendProtocol
 from langgraph.runtime import get_runtime
+from langsmith.utils import LangSmithConflictError
 
 from custom_demo.config import scoped_client
 from custom_demo.core.ctx import get_ctx
@@ -30,6 +32,9 @@ def _get_or_create_sandbox(runtime) -> Any | None:
     return sandbox.ensure_sandbox(key, seed=spec)
 
 
+# Prompt and skills repos only. A ContextHubBackend loads the repo's whole tree on first
+# access and then holds it, which is right for content that changes at provisioning time
+# and wrong for anything with a second writer. Documents have one: see `_docs_route`.
 _CTXHUB_CACHE: dict[tuple[str, str | None], Any] = {}
 
 
@@ -44,8 +49,73 @@ def _ctxhub_backend(repo: str, ws: str | None) -> Any:
     return backend
 
 
+# Where the agent writes documents, and the mount the documents repo answers for. Shared
+# with the SPA's `frontend/src/lib/artifacts.ts:ARTIFACT_DIR`, which decides the same paths
+# deserve their own tab. CompositeBackend strips this prefix, so a document written to
+# `/workspace/artifacts/req-204/brief.md` is stored in the repo as `req-204/brief.md`.
+ARTIFACTS_MOUNT = "/workspace/artifacts/"
+
+
+class DocumentsBackend(ContextHubBackend):
+    """A Hub documents backend that re-reads before giving up on a conflicting write.
+
+    The documents repo has TWO writers: the agent through this backend, and a person
+    saving in the browser through `web/docs.py`. So the tree moves under a turn, the
+    parent commit this backend is holding stops being the head, and Hub answers the next
+    push with a conflict. That would surface as a failed turn even when nothing is really
+    in conflict: the person edited one document and the agent is writing another.
+
+    Reload the tree and retry ONCE. A second conflict is a genuine race worth raising,
+    and a retry loop over someone else's commits would eventually bury one of them.
+
+    `_commit` is deepagents-internal, so this depends on a private method rather than a
+    public API. `test_documents.py` pins the behaviour, so a release that renames it
+    fails a test here instead of quietly restoring the conflict.
+    """
+
+    def _commit(self, changes: dict[str, str | None]) -> None:
+        """Push `changes`, rebasing onto the current head if someone else got there first."""
+        try:
+            super()._commit(changes)
+        except LangSmithConflictError:
+            # Drop the stale snapshot and re-read, which also refreshes the parent commit
+            # this push chains onto. `changes` is a delta, so replaying it on the new head
+            # is exactly a rebase: the other writer's revision survives.
+            self._cache = None
+            self._commit_hash = None
+            self._ensure_cache()
+            super()._commit(changes)
+
+
 class BackendSourceError(RuntimeError):
     """An explicitly configured Hub filesystem could not be constructed."""
+
+
+def _docs_route(docs_repo: str | None, ws: str | None) -> dict[str, BackendProtocol]:
+    """The artifacts mount when this assistant names a documents repo, else nothing.
+
+    Set on BOTH topologies below rather than only the sandbox one: an assistant that
+    named a documents repo asked for versioned documents, and dropping the mount
+    because the assistant also happens to predate skills bundles would answer that
+    request with a filesystem that silently forgets every revision.
+
+    Never cached across runs: see the comment on the construction below.
+    """
+    if not docs_repo:
+        return {}
+
+    try:
+        # Built fresh every resolve, deliberately NOT through `_CTXHUB_CACHE`. A cached
+        # backend keeps the tree it first loaded, so after a person saves in the browser
+        # the agent would read the superseded text and reason over documents that have
+        # moved on, which is worse than any failure: it looks like it worked.
+        return {ARTIFACTS_MOUNT: DocumentsBackend(docs_repo, client=scoped_client(ws))}
+    except Exception as exc:
+        raise BackendSourceError(
+            f"This assistant's documents are its Context Hub repo {docs_repo!r}, mounted "
+            f"at {ARTIFACTS_MOUNT}, and no backend could be built for it: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
 
 
 def _resolve_backends(runtime) -> tuple[BackendProtocol, dict[str, BackendProtocol]]:
@@ -54,6 +124,11 @@ def _resolve_backends(runtime) -> tuple[BackendProtocol, dict[str, BackendProtoc
     A sandbox default exposes execute; a StateBackend default does not. Skills
     bundles store skills at their root because CompositeBackend strips /skills/.
     Legacy assistants with only agent_repo use that whole Hub repo as their default.
+
+    Documents routed to the Hub are reachable by the file tools but NOT by shell or
+    Python in the VM, which only ever sees the VM's own disk. That boundary is why the
+    mount covers the artifacts directory alone: prose and specs gain version history,
+    and the data files a run computes over stay where `execute` can read them.
 
     Sandbox transport failures allow a state-only run. An explicitly named Hub repo
     must not silently disappear: construction failures raise BackendSourceError.
@@ -65,7 +140,9 @@ def _resolve_backends(runtime) -> tuple[BackendProtocol, dict[str, BackendProtoc
     ws = ctx.ls_workspace
     if agent_repo and not skills_repo:
         try:
-            return _ctxhub_backend(agent_repo, ws), {}
+            return _ctxhub_backend(agent_repo, ws), _docs_route(ctx.docs_repo, ws)
+        except BackendSourceError:
+            raise
         except Exception as exc:
             raise BackendSourceError(
                 f"This assistant's whole filesystem is its Context Hub agent repo "
@@ -75,7 +152,7 @@ def _resolve_backends(runtime) -> tuple[BackendProtocol, dict[str, BackendProtoc
 
     vm = _get_or_create_sandbox(runtime)
     default: BackendProtocol = vm if vm is not None else StateBackend()
-    routes: dict[str, BackendProtocol] = {}
+    routes: dict[str, BackendProtocol] = _docs_route(ctx.docs_repo, ws)
     if skills_repo:
         try:
             routes["/skills/"] = _ctxhub_backend(skills_repo, ws)

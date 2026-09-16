@@ -163,7 +163,11 @@ def test_tagging_uses_the_same_handles_as_cleanup(rec, monkeypatch):
             "project": artifacts["project"],
             "dataset": artifacts["eval_dataset"],
             "prompts": (),
-            "agents": (artifacts["agent_repo"], artifacts["skills_repo"]),
+            "agents": (
+                artifacts["agent_repo"],
+                artifacts["skills_repo"],
+                artifacts["docs_repo"],
+            ),
             "evaluator_id": artifacts["eval_evaluator_id"],
         }
     ]

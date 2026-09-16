@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  artifactFolder,
+  artifactFormat,
   artifactName,
+  groupArtifacts,
   hasRenderableBody,
+  isArtifactPath,
   isHtmlArtifactPath,
+  isMarkdownArtifactPath,
   safeHtmlPrefix,
   provisionalDuplicates,
   skeletonReveal,
@@ -255,5 +260,67 @@ describe("provisionalDuplicates", () => {
   it("never drops the path being registered", () => {
     const open = ["/workspace/artifacts/report.html"];
     expect(provisionalDuplicates(open, "/workspace/artifacts/report.html", streaming)).toEqual([]);
+  });
+});
+
+describe("artifactFormat", () => {
+  it("routes html to the iframe and markdown to the editor", () => {
+    expect(artifactFormat("/workspace/artifacts/report.html")).toBe("html");
+    expect(artifactFormat("/workspace/artifacts/req-204/brief.md")).toBe("markdown");
+    expect(artifactFormat("/workspace/artifacts/notes.markdown")).toBe("markdown");
+  });
+
+  it("is null for anything that is not an artifact", () => {
+    expect(artifactFormat("/workspace/data/orders.csv")).toBe(null);
+    expect(artifactFormat("/workspace/artifacts/orders.csv")).toBe(null);
+    expect(artifactFormat(undefined)).toBe(null);
+    expect(isArtifactPath("/workspace/artifacts/req/brief.md")).toBe(true);
+    expect(isArtifactPath("/workspace/artifacts/orders.csv")).toBe(false);
+  });
+
+  it("does not mistake one format for the other", () => {
+    expect(isMarkdownArtifactPath("/workspace/artifacts/report.html")).toBe(false);
+    expect(isHtmlArtifactPath("/workspace/artifacts/brief.md")).toBe(false);
+  });
+});
+
+describe("artifactFolder", () => {
+  it("is the first segment, however deeply the document nests", () => {
+    expect(artifactFolder("/workspace/artifacts/req-204/brief.md")).toBe("req-204");
+    expect(artifactFolder("/workspace/artifacts/req-204/design/ux.md")).toBe("req-204");
+  });
+
+  it("is empty for a document at the root", () => {
+    expect(artifactFolder("/workspace/artifacts/report.html")).toBe("");
+    expect(artifactFolder("/workspace/data/orders.csv")).toBe("");
+  });
+});
+
+describe("groupArtifacts", () => {
+  const dir = "/workspace/artifacts/";
+
+  it("gathers a folder's documents even when other work interleaved", () => {
+    expect(
+      groupArtifacts([
+        `${dir}req-204/brief.md`,
+        `${dir}req-311/brief.md`,
+        `${dir}req-204/spec.md`,
+      ]),
+    ).toEqual([
+      { folder: "req-204", paths: [`${dir}req-204/brief.md`, `${dir}req-204/spec.md`] },
+      { folder: "req-311", paths: [`${dir}req-311/brief.md`] },
+    ]);
+  });
+
+  it("keeps folders in the order their work started", () => {
+    const groups = groupArtifacts([`${dir}b/one.md`, `${dir}a/two.md`]);
+    expect(groups.map((g) => g.folder)).toEqual(["b", "a"]);
+  });
+
+  it("leaves root documents standing alone rather than in one unnamed group", () => {
+    expect(groupArtifacts([`${dir}one.html`, `${dir}two.html`])).toEqual([
+      { folder: "", paths: [`${dir}one.html`] },
+      { folder: "", paths: [`${dir}two.html`] },
+    ]);
   });
 });

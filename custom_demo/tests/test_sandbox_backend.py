@@ -140,11 +140,25 @@ def _install_client(monkeypatch, client=None):
 
 
 def _stub_ctxhub(monkeypatch):
-    """ContextHubBackend that never hits the network; carries the repo it mounted."""
+    """Hub backends that never hit the network; each carries the repo it mounted."""
     monkeypatch.setattr(B, "scoped_client", lambda workspace: None)
     monkeypatch.setattr(
         B, "ContextHubBackend", lambda repo, client=None: SimpleNamespace(_repo=repo)
     )
+    # Documents deliberately do NOT go through `_ctxhub_backend`, so patching the base
+    # class alone would leave this route building a real client.
+    monkeypatch.setattr(
+        B, "DocumentsBackend", lambda repo, client=None: SimpleNamespace(_repo=repo)
+    )
+
+
+def _mounted_repo(backend) -> str:
+    """The repo a stubbed Hub backend was built for.
+
+    `getattr` because the stub's shape is a test fixture rather than an attribute the
+    backend protocol declares.
+    """
+    return str(getattr(backend, "_repo", ""))
 
 
 def _execute_offered(default, routes) -> bool:
@@ -171,6 +185,53 @@ def test_skills_mount_without_sandbox_has_no_execute(monkeypatch):
     assert isinstance(default, StateBackend)
     assert _execute_offered(default, routes) is False  # no VM ⇒ no execute
     assert "/skills/" in routes  # ...but skills still mount
+
+
+# --- documents mount: present on BOTH topologies, and never silently dropped ---
+
+
+def test_documents_mount_beside_the_sandbox_default(monkeypatch):
+    _install_client(monkeypatch)
+    _stub_ctxhub(monkeypatch)
+    default, routes = B._resolve_backends(
+        _rt(customer="Eval Co", skills_repo="eval-skills", docs_repo="eval-docs")
+    )
+    assert isinstance(default, LangSmithSandbox)  # data files stay where execute can read them
+    assert _mounted_repo(routes[B.ARTIFACTS_MOUNT]) == "eval-docs"
+    assert _mounted_repo(routes["/skills/"]) == "eval-skills"
+
+
+def test_documents_mount_survives_the_agent_repo_only_topology(monkeypatch):
+    """An assistant that predates skills bundles still asked for versioned documents.
+
+    Its whole filesystem is its agent repo, and that branch returns early. Dropping the
+    documents mount there would answer a request for version history with a filesystem
+    that quietly keeps only the latest copy.
+    """
+    _stub_ctxhub(monkeypatch)
+    default, routes = B._resolve_backends(_rt(agent_repo="eval-agent", docs_repo="eval-docs"))
+    assert _mounted_repo(default) == "eval-agent"
+    assert _mounted_repo(routes[B.ARTIFACTS_MOUNT]) == "eval-docs"
+
+
+def test_no_documents_repo_means_no_mount(monkeypatch):
+    _install_client(monkeypatch)
+    _stub_ctxhub(monkeypatch)
+    _default, routes = B._resolve_backends(_rt(customer="Eval Co"))
+    assert B.ARTIFACTS_MOUNT not in routes
+
+
+def test_a_documents_repo_that_cannot_be_mounted_fails_the_run(monkeypatch):
+    """Naming the repo is an explicit request, so a broken mount is loud, not absent."""
+    monkeypatch.setattr(B, "scoped_client", lambda workspace: None)
+
+    def explode(repo, client=None):
+        raise RuntimeError("no credentials for the hub")
+
+    monkeypatch.setattr(B, "DocumentsBackend", explode)
+    _install_client(monkeypatch)
+    with pytest.raises(B.BackendSourceError, match="eval-docs"):
+        B._resolve_backends(_rt(customer="Eval Co", docs_repo="eval-docs"))
 
 
 # --- sandbox alone (no skills) → sandbox default, no routes, execute available ---

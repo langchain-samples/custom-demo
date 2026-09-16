@@ -23,6 +23,7 @@ CASES = [
     ("project", "project", "project-handle", "delete_project"),
     ("agent_repo", "agent", "agent-handle", "delete_agent"),
     ("skills_repo", "skills bundle", "bundle-handle", "delete_agent"),
+    ("docs_repo", "documents", "docs-handle", "delete_agent"),
     ("skills", "skill", "legacy-skill-handle", "delete_skill"),
     ("eval_dataset", "eval dataset", "dataset-handle", "delete_dataset"),
     ("eval_rule_id", "eval rule", "rule-handle", "delete_rule"),
@@ -129,7 +130,7 @@ def test_tagging_projects_only_supported_resources_from_the_manifest():
         "project": "project-handle",
         "dataset": "dataset-handle",
         "prompts": ("judge-handle",),
-        "agents": ("agent-handle", "bundle-handle"),
+        "agents": ("agent-handle", "bundle-handle", "docs-handle"),
         "evaluator_id": "evaluator-handle",
     }
     assert LsArtifacts().tagging_targets()["agents"] == ()
@@ -161,7 +162,7 @@ def test_the_spa_declares_exactly_the_contract():
     start = body.index("export interface LsArtifacts {")
     end = body.index("\n}", start)
     assert set(re.findall(r"^  ([a-z_]+)\??:", body[start:end], re.M)) == KEYS
-    assert len(KEYS) == 10
+    assert len(KEYS) == 11
 
 
 @pytest.mark.parametrize("key,label,handle,method", CASES)

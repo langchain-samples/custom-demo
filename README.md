@@ -34,10 +34,33 @@ can share prompt/skill repositories and eval datasets.
 |---|---|
 | **Deep Agents** | Skills, sandbox/code execution, dynamic subagents, MCP tools and Apps, human approval, generative UI (streamed dashboards and HTML assets) |
 | **LangSmith** | Context Hub prompts/skills, tracing, Monitoring, Insights, **Engine** (issue detection), Evals and live prompt fixes |
+| **Documents** | Markdown artifacts you edit in the browser, with revision history, attribution, and selecting a passage to ask the agent about it |
 
 Dynamic subagents are always available; MCP requires a connected server.
 Optional demo traffic populates Monitoring and attempts to start Insights and Engine, subject to
 workspace permissions and availability.
+
+## Documents an assistant can edit
+
+An assistant with a documents repo keeps everything it writes to `/workspace/artifacts/` in
+Context Hub instead of on its sandbox VM, so every write is a commit. Markdown files open in an
+editor rather than a viewer:
+
+- **Edit and save** a document, with a sentence about what changed. The save is a revision.
+- **History** lists the revisions of that document, who made each one, and why. Open an old
+  one to read it, or restore it as a new revision.
+- **Select a passage** and choose "Ask about this" to send it to the chat as context. The agent
+  edits that passage in the document rather than answering in the transcript.
+- **Folders group the tabs.** Documents written to `/workspace/artifacts/req-0142/` appear as
+  one banded group, so a request's brief, spec and acceptance criteria stay together.
+
+Saving asks which role the revision is recorded as. There is no signed-in user in this
+deployment, so that choice is a label on the revision and not a permission.
+
+The **software factory** demo in `demos/sdlc-factory/` is built on this: one skill per phase of a
+software development process, from a one-sentence request to Gherkin acceptance criteria. Seed it
+with `uv run python scripts/seed_sdlc_demo.py` and walk it end to end with
+`uv run python scripts/e2e_sdlc.py`.
 
 ## Ways to run and demo
 

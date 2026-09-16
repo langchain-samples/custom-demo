@@ -25,6 +25,7 @@ class LsArtifacts:
     project: str | None = ""
     agent_repo: str | None = ""
     skills_repo: str | None = ""
+    docs_repo: str | None = ""
     skills: list[str] | None = field(default_factory=list)
     eval_dataset: str | None = ""
     eval_rule_id: str | None = ""
@@ -38,7 +39,7 @@ class LsArtifacts:
         return cls(**{item.name: body.get(item.name) for item in fields(cls)})
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize the ten-field assistant metadata contract."""
+        """Serialize the eleven-field assistant metadata contract."""
         return asdict(self)
 
     def tagging_targets(self) -> dict[str, Any]:
@@ -48,7 +49,9 @@ class LsArtifacts:
             "project": self.project,
             "dataset": self.eval_dataset,
             "prompts": (self.eval_judge_prompt,) if self.eval_judge_prompt else (),
-            "agents": tuple(name for name in (self.agent_repo, self.skills_repo) if name),
+            "agents": tuple(
+                name for name in (self.agent_repo, self.skills_repo, self.docs_repo) if name
+            ),
             "evaluator_id": self.eval_evaluator_id,
         }
 
@@ -83,6 +86,16 @@ class DemoPlan:
     def agent_repo(self) -> str:
         """The customer-derived prompt repository name used during preparation."""
         return f"{self.slug}-agent"
+
+    @property
+    def docs_repo(self) -> str:
+        """Context Hub repo for this assistant's documents, mounted at the artifacts dir.
+
+        Named at planning time and created by the FIRST write, whether that write comes
+        from the agent or from someone editing in the browser. Nothing worth committing
+        exists yet at preparation, and an empty repo would only be a thing to explain.
+        """
+        return f"{self.slug}-docs"
 
     @property
     def dashboard_mode(self) -> str:

@@ -1194,6 +1194,8 @@ def prepare_assistant(payload: dict) -> dict:
         dashboard=plan.dashboard_mode,
     ) + (_SKILLS_CLAUSE if artifacts.skills_repo else "")
     if plan.push_prompts:
+        artifacts.docs_repo = plan.docs_repo
+        context["docs_repo"] = artifacts.docs_repo
         prompt_urls["system"] = push_agent_prompt(plan.workspace, plan.agent_repo, prompt_text)
         artifacts.agent_repo = plan.agent_repo
         context["agent_repo"] = artifacts.agent_repo
