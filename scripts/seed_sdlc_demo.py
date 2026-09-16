@@ -28,8 +28,81 @@ from langsmith.utils import LangSmithConflictError
 from custom_demo.config import load_env, scoped_client
 from custom_demo.core.demo import LsArtifacts
 
+# `_brand_metadata` is private to setup, and reached for here on purpose: reproducing its
+# source precedence (Brandfetch, then scraped, then defaults) would be a second answer to
+# "what colour is this customer" that drifts from the one every other assistant gets.
+from custom_demo.provisioning.setup import _brand_metadata, fetch_brand
+
 ROOT = Path(__file__).resolve().parents[1]
 DEMO = ROOT / "demos" / "sdlc-factory"
+
+# The customer's site, so brand lookup resolves the right domain rather than guessing one
+# from the name.
+WEBSITE = "marykay.com"
+
+# Files planted in the VM at /workspace/data. The sandbox refuses to create a VM for an
+# assistant with no seed spec at all, and these are not filler: stage 0.2 Practices
+# Discovery reads them, so the team's own vocabulary and section conventions reach the
+# first brief instead of the skill's defaults. Without them that stage always skips and
+# the demo never shows it working.
+SEED_FILES = [
+    {
+        "name": "team-practices.md",
+        "kind": "md",
+        "text": """# Product delivery practices
+
+## Roles, and who does what
+
+- **Product owner** approves the request brief and owns the decision to build.
+- **Product manager** writes the functional spec and the acceptance criteria.
+- **Business analyst** enriches the spec and chases the open questions.
+- **Architect** and **DxD** (design experience) review in parallel, then align.
+- **QA** owns regression, which runs in MK TQM.
+
+## How we write
+
+- Requests are identified as `req-` plus four digits. Never reuse an id.
+- We say **consultant**, never "user" or "end user". Consultants sell; customers buy.
+- A consultant's customer is a **customer**, not a "client".
+- Orders are placed in the **consultant ordering app**. Promotions are applied by the
+  **promotions engine**, which is the system of record for any discount or gift.
+- Every spec carries an **Assumptions** section, and every assumption is one line a
+  reviewer can overturn. An assumption buried in a paragraph counts as a defect.
+- Acceptance criteria are written as Gherkin scenarios, because the build agents react
+  better to them than to prose user stories.
+
+## What we always do
+
+- Name the markets a change applies to. "All markets" is a decision, not a default.
+- Say what happens when something is refused, out of stock, expired or over a limit.
+  A capability with no failure path has not been specified.
+
+## What we never do
+
+- Never put a launch date in a spec without naming the campaign it belongs to.
+- Never specify a screen layout in a functional spec. Behaviour only; DxD owns layout.
+""",
+    },
+    {
+        "name": "systems.md",
+        "kind": "md",
+        "text": """# Systems a request usually touches
+
+- **Consultant ordering app** - where consultants place and edit customer orders.
+  Changes here are the most common kind of request.
+- **Promotions engine** - the system of record for discounts, offers and gifts. Anything
+  that changes what a customer pays goes through it.
+- **Fulfilment** - picks and ships. Needs to know about anything physical added to an
+  order, including a free gift.
+- **Customer care tooling** - where manual corrections happen today. A request that
+  removes manual corrections should say so as its measure of success.
+- **MK TQM** - QA regression, partly automated and partly manual.
+
+No system notes beyond this file are available to the agent, so reverse engineering says
+what it could not determine rather than inventing current behaviour.
+""",
+    },
+]
 
 # Every optional tool off. The filesystem tools come from middleware rather than the
 # catalogue, so the assistant can still read, write and edit documents; what this turns
@@ -149,6 +222,7 @@ def main() -> int:
     agent_repo = f"{args.slug}-agent"
     skills_repo = f"{args.slug}-skills"
     docs_repo = f"{args.slug}-docs"
+    sandbox_key = f"{args.slug}-vm"
 
     print(f"Pushing {args.customer} software-factory demo to Context Hub")
     push(
@@ -188,12 +262,19 @@ def main() -> int:
         "enabled_tools": ENABLED_TOOLS,
         "ls_workspace": args.workspace,
         "ls_project": args.customer,
+        "sandbox_key": sandbox_key,
+        "sandbox_seed": SEED_FILES,
     }
+    print(f"Looking up {args.customer} branding")
+    brand = fetch_brand(args.customer, WEBSITE)
+    branding = _brand_metadata(brand, {})
+    print(f"  accent {branding['accent']} | logo {'found' if branding['logo'] else 'none'}")
     metadata = {
         "customer": args.customer,
         "display_name": f"{args.customer} Software Factory",
         "industry": "Beauty and direct sales",
         "owner_name": args.owner if args.owner is not None else default_owner(),
+        **branding,
         "ls_artifacts": artifacts.to_dict(),
     }
 

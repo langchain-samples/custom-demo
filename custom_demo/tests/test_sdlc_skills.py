@@ -54,12 +54,14 @@ def _table_rows(text: str, header_contains: str) -> list[list[str]]:
         if not stripped.startswith("|"):
             if collecting:
                 break
+
             continue
 
         cells = [c.strip() for c in stripped.strip("|").split("|")]
         if not collecting:
             if header_contains in stripped:
                 collecting = True
+
             continue
 
         if set("".join(cells)) <= set("-: "):

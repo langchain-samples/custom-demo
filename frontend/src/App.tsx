@@ -578,6 +578,14 @@ export default function App() {
               theme={effectiveTheme}
               artifacts={artifacts}
               docsTarget={docsTarget}
+              onCloseArtifact={(path) =>
+                setArtifacts((prev) => {
+                  if (!(path in prev)) return prev;
+                  const next = { ...prev };
+                  delete next[path];
+                  return next;
+                })
+              }
               onAskAbout={(excerpt, path) =>
                 setQuotes((prev) =>
                   // One chip per passage, and the same passage twice is the reader

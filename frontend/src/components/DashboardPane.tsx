@@ -19,13 +19,14 @@
  * without yanking them back, so reading artifact A while the agent appends to B works.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { IconFileTypePdf } from "@tabler/icons-react";
+import { IconFileTypePdf, IconX } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import { DashboardCanvas } from "@/components/DashboardCanvas";
 import { HtmlArtifact, type HtmlArtifactHandle } from "@/components/HtmlArtifact";
 import { MarkdownArtifact } from "@/components/MarkdownArtifact";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { artifactFormat, artifactName, groupArtifacts } from "@/lib/artifacts";
+import { artifactFolder, artifactFormat, artifactName, groupArtifacts } from "@/lib/artifacts";
+import { cn } from "@/lib/utils";
 import type { DocsTarget, Widget } from "@/lib/api";
 import type { Theme } from "@/lib/theme";
 
@@ -46,6 +47,15 @@ export interface DashboardPaneProps {
   author?: string;
   /** Hand a passage the reader selected to the chat composer. */
   onAskAbout?: (excerpt: string, path: string) => void;
+  /**
+   * Close one artifact's tab.
+   *
+   * CLOSES the tab; it does not delete the document. A Markdown artifact lives in the
+   * assistant's documents repo with its revisions, and a tab is just a view of it, so
+   * closing has to be as cheap and as reversible as closing a browser tab. The agent
+   * writing to that file again reopens it.
+   */
+  onCloseArtifact?: (path: string) => void;
 }
 
 /** Tab value for the widget canvas. Not a path, so it cannot collide with one. */
@@ -81,6 +91,7 @@ export function DashboardPane({
   docsTarget,
   author,
   onAskAbout,
+  onCloseArtifact,
 }: DashboardPaneProps) {
   const paths = Object.keys(artifacts);
   // Newline-joined so the effect below compares on a plain string: a fresh array every
@@ -95,6 +106,20 @@ export function DashboardPane({
   // to reach whichever one the download button is currently pointing at.
   const artifact = useRef<HtmlArtifactHandle>(null);
   const groups = useMemo(() => groupArtifacts(paths), [pathsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  /**
+   * Folders whose tabs are folded away behind their label.
+   *
+   * A request that has run a few stages carries five or six documents, and two requests
+   * at once fills the strip. Collapsing is how a browser solves exactly this, and the
+   * label stays put so the group is still visibly there.
+   */
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
+  /** Paths whose tab is currently rendered, in strip order. */
+  const visible = useMemo(
+    () => groups.flatMap((g) => (g.folder && collapsed.has(g.folder) ? [] : g.paths)),
+    [groups, collapsed],
+  );
 
   useEffect(() => {
     const list = pathsKey ? pathsKey.split("\n") : [];
@@ -106,6 +131,15 @@ export function DashboardPane({
     }
     if (firstSight !== null) {
       setActive(firstSight);
+      const folder = artifactFolder(firstSight);
+      if (folder) {
+        setCollapsed((prev) => {
+          if (!prev.has(folder)) return prev;
+          const next = new Set(prev);
+          next.delete(folder);
+          return next;
+        });
+      }
       return;
     }
     // A tab can disappear (a reset, or the agent deleting an artifact); fall back
@@ -113,13 +147,47 @@ export function DashboardPane({
     setActive((cur) => (cur !== CANVAS_TAB && !list.includes(cur) ? CANVAS_TAB : cur));
   }, [pathsKey]);
 
-  // Dashboard is the default tab but does not always exist, so land on the first tab
-  // that does rather than on a trigger that is not rendered.
+  /**
+   * Keep the selection on a tab that is actually on screen.
+   *
+   * ONE effect, deliberately. This was two - "the dashboard does not always exist, so
+   * land on the first artifact" and "the selected artifact is gone, so fall back to the
+   * dashboard" - and they fight: collapse every group and neither has a valid answer, so
+   * each one's correction re-triggers the other and the pane renders forever.
+   */
   useEffect(() => {
-    if (active !== CANVAS_TAB || hasWidgets) return;
-    const first = pathsKey ? pathsKey.split("\n")[0] : "";
-    setActive(first || CANVAS_TAB);
-  }, [active, hasWidgets, pathsKey]);
+    if (active !== CANVAS_TAB && visible.includes(active)) return;
+    if (active === CANVAS_TAB && (hasWidgets || !visible.length)) return;
+    setActive(visible[0] ?? CANVAS_TAB);
+  }, [active, hasWidgets, visible]);
+
+  /**
+   * Close `path`, having first moved off it.
+   *
+   * Selection moves to the neighbour rather than back to the dashboard: closing the
+   * third of four documents should leave you reading the fourth, the way a browser
+   * does, not send you to the start.
+   */
+  const close = (path: string) => {
+    if (path === active) {
+      const at = visible.indexOf(path);
+      const next = visible[at + 1] ?? visible[at - 1] ?? CANVAS_TAB;
+      setActive(next);
+    }
+    // Forget it, so a later write to the same file counts as first sight and takes
+    // focus again. A closed tab that silently reappeared unfocused would look broken.
+    seen.current.delete(path);
+    onCloseArtifact?.(path);
+  };
+
+  const toggleGroup = (folder: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(folder)) next.delete(folder);
+      else next.add(folder);
+      return next;
+    });
+  };
 
   // Nothing but widgets: render the canvas alone, exactly as before any of this.
   if (paths.length === 0) {
@@ -127,11 +195,37 @@ export function DashboardPane({
   }
 
   const tab = (path: string) => (
-    <TabsTrigger key={path} value={path} className="max-w-52">
+    <TabsTrigger key={path} value={path} className="group max-w-52 gap-1">
       {/* The full path lives here rather than in a header line: the tab names
           the file, and hovering gives you where it is. */}
       <span className="truncate" title={path}>
         {artifactName(path)}
+      </span>
+      {/* A span, not a button: TabsTrigger already renders a button and nesting one
+          inside it is invalid HTML. `onPointerDown` has to stop there too, because
+          Radix activates a tab on pointer down, so a click on the close control would
+          otherwise select the tab on the way to closing it. */}
+      <span
+        role="button"
+        tabIndex={-1}
+        aria-label={`Close ${artifactName(path)}`}
+        title="Close this tab. The document is kept."
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          close(path);
+        }}
+        className={cn(
+          "flex-shrink-0 rounded p-0.5 text-muted-foreground transition-opacity hover:bg-panel-2 hover:text-foreground",
+          // Shown on the selected tab and on hover, the way a browser does it, so the
+          // strip is not a row of close buttons competing with the filenames.
+          active === path ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+        )}
+      >
+        <IconX className="size-3" />
       </span>
     </TabsTrigger>
   );
@@ -150,14 +244,34 @@ export function DashboardPane({
                 className="flex items-center gap-1 rounded-md pb-0.5"
                 style={{ boxShadow: `inset 0 -2px 0 0 ${bandColor(group.folder)}` }}
               >
+                {/* The label is the group's control, as it is in a browser: clicking it
+                    folds the group's tabs away and clicking it again brings them back.
+                    Collapsed, it carries the count so the documents are visibly still
+                    there rather than gone. */}
                 <span
-                  className="ml-1 max-w-28 truncate rounded px-1.5 py-0.5 text-[11px] font-medium text-white"
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={!collapsed.has(group.folder)}
+                  onClick={() => toggleGroup(group.folder)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      toggleGroup(group.folder);
+                    }
+                  }}
+                  className="ml-1 max-w-28 flex-shrink-0 cursor-pointer truncate rounded px-1.5 py-0.5 text-[11px] font-medium text-white"
                   style={{ backgroundColor: bandColor(group.folder) }}
-                  title={group.folder}
+                  title={
+                    collapsed.has(group.folder)
+                      ? `Show the ${group.paths.length} documents in ${group.folder}`
+                      : `Hide the documents in ${group.folder}`
+                  }
                 >
-                  {group.folder}
+                  {collapsed.has(group.folder)
+                    ? `${group.folder} (${group.paths.length})`
+                    : group.folder}
                 </span>
-                {group.paths.map(tab)}
+                {!collapsed.has(group.folder) && group.paths.map(tab)}
               </span>
             ) : (
               group.paths.map(tab)
@@ -186,9 +300,10 @@ export function DashboardPane({
           <DashboardCanvas widgets={widgets} theme={theme} />
         </TabsContent>
       )}
-      {paths.map((path) => (
-        // forceMount would re-run every artifact's scripts on every render; artifacts
-        // are cheap to remount and only the visible one needs to exist.
+      {visible.map((path) => (
+        // Only tabs that are on screen get a panel: a document whose group is folded
+        // away must not be the thing the pane is showing. forceMount would also re-run
+        // every artifact's scripts on every render, and artifacts are cheap to remount.
         <TabsContent key={path} value={path} className="flex min-h-0 flex-1 flex-col">
           {artifactFormat(path) === "markdown" ? (
             <MarkdownArtifact
