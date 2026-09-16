@@ -33,6 +33,7 @@ import { mcpAppBindings } from "@/lib/mcpClients";
 import {
   isDeliberateReset,
   rehydrateItems,
+  restoredArtifacts,
   structuredFromToolMessage,
 } from "@/components/chat/rehydrate";
 import { PROSE_CLS } from "@/lib/markdown";
@@ -442,6 +443,15 @@ export default function ChatPanel({
   const busyRef = useRef(false);
   /** True once this session has sent or resumed anything of its own. */
   const interactedRef = useRef(false);
+  /**
+   * `onArtifact` with a stable identity, for the restore effect below.
+   *
+   * App passes an inline arrow, so naming the prop in that effect's dependencies would
+   * re-run it on every render: refetching the thread state and re-registering every
+   * document each time. A ref keeps the effect keyed on what actually changes.
+   */
+  const onArtifactRef = useRef(onArtifact);
+  onArtifactRef.current = onArtifact;
   const abortRef = useRef<AbortController | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
   /** The last `resetKey` acted on, so a change can be classified. */
@@ -1412,6 +1422,23 @@ export default function ChatPanel({
   };
 
   /**
+   * `guard` and `runTurn` as they are RIGHT NOW, for the voice handle below.
+   *
+   * Both are rebuilt every render and the handle is not, so the handle has to reach them
+   * through a ref rather than close over them. It used to close over them with a
+   * dependency list of `[handleRef]`, which never changes: the handle therefore kept the
+   * FIRST render's guard forever, and on the first render the assistant list has not
+   * loaded, so the draft has no agent repo and the guard's honest answer is "pick a
+   * system prompt". Every spoken question was refused with that, for the life of the
+   * page, while typing the same question worked - because the composer calls `guard`
+   * directly and gets the current one.
+   */
+  const guardRef = useRef(guard);
+  guardRef.current = guard;
+  const runTurnRef = useRef(runTurn);
+  runTurnRef.current = runTurn;
+
+  /**
    * The voice shell's way in. Deliberately the SAME `runTurn` the composer calls: a
    * spoken question has to produce the same widgets, chips, transcript and trace as a
    * typed one, and a second code path would drift from the first within a week.
@@ -1427,17 +1454,16 @@ export default function ChatPanel({
         headers?: Record<string, string>,
         onProgress?: (toolName: string) => void,
       ) => {
-        const blocked = guard?.(question);
+        const blocked = guardRef.current?.(question);
         if (blocked) return { answer: blocked, widgets: [] };
-        return runTurn({ question, headers, onProgress });
+        return runTurnRef.current({ question, headers, onProgress });
       },
-      resumeWith: (value: unknown) => runTurn({ resume: value }),
+      resumeWith: (value: unknown) => runTurnRef.current({ resume: value }),
       busy: () => busyRef.current,
     }),
-    // `runTurn` and `guard` are re-created every render; the handle reads them through
-    // the closure it is rebuilt with, so no dependency list is needed beyond the ref.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [handleRef],
+    // Nothing: the handle reads only refs, so it never needs rebuilding. A dependency
+    // list is what caused the stale guard above, so this one stays empty on purpose.
+    [],
   );
 
   /**
@@ -1483,8 +1509,15 @@ export default function ChatPanel({
       ]);
       if (!live || !state || interactedRef.current) return;
 
-      const restored = rehydrateItems(state.values?.messages ?? [], apps);
+      const messages = state.values?.messages ?? [];
+      const restored = rehydrateItems(messages, apps);
       if (restored.length) setItems(restored);
+      // Reopen the documents this conversation wrote. Registered with no content: the
+      // write arguments in the transcript are a partial or a patch, so App re-reads each
+      // one from the store it actually lives in.
+      for (const path of restoredArtifacts(messages)) {
+        onArtifactRef.current?.({ path, content: "", streaming: false });
+      }
     })();
     return () => {
       live = false;

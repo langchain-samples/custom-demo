@@ -14,6 +14,7 @@
 import type { MessageContent, ThreadMessage } from "@/lib/api";
 import type { McpAppBinding } from "@/lib/mcpClients";
 import { contentToText } from "@/components/chat/helpers";
+import { isArtifactPath } from "@/lib/artifacts";
 
 /** A tool result's structured half, when the text is a JSON object. */
 export function parseStructured(text: string): Record<string, unknown> | undefined {
@@ -72,6 +73,42 @@ export type RestoredItem =
  * there is no way to tell which of them should come back as an app. The old
  * prefix guess could not have done this correctly.
  */
+/**
+ * Artifact paths a refreshed conversation should reopen, in the order they were written.
+ *
+ * The thread id is in the URL, so a refresh brings the CONVERSATION back, and until this
+ * existed it brought back only the conversation: the documents the agent had written
+ * vanished from the tab strip, which reads as the work having been lost. It has not been
+ * lost - it is in Context Hub or on the VM, and the tab is the only thing that was
+ * missing.
+ *
+ * Read from the write calls rather than from a listing of the store, because the tabs
+ * should reflect THIS conversation. A request folder can hold documents from an earlier
+ * thread, and reopening those would put another conversation's work in front of someone
+ * who never asked for it.
+ *
+ * A `delete` retires the path, so a document the agent removed does not come back.
+ */
+export function restoredArtifacts(messages: ThreadMessage[]): string[] {
+  const open: string[] = [];
+  for (const msg of messages) {
+    for (const call of msg.tool_calls ?? []) {
+      const path = (call.args as { file_path?: string } | undefined)?.file_path;
+      if (!isArtifactPath(path)) continue;
+
+      const at = open.indexOf(path as string);
+      if (call.name === "delete") {
+        if (at >= 0) open.splice(at, 1);
+        continue;
+      }
+      if ((call.name === "write_file" || call.name === "edit_file") && at < 0) {
+        open.push(path as string);
+      }
+    }
+  }
+  return open;
+}
+
 export function rehydrateItems(
   messages: ThreadMessage[],
   apps: Record<string, McpAppBinding>,

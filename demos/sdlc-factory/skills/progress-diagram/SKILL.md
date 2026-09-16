@@ -48,24 +48,32 @@ list and the classes.
   h1 { margin: 0 0 4px; font-size: 18px; }
   p { margin: 0 0 6px; color: #5a6675; }
   p.profile { font: 12px ui-monospace, monospace; color: #7b8796; margin-bottom: 20px; }
+  /* The diagram keeps its natural size and this scrolls, rather than the diagram being
+     squeezed to the pane width. A twelve-stage row scaled to fit is unreadable. */
   .mermaid { overflow-x: auto; }
 </style>
 <h1>req-0142: Gift with purchase at checkout</h1>
 <p>Awaiting product manager review of the functional spec</p>
 <p class="profile">profile: change &middot; depth: standard &middot; review: advisory &middot; 9 stages &middot; 2 gates</p>
 <pre class="mermaid">
-flowchart LR
-  s01["0.1 Request Intake"]
-  s02["0.2 Practices Discovery"]
-  s11["1.1 Intent Capture"]
-  s13{{"1.3 Approval &amp; Handoff"}}
-  s21["2.1 Reverse Engineering"]
-  s22["2.2 Requirements Analysis"]
-  s23["2.3 NFR Requirements"]
-  s25["2.5 Acceptance Criteria"]
-  s27{{"2.7 Definition Ready"}}
+flowchart TD
+  subgraph P0[" Initialization "]
+    direction LR
+    s01["0.1 Request Intake"] --> s02["0.2 Practices Discovery"]
+  end
+  subgraph P1[" Ideation "]
+    direction LR
+    s11["1.1 Intent Capture"] --> s13{{"1.3 Approval &amp; Handoff"}}
+  end
+  subgraph P2[" Inception "]
+    direction LR
+    s21["2.1 Reverse Engineering"] --> s22["2.2 Requirements Analysis"]
+    s22 --> s23["2.3 NFR Requirements"] --> s25["2.5 Acceptance Criteria"]
+    s25 --> s27{{"2.7 Definition Ready"}}
+  end
 
-  s01 --> s02 --> s11 --> s13 --> s21 --> s22 --> s23 --> s25 --> s27
+  s02 --> s11
+  s13 --> s21
 
   class s01,s02,s11,s13 done
   class s22 current
@@ -74,12 +82,19 @@ flowchart LR
 
   classDef done fill:#15722f,stroke:#0f5a24,color:#fff
   classDef current fill:#2360a8,stroke:#1b4b85,color:#fff
-  classDef pending fill:#e8ebef,stroke:#c2cbd6,color:#4a5665
-  classDef skipped fill:#f4f5f7,stroke:#c2cbd6,color:#9aa4b0,stroke-dasharray:4 3
+  classDef pending fill:#eef1f5,stroke:#c2cbd6,color:#3d4855
+  classDef skipped fill:#f6f7f9,stroke:#c8d0da,color:#8b95a2,stroke-dasharray:4 3
 </pre>
 <script type="module">
   import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
-  mermaid.initialize({ startOnLoad: true, securityLevel: "strict" });
+  mermaid.initialize({
+    startOnLoad: true,
+    securityLevel: "strict",
+    // Without this mermaid caps the SVG at the container width, which shrinks a long
+    // process until nobody can read a single stage name.
+    flowchart: { useMaxWidth: false, nodeSpacing: 28, rankSpacing: 44 },
+    themeVariables: { fontSize: "15px" },
+  });
 </script>
 ```
 
@@ -87,6 +102,15 @@ Two shapes carry meaning: `{{...}}` is a gate, `[...]` is an ordinary stage. Nod
 the stage number with the dot removed, so `2.5` is `s25`. A skipped stage stays in the
 chain, dashed and grey: the reader should see that the process considered it and why, not
 find a gap.
+
+**One phase per row.** The stages of a phase run left to right inside its own subgraph, and
+the phases stack downwards. Join the phases NODE to node (`s02 --> s11`), never subgraph
+to subgraph (`P0 --> P1`): mermaid ignores a subgraph's own `direction` once the subgraph
+itself is an endpoint, and the rows collapse back into one long line. Never put the whole process on one line: twelve stages in a
+single row is about 2000 pixels wide, and a reader who has to scroll sideways past every
+finished stage to find the current one would rather you had written a sentence. Include
+only the stages this profile runs, so a `bugfix` request draws five nodes and its rows are
+shorter still.
 
 ## Updating it
 

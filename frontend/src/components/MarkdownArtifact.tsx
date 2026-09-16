@@ -6,6 +6,11 @@
  *   │    ┌ Ask about this ┐  ← on a selection     │
  *   └─────────────────────────────────────────────┘
  *
+ * Reading and editing must LOOK the same, or the document appears to change when someone
+ * clicks Edit. Both panes carry `doc-prose`: the read side gets it through `PROSE_CLS`,
+ * the same constant the chat bubble and the file viewer use, and the editor side is
+ * mirrored onto those numbers in `lib/markdownEditor.css`.
+ *
  * Editing is a real WYSIWYG surface (Milkdown/Crepe), not a source pane. That matters
  * for who this is for: the people who raise and review these documents are product
  * owners and business analysts, and asking them to type `##` is asking them to learn a
@@ -43,6 +48,7 @@ import {
   type DocVersion,
 } from "@/lib/api";
 import { artifactName } from "@/lib/artifacts";
+import { PROSE_CLS } from "@/lib/markdown";
 import { LAST_OWNER_LS_KEY, readSessionPreference } from "@/lib/assistantSession";
 import type { MarkdownEditor } from "@/lib/markdownEditor";
 import { cn } from "@/lib/utils";
@@ -487,7 +493,7 @@ export function MarkdownArtifact({
             {/* The editor owns its own toolbars: a selection raises an inline one, and a
                 new line offers a block menu. So there is no toolbar of ours here, and
                 nothing tells the reader they are editing markup. */}
-            <div ref={editorHost} className="min-h-0 flex-1 overflow-y-auto" />
+            <div ref={editorHost} className="doc-prose min-h-0 flex-1 overflow-y-auto" />
             {/* Save bar. The message is the whole reason the history is readable later,
                 so it sits in the primary path rather than behind a dialog. */}
             <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2">
@@ -546,7 +552,7 @@ export function MarkdownArtifact({
             ref={readRef}
             onMouseUp={onSelectionChange}
             onKeyUp={onSelectionChange}
-            className="relative min-h-0 flex-1 overflow-y-auto p-6"
+            className={cn("doc-prose relative min-h-0 flex-1 overflow-y-auto p-6", PROSE_CLS)}
           >
             <Streamdown parseIncompleteMarkdown>{shown}</Streamdown>
             {selection && (

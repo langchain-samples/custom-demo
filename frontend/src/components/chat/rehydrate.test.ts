@@ -8,7 +8,12 @@
  * artifact, not in its text.
  */
 import { describe, expect, it } from "vitest";
-import { isDeliberateReset, rehydrateItems, structuredFromToolMessage } from "./rehydrate";
+import {
+  isDeliberateReset,
+  rehydrateItems,
+  restoredArtifacts,
+  structuredFromToolMessage,
+} from "./rehydrate";
 import type { ThreadMessage } from "@/lib/api";
 
 const APPS = { draw_create_view: { resourceUri: "ui://excalidraw/app.html" } };
@@ -117,5 +122,68 @@ describe("telling a real reset from the assistant loading", () => {
 
   it("does nothing when the key has not changed", () => {
     expect(isDeliberateReset("a1b2:0", "a1b2:0")).toBe(false);
+  });
+});
+
+describe("restoredArtifacts", () => {
+  const dir = "/workspace/artifacts/";
+  const wrote = (name: string, path: string): ThreadMessage => ({
+    type: "ai",
+    tool_calls: [{ id: `c-${name}-${path}`, name, args: { file_path: path } }],
+  });
+
+  it("reopens the documents this conversation wrote, in order", () => {
+    // Until this existed a refresh brought the conversation back and left the tab strip
+    // empty, which reads as the work having been lost. It had not been: only the tab was.
+    expect(
+      restoredArtifacts([
+        wrote("write_file", `${dir}req-0142/brief.md`),
+        wrote("write_file", `${dir}req-0142/spec.md`),
+      ]),
+    ).toEqual([`${dir}req-0142/brief.md`, `${dir}req-0142/spec.md`]);
+  });
+
+  it("counts a document once however many times it was edited", () => {
+    expect(
+      restoredArtifacts([
+        wrote("write_file", `${dir}brief.md`),
+        wrote("edit_file", `${dir}brief.md`),
+        wrote("edit_file", `${dir}brief.md`),
+      ]),
+    ).toEqual([`${dir}brief.md`]);
+  });
+
+  it("does not bring back a document the agent deleted", () => {
+    expect(
+      restoredArtifacts([
+        wrote("write_file", `${dir}draft.md`),
+        wrote("write_file", `${dir}keep.md`),
+        wrote("delete", `${dir}draft.md`),
+      ]),
+    ).toEqual([`${dir}keep.md`]);
+  });
+
+  it("reopens a document that was deleted and then written again", () => {
+    expect(
+      restoredArtifacts([
+        wrote("write_file", `${dir}brief.md`),
+        wrote("delete", `${dir}brief.md`),
+        wrote("write_file", `${dir}brief.md`),
+      ]),
+    ).toEqual([`${dir}brief.md`]);
+  });
+
+  it("ignores writes that are not artifacts", () => {
+    expect(
+      restoredArtifacts([
+        wrote("write_file", "/workspace/data/orders.csv"),
+        wrote("write_file", `${dir}notes.txt`),
+        wrote("write_file", `${dir}brief.md`),
+      ]),
+    ).toEqual([`${dir}brief.md`]);
+  });
+
+  it("is empty for a conversation that wrote nothing", () => {
+    expect(restoredArtifacts([{ type: "human", content: "hi" }])).toEqual([]);
   });
 });

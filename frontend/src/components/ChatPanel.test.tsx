@@ -320,3 +320,29 @@ describe("persisted conversations", () => {
     await run.finish();
   });
 });
+
+
+describe("the voice handle", () => {
+  it("consults the guard as it is when asked, not as it was on the first render", async () => {
+    // The handle is created once and its factory used to close over `guard`, so it kept
+    // the FIRST render's copy. On that render the assistant list has not loaded, the
+    // draft has no agent repo, and the guard's honest answer is "pick a system prompt".
+    // Every spoken question was refused with that for the life of the page while typing
+    // the same question worked.
+    let blocked: string | null = "Pick or create an assistant in Settings before sending.";
+    const ui = panel({ guard: () => blocked });
+    const handle = ui.handle;
+    const refused = await act(() => handle.current!.ask("write the brief"));
+    expect(refused.answer).toBe(blocked);
+
+    // The assistant loads and the guard now allows the send. The handle must see that.
+    blocked = null;
+    // The file's own harness: `start` drives a turn through the handle, and `finish`
+    // closes the stream and hands back the result.
+    const turn = await ui.start();
+    await turn.send(frame("messages/complete", [{ type: "ai", content: "On it." }]));
+    const allowed = await turn.finish();
+    expect(allowed.answer).not.toBe("Pick or create an assistant in Settings before sending.");
+    expect(runStream).toHaveBeenCalled();
+  });
+});

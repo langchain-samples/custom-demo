@@ -1,0 +1,93 @@
+/* ---------------------------------------------------------------------------
+ * The document editor, wearing this app's typography.
+ *
+ * Imported AFTER Crepe's own theme, and that order is the whole point: these are
+ * the same overrides that sat in index.css and did nothing, because the editor's
+ * stylesheet arrives later through a dynamic import and won at equal specificity.
+ *
+ * Two jobs. The variables map Crepe's palette onto this app's tokens, so the
+ * editor follows the assistant's theme and brand accent instead of shipping a
+ * second one. The element rules mirror `lib/markdown.ts:PROSE_CLS`, because that
+ * constant's own docstring is the rule being kept: every surface that renders
+ * markdown has to agree, or the same document reads one way being read and
+ * another way being edited. Change one, change both.
+ * ------------------------------------------------------------------------- */
+.milkdown {
+  --crepe-color-background: var(--panel);
+  --crepe-color-on-background: var(--foreground);
+  --crepe-color-surface: var(--panel);
+  --crepe-color-surface-low: var(--panel-2);
+  --crepe-color-on-surface: var(--foreground);
+  --crepe-color-on-surface-variant: var(--muted-foreground);
+  --crepe-color-outline: var(--border);
+  --crepe-color-primary: var(--brand-primary);
+  --crepe-color-secondary: var(--panel-2);
+  --crepe-color-on-secondary: var(--foreground);
+  --crepe-color-inverse: var(--foreground);
+  --crepe-color-on-inverse: var(--background);
+  --crepe-color-hover: var(--panel-2);
+  --crepe-color-selected: var(--brand-soft);
+  --crepe-color-inline-area: var(--panel-2);
+
+  /* `inherit` rather than a named family: the assistant's own heading and body
+     fonts are applied to the document root by useAssistantAppearance, and the
+     editor should be in whatever the rest of the app is wearing. */
+  --crepe-font-title: inherit;
+  --crepe-font-default: inherit;
+  --crepe-base-font-size: 14px;
+}
+
+/* The editor fills its pane and scrolls inside it, rather than growing the pane. */
+.milkdown .ProseMirror {
+  padding: 1.5rem;
+  min-height: 100%;
+  outline: none;
+}
+
+/* Element styling, mirroring PROSE_CLS. Scoped under `.doc-prose` (which the pane
+   sets) so these beat Crepe's own `.milkdown .ProseMirror h1` on specificity and
+   not merely on order. */
+.doc-prose .milkdown .ProseMirror {
+  font-size: 0.875rem;
+  line-height: 1.625;
+  color: var(--foreground);
+}
+.doc-prose .milkdown .ProseMirror h1 {
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 0.5rem 0 0.25rem;
+}
+.doc-prose .milkdown .ProseMirror h2 {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0.5rem 0 0.25rem;
+}
+.doc-prose .milkdown .ProseMirror h3 {
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin: 0.5rem 0 0.25rem;
+}
+.doc-prose .milkdown .ProseMirror p,
+.doc-prose .milkdown .ProseMirror ul,
+.doc-prose .milkdown .ProseMirror ol {
+  margin: 0.375rem 0;
+}
+.doc-prose .milkdown .ProseMirror li {
+  margin: 0.125rem 0;
+}
+.doc-prose .milkdown .ProseMirror table {
+  margin: 0.5rem 0;
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+}
+.doc-prose .milkdown .ProseMirror th {
+  border-bottom: 1px solid var(--border);
+  padding: 0.25rem 0.5rem;
+  text-align: left;
+  font-weight: 600;
+}
+.doc-prose .milkdown .ProseMirror td {
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
+  padding: 0.25rem 0.5rem;
+}

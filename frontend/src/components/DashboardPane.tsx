@@ -62,6 +62,16 @@ export interface DashboardPaneProps {
 const CANVAS_TAB = "dashboard";
 
 /**
+ * Tighter than the shared tab default, which is sized for a settings pane.
+ *
+ * The selected-tab indicator is `inset-0` on the trigger, so its padding IS the size of
+ * the coloured pill, and at the default `px-3.5 py-1.5` the brand block around a filename
+ * dominates the strip. Applied here rather than in `ui/tabs`, which other views use at
+ * their own scale. Ordered last in `cn` so tailwind-merge drops the defaults.
+ */
+const TAB_CLS = "max-w-52 gap-1 px-2 py-0.5 text-[13px]";
+
+/**
  * Band colors for folder groups, assigned by name rather than by position.
  *
  * By name so a group keeps its color when another request's tabs appear before it:
@@ -195,7 +205,7 @@ export function DashboardPane({
   }
 
   const tab = (path: string) => (
-    <TabsTrigger key={path} value={path} className="group max-w-52 gap-1">
+    <TabsTrigger key={path} value={path} className={cn("group", TAB_CLS)}>
       {/* The full path lives here rather than in a header line: the tab names
           the file, and hovering gives you where it is. */}
       <span className="truncate" title={path}>
@@ -236,7 +246,11 @@ export function DashboardPane({
           tabs, which doubled the header's height for a single control. */}
       <div className="mx-4 mt-3 flex items-center gap-3 print:hidden">
         <TabsList className="w-fit min-w-0 flex-shrink overflow-x-auto">
-          {hasWidgets && <TabsTrigger value={CANVAS_TAB}>Dashboard</TabsTrigger>}
+          {hasWidgets && (
+            <TabsTrigger value={CANVAS_TAB} className={TAB_CLS}>
+              Dashboard
+            </TabsTrigger>
+          )}
           {groups.map((group, index) =>
             group.folder ? (
               <span

@@ -14,6 +14,9 @@
 import { Crepe } from "@milkdown/crepe";
 import "@milkdown/crepe/theme/common/style.css";
 import "@milkdown/crepe/theme/frame.css";
+// Last, deliberately: these override the theme above, and at equal specificity the
+// later stylesheet is the one that wins.
+import "@/lib/markdownEditor.css";
 
 export { Crepe };
 
