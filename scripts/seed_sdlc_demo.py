@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 from langgraph_sdk import get_client
-from langsmith.schemas import FileEntry
+from langsmith.schemas import Entry, FileEntry
 from langsmith.utils import LangSmithConflictError
 
 from custom_demo.config import load_env, scoped_client
@@ -125,9 +125,9 @@ def _already_committed(exc: BaseException) -> bool:
     return isinstance(exc, LangSmithConflictError)
 
 
-def skill_files() -> dict[str, FileEntry]:
+def skill_files() -> dict[str, Entry | None]:
     """Every skill in the demo, keyed for the root layout the /skills/ mount expects."""
-    files: dict[str, FileEntry] = {}
+    files: dict[str, Entry | None] = {}
     for skill in sorted((DEMO / "skills").iterdir()):
         source = skill / "SKILL.md"
         if not source.is_file():
@@ -143,7 +143,9 @@ def skill_files() -> dict[str, FileEntry]:
     return files
 
 
-def push(workspace: str | None, repo: str, files: dict[str, FileEntry], description: str) -> None:
+def push(
+    workspace: str | None, repo: str, files: dict[str, Entry | None], description: str
+) -> None:
     """Push one Hub repo, treating a re-push of identical content as success."""
     try:
         scoped_client(workspace).push_agent(repo, files=files, description=description)

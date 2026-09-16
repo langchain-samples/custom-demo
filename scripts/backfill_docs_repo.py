@@ -28,6 +28,8 @@ import asyncio
 import os
 import re
 import sys
+from collections.abc import Mapping
+from typing import Any
 
 from langgraph_sdk import get_client
 
@@ -48,7 +50,7 @@ def slugify(name: str) -> str:
     return slug or "assistant"
 
 
-def docs_repo_for(assistant: dict) -> str:
+def docs_repo_for(assistant: Mapping[str, Any]) -> str:
     """The documents repo this assistant should use.
 
     Derived from its agent repo, so the three repos of one assistant share a prefix the
@@ -72,10 +74,17 @@ async def run(url: str, only: str | None, apply: bool) -> int:
     load_env()
     client = get_client(url=url, api_key=app_token())
     found = await client.assistants.search(graph_id=GRAPH_ID, limit=100)
-    planned: list[tuple[dict, str]] = []
+    planned: list[tuple[Mapping[str, Any], str]] = []
     for assistant in found:
         name = str(assistant.get("name") or "")
         if only and name != only:
+            continue
+
+        # The implicit assistant LangGraph creates for the graph itself, which no
+        # presenter picks and which has no customer. Giving it a documents repo would
+        # put a repo in the workspace that nothing ever writes to.
+        if name == GRAPH_ID:
+            print(f"  skip  {name}: the graph's own default assistant")
             continue
 
         artifacts = (assistant.get("metadata") or {}).get("ls_artifacts") or {}
@@ -91,6 +100,18 @@ async def run(url: str, only: str | None, apply: bool) -> int:
 
     for assistant, repo in planned:
         print(f"  {'apply' if apply else 'would'}  {assistant.get('name')} -> {repo}")
+
+    # Assistants for the same customer already share a prompt repo, because the name is
+    # derived from the customer. Sharing DOCUMENTS is more surprising than sharing a
+    # prompt: one demo's request folders show up in another's tab strip, and retiring
+    # either one deletes both their documents. Worth seeing before it happens.
+    shared: dict[str, list[str]] = {}
+    for assistant, repo in planned:
+        shared.setdefault(repo, []).append(str(assistant.get("name") or "?"))
+
+    for repo, names in sorted(shared.items()):
+        if len(names) > 1:
+            print(f"\n  note: {len(names)} assistants would share {repo}: {', '.join(names)}")
 
     if not apply:
         print(f"\n{len(planned)} assistant(s) would change. Re-run with --apply to write.")

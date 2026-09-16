@@ -183,10 +183,10 @@ async def turn(client, thread_id: str, assistant_id: str, question: str, label: 
         if not pending:
             break
 
-        question = pending[0]
-        options = [str(o) for o in (question.get("options") or [])]
+        asked = pending[0]
+        options = [str(o) for o in (asked.get("options") or [])]
         answer = _pick(options, "Make a sensible assumption and flag it")
-        print(f"    interrupt: {str(question.get('question'))[:90]} -> {answer!r}")
+        print(f"    interrupt: {str(asked.get('question'))[:90]} -> {answer!r}")
         result = await client.runs.wait(
             thread_id, assistant_id, command={"resume": {"answer": answer}}
         )
