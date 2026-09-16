@@ -193,6 +193,30 @@ def test_a_sibling_document_keeps_its_own_content_through_another_save(hub):
 # --- revisions ---
 
 
+def test_a_revision_records_the_person_and_the_hat_separately(hub):
+    """Two facts, not one string: who saved it, and which role they were acting as.
+
+    Joining them at write time ("Jo (UX Designer)") makes both unrecoverable, and a
+    review chain asks different questions of each.
+    """
+    write_document(
+        REPO, BRIEF, "# Brief\n", message="Tightened the wording", author="Jo", role="UX Designer"
+    )
+    document = read_document(REPO, BRIEF)
+    assert document.author == "Jo"
+    assert document.role == "UX Designer"
+    version = list_versions(REPO, BRIEF)[0]
+    assert (version.author, version.role) == ("Jo", "UX Designer")
+
+
+def test_a_save_with_no_person_named_still_records_the_role(hub):
+    """The name comes from the browser and may simply not be set."""
+    write_document(REPO, BRIEF, "x", role="Product Owner")
+    version = list_versions(REPO, BRIEF)[0]
+    assert version.author == ""
+    assert version.role == "Product Owner"
+
+
 def test_only_the_commits_that_changed_this_document_are_its_revisions(hub):
     write_document(REPO, BRIEF, "one", message="drafted", author="Intake Agent")
     write_document(REPO, SPEC, "# Spec\n", message="spec drafted", author="PM Agent")
@@ -365,14 +389,16 @@ def test_a_save_over_http_becomes_a_revision_with_its_message(hub):
             "path": BRIEF,
             "content": "# Brief\n",
             "message": "PO approved",
-            "author": "Product Owner",
+            "author": "Kevin",
+            "role": "Product Owner",
         },
     )
     assert response.status_code == 200
     assert response.json()["version"] == "c0001"
     versions = _client().get("/docs-versions", params={"docs_repo": REPO, "path": BRIEF}).json()
     assert versions["versions"][0]["message"] == "PO approved"
-    assert versions["versions"][0]["author"] == "Product Owner"
+    assert versions["versions"][0]["author"] == "Kevin"
+    assert versions["versions"][0]["role"] == "Product Owner"
 
 
 def test_a_save_without_text_is_refused_before_it_reaches_the_store(hub):

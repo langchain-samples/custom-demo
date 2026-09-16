@@ -1,15 +1,18 @@
 /**
- * One Markdown document, read and edited in place, with its revision history.
+ * One Markdown document, edited as a document, with its revision history.
  *
  *   ┌ brief.md ──────────────── ⟲ History │ Edit ┐
  *   │  rendered markdown, selectable              │
  *   │    ┌ Ask about this ┐  ← on a selection     │
  *   └─────────────────────────────────────────────┘
  *
- * Three modes, one document: reading it, editing its source, and looking back at a
- * revision. Editing is deliberately the source rather than a rich-text surface over it,
- * because the document IS Markdown all the way through to the agent that reads it next,
- * and a round trip through a rich-text model is where headings and Gherkin blocks get
+ * Editing is a real WYSIWYG surface (Milkdown/Crepe), not a source pane. That matters
+ * for who this is for: the people who raise and review these documents are product
+ * owners and business analysts, and asking them to type `##` is asking them to learn a
+ * markup language to do their job. Markdown stays the storage format all the way to the
+ * agent that reads the document next, which is why the editor is markdown-native
+ * (ProseMirror over remark) rather than rich text with a converter bolted on: a round
+ * trip through a foreign document model is where headings and Gherkin fences get
  * quietly reformatted.
  *
  * Saving is only possible when the assistant stores documents in Context Hub. An
@@ -21,14 +24,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   IconAlertTriangle,
   IconArrowBackUp,
-  IconBold,
-  IconCode,
   IconDeviceFloppy,
-  IconEye,
   IconHistory,
-  IconItalic,
-  IconLink,
-  IconList,
   IconMessagePlus,
   IconPencil,
   IconX,
@@ -36,7 +33,6 @@ import {
 import { Streamdown } from "streamdown";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import {
   DocsError,
   listDocVersions,
@@ -47,6 +43,8 @@ import {
   type DocVersion,
 } from "@/lib/api";
 import { artifactName } from "@/lib/artifacts";
+import { LAST_OWNER_LS_KEY, readSessionPreference } from "@/lib/assistantSession";
+import type { MarkdownEditor } from "@/lib/markdownEditor";
 import { cn } from "@/lib/utils";
 
 export interface MarkdownArtifactProps {
@@ -57,44 +55,15 @@ export interface MarkdownArtifactProps {
   target: DocsTarget;
   /**
    * Who a save is recorded as, when the caller knows. Nothing in this deployment does:
-   * authentication is one shared token and there is no signed-in user, so the save bar
-   * asks for a role instead of inventing an author. Naming that gap where the save
-   * happens is the point - a history full of unattributed revisions would be useless
-   * for a review chain, and a made-up name would be worse than useless.
+   * authentication is one shared token and there is no signed-in user, so the name comes
+   * from what this browser already knows and the save bar asks for the role. Naming that
+   * gap where the save happens is the point - a history full of unattributed revisions
+   * would be useless for a review chain, and a made-up name would be worse than useless.
    */
   author?: string;
   /** Hand a selected passage to the chat composer as context for the next question. */
   onAskAbout?: (excerpt: string, path: string) => void;
 }
-
-/** A source edit applied to the selection, as the toolbar buttons perform it. */
-interface Wrap {
-  before: string;
-  after?: string;
-  /** Applied to the start of every selected line instead of around the selection. */
-  linePrefix?: boolean;
-  placeholder: string;
-}
-
-const WRAPS: { icon: typeof IconBold; title: string; wrap: Wrap }[] = [
-  { icon: IconBold, title: "Bold", wrap: { before: "**", after: "**", placeholder: "bold text" } },
-  { icon: IconItalic, title: "Italic", wrap: { before: "_", after: "_", placeholder: "italic" } },
-  {
-    icon: IconList,
-    title: "Bulleted list",
-    wrap: { before: "- ", linePrefix: true, placeholder: "list item" },
-  },
-  {
-    icon: IconCode,
-    title: "Code",
-    wrap: { before: "`", after: "`", placeholder: "code" },
-  },
-  {
-    icon: IconLink,
-    title: "Link",
-    wrap: { before: "[", after: "](https://)", placeholder: "link text" },
-  },
-];
 
 /**
  * Roles a reviewer saves as, and where the choice is remembered.
@@ -131,6 +100,18 @@ function versionLabel(version: DocVersion): string {
   return Number.isNaN(when.getTime()) ? "Saved" : `Saved ${when.toLocaleString()}`;
 }
 
+/**
+ * Who a revision is credited to.
+ *
+ * An agent write reaches the store through the filesystem mount rather than the save
+ * route, so it records neither, and says so plainly instead of borrowing the last
+ * person's name.
+ */
+function versionWho(version: DocVersion): string {
+  const parts = [version.author, version.role].filter(Boolean);
+  return parts.length ? parts.join(" · ") : "written by the assistant";
+}
+
 /** Short, stable revision id for the history list. */
 function shortVersion(version: string): string {
   return version ? version.slice(0, 7) : "";
@@ -148,11 +129,9 @@ export function MarkdownArtifact({
   const [stored, setStored] = useState<AgentDoc | null>(null);
   const [loadError, setLoadError] = useState("");
   const [editing, setEditing] = useState(false);
-  const [buffer, setBuffer] = useState("");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<DocsError | Error | null>(null);
-  const [preview, setPreview] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [versions, setVersions] = useState<DocVersion[]>([]);
   const [viewing, setViewing] = useState<DocVersion | null>(null);
@@ -162,7 +141,16 @@ export function MarkdownArtifact({
   );
   const [role, setRole] = useState<string>(storedRole);
   const readRef = useRef<HTMLDivElement>(null);
-  const areaRef = useRef<HTMLTextAreaElement>(null);
+  const editorHost = useRef<HTMLDivElement>(null);
+  const crepe = useRef<MarkdownEditor | null>(null);
+  /** The text the editor opened with, so Save can tell whether anything changed. */
+  const opened = useRef("");
+
+  /** The person this browser knows about, when the caller did not supply one. */
+  const person = useMemo(
+    () => author || readSessionPreference(LAST_OWNER_LS_KEY),
+    [author],
+  );
 
   /**
    * Re-read the canonical document once a write settles.
@@ -204,6 +192,44 @@ export function MarkdownArtifact({
 
   const text = stored?.content ?? content;
 
+  /**
+   * Mount the editor for the current text, and tear it down on the way out.
+   *
+   * Keyed on `editing` and the document's revision, NOT on the text: Crepe owns its own
+   * document once created, and re-creating it on every keystroke would move the caret to
+   * the start and lose the selection. A revision arriving from elsewhere is a different
+   * document and does warrant a fresh editor.
+   */
+  useEffect(() => {
+    if (!editing || !editorHost.current) return;
+    const host = editorHost.current;
+    const openedWith = text;
+    let live = true;
+    let instance: MarkdownEditor | null = null;
+    // Imported here rather than at the top of the file: the editor and its stylesheets
+    // are a large chunk that only an editing session needs.
+    void (async () => {
+      try {
+        const { Crepe } = await import("@/lib/markdownEditor");
+        if (!live) return;
+        instance = new Crepe({ root: host, defaultValue: openedWith });
+        crepe.current = instance;
+        opened.current = openedWith;
+        await instance.create();
+      } catch (e: unknown) {
+        if (!live) return;
+        setSaveError(new Error(`The editor could not open this document: ${String(e)}`));
+      }
+    })();
+    return () => {
+      live = false;
+      crepe.current = null;
+      // Destroy is async and the node is already going; nothing waits on it.
+      void instance?.destroy();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, stored?.version]);
+
   const loadVersions = useCallback(() => {
     listDocVersions(target, path).then(setVersions);
   }, [target, path]);
@@ -214,56 +240,38 @@ export function MarkdownArtifact({
   };
 
   const startEditing = () => {
-    setBuffer(text);
     setMessage("");
     setSaveError(null);
     setEditing(true);
     setViewing(null);
   };
 
-  /** Apply a toolbar wrap to the textarea's current selection, keeping it selected. */
-  const applyWrap = (wrap: Wrap) => {
-    const area = areaRef.current;
-    if (!area) return;
-    const start = area.selectionStart;
-    const end = area.selectionEnd;
-    const chosen = buffer.slice(start, end);
-    let replacement: string;
-    if (wrap.linePrefix) {
-      const lines = (chosen || wrap.placeholder).split("\n");
-      replacement = lines.map((line) => wrap.before + line).join("\n");
-    } else {
-      replacement = wrap.before + (chosen || wrap.placeholder) + (wrap.after ?? "");
-    }
-    const next = buffer.slice(0, start) + replacement + buffer.slice(end);
-    setBuffer(next);
-    // Restore the selection around what was just wrapped, so a second click on another
-    // button applies to the same passage instead of to a collapsed caret.
-    requestAnimationFrame(() => {
-      area.focus();
-      area.setSelectionRange(start, start + replacement.length);
-    });
-  };
-
   const save = async () => {
+    const edited = crepe.current?.getMarkdown() ?? "";
+    if (!edited) {
+      setSaveError(new Error("The editor has no content to save."));
+      return;
+    }
     setSaving(true);
     setSaveError(null);
     try {
       const saved = await saveAgentDoc(target, {
         path,
-        content: buffer,
+        content: edited,
         message,
-        author: author || role,
+        author: person,
+        role,
         // Omitted while the store has never been read: there is no revision to be
         // stale against, and sending "" would read as "I looked at nothing".
         baseVersion: stored?.version,
       });
       setStored({
         path,
-        content: buffer,
+        content: edited,
         version: saved.version,
         message: saved.message,
-        author: author || role,
+        author: person,
+        role,
       });
       setEditing(false);
       setMessage("");
@@ -305,12 +313,36 @@ export function MarkdownArtifact({
    * the discarded version can still find it, and a restore that erased the revision it
    * replaced would make the history a worse account of the document than no history.
    */
-  const restore = () => {
+  const restore = async () => {
     if (!viewing) return;
-    setBuffer(viewingText);
-    setMessage(`Restored the revision from ${shortVersion(viewing.version)}`);
+    const restoring = viewingText;
+    const note = `Restored the revision from ${shortVersion(viewing.version)}`;
     setViewing(null);
-    setEditing(true);
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const saved = await saveAgentDoc(target, {
+        path,
+        content: restoring,
+        message: note,
+        author: person,
+        role,
+        baseVersion: stored?.version,
+      });
+      setStored({
+        path,
+        content: restoring,
+        version: saved.version,
+        message: note,
+        author: person,
+        role,
+      });
+      loadVersions();
+    } catch (e: unknown) {
+      setSaveError(e instanceof Error ? e : new Error(String(e)));
+    } finally {
+      setSaving(false);
+    }
   };
 
   /** Track a selection in the rendered document, for the "Ask about this" action. */
@@ -329,10 +361,11 @@ export function MarkdownArtifact({
     }
     const rect = sel.getRangeAt(0).getBoundingClientRect();
     const box = host.getBoundingClientRect();
+    const above = rect.top - box.top + host.scrollTop - 38;
     setSelection({
       text: chosen,
       // Above the selection where there is room, below it at the very top of the pane.
-      top: rect.top - box.top + host.scrollTop - 38 < 0 ? rect.bottom - box.top + host.scrollTop + 8 : rect.top - box.top + host.scrollTop - 38,
+      top: above < 0 ? rect.bottom - box.top + host.scrollTop + 8 : above,
       left: Math.max(0, rect.left - box.left),
     });
   };
@@ -347,9 +380,9 @@ export function MarkdownArtifact({
   const conflict = saveError instanceof DocsError && saveError.reason === "conflict";
   const shown = viewing ? viewingText : text;
   const revisionNote = useMemo(() => {
-    if (!stored) return "";
-    const who = stored.author ? `${stored.author}: ` : "";
-    return stored.message ? `${who}${stored.message}` : "";
+    if (!stored?.message) return "";
+    const who = [stored.author, stored.role].filter(Boolean).join(" · ");
+    return who ? `${who}: ${stored.message}` : stored.message;
   }, [stored]);
 
   return (
@@ -384,7 +417,7 @@ export function MarkdownArtifact({
           )}
           {viewing && (
             <>
-              <Button variant="ghost" size="sm" onClick={restore}>
+              <Button variant="ghost" size="sm" onClick={restore} disabled={saving}>
                 <IconArrowBackUp className="size-4" />
                 Restore this revision
               </Button>
@@ -408,7 +441,9 @@ export function MarkdownArtifact({
       {loadError && (
         <p className="flex items-start gap-2 border-b border-border bg-panel-2 px-4 py-2 text-[12px] text-muted-foreground">
           <IconAlertTriangle className="mt-0.5 size-3.5 flex-shrink-0" />
-          <span>Showing what was written in this turn. The stored copy could not be read: {loadError}</span>
+          <span>
+            Showing what was written in this turn. The stored copy could not be read: {loadError}
+          </span>
         </p>
       )}
 
@@ -421,9 +456,7 @@ export function MarkdownArtifact({
               Revisions
             </p>
             {versions.length === 0 && (
-              <p className="px-3 pb-3 text-[12px] text-muted-foreground">
-                No saved revisions yet.
-              </p>
+              <p className="px-3 pb-3 text-[12px] text-muted-foreground">No saved revisions yet.</p>
             )}
             <ul className="flex flex-col">
               {versions.map((version) => (
@@ -440,7 +473,7 @@ export function MarkdownArtifact({
                   >
                     <span className="text-[12px] leading-snug">{versionLabel(version)}</span>
                     <span className="text-[11px] text-muted-foreground">
-                      {version.author || "unattributed"} · {shortVersion(version.version)}
+                      {versionWho(version)} · {shortVersion(version.version)}
                     </span>
                   </button>
                 </li>
@@ -451,51 +484,10 @@ export function MarkdownArtifact({
 
         {editing ? (
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className="flex flex-wrap items-center gap-1 border-b border-border px-3 py-1.5">
-              {WRAPS.map(({ icon: Icon, title, wrap }) => (
-                <Button
-                  key={title}
-                  variant="ghost"
-                  size="sm"
-                  title={title}
-                  onClick={() => applyWrap(wrap)}
-                >
-                  <Icon className="size-4" />
-                </Button>
-              ))}
-              <Button
-                variant="ghost"
-                size="sm"
-                title="Heading"
-                onClick={() => applyWrap({ before: "## ", linePrefix: true, placeholder: "Heading" })}
-              >
-                H2
-              </Button>
-              <Button
-                variant={preview ? "secondary" : "ghost"}
-                size="sm"
-                title="Show the rendered document beside the source"
-                onClick={() => setPreview((on) => !on)}
-                className="ml-auto"
-              >
-                <IconEye className="size-4" />
-                Preview
-              </Button>
-            </div>
-            <div className="flex min-h-0 flex-1">
-              <Textarea
-                ref={areaRef}
-                value={buffer}
-                onChange={(e) => setBuffer(e.target.value)}
-                spellCheck
-                className="min-h-0 flex-1 resize-none rounded-none border-0 font-mono text-[13px] leading-relaxed focus-visible:ring-0"
-              />
-              {preview && (
-                <div className="min-h-0 flex-1 overflow-y-auto border-l border-border p-4">
-                  <Streamdown parseIncompleteMarkdown>{buffer}</Streamdown>
-                </div>
-              )}
-            </div>
+            {/* The editor owns its own toolbars: a selection raises an inline one, and a
+                new line offers a block menu. So there is no toolbar of ours here, and
+                nothing tells the reader they are editing markup. */}
+            <div ref={editorHost} className="min-h-0 flex-1 overflow-y-auto" />
             {/* Save bar. The message is the whole reason the history is readable later,
                 so it sits in the primary path rather than behind a dialog. */}
             <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2">
@@ -506,32 +498,33 @@ export function MarkdownArtifact({
                 placeholder="What changed? (shows up in the history)"
                 className="h-8 min-w-48 flex-1 text-[13px]"
               />
-              {!author && (
-                <select
-                  id="doc-save-role"
-                  value={role}
-                  onChange={(e) => {
-                    setRole(e.target.value);
-                    try {
-                      window.localStorage.setItem(ROLE_KEY, e.target.value);
-                    } catch {
-                      /* a role that cannot be remembered still labels this save */
-                    }
-                  }}
-                  title="The role this revision is recorded as"
-                  className="h-8 rounded-md border border-border bg-transparent px-2 text-[12px]"
-                >
-                  {ROLES.map((name) => (
-                    <option key={name} value={name}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
-              )}
+              <span className="text-[12px] text-muted-foreground">
+                {person ? `${person} as` : "Saving as"}
+              </span>
+              <select
+                id="doc-save-role"
+                value={role}
+                onChange={(e) => {
+                  setRole(e.target.value);
+                  try {
+                    window.localStorage.setItem(ROLE_KEY, e.target.value);
+                  } catch {
+                    /* a role that cannot be remembered still labels this save */
+                  }
+                }}
+                title="The role this revision is recorded as"
+                className="h-8 rounded-md border border-border bg-transparent px-2 text-[12px]"
+              >
+                {ROLES.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
               <Button variant="ghost" size="sm" onClick={() => setEditing(false)} disabled={saving}>
                 Cancel
               </Button>
-              <Button size="sm" onClick={save} disabled={saving || buffer === text}>
+              <Button size="sm" onClick={save} disabled={saving}>
                 <IconDeviceFloppy className="size-4" />
                 {saving ? "Saving" : "Save revision"}
               </Button>
@@ -557,10 +550,7 @@ export function MarkdownArtifact({
           >
             <Streamdown parseIncompleteMarkdown>{shown}</Streamdown>
             {selection && (
-              <div
-                className="absolute z-10"
-                style={{ top: selection.top, left: selection.left }}
-              >
+              <div className="absolute z-10" style={{ top: selection.top, left: selection.left }}>
                 <Button size="sm" onClick={askAbout} className="shadow-md">
                   <IconMessagePlus className="size-4" />
                   Ask about this

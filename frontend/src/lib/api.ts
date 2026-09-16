@@ -1121,7 +1121,11 @@ export interface DocVersion {
   /** ISO timestamp, or "" when the commit carried none. */
   created_at: string;
   message: string;
+  /** The person who saved it, when the browser knew their name. */
   author: string;
+  /** The role they were acting as. Separate from the name: a review chain asks
+   *  different questions of "who" and "as what". */
+  role: string;
 }
 
 /** One document's text at one revision. */
@@ -1131,6 +1135,7 @@ export interface AgentDoc {
   version: string;
   message: string;
   author: string;
+  role: string;
 }
 
 /** The revision a save created. */
@@ -1226,7 +1231,14 @@ export async function readAgentDoc(
  */
 export async function saveAgentDoc(
   target: DocsTarget,
-  input: { path: string; content: string; message?: string; author?: string; baseVersion?: string },
+  input: {
+    path: string;
+    content: string;
+    message?: string;
+    author?: string;
+    role?: string;
+    baseVersion?: string;
+  },
 ): Promise<AgentDocSaved> {
   const res = await fetch(`${getApiBase()}/docs-file`, {
     method: "POST",
@@ -1238,6 +1250,7 @@ export async function saveAgentDoc(
       content: input.content,
       message: input.message || undefined,
       author: input.author || undefined,
+      role: input.role || undefined,
       base_version: input.baseVersion || undefined,
     }),
   });

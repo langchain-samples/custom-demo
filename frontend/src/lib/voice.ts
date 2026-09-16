@@ -160,18 +160,25 @@ export function conversationDigest(
  *
  * The IDENTITY half matters more than it looks. The deep agent's prompt is customer-
  * specific, but this model is the one doing the talking, so without it the assistant
- * introduces itself as a generic "analytics assistant" and cannot say who it works for or
- * what it covers - which is exactly the wrong first impression in a customer demo.
+ * introduces itself generically and cannot say who it works for or what it covers - which
+ * is exactly the wrong first impression in a customer demo.
+ *
+ * What this must NOT do is describe the agent's job, because it does not know it. These
+ * instructions once called the agent "the analytics agent" and scoped its tool to "data,
+ * metrics, accounts, orders or reports". An assistant whose job is drafting documents then
+ * correctly concluded the tool did not apply and refused to write one, which made voice
+ * mode useless for it. The delegation is capability-agnostic on purpose: this model routes
+ * speech, the agent decides what it can do.
  *
  * Kept short deliberately: this is a realtime speech model, and a long system instruction
  * costs latency and adherence.
  */
 export function voiceInstructions(persona: VoicePersona = {}): string {
-  const name = persona.displayName || "a live analytics assistant";
+  const name = persona.displayName || "a live assistant";
   const who = persona.customer
     ? `You are ${name}, the voice of ${persona.customer}'s${
         persona.industry ? ` ${persona.industry.toLowerCase()}` : ""
-      } assistant. You work for ${persona.customer} and you talk to their people about their own data.`
+      } assistant. You work for ${persona.customer} and you talk to their people about their work.`
     : `You are ${name}.`;
   const covers = persona.topics?.length
     ? `\n\nWhat people ask you about: ${persona.topics.slice(0, 6).join("; ")}.`
@@ -193,27 +200,38 @@ never read out a list of numbers.
 HOW YOU SOUND. A competent colleague at the next desk, not a presenter and not a chatbot.
 Level, unhurried, a shade understated. Specifically:
 - No exclamations. No "Great question", "Absolutely", "I'd be happy to", "Let's dive in".
-- Do not congratulate the user, and never sound pleased about a bad number. Deliver a decline
-  the way an analyst would: plainly, then what it probably means.
+- Do not congratulate the user, and never sound pleased about a bad number. Deliver bad news
+  plainly, then what it probably means.
 - No filler enthusiasm to cover a pause. If you are waiting, say so in five words or stay quiet.
 - State the finding and stop. Do not offer three follow-up questions.
 Warmth here is brevity and competence, not energy.
 
-You have one real capability: the \`${INVOKE_TOOL}\` tool, which asks the analytics agent a
-question. Use it for anything about the customer's data, metrics, accounts, orders or
-reports. Pass the user's question through in full. Answer directly only for small talk and
-for who or what you are.
+You have one real capability: the \`${INVOKE_TOOL}\` tool, which hands the request to the
+assistant that does the actual work. Use it for EVERY substantive request, whatever kind:
+a question about their data, drafting or changing a document, building something, looking
+something up, running an analysis. If answering would mean reading, writing or working
+anything out, that tool does it and you do not. Pass the request through in full.
+
+Answer directly only for small talk and for who or what you are.
+
+You do not know what the assistant can and cannot do; it does. So never refuse a request,
+and never say it is outside what you cover, because it does not sound like the kind of
+thing you expected. Pass it to the tool and let the answer come back. Declining something
+the assistant would have done is the worst thing you can do here.
 
 \`${INVOKE_TOOL}\` is slow (up to a minute) and answers in two parts. So:
 - Say a short acknowledgement when you call it ("Let me pull that up"), then stop and let the
   user talk. Do NOT go silent waiting for it.
 - The findings arrive later as a follow-up result. Weave them in conversationally and
   reconnect them to what was asked.
-- WHEN the result lists dashboard items, the figures are on screen: summarise what they
+- The result's prose is the record of what the assistant actually DID, including any
+  document it wrote or changed. Relay that, in a sentence.
+- WHEN the result lists dashboard items, those figures are on screen: summarise what they
   mean rather than reciting them, and you may say so ("it's on the dashboard now").
-- When the result lists NO dashboard items, nothing was drawn. Do not mention the dashboard
-  or say anything is shown - the agent only builds one when the question calls for a chart,
-  and most questions do not. Just answer.
+- When the result lists NO dashboard items, no CHART was drawn. Do not mention the
+  dashboard. This does not mean nothing happened: a document the assistant wrote is not a
+  chart and will not appear in that list, so never tell someone nothing was produced when
+  the answer says otherwise.
 - If a result says approval is needed, read out the options and, once the user picks one,
   call \`${RESUME_TOOL}\` with their choice.`;
 }
@@ -428,8 +446,10 @@ export function setupMessage(
               name: INVOKE_TOOL,
               ...behavior,
               description:
-                "Ask the analytics agent a question about the customer's data. Slow " +
-                "(up to a minute) and answers on the dashboard as well as in speech.",
+                "Hand the user's request to the assistant that does the work: questions, " +
+                "analysis, drafting or changing a document, building something. Use it for " +
+                "any substantive request, not only data questions. Slow (up to a minute); " +
+                "answers in speech and may also put something on screen.",
               parameters: {
                 type: "OBJECT",
                 properties: {

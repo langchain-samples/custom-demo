@@ -98,7 +98,7 @@ async def docs_file(request):
 async def docs_save(request):
     """POST /docs-file: save an edit as the next revision of one document.
 
-    Body: {docs_repo, workspace?, path, content, message?, author?, base_version?}.
+    Body: {docs_repo, workspace?, path, content, message?, author?, role?, base_version?}.
     `base_version` is what the editor loaded; sending it is what turns a lost race
     into a 409 instead of a silent overwrite.
     """
@@ -137,6 +137,7 @@ async def docs_save(request):
             str(body.get("message") or ""),
             str(body.get("author") or ""),
             body.get("base_version") or None,
+            str(body.get("role") or ""),
         )
     except DocumentStoreError as exc:
         return _store_failure(exc)

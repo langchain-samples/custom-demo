@@ -27,7 +27,7 @@ export interface VoiceSessionOptions {
   voiceName?: string;
   /**
    * Who the assistant is, for the shell's system instruction. Without it the voice
-   * introduces itself as a generic analytics assistant and cannot say who it works for.
+   * introduces itself generically and cannot say who it works for.
    */
   persona?: VoicePersona;
 }

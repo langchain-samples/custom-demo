@@ -72,6 +72,7 @@ class DocumentVersion(BaseModel):
     created_at: str
     message: str = ""
     author: str = ""
+    role: str = ""
 
 
 class DocumentEntry(BaseModel):
@@ -99,6 +100,7 @@ class Document(BaseModel):
     version: str = ""
     message: str = ""
     author: str = ""
+    role: str = ""
 
 
 class DocumentSaved(BaseModel):
@@ -243,6 +245,7 @@ def read_document(
         version=version or _head(repo, ws),
         message=str(last.get("message") or ""),
         author=str(last.get("author") or ""),
+        role=str(last.get("role") or ""),
     )
 
 
@@ -254,6 +257,7 @@ def write_document(
     message: str = "",
     author: str = "",
     base_version: str | None = None,
+    role: str = "",
 ) -> DocumentSaved:
     """Save `content` as the next revision, recording who changed it and why.
 
@@ -276,6 +280,7 @@ def write_document(
         "at": datetime.now(UTC).isoformat(timespec="seconds"),
         "message": message.strip(),
         "author": author.strip(),
+        "role": role.strip(),
     }
     log = tree.get(history_path(key), "")
     if log and not log.endswith("\n"):
@@ -342,6 +347,7 @@ def list_versions(
                 created_at=created.isoformat() if created else "",
                 message=str(last.get("message") or ""),
                 author=str(last.get("author") or ""),
+                role=str(last.get("role") or ""),
             )
         )
 

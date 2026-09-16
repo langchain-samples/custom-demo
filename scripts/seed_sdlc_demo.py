@@ -222,6 +222,13 @@ def main() -> int:
     parser.add_argument("--workspace", default=None, help="LangSmith workspace id")
     parser.add_argument("--url", default="http://127.0.0.1:2024", help="Agent Server URL")
     parser.add_argument("--owner", default=None, help="name shown in the assistant picker")
+    # The assistant is matched BY NAME so a re-run updates in place, which made the name
+    # load-bearing: derived from --customer alone, seeding a second fixture under a
+    # different --slug silently repointed the FIRST assistant at the new repos. It did
+    # exactly that once, to an assistant someone was demoing on.
+    parser.add_argument(
+        "--name", default=None, help="assistant name (default: '<customer> Software Factory')"
+    )
     parser.add_argument(
         "--skip-assistant", action="store_true", help="push Hub content only, create nothing"
     )
@@ -280,14 +287,14 @@ def main() -> int:
     print(f"  accent {branding['accent']} | logo {'found' if branding['logo'] else 'none'}")
     metadata = {
         "customer": args.customer,
-        "display_name": f"{args.customer} Software Factory",
+        "display_name": args.name or f"{args.customer} Software Factory",
         "industry": INDUSTRY,
         "owner_name": args.owner if args.owner is not None else default_owner(),
         **branding,
         "ls_artifacts": artifacts.to_dict(),
     }
 
-    name = f"{args.customer} Software Factory"
+    name = args.name or f"{args.customer} Software Factory"
     print(f"Binding assistant {name!r} on {args.url}")
     assistant_id = asyncio.run(create_assistant(args.url, name, context, metadata))
     print(f"  assistant_id: {assistant_id}")

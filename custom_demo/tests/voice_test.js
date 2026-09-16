@@ -424,5 +424,21 @@ function ok(name, fn) {
     assert.ok(!voiceInstructions({ customer: "Progressive" }).includes("Earlier in this"));
   });
 
+  ok("delegation is capability-agnostic, so the shell cannot refuse the agent's own work", () => {
+    const text = voiceInstructions({ customer: "Mary Kay", industry: "software delivery" });
+    // This instruction once called the agent "the analytics agent" and scoped its tool to
+    // "data, metrics, accounts, orders or reports". An assistant whose job is drafting
+    // documents then correctly concluded the tool did not apply and REFUSED to write one,
+    // which makes voice mode useless for every assistant that is not an analytics demo.
+    assert.ok(!/analytics agent/i.test(text), "the agent must not be described as analytics");
+    assert.ok(!/about their own data/i.test(text), "the shell must not narrow the subject");
+    // Non-data work has to be named, or the model infers the tool's scope from the examples.
+    assert.ok(/document/i.test(text), text.slice(-400));
+    // And the refusal has to be forbidden outright, not merely unencouraged.
+    assert.ok(/never refuse a request/i.test(text), text.slice(-400));
+    // An empty on-screen digest means no chart, never "nothing happened".
+    assert.ok(/not a\s+chart/i.test(text), text.slice(-400));
+  });
+
   console.log(`\n${passed} passed`);
 })();
