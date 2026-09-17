@@ -91,7 +91,8 @@ frontend/src/
   components/chat/McpAppCard.tsx     Streaming MCP Apps and stable iframe presentation
   components/chat/McpElicitationCard.tsx  Schema form for MCP interrupts
   lib/mcpClients.ts         Browser MCP clients, metadata, resources and app-call checks
-  lib/mcpAppHost.ts         Official AppBridge adapter for SEP-1865
+  packages/langchain-react/ @langchain/react: the SEP-1865 host half, vendored
+  lib/mcpAppTheme.ts        The SPA palette, in SEP-1865's standard variables
   lib/api.ts                HTTP transport, thread URL persistence and frontend wire types
   lib/queries.ts            React Query reads and cache keys
 demos/sdlc-factory/          Software-factory demo: agent prompt and one skill per SDLC phase
