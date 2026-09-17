@@ -2,9 +2,15 @@
  * ChatPanel — the left rail: message list, streaming answer bubble, tool-activity
  * chips, thumbs feedback, quick-prompt presets and the input form.
  *
- * It owns the streaming loop (api.runStream) and the onMessage handler. The
- * metadata `langgraph_node === "model"` guard ensures only the MAIN agent's final
- * answer renders in the bubble — AI messages emitted from inside a tool (the
+ * The run itself belongs to `useAgentStream`: it creates it, streams it, stops
+ * it, and holds the interrupts. What this file owns is the render model the
+ * hook has no opinion about - the item list, tool chips, widgets, artifacts and
+ * subagent cards - built in `onFrame` inside `runTurn` from the frames the
+ * transport hands over. `thread.messages` is deliberately empty; see
+ * `useAgentStream`.
+ *
+ * The metadata `langgraph_node === "model"` guard ensures only the MAIN agent's
+ * final answer renders in the bubble — AI messages emitted from inside a tool (the
  * synthetic data source's own LLM call, tagged with a different node) never leak
  * into the chat. push_widget args are emitted to `onWidget` with the original
  * progressive-flush logic (flush each widget when the next begins; flush the last
@@ -28,7 +34,9 @@ import {
   IconUser,
 } from "@tabler/icons-react";
 import type { QuickAction, ReviewInterrupt, RunContext, ThreadMessage, Widget } from "@/lib/api";
-import { ensureThread, getThreadState, resetThread, runStream, savedThreadId } from "@/lib/api";
+import { getThreadState, resetThread, savedThreadId } from "@/lib/api";
+import { useAgentStream } from "@/lib/useAgentStream";
+import type { AgentFrame } from "@/lib/agentTransport";
 import { mcpAppBindings } from "@/lib/mcpClients";
 import {
   isDeliberateReset,
@@ -71,10 +79,8 @@ import {
 } from "@/lib/api";
 import { COMMANDS, parseGoalCommand, type GoalCommand } from "@/lib/commands";
 import {
-  effectiveNamespace,
   isMiddlewareNamespace,
   isSubagentNamespace,
-  parseCheckpointNs,
   parseTaskDispatches,
   subagentIdentity,
   subagentRoot,
@@ -452,7 +458,30 @@ export default function ChatPanel({
    */
   const onArtifactRef = useRef(onArtifact);
   onArtifactRef.current = onArtifact;
-  const abortRef = useRef<AbortController | null>(null);
+  /**
+   * Where the running turn wants its frames.
+   *
+   * `useAgentStream` is a hook, so it is created once here, while a frame
+   * handler belongs to ONE turn: it closes over that turn's chips, widgets,
+   * subagent buckets and bubble id. `runTurn` publishes its handler here for
+   * the duration of the run and clears it after, so a frame arriving outside a
+   * turn - a late one from an aborted run - lands nowhere instead of patching
+   * the previous turn's items.
+   */
+  const frameSink = useRef<((frame: AgentFrame) => void) | null>(null);
+  /** Tracing headers for the turn in flight, read by the transport at submit. */
+  const runHeaders = useRef<Record<string, string> | undefined>(undefined);
+  const thread = useAgentStream({
+    assistantId,
+    getHeaders: () => runHeaders.current,
+    onFrame: (frame) => frameSink.current?.(frame),
+  });
+  /**
+   * The stream as of THIS render, for the reset effect below, which cannot name
+   * `thread` in its dependencies without re-running on every render.
+   */
+  const threadRef = useRef(thread);
+  threadRef.current = thread;
   const logRef = useRef<HTMLDivElement | null>(null);
   /** The last `resetKey` acted on, so a change can be classified. */
   const lastResetKey = useRef<string>(String(resetKey ?? ""));
@@ -475,7 +504,7 @@ export default function ChatPanel({
     // A real switch: this session owns the list from here, so a late restore
     // must not put the old conversation back.
     interactedRef.current = true;
-    abortRef.current?.abort();
+    void threadRef.current.stop();
     resetThread();
     busyRef.current = false;
     setBusy(false);
@@ -652,20 +681,11 @@ export default function ChatPanel({
     // calls do, so a per-frame "has no tool calls" test says yes, then no. Remembering
     // which ids ever had tools is what makes that judgement stick.
     const toolMsgIds = new Set<string>();
-    // Message ids belonging to a middleware's own model call (the goal grader),
-    // learned from metadata. Only needed on a server that does NOT suffix event
-    // names with the namespace: there the frames look like main-graph output and
-    // the checkpoint ns is the one place the middleware's name still shows.
-    const middlewareMsgIds = new Set<string>();
     // langgraph_node per MAIN-graph message id, from `messages/metadata` events.
     // The main agent's messages are node "model"; a tool's internal LLM calls
     // (e.g. the synthetic data source) are node "tools" — we must NOT render
     // those as chat.
     const nodeById: Record<string, string> = {};
-    // Effective namespace per message id, learned from either the SSE event-name
-    // suffix or a `langgraph_checkpoint_ns` in messages/metadata (fallback for
-    // servers that don't suffix the event name). [] means the root/main graph.
-    const nsById: Record<string, string[]> = {};
     // Per-subagent reducer state, keyed by subagentIdentity(ns).key. Each bucket
     // tracks its own chips/nodes/text independently of main and of each other.
     const subOrder: string[] = [];
@@ -685,22 +705,32 @@ export default function ChatPanel({
     // The `task` TOOL's own args, keyed by its tool_call id. An interpreter
     // dispatch has no args in the stream at all; it is read back off the script.
     const taskArgs: Record<string, TaskDispatch> = {};
-    let answer = "";
     /**
-     * What the bubble is currently SHOWING, which is not the same as the answer.
+     * What this turn has learned so far, in one mutable object rather than five
+     * `let`s, because the frame handler below is a CALLBACK.
      *
-     * The agent narrates before it acts ("I have the intake details, now I'll draft the
-     * letter"), and that narration is worth leaving on screen while the tools run. But
-     * it is not the answer: `answer` is returned from this function and read aloud by
-     * voice mode, and it gates the "Building your dashboard…" line below. Conflating the
-     * two meant a preamble got spoken as the answer; withdrawing the preamble the moment
-     * tool calls appeared meant it blinked out with nothing to replace it. Tracking both
-     * separately is what allows "linger until something replaces it".
+     * TypeScript stops tracking assignments to a `let` once they happen inside a
+     * nested function, so it would go on believing each of these is still its
+     * initial `null` at every read after the run: `if (paused.review)` narrowed
+     * to `never` and stopped type-checking its own body. A field on an object is
+     * never narrowed that way, so these keep checking.
+     *
+     * `answer` vs `shown` is the pair worth knowing. The agent narrates before it
+     * acts ("I have the intake details, now I'll draft the letter"), and that
+     * narration is worth leaving on screen while the tools run. But it is not the
+     * answer: `answer` is returned from this function and read aloud by voice
+     * mode, and it gates the "Building your dashboard…" line below. Conflating the
+     * two meant a preamble got spoken as the answer; withdrawing the preamble the
+     * moment tool calls appeared meant it blinked out with nothing to replace it.
+     * Tracking both separately is what allows "linger until something replaces it".
      */
-    let shownText = "";
-    let runId: string | null = null;
-    let errorMsg: string | null = null;
-    let interrupt: ReviewInterrupt | null = null;
+    const turn: {
+      answer: string;
+      shown: string;
+      runId: string | null;
+      error: string | null;
+      review: ReviewInterrupt | null;
+    } = { answer: "", shown: "", runId: null, error: null, review: null };
     // Every tool call's arguments this turn, by tool name, latest frame wins.
     const argsByTool: Record<string, Record<string, unknown>> = {};
     /**
@@ -748,7 +778,7 @@ export default function ChatPanel({
         // Only fills an EMPTY bubble: a narration already on screen says more than
         // this does, and overwriting it would be the same blink-out by another route
         // (push_widget is a tool, so it fires exactly when narration is showing).
-        if (!shownText) setBubble({ text: "Building your dashboard…" });
+        if (!turn.shown) setBubble({ text: "Building your dashboard…" });
       }
     };
 
@@ -879,8 +909,8 @@ export default function ChatPanel({
         if (text && node !== "tools") {
           // Both kinds of text go on screen and STAY there until something replaces
           // them: the next narration, or the answer. Only the answer becomes `answer`.
-          shownText = text; // partial content is cumulative per message id
-          if (!isPreamble) answer = text;
+          turn.shown = text; // partial content is cumulative per message id
+          if (!isPreamble) turn.answer = text;
           setBubble({ text, streaming: true, markdown: false });
         }
       } else if (msg.type === "tool" && msg.name !== "push_widget") {
@@ -992,17 +1022,138 @@ export default function ChatPanel({
       }
     };
 
-    const controller = new AbortController();
-    abortRef.current = controller;
+    /**
+     * One frame of this run, routed.
+     *
+     * `useAgentStream` hands over every frame with the namespace its event name
+     * carried, already parsed. The order of the tests is the routing: the three
+     * root-only channels first, then the middleware drop, then the messages that
+     * split main from subagent.
+     */
+    const onFrame = ({ event, data: parsed, namespace }: AgentFrame) => {
+      if (event === "metadata") {
+        // run_id ONLY from a root (non-subagent) frame — a subagent frame must
+        // not hijack the feedback run_id.
+        if (!isSubagentNamespace(namespace)) {
+          const d = parsed as { run_id?: string };
+          if (d && d.run_id) turn.runId = d.run_id;
+        }
+        return;
+      }
+      if (event === "custom") {
+        // RubricMiddleware grading the turn against the active goal. Root frames
+        // only: a subagent cannot finish the user's goal.
+        const frame = parsed as RubricFrame;
+        if (!isSubagentNamespace(namespace) && frame?.type?.startsWith("rubric_evaluation")) {
+          if (frame.type === "rubric_evaluation_start") {
+            setGoal((g) => (g ? { ...g, status: "grading" } : g));
+          } else {
+            const status = statusFromVerdict(frame.result);
+            setGoal((g) => (g ? { ...g, status, note: frame.explanation || "" } : g));
+          }
+        }
+        return;
+      }
+      if (event === "error") {
+        // Only surface root-graph errors in the main bubble; a subagent error
+        // must not leak into the main answer.
+        if (!isSubagentNamespace(namespace)) {
+          const d = parsed as { error?: string; message?: string };
+          // `message` FIRST. The server sends `error` as the exception class and
+          // `message` as the detail, and preferring the class put
+          // "AnthropicInvalidRequestError" on screen while discarding "Your credit
+          // balance is too low to access the Anthropic API" - the only part anyone
+          // can act on. That cost a trip through the traces to learn something the
+          // UI had already been handed.
+          turn.error = errorText(d?.message) || errorText(d?.error) || "run error";
+        }
+        return;
+      }
+      // A middleware's own model call (the goal grader) streams on this channel
+      // too. Its frames are AI messages with no tool calls, i.e. shaped exactly
+      // like a final answer, so they must be dropped before any routing: the
+      // verdict JSON was landing in the chat as the assistant's reply. The
+      // grader's `custom` frames above are how its result reaches the UI.
+      if (isMiddlewareNamespace(namespace)) return;
+      if (event === "messages/metadata") {
+        // { "<message_id>": { metadata: { langgraph_node, ... } } }
+        const d = parsed as Record<string, { metadata?: { langgraph_node?: string } }>;
+        if (!d || typeof d !== "object") return;
+        for (const [mid, info] of Object.entries(d)) {
+          const n = info?.metadata?.langgraph_node;
+          // Route by the EVENT-NAME namespace ONLY. Real subagents are streamed
+          // subgraphs, so their frames carry a `tools:<call_id>` event-name
+          // suffix. The metadata `checkpoint_ns` is NOT a reliable subagent
+          // signal: the MAIN agent's own `tools` node also has a `tools:<uuid>`
+          // checkpoint_ns, so using it as a fallback here tagged every main-agent
+          // tool RESULT as a subagent — the tool chip never got its result and
+          // couldn't be expanded (read_file/execute).
+          if (isSubagentNamespace(namespace)) {
+            if (n) subState[ensureSub(namespace)].nodeById[mid] = n;
+          } else if (n) {
+            nodeById[mid] = n;
+          }
+        }
+        return;
+      }
+      if (event === "updates") {
+        if (!isSubagentNamespace(namespace)) {
+          // A tool called interrupt() — the run is now paused awaiting a human.
+          // HITL review is a main-graph concern (main namespace only).
+          //
+          // Read here and not from `thread.interrupts`, which the SDK builds
+          // from the `values` channel instead. Whether this server also puts
+          // `__interrupt__` in a values snapshot has not been measured, and
+          // `updates` is the channel every paused run in this SPA has arrived
+          // on, so the proven one stays.
+          const d = parsed as { __interrupt__?: Array<{ value?: ReviewInterrupt }> };
+          const value = d?.__interrupt__?.[0]?.value;
+          if (value && typeof value === "object") turn.review = value;
+          return;
+        }
+        {
+          // eval/`task()`-from-code subagents don't emit a namespaced token
+          // stream — they surface as namespaced STATE updates. Pull each node's
+          // messages into that subagent's card (its model output = its result,
+          // its tool calls = its chips), keyed by the full namespace so parallel
+          // dispatches land in separate cards.
+          const nodes = parsed as Record<string, { messages?: ThreadMessage[] } | null>;
+          if (nodes && typeof nodes === "object") {
+            const key = ensureSub(namespace);
+            for (const [node, upd] of Object.entries(nodes)) {
+              for (const m of upd?.messages || []) {
+                if (m && typeof m === "object" && m.id) subState[key].nodeById[m.id] = node;
+                onSubagentMessage(namespace, m);
+              }
+            }
+          }
+        }
+        return;
+      }
+      if (event === "messages/partial" || event === "messages/complete") {
+        const msg = (Array.isArray(parsed) ? parsed[0] : parsed) as ThreadMessage;
+        // Partition strictly by namespace: ONLY root frames feed the main
+        // pipeline; everything else is a subagent (kept out of answer/widgets).
+        if (isSubagentNamespace(namespace)) onSubagentMessage(namespace, msg);
+        else onStreamMessage(msg);
+      }
+    };
 
     const runContext = getRunContext();
+    runHeaders.current = headers;
+    frameSink.current = onFrame;
     try {
-      const tid = await ensureThread();
-      for await (const { event, data, namespace } of runStream({
-        threadId: tid,
-        assistantId,
-        ...(isResume
-          ? { resume }
+      // `submit` resolves when the run ends, so everything after it is the
+      // end-of-turn work the `for await` loop used to fall out of.
+      //
+      // A resume sends a command and NO input: re-sending the turn's messages
+      // would duplicate it. The rubric rides on the input rather than the
+      // context because it is checkpointed agent state, and it is sent on every
+      // turn - empty when there is no goal, since merely omitting the key would
+      // leave a cleared goal grading every future turn on the thread.
+      await thread.submit(
+        isResume
+          ? null
           : {
               messages: [
                 {
@@ -1010,150 +1161,33 @@ export default function ChatPanel({
                   content: imageContent(withQuotes(withDocs(question!, sent), quoted), images),
                 },
               ],
-            }),
-        context: runContext,
-        signal: controller.signal,
-        headers,
-        // Sticky: re-sent every turn until the goal is met or cleared. A resume
-        // carries no input, but the rubric is already on the thread's state.
-        rubric: goalRef.current?.text,
-      })) {
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(data);
-        } catch {
-          continue;
-        }
-        if (event === "metadata") {
-          // run_id ONLY from a root (non-subagent) frame — a subagent frame must
-          // not hijack the feedback run_id.
-          if (!isSubagentNamespace(namespace)) {
-            const d = parsed as { run_id?: string };
-            if (d && d.run_id) runId = d.run_id;
-          }
-          continue;
-        }
-        if (event === "custom") {
-          // RubricMiddleware grading the turn against the active goal. Root frames
-          // only: a subagent cannot finish the user's goal.
-          const frame = parsed as RubricFrame;
-          if (!isSubagentNamespace(namespace) && frame?.type?.startsWith("rubric_evaluation")) {
-            if (frame.type === "rubric_evaluation_start") {
-              setGoal((g) => (g ? { ...g, status: "grading" } : g));
-            } else {
-              const status = statusFromVerdict(frame.result);
-              setGoal((g) => (g ? { ...g, status, note: frame.explanation || "" } : g));
-            }
-          }
-          continue;
-        }
-        if (event === "error") {
-          // Only surface root-graph errors in the main bubble; a subagent error
-          // must not leak into the main answer.
-          if (!isSubagentNamespace(namespace)) {
-            const d = parsed as { error?: string; message?: string };
-            // `message` FIRST. The server sends `error` as the exception class and
-            // `message` as the detail, and preferring the class put
-            // "AnthropicInvalidRequestError" on screen while discarding "Your credit
-            // balance is too low to access the Anthropic API" - the only part anyone
-            // can act on. That cost a trip through the traces to learn something the
-            // UI had already been handed.
-            errorMsg = errorText(d?.message) || errorText(d?.error) || "run error";
-          }
-          continue;
-        }
-        // A middleware's own model call (the goal grader) streams on this channel
-        // too. Its frames are AI messages with no tool calls, i.e. shaped exactly
-        // like a final answer, so they must be dropped before any routing: the
-        // verdict JSON was landing in the chat as the assistant's reply. The
-        // grader's `custom` frames above are how its result reaches the UI.
-        if (isMiddlewareNamespace(namespace)) continue;
-        if (event === "messages/metadata") {
-          // { "<message_id>": { metadata: { langgraph_node, langgraph_checkpoint_ns, ... } } }
-          const d = parsed as Record<
-            string,
-            {
-              metadata?: {
-                langgraph_node?: string;
-                langgraph_checkpoint_ns?: string;
-                checkpoint_ns?: string;
-              };
-            }
-          >;
-          if (d && typeof d === "object") {
-            for (const [mid, info] of Object.entries(d)) {
-              const meta = info?.metadata;
-              const n = meta?.langgraph_node;
-              if (isMiddlewareNamespace(parseCheckpointNs(meta?.langgraph_checkpoint_ns))) {
-                middlewareMsgIds.add(mid);
-                continue;
-              }
-              // Route by the EVENT-NAME namespace ONLY. Real subagents are streamed
-              // subgraphs, so their frames carry a `tools:<call_id>` event-name
-              // suffix. The metadata `checkpoint_ns` is NOT a reliable subagent
-              // signal: the MAIN agent's own `tools` node also has a `tools:<uuid>`
-              // checkpoint_ns, so using it as a fallback here tagged every main-agent
-              // tool RESULT as a subagent — the tool chip never got its result and
-              // couldn't be expanded (read_file/execute).
-              if (isSubagentNamespace(namespace)) {
-                nsById[mid] = namespace;
-                if (n) subState[ensureSub(namespace)].nodeById[mid] = n;
-              } else if (n) {
-                nodeById[mid] = n;
-              }
-            }
-          }
-          continue;
-        }
-        if (event === "updates") {
-          if (isSubagentNamespace(namespace)) {
-            // eval/`task()`-from-code subagents don't emit a namespaced token
-            // stream — they surface as namespaced STATE updates. Pull each node's
-            // messages into that subagent's card (its model output = its result,
-            // its tool calls = its chips), keyed by the full namespace so parallel
-            // dispatches land in separate cards.
-            const nodes = parsed as Record<string, { messages?: ThreadMessage[] } | null>;
-            if (nodes && typeof nodes === "object") {
-              const key = ensureSub(namespace);
-              for (const [node, upd] of Object.entries(nodes)) {
-                for (const m of upd?.messages || []) {
-                  if (m && typeof m === "object" && m.id) subState[key].nodeById[m.id] = node;
-                  onSubagentMessage(namespace, m);
-                }
-              }
-            }
-            continue;
-          }
-          // A tool called interrupt() — the run is now paused awaiting a human.
-          // HITL review is a main-graph concern (main namespace only).
-          const d = parsed as { __interrupt__?: Array<{ value?: ReviewInterrupt }> };
-          const value = d?.__interrupt__?.[0]?.value;
-          if (value && typeof value === "object") interrupt = value;
-          continue;
-        }
-        if (event === "messages/partial" || event === "messages/complete") {
-          const msg = (Array.isArray(parsed) ? parsed[0] : parsed) as ThreadMessage;
-          if (msg?.id && middlewareMsgIds.has(msg.id)) continue;
-          // Partition strictly by namespace: ONLY root frames feed the main
-          // pipeline; everything else is a subagent (kept out of answer/widgets).
-          const ns = effectiveNamespace(namespace, msg?.id, nsById);
-          // Route to a subagent card ONLY for a real `tools:` subagent namespace;
-          // main-agent frames (empty OR internal non-tools ns) feed the answer.
-          if (isSubagentNamespace(ns)) onSubagentMessage(ns, msg);
-          else onStreamMessage(msg);
-        }
-      }
+              rubric: goalRef.current?.text || "",
+            },
+        {
+          ...(isResume ? { command: { resume } } : {}),
+          context: runContext as unknown as Record<string, unknown>,
+          streamSubgraphs: true,
+          // A run that fails before its first frame emits no `error` event: the
+          // request itself threw. The hook catches that and puts it in state
+          // rather than rejecting `submit`, so it has to be taken here. Reading
+          // `thread.error` after the await instead would race the re-render
+          // that publishes it, and a failed turn would show "(no response)".
+          onError: (e) => {
+            turn.error = turn.error || errorText((e as Error)?.message) || "run error";
+          },
+        },
+      );
       // Flush the last (still-open) widget now the stream has ended.
       wOrder.forEach(flushWidget);
 
-      if (interrupt) {
+      if (turn.review) {
         // Paused, not finished: hand over to the review editor. Any preamble the
         // agent streamed stays (minus the cursor); the bare "Working…" placeholder
         // is dropped since the review card now explains the state. No feedback row
         // either — there is no answer to rate yet.
-        const pending = interrupt;
+        const pending = turn.review;
         // Narration counts as having spoken: the comment below is about keeping it.
-        const spoke = !!shownText;
+        const spoke = !!turn.shown;
         setBubble({ streaming: false, markdown: false });
         setItems((prev) => [
           ...prev.filter((it) => spoke || it.id !== bubbleId),
@@ -1168,25 +1202,32 @@ export default function ChatPanel({
         // A caller driving this by voice cannot see the review card, so hand back a
         // line it can read out. The card is still rendered for whoever is looking.
         return {
-          answer,
+          answer: turn.answer,
           widgets: turnWidgets,
           approval: describeInterrupt(pending),
-          runId: runId || undefined,
+          runId: turn.runId || undefined,
         };
       }
 
-      if (answer) setBubble({ streaming: false, markdown: true, text: answer });
-      else if (errorMsg) setBubble({ streaming: false, markdown: false, text: "⚠️ " + errorMsg });
+      if (turn.answer) setBubble({ streaming: false, markdown: true, text: turn.answer });
+      else if (turn.error)
+        setBubble({ streaming: false, markdown: false, text: "⚠️ " + turn.error });
       else if (wFlushed.size)
         setBubble({ streaming: false, markdown: false, text: "Dashboard ready." });
       else setBubble({ streaming: false, markdown: false, text: "(no response)" });
 
-      if (runId)
+      const finished = turn.runId;
+      if (finished)
         setItems((prev) => [
           ...prev,
-          { kind: "feedback", id: nextId(), runId: runId!, workspace: runContext.ls_workspace },
+          { kind: "feedback", id: nextId(), runId: finished, workspace: runContext.ls_workspace },
         ]);
-      return { answer, widgets: turnWidgets, error: errorMsg || undefined, runId: runId || undefined };
+      return {
+        answer: turn.answer,
+        widgets: turnWidgets,
+        error: turn.error || undefined,
+        runId: finished || undefined,
+      };
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
         setBubble({
@@ -1197,6 +1238,8 @@ export default function ChatPanel({
       }
       return { answer: "", widgets: turnWidgets, error: (e as Error).message };
     } finally {
+      frameSink.current = null;
+      runHeaders.current = undefined;
       busyRef.current = false;
       setBusy(false);
       // Stop the answer bubble's shimmer. A bubble still marked streaming HERE can only
@@ -1225,7 +1268,7 @@ export default function ChatPanel({
       // here rendered a live call as "Cancelled" and left it that way even after
       // the tool went on to succeed. (An `if`, not an early return: a `return`
       // inside `finally` replaces the value the `try` already returned.)
-      if (!interrupt) {
+      if (!turn.review) {
         patchItem(activityId, (it) =>
           it.kind === "activity" ? { ...it, chips: freezePendingChips(it.chips) } : it,
         );
@@ -1716,7 +1759,7 @@ export default function ChatPanel({
         onValueChange={setInput}
         onSubmit={(text) => submit(text)}
         loading={busy}
-        onStop={() => abortRef.current?.abort()}
+        onStop={() => void thread.stop()}
         placeholder={variant === "hero" ? heroPlaceholder : "Ask a question…"}
         minRows={variant === "hero" ? 2 : 1}
         aria-label="Prompt"

@@ -1,23 +1,26 @@
 /**
  * `useStream`, configured the way this deployment needs it.
  *
- * One place for the options every turn shares, so the component running a
- * turn is left with the part that is actually about this product.
+ * It owns the RUN: creating it, streaming it, `isLoading`, `stop()`, the error
+ * it failed with, `thread.values`, and `thread.interrupts` - which is how a
+ * tool pausing for human review reaches the UI.
  *
- * Three of these are not defaults and are easy to lose:
+ * It does NOT own the rendered transcript. `thread.messages` stays EMPTY here
+ * by design, so do not reach for it: the SDK builds that array from
+ * `messages-tuple` frames, which this deployment does not request, and
+ * `agentTransport` says why in the comment on `STREAM_MODES`. The chat
+ * transcript, tool chips, widgets, artifacts and subagent cards are all built
+ * in `ChatPanel` from the cumulative `messages/*` frames the transport hands to
+ * `onFrame`.
  *
- * `streamSubgraphs` is what makes a dispatched subagent's work visible at
- * all. Without it a subagent runs silently and the UI has nothing to show
- * between the tool call and its result, which on a long task reads as a hang.
- *
- * `custom` in `streamMode` is the channel `RubricMiddleware` grades on. Drop
- * it and the goal verdict never arrives, silently, because nothing errors.
- *
- * `updates` carries `__interrupt__`, which is how a tool pausing for human
- * review reaches the UI at all.
+ * A custom `transport` rather than `apiUrl` for two reasons, both in
+ * `agentTransport`: a turn's request carries things `SubmitOptions` cannot
+ * express (a `rubric` on the input, per-run tracing headers), and the SDK's own
+ * subagent routing misfiles this graph's main-agent tool results.
  */
+import { useMemo, useRef } from "react";
 import { useStream } from "@langchain/langgraph-sdk/react";
-import { apiHeaders, getApiBase, getApiKey, getAssistantId } from "@/lib/config";
+import { agentTransport, type AgentFrame } from "@/lib/agentTransport";
 import type { ThreadMessage } from "@/lib/api";
 
 /** The agent's state, as the SPA reads it. */
@@ -34,39 +37,40 @@ export interface AgentState extends Record<string, unknown> {
 }
 
 export interface AgentStreamOptions {
-  threadId: string | null;
-  onThreadId: (id: string) => void;
+  /** The assistant a turn runs against, read at submit time. */
+  assistantId: string;
+  /**
+   * Extra headers for the turn being submitted, for a voice turn's tracing
+   * parent. A function because a turn sets them and submits in the same tick:
+   * a plain value would be read from the last render and so always one turn
+   * behind.
+   */
+  getHeaders: () => Record<string, string> | undefined;
+  /** Every frame of the run, subagent frames included, in arrival order. */
+  onFrame: (frame: AgentFrame) => void;
 }
 
 /**
- * The stream for one thread.
+ * The stream for this SPA's turns.
  *
- * `apiKey` and `defaultHeaders` are both supplied: the key is what the
- * deployment authenticates on, and the headers carry whatever else
- * `apiHeaders` adds, which includes the shared-secret header when one is set.
+ * All three options are read through refs at stream time, not captured, so a
+ * turn always uses the assistant, headers and frame handler that are current
+ * when it is submitted. The transport is therefore built once: rebuilding it
+ * would hand `useStream` a new transport identity on every render.
  */
-export function useAgentStream({ threadId, onThreadId }: AgentStreamOptions) {
-  return useStream<AgentState>({
-    apiUrl: getApiBase(),
-    apiKey: getApiKey() || undefined,
-    defaultHeaders: apiHeaders(),
-    assistantId: getAssistantId(),
-    threadId,
-    onThreadId,
-    messagesKey: "messages",
-  });
-}
+export function useAgentStream(options: AgentStreamOptions) {
+  const live = useRef(options);
+  live.current = options;
 
-/**
- * The per-run options, which is where the stream modes actually live.
- *
- * NOT hook options: `useStream` takes the connection, and `submit` takes how
- * a given run should stream. Spread this into every `submit` so a turn cannot
- * silently lose a channel.
- */
-export const RUN_STREAM_OPTIONS = {
-  // "messages" is the token stream the chat and widgets are built from;
-  // "updates" carries `__interrupt__`; "custom" carries the goal verdict.
-  streamMode: ["messages", "updates", "custom"],
-  streamSubgraphs: true,
-} as const;
+  const transport = useMemo(
+    () =>
+      agentTransport({
+        assistantId: () => live.current.assistantId,
+        headers: () => live.current.getHeaders(),
+        onFrame: (frame) => live.current.onFrame(frame),
+      }),
+    [],
+  );
+
+  return useStream<AgentState>({ transport, messagesKey: "messages" });
+}

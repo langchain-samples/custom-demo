@@ -597,7 +597,26 @@ export interface RunStreamOptions {
    * goal is sticky until the user clears it or the grader passes it.
    */
   rubric?: string;
+  /**
+   * Which stream modes to request. Defaults to `DEFAULT_STREAM_MODES`.
+   *
+   * A caller that feeds the LangGraph SDK asks for `messages-tuple` instead of
+   * `messages`, because those are two different wire shapes: `messages` emits
+   * `messages/partial` + `messages/metadata` frames, while `messages-tuple`
+   * emits one `messages` frame whose data is `[chunk, metadata]`. The SDK's
+   * message manager reads the tuple and ignores the other, silently.
+   */
+  streamMode?: string[];
 }
+
+/**
+ * What a turn streams when the caller does not say.
+ *
+ * "updates" carries `__interrupt__` when a tool pauses for human review;
+ * "messages" is the token stream the chat + widgets are built from; "custom"
+ * carries RubricMiddleware's `rubric_evaluation_*` frames (the goal verdict).
+ */
+export const DEFAULT_STREAM_MODES = ["messages", "updates", "custom"];
 
 /**
  * Stream a run over SSE (stream_mode:"messages") and yield each decoded
@@ -609,10 +628,7 @@ export async function* runStream(opts: RunStreamOptions): AsyncGenerator<SSEEven
   const { threadId, assistantId, messages, context, resume, signal, rubric, headers } = opts;
   const body: Record<string, unknown> = {
     assistant_id: assistantId,
-    // "updates" carries `__interrupt__` when a tool pauses for human review;
-    // "messages" is the token stream the chat + widgets are built from; "custom"
-    // carries RubricMiddleware's `rubric_evaluation_*` frames (the goal verdict).
-    stream_mode: ["messages", "updates", "custom"],
+    stream_mode: opts.streamMode || DEFAULT_STREAM_MODES,
     // Also stream frames emitted from inside subgraphs (task-dispatched
     // subagents) so we can peer into their work. Their event names carry a `|`
     // namespace suffix; the root graph's frames stay unsuffixed.
