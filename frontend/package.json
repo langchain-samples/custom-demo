@@ -19,6 +19,7 @@
     "@fontsource-variable/space-grotesk": "^5.3.0",
     "@headless-tree/core": "^1.7.0",
     "@headless-tree/react": "^1.7.0",
+    "@langchain/langgraph-sdk": "^1.11.0",
     "@milkdown/crepe": "^7.22.1",
     "@modelcontextprotocol/client": "^2.0.0",
     "@modelcontextprotocol/ext-apps": "^2.0.0",
