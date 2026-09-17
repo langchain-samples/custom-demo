@@ -39,6 +39,14 @@ export interface McpAppHandlers {
   /** Put the view's text into the conversation. */
   onMessage?: (text: string) => void;
   /**
+   * The view reported its content height.
+   *
+   * Take this when the surface owns the app's layout, which it usually does:
+   * the ceiling on how tall an app may grow is a fact about the card it sits
+   * in, not about the app. Handled internally when absent.
+   */
+  onResize?: (size: { height: number }) => void;
+  /**
    * The view asked to be shown differently, and the host agreed.
    *
    * Only ever called with a mode the host declared in
@@ -166,6 +174,7 @@ export function MCPApp({
 }: MCPAppProps) {
   const frame = useRef<HTMLIFrameElement | null>(null);
   const [bridge, setBridge] = useState<AppBridge | null>(null);
+  const [ready, setReady] = useState(false);
   const [resource, setResource] = useState<McpAppResource | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [height, setHeight] = useState(340);
@@ -249,7 +258,10 @@ export function MCPApp({
     setBridge(app);
 
     app.onsizechange = ({ height: h }) => {
-      if (typeof h === "number") setHeight(Math.min(Math.max(h, 160), 900));
+      if (typeof h !== "number") return;
+      const report = live.current?.onResize;
+      if (report) report({ height: h });
+      else setHeight(Math.min(Math.max(h, 160), 900));
     };
 
     app.oncalltool = async (params) => {
@@ -322,12 +334,21 @@ export function MCPApp({
       });
     };
 
+    // Registered BEFORE connect, deliberately. A view can send `initialized`
+    // the moment the transport is attached, and a listener added in a later
+    // effect would miss it and then wait forever for something already past.
+    setReady(false);
+    const onReady = () => setReady(true);
+    app.addEventListener("initialized", onReady);
+
     void app.connect(new PostMessageTransport(win, win));
     return () => {
       // A request, not a notification: the spec has the host give the view a
       // chance to save what the person typed before the frame goes.
+      app.removeEventListener("initialized", onReady);
       void app.teardownResource({ reason: "The app was closed." }).catch(() => {});
       setBridge(null);
+      setReady(false);
     };
     // Deliberately not keyed on the input or the result. Those change on every
     // streamed frame, and rebuilding would tear down a handshake the iframe
@@ -351,7 +372,7 @@ export function MCPApp({
     void bridge.sendHostContextChange({ displayMode: wanted as "inline" | "fullscreen" | "pip" });
   }, [bridge, wanted]);
 
-  useToolInput(bridge, part);
+  useToolInput(bridge, ready, part);
 
   if (failed) return <div role="alert">Could not load the app: {failed}</div>;
   if (!resource) return <>{fallback ?? null}</>;
@@ -397,22 +418,13 @@ export function MCPApp({
  * still sends its one final input, so a view never waits on a partial that
  * already happened.
  */
-function useToolInput(bridge: AppBridge | null, part: McpAppPart) {
-  const [ready, setReady] = useState(false);
+function useToolInput(bridge: AppBridge | null, ready: boolean, part: McpAppPart) {
   const sentFinal = useRef(false);
   const sentResult = useRef(false);
 
-  // A host MUST NOT send anything before the view says `initialized`. Sending
-  // early is silent: the view simply never draws.
   useEffect(() => {
-    setReady(false);
     sentFinal.current = false;
     sentResult.current = false;
-    if (!bridge) return;
-
-    const onReady = () => setReady(true);
-    bridge.addEventListener("initialized", onReady);
-    return () => bridge.removeEventListener("initialized", onReady);
   }, [bridge]);
 
   const input = JSON.stringify(part.input);
@@ -438,8 +450,8 @@ function useToolInput(bridge: AppBridge | null, part: McpAppPart) {
       sentResult.current = true;
       void bridge.sendToolResult(part.output as never);
     }
-    // `ready` is load-bearing here: `initialized` often arrives after the
-    // result does, and without it this never re-runs to send anything.
+    // `ready` is load-bearing: `initialized` often arrives after the result
+    // does, and without it this never re-runs to send anything.
     //
     // `part.input` is deliberately absent: it is a new object on every frame,
     // so depending on it would send a partial per render rather than per

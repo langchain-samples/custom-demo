@@ -1996,6 +1996,7 @@ function ItemView({
     return (
       <McpAppCard
         toolName={item.toolName}
+        toolCallId={item.id}
         toolArguments={item.toolArgs}
         toolResult={item.toolResult}
         streaming={item.streaming}

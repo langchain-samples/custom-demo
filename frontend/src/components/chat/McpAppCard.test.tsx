@@ -10,7 +10,7 @@
  *
  * The app's own half of the conversation is exercised for real against a built
  * app in `custom_demo/tests/signature_app_test.js`; the protocol is pinned in
- * `src/lib/mcpAppHost.test.ts`.
+ * `@langchain/react`, whose ordering rule has its own test.
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
@@ -20,10 +20,22 @@ const bridge = vi.hoisted(() => ({ current: null as null | Record<string, Return
 vi.mock("@modelcontextprotocol/ext-apps/app-bridge", () => ({
   PostMessageTransport: class {},
   AppBridge: class {
+    listeners: Record<string, ((params: unknown) => void)[]> = {};
     constructor() {
       bridge.current = this as unknown as Record<string, ReturnType<typeof vi.fn>>;
     }
-    connect = vi.fn(async () => {});
+    addEventListener = vi.fn((name: string, fn: (params: unknown) => void) => {
+      (this.listeners[name] ??= []).push(fn);
+    });
+    removeEventListener = vi.fn((name: string, fn: (params: unknown) => void) => {
+      this.listeners[name] = (this.listeners[name] ?? []).filter((f) => f !== fn);
+    });
+    // A view says `initialized` once the transport is attached, and the host
+    // may send nothing before it does. Firing it here is what makes this mock
+    // a view that works rather than one that never speaks.
+    connect = vi.fn(async () => {
+      for (const fn of this.listeners.initialized ?? []) fn({});
+    });
     sendToolInput = vi.fn(async () => {});
     sendToolInputPartial = vi.fn(async () => {});
     sendToolResult = vi.fn(async () => {});
@@ -49,6 +61,7 @@ function draw(overrides: Partial<Parameters<typeof McpAppCard>[0]> = {}) {
   return render(
     <McpAppCard
       toolName="meridian_propose_rebalance"
+      toolCallId="call_1"
       toolArguments={{ account_id: "MW-10241" }}
       toolResult={{ structuredContent: { household: "Whitfield Family Trust" } }}
       streaming={false}
@@ -135,7 +148,8 @@ it("forwards each streamed argument frame as a partial, then one complete input"
     rerender(
       <McpAppCard
         toolName="meridian_propose_rebalance"
-        toolArguments={{ elements }}
+        toolCallId="call_1"
+              toolArguments={{ elements }}
         streaming
         servers={SERVERS}
       />,
@@ -145,6 +159,7 @@ it("forwards each streamed argument frame as a partial, then one complete input"
   rerender(
     <McpAppCard
       toolName="meridian_propose_rebalance"
+      toolCallId="call_1"
       toolArguments={{ elements: "[{a:1},{b:2},{c:3}]" }}
       streaming={false}
       servers={SERVERS}
@@ -177,6 +192,7 @@ it("waits with a skeleton until the model has written any arguments", async () =
   rerender(
     <McpAppCard
       toolName="meridian_propose_rebalance"
+      toolCallId="call_1"
       toolArguments={{ elements: "[{a" }}
       streaming
       servers={SERVERS}
@@ -194,7 +210,13 @@ it("does not put the skeleton back when a later frame parses to nothing", async 
   await waitFor(() => expect(container.querySelector("[aria-hidden]")).toBeNull());
 
   rerender(
-    <McpAppCard toolName="meridian_propose_rebalance" toolArguments={{}} streaming servers={SERVERS} />,
+    <McpAppCard
+      toolName="meridian_propose_rebalance"
+      toolCallId="call_1"
+      toolArguments={{}}
+      streaming
+      servers={SERVERS}
+    />,
   );
   // Sticky on purpose: a skeleton reappearing over a drawing already on screen
   // is worse than the wait it was there to explain.
