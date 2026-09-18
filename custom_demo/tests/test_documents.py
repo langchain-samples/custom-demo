@@ -284,7 +284,7 @@ def test_the_agent_write_rebases_when_a_person_committed_first():
     write reloads and replays rather than failing the turn or overwriting the tree.
     """
     hub = RacingHub(conflicts=1)
-    backend = B.DocumentsBackend("acme-docs", client=cast("Any", hub))
+    backend = B.RebasingBackend("acme-docs", client=cast("Any", hub))
     backend.write("/req-204/functional-spec.md", "drafted by the agent")
     assert hub.pushes == 2  # the refused push, then the replay
     assert hub.tree["req-204/functional-spec.md"] == "drafted by the agent"
@@ -300,7 +300,7 @@ def test_a_second_conflict_stops_and_reports_rather_than_retrying_forever():
     eventually bury one of them.
     """
     hub = RacingHub(conflicts=2)
-    backend = B.DocumentsBackend("acme-docs", client=cast("Any", hub))
+    backend = B.RebasingBackend("acme-docs", client=cast("Any", hub))
     result = backend.write("/req-204/functional-spec.md", "drafted by the agent")
     assert hub.pushes == 2
     assert result.error
@@ -310,12 +310,12 @@ def test_a_second_conflict_stops_and_reports_rather_than_retrying_forever():
 def test_the_private_commit_hook_this_depends_on_still_exists():
     """Pins the dependency on a deepagents-internal method.
 
-    `DocumentsBackend` overrides `ContextHubBackend._commit`. A release that renames it
+    `RebasingBackend` overrides `ContextHubBackend._commit`. A release that renames it
     would leave the override dead and silently restore the failed turns, so the rename
     has to fail here instead.
     """
     assert callable(ContextHubBackend._commit)
-    assert B.DocumentsBackend._commit is not ContextHubBackend._commit
+    assert B.RebasingBackend._commit is not ContextHubBackend._commit
 
 
 def test_documents_backends_are_never_shared_between_runs(monkeypatch):
@@ -331,7 +331,7 @@ def test_documents_backends_are_never_shared_between_runs(monkeypatch):
         built.append(repo)
         return SimpleNamespace(_repo=repo)
 
-    monkeypatch.setattr(B, "DocumentsBackend", record)
+    monkeypatch.setattr(B, "RebasingBackend", record)
     first = B._docs_route("acme-docs", None)[B.ARTIFACTS_MOUNT]
     second = B._docs_route("acme-docs", None)[B.ARTIFACTS_MOUNT]
     assert built == ["acme-docs", "acme-docs"]
