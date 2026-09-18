@@ -100,7 +100,11 @@ TOOL_REGISTRY: tuple[ToolSpec, ...] = (
             "ask about things you can look up or reasonably assume. It is MULTIPLE CHOICE: always "
             'pass 2-5 short, mutually exclusive `options` (plus an escape hatch like "Something '
             'else" when they may not cover it). The user can only pick one of them, so never '
-            "ask for a value they would have to type."
+            "ask for a value they would have to type. If a previous `ask_user` call came back "
+            "as 'did not complete - no result was recorded', the user is replying in free text "
+            "and cannot see the multiple-choice prompt. Do NOT call `ask_user` again for that "
+            "question, and never repeat an identical question: ask it in plain prose in your "
+            "written reply instead."
         ),
     ),
     ToolSpec(

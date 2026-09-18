@@ -165,6 +165,12 @@ def ask_user(question: str, options: list[str]) -> str:
     "Something else" when they might not. Never ask for a value only the user
     can type (an account number, a specific date): ask a choosable question
     instead, or look it up.
+
+    If a previous `ask_user` call came back as 'did not complete - no result was
+    recorded', the user is replying in free text and cannot see the
+    multiple-choice prompt. Do NOT call `ask_user` again for that question, and
+    never repeat an identical question: ask it in plain prose in your written
+    reply instead.
     """
     choices = [str(o).strip() for o in (options or []) if str(o).strip()]
     # A no-artifact interrupt: nothing is generated or cached, so (unlike `review`)

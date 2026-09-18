@@ -83,6 +83,13 @@ def test_capability_note_empty_for_unset_selection():
     assert A._capability_note(_rt(None)) == ""  # default selection → no note (unchanged path)
 
 
+def test_capability_note_tells_ask_user_not_to_repeat_an_uncompleted_question():
+    """A cancelled interrupt comes back as a new run, so only the prompt can stop the repeat."""
+    note = A._capability_note(_rt(["web_search"]))  # ask_user is always on
+    assert "did not complete - no result was recorded" in note
+    assert "never repeat an identical question" in note
+
+
 # --- dynamic subagents are part of every agent ---
 
 
