@@ -57,6 +57,24 @@ def _closing_audio(body: dict) -> bytes:
         return b""
 
 
+def _session_metadata(body: dict) -> dict:
+    """The `session` action's metadata, checked for the keys that make a trace attributable.
+
+    `assistant_id`, `agent_repo`, `graph_id` and `user_id` are what let a voice trace be
+    filtered to one assistant, one prompt source and one user, exactly as an agent run
+    already can be; the SPA reads them off the presenter session and sends them here.
+    A session missing them still opens, because a conversation must not fail over its
+    bookkeeping, but the root run names what never arrived under `identity_missing` so an
+    unattributable trace says why it is unattributable.
+    """
+    metadata = {k: v for k, v in (body.get("metadata") or {}).items() if v not in (None, "")}
+    missing = [key for key in voice_trace_mod.IDENTITY_KEYS if key not in metadata]
+    if missing:
+        metadata["identity_missing"] = missing
+
+    return metadata
+
+
 def _voice_action(action: str, body: dict) -> JSONResponse:
     """Dispatch one bookkeeping call. See `voice_trace` for the five shapes."""
     if action == "session":
@@ -65,7 +83,7 @@ def _voice_action(action: str, body: dict) -> JSONResponse:
                 "session_id": voice_trace_mod.start_session(
                     str(body.get("workspace") or ""),
                     str(body.get("project") or ""),
-                    body.get("metadata") or {},
+                    _session_metadata(body),
                 )
             }
         )
@@ -113,6 +131,10 @@ async def voice_trace(request):
 
     `tool` is the interesting one: its `headers` are what the SPA puts on the agent run
     so the run nests under the tool span instead of starting its own trace.
+
+    `session`'s `metadata` carries the conversation's identity - `thread_id`, `customer`
+    and the four keys in `_session_metadata` - and an `end` with no `outputs` is the normal
+    case: the root is closed with the transcript summary voice/trace.py keeps.
 
     Best-effort throughout: a conversation must not break because its trace could not be
     written, so a missing session or an unusable LangSmith key answers `{}` / `ok: false`

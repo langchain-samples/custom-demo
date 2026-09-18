@@ -15,7 +15,7 @@ from typing import Any
 
 from langsmith import Client, tracing_context
 
-from custom_demo.config import routing_key, scoped_client
+from custom_demo.config import deployment_environment, routing_key, scoped_client
 
 # Absolute import: Agent Server loads this entrypoint as a top-level module (no
 # package parent), so a relative `from .agent` import would fail here.
@@ -45,6 +45,17 @@ def _client_for_workspace(workspace_id: str) -> Client | None:
     return client
 
 
+def _root_metadata() -> dict[str, str]:
+    """Metadata put on this run's tracing context, whatever workspace it routes to.
+
+    `surface` separates typed traffic from the voice conversations voice/trace.py opens,
+    and `environment` separates a real customer session from demo traffic. Set here
+    rather than by the SPA so a run started by anything (a script, an eval, a scheduled
+    job) still says where it came from.
+    """
+    return {"surface": "dashboard", "environment": deployment_environment()}
+
+
 @contextlib.asynccontextmanager
 async def graph(config: Any):
     """Route this run's traces to a chosen workspace/project, then yield the graph.
@@ -53,7 +64,8 @@ async def graph(config: Any):
     these in the run's `context` (LangGraph surfaces context into `configurable`),
     which avoids the "can't set both context and configurable" error. `ls_workspace`
     needs an org-scoped key to switch tenants; `ls_project` is the project name.
-    Both optional — with neither set we yield the graph unwrapped (default behavior).
+    Both optional: with neither set the run stays where it would have gone anyway, and
+    the context only carries `_root_metadata`.
     """
     configurable = (config or {}).get("configurable", {}) or {}
     workspace_id = configurable.get("ls_workspace") or None
@@ -81,9 +93,13 @@ async def graph(config: Any):
     # records the agent run's id on its tool span instead (`closeToolSpan`), which gives a
     # click-through without putting the trace at risk.
     if not workspace_id and not project_name:
-        yield base_graph
+        with tracing_context(metadata=_root_metadata()):
+            yield base_graph
+
         return
 
     client = _client_for_workspace(workspace_id) if workspace_id else None
-    with tracing_context(enabled=True, client=client, project_name=project_name):
+    with tracing_context(
+        enabled=True, client=client, project_name=project_name, metadata=_root_metadata()
+    ):
         yield base_graph

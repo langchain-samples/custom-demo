@@ -14,6 +14,7 @@ from __future__ import annotations
 import pytest
 
 from custom_demo.voice import trace as voice_trace
+from custom_demo.web import voice as web_voice
 
 
 class _FakeRun:
@@ -182,3 +183,58 @@ def test_no_audio_means_no_attachment():
     run = voice_trace._SESSIONS[sid]["run"]
     voice_trace.end_session(sid, {}, b"")
     assert not hasattr(run, "attachments") or not run.attachments
+
+
+def test_a_root_opens_with_inputs_and_closes_with_the_transcript():
+    """Empty inputs and outputs are what make a voice root uninspectable.
+
+    A root with neither has a blank preview in every list view, and the conversation
+    endpoints cannot reconstruct the trace at all - the audio is the only content, and
+    only if the browser managed to upload it.
+    """
+    sid = voice_trace.start_session("ws-1", "proj-1", {"customer": "Acme"})
+    root = _root(sid)
+    assert root.inputs["session"] == "voice"
+    assert root.inputs["customer"] == "Acme" and root.inputs["started_at"]
+
+    voice_trace.utterance(sid, "user", "why did units fall")
+    voice_trace.utterance(sid, "model", "on three SKUs in the north region")
+    voice_trace.open_tool(sid, "invoke_deep_agent", {})
+    assert voice_trace.end_session(sid) is True
+    assert root.outputs == {
+        "transcript_summary": "why did units fall",
+        "final_answer": "on three SKUs in the north region",
+        "utterances": 2,
+        "tool_calls": 1,
+    }
+
+
+def test_outputs_from_the_caller_still_win_over_the_summary():
+    sid = voice_trace.start_session()
+    voice_trace.utterance(sid, "user", "hello")
+    root = _root(sid)
+    voice_trace.end_session(sid, {"turns": 1})
+    assert root.outputs == {"turns": 1}
+
+
+def test_a_root_records_the_surface_and_environment_it_came_from(monkeypatch):
+    """Without these two, voice traffic cannot be told apart from typed demo traffic."""
+    monkeypatch.setenv("ENVIRONMENT", "staging")
+    sid = voice_trace.start_session()
+    meta = _root(sid).kwargs["extra"]["metadata"]
+    assert meta["surface"] == "voice" and meta["environment"] == "staging"
+
+
+def test_the_route_forwards_the_identity_keys_and_names_the_missing_ones():
+    """A voice trace is attributable only if the SPA sends who it was for."""
+    sent = {
+        "assistant_id": "asst-1",
+        "agent_repo": "acme/agent",
+        "graph_id": "dashboard_agent",
+        "user_id": "user-7",
+    }
+    assert web_voice._session_metadata({"metadata": sent}) == sent
+    # A blank value is not an identity, so it is dropped and reported as missing.
+    partial = web_voice._session_metadata({"metadata": {"assistant_id": "asst-1", "user_id": ""}})
+    assert partial["assistant_id"] == "asst-1"
+    assert partial["identity_missing"] == ["agent_repo", "graph_id", "user_id"]

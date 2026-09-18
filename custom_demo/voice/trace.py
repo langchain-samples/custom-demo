@@ -30,10 +30,16 @@ from __future__ import annotations
 import threading
 import traceback
 import uuid
+from datetime import UTC, datetime
 
 from langsmith import Client, RunTree
 
-from custom_demo.config import routing_key, scoped_client
+from custom_demo.config import deployment_environment, routing_key, scoped_client
+
+# The metadata keys a voice session has to be given to be attributable the way a typed
+# run is: which assistant answered, out of which agent repo and graph, for which user.
+# The SPA sends them on the `session` action; `custom_demo/web/voice.py` checks they arrived.
+IDENTITY_KEYS = ("assistant_id", "agent_repo", "graph_id", "user_id")
 
 # session_id -> the conversation's root span, plus its open tool spans by id.
 _SESSIONS: dict[str, dict] = {}
@@ -71,6 +77,11 @@ def start_session(workspace: str = "", project: str = "", metadata: dict | None 
       the agent runs on, so the spoken conversation and the agent's turns are one object.
 
     Both match what langchain-ai/google-adk-realtime-deepagents-example sets.
+
+    `inputs` is filled rather than left empty: a root with no inputs has a blank preview in
+    every list view, and the conversation-level endpoints cannot reconstruct it at all. The
+    opening context is the only thing known at this point; the transcript arrives later and
+    is summarised into the root's outputs by `end_session`.
     """
     client = _client(workspace)
     if client is None:
@@ -81,19 +92,39 @@ def start_session(workspace: str = "", project: str = "", metadata: dict | None 
     # `project_name` is typed as a plain str, so an unset project omits the kwarg
     # rather than passing None.
     kwargs: dict = {"project_name": project} if project else {}
+    supplied = metadata or {}
+    started_at = datetime.now(UTC).isoformat()
     run = RunTree(
         name="voice_session",
         run_type="chain",
-        inputs={},
+        inputs={
+            "session": "voice",
+            "customer": str(supplied.get("customer") or ""),
+            "started_at": started_at,
+        },
         ls_client=client,
         tags=["voice-mode"],
-        extra={"metadata": {"ls_modality": "audio", **(metadata or {})}},
+        extra={
+            "metadata": {
+                "ls_modality": "audio",
+                "surface": "voice",
+                "environment": deployment_environment(),
+                **supplied,
+            }
+        },
         **kwargs,
     )
     run.post()
     session_id = str(uuid.uuid4())
     with _LOCK:
-        _SESSIONS[session_id] = {"run": run, "tools": {}}
+        _SESSIONS[session_id] = {
+            "run": run,
+            "tools": {},
+            "utterances": 0,
+            "tool_calls": 0,
+            "first_user": "",
+            "last_agent": "",
+        }
         while len(_SESSIONS) > _MAX_SESSIONS:
             _SESSIONS.pop(next(iter(_SESSIONS)))
 
@@ -121,6 +152,12 @@ def utterance(session_id: str, role: str, text: str) -> bool:
     child.post()
     child.end(outputs={"text": text})
     child.patch()
+    session["utterances"] += 1
+    if role == "user":
+        session["first_user"] = session["first_user"] or text
+    else:
+        session["last_agent"] = text
+
     return True
 
 
@@ -140,6 +177,7 @@ def open_tool(session_id: str, name: str, inputs: dict) -> dict:
     child.post()
     tool_id = str(uuid.uuid4())
     session["tools"][tool_id] = child
+    session["tool_calls"] += 1
     return {"tool_id": tool_id, "headers": dict(child.to_headers())}
 
 
@@ -173,6 +211,16 @@ def close_tool(session_id: str, tool_id: str, outputs: dict) -> bool:
     return True
 
 
+def _transcript_outputs(session: dict) -> dict:
+    """Root outputs built from what was said, for a caller that sends none."""
+    return {
+        "transcript_summary": session["first_user"],
+        "final_answer": session["last_agent"],
+        "utterances": session["utterances"],
+        "tool_calls": session["tool_calls"],
+    }
+
+
 def end_session(session_id: str, outputs: dict | None = None, audio_wav: bytes = b"") -> bool:
     """Close the root span, attaching the conversation audio when there is any.
 
@@ -183,6 +231,10 @@ def end_session(session_id: str, outputs: dict | None = None, audio_wav: bytes =
     server-side recorder.
 
     Also closes any tool span still open, so a tab shut mid-run does not leave one spinning.
+
+    A closing call with no outputs (what the SPA sends today) gets the transcript summary
+    instead of an empty dict, so the root says what the conversation was about rather than
+    showing a blank preview beside its audio.
     """
     with _LOCK:
         session = _SESSIONS.pop(session_id, None)
@@ -203,6 +255,6 @@ def end_session(session_id: str, outputs: dict | None = None, audio_wav: bytes =
         except Exception:  # noqa: BLE001
             traceback.print_exc()
 
-    run.end(outputs=outputs or {})
+    run.end(outputs=outputs or _transcript_outputs(session))
     run.patch()
     return True

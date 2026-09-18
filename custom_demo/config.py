@@ -280,6 +280,17 @@ def project_name() -> str:
     return os.getenv("PROJECT_NAME", "custom-demo")
 
 
+def deployment_environment() -> str:
+    """Environment this deployment is serving, recorded on every root run (`ENVIRONMENT`).
+
+    Defaults to "development" rather than empty: a root run with no environment at all
+    is indistinguishable in a dashboard from a production one, so an unset variable has
+    to name the safe assumption instead of saying nothing.
+    """
+    load_env()
+    return os.getenv("ENVIRONMENT") or "development"
+
+
 def workspace_id() -> str | None:
     """LangSmith workspace (tenant) id to scope prompts, traces, and feedback.
 
