@@ -222,7 +222,7 @@ export interface McpToolInfo {
   app: string | null;
 }
 
-/** What POST /mcp/probe reports for a single server. */
+/** What the browser's own connection check reports for a single server. */
 export interface McpProbeResult {
   id: string;
   label: string;

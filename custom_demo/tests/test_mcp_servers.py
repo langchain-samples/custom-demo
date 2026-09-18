@@ -727,7 +727,7 @@ def test_one_unreachable_server_does_not_take_the_others_down(monkeypatch):
     dead = m.McpServer(id="everything", label="Everything", url="https://dead/mcp")
     tool = SimpleNamespace(name="excalidraw_create_view", metadata={}, args_schema=None)
 
-    async def fake_discover(servers, *, refresh):
+    async def fake_discover(servers):
         ids = [s.id for s in servers]
         if "everything" in ids:
             raise RuntimeError("Client failed to connect: nodename nor servname provided")
@@ -736,7 +736,7 @@ def test_one_unreachable_server_does_not_take_the_others_down(monkeypatch):
 
     monkeypatch.setattr(m, "_discover", fake_discover)
     m._TOOLS.clear()
-    out = asyncio.run(m.load_tools((good, dead), refresh=True))
+    out = asyncio.run(m.load_tools((good, dead)))
 
     # The group pass raises because of `dead`; the per-server retry keeps `good`.
     assert [t.name for t in out] == ["excalidraw_create_view"]
@@ -748,10 +748,10 @@ def test_one_unreachable_server_does_not_take_the_others_down(monkeypatch):
 def test_every_server_unreachable_is_still_an_empty_list(monkeypatch):
     """No tools, never an exception: a broken connection cannot fail a turn."""
 
-    async def fake_discover(servers, *, refresh):
+    async def fake_discover(servers):
         raise RuntimeError("nope")
 
     monkeypatch.setattr(m, "_discover", fake_discover)
     m._TOOLS.clear()
     dead = m.McpServer(id="everything", label="Everything", url="https://dead/mcp")
-    assert asyncio.run(m.load_tools((dead,), refresh=True)) == []
+    assert asyncio.run(m.load_tools((dead,))) == []

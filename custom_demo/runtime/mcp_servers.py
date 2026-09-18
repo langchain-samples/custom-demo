@@ -45,8 +45,8 @@ from custom_demo.config import mcp_timeout_seconds, mcp_tools_ttl_seconds
 # the server's TTL hint; this one only avoids re-adapting tools we hold.
 TOOLS_TTL_SECONDS = mcp_tools_ttl_seconds()
 
-# A server that has gone away must not hang a turn. Both the probe route and the
-# per-run load are bounded by this.
+# A server that has gone away must not hang a turn. Every connection this module
+# opens, on discovery and on a tool call, is bounded by this.
 CONNECT_TIMEOUT_SECONDS = mcp_timeout_seconds()
 
 _SLUG = re.compile(r"[^a-z0-9]+")
@@ -85,8 +85,8 @@ def parse_servers(raw: Any) -> tuple[McpServer, ...]:
     """Normalize `context.mcp_servers` into servers we can actually connect to.
 
     Skips anything malformed rather than raising: a half-typed URL saved in
-    Settings must not take the whole agent down, and the SPA validates properly
-    through `probe()`.
+    Settings must not take the whole agent down. The SPA checks a server properly
+    from the browser, with its own MCP client, and shows the result in Settings.
 
     Accepts a list of dicts, or a JSON string of one, as insurance against a
     transport that stringifies the field.
@@ -186,7 +186,7 @@ _TOOLS: dict[str, tuple[float, list[Any]]] = {}
 _LOCKS: dict[str, asyncio.Lock] = {}
 
 
-async def load_tools(servers: tuple[McpServer, ...], *, refresh: bool = False) -> list[Any]:
+async def load_tools(servers: tuple[McpServer, ...]) -> list[Any]:
     """Adapted LangChain tools for `servers`, cached for `TOOLS_TTL_SECONDS`.
 
     App-only tools are dropped: the agent must not see them, and that filter is
@@ -197,31 +197,30 @@ async def load_tools(servers: tuple[McpServer, ...], *, refresh: bool = False) -
     way out.
 
     Never raises: a server that is down, tunnelled to nothing, or refusing the
-    token yields no tools and leaves the rest of the agent working. The SPA's
-    `probe()` is where a connection problem is meant to be visible; a chat turn
-    is not.
+    token yields no tools and leaves the rest of the agent working. Settings is
+    where a connection problem is meant to be visible, from the browser's own
+    check; a chat turn is not.
     """
     if not servers:
         return []
 
     key = fingerprint(servers)
     now = time.monotonic()
-    if not refresh:
-        hit = _TOOLS.get(key)
-        if hit and hit[0] > now:
-            return [t for t in hit[1] if model_visible(t)]
+    hit = _TOOLS.get(key)
+    if hit and hit[0] > now:
+        return [t for t in hit[1] if model_visible(t)]
 
     lock = _LOCKS.setdefault(key, asyncio.Lock())
     async with lock:
         # A second caller that queued on the lock while the first was loading
         # should use what it produced, not load again.
         hit = _TOOLS.get(key)
-        if not refresh and hit and hit[0] > time.monotonic():
+        if hit and hit[0] > time.monotonic():
             return [t for t in hit[1] if model_visible(t)]
 
         try:
             tools, said = await asyncio.wait_for(
-                _discover(servers, refresh=refresh),
+                _discover(servers),
                 timeout=CONNECT_TIMEOUT_SECONDS,
             )
         except Exception as exc:  # noqa: BLE001 - a bad server degrades the turn, never fails it
@@ -230,7 +229,7 @@ async def load_tools(servers: tuple[McpServer, ...], *, refresh: bool = False) -
             # takes every other server's tools down with it. Retry one at a
             # time so the damage is limited to the server that caused it.
             _log(f"group discovery failed, retrying per server: {type(exc).__name__}: {exc}")
-            tools, said = await _discover_each(servers, refresh=refresh)
+            tools, said = await _discover_each(servers)
 
         _INSTRUCTIONS[key] = said
         if not tools:
@@ -243,9 +242,7 @@ async def load_tools(servers: tuple[McpServer, ...], *, refresh: bool = False) -
         return [t for t in tools if model_visible(t)]
 
 
-async def _discover_each(
-    servers: tuple[McpServer, ...], *, refresh: bool
-) -> tuple[list[Any], dict[str, str]]:
+async def _discover_each(servers: tuple[McpServer, ...]) -> tuple[list[Any], dict[str, str]]:
     """Discover each server alone, so one broken server costs only its own tools.
 
     The fallback for when the single-group pass fails. A `ClientGroup` connects
@@ -255,15 +252,13 @@ async def _discover_each(
     naming a server that is perfectly healthy.
 
     Concurrent, so a server that hangs costs one timeout rather than one per
-    server. Namespacing is unchanged: a one-member group still prefixes its
-    tools with the server id, which is what `probe` has always relied on.
+    server. A one-member group still prefixes its tools with the server id, so a
+    tool name identifies the server it came from however many are configured.
     """
 
     async def one(server: McpServer) -> tuple[list[Any], dict[str, str]]:
         try:
-            return await asyncio.wait_for(
-                _discover((server,), refresh=refresh), timeout=CONNECT_TIMEOUT_SECONDS
-            )
+            return await asyncio.wait_for(_discover((server,)), timeout=CONNECT_TIMEOUT_SECONDS)
         except Exception as exc:  # noqa: BLE001 - name the server and keep the others
             _log(f"{server.id} is unreachable, its tools are missing: {type(exc).__name__}: {exc}")
             return [], {}
@@ -274,9 +269,7 @@ async def _discover_each(
     }
 
 
-async def _discover(
-    servers: tuple[McpServer, ...], *, refresh: bool
-) -> tuple[list[Any], dict[str, str]]:
+async def _discover(servers: tuple[McpServer, ...]) -> tuple[list[Any], dict[str, str]]:
     """One real discovery pass: connect, list, adapt, and read what each server says.
 
     Both results come from the same connection on purpose. `awrap_model_call`
@@ -292,9 +285,9 @@ async def _discover(
     # `group.clients[...].instructions` empty, so the guidance would silently be
     # lost while the tools came back fine. One connection still, not two.
     async with group, MCPAdapter(group) as adapter:
-        # `use` reads the client-side cache when the server's TTL hint says it is
-        # still fresh; `refresh` is what the SPA's "reload tools" button sends.
-        tools = await adapter.list_tools(cache_mode="refresh" if refresh else "use")
+        # `use` reads the client-side cache while the server's own TTL hint says
+        # it is still fresh, so a warm list costs no round trip.
+        tools = await adapter.list_tools(cache_mode="use")
         # `instructions` is declared on the client, and `clients` is keyed by the
         # id we namespaced the tools with, so the two line up by construction.
         said = {
@@ -322,6 +315,26 @@ def instructions_for(servers: tuple[McpServer, ...]) -> dict[str, str]:
     return dict(_INSTRUCTIONS.get(fingerprint(servers), {}))
 
 
+def invalidate(servers: tuple[McpServer, ...] | None = None) -> None:
+    """Drop cached tools and instructions, for one server set or all of them.
+
+    The cache's only other exit is `TOOLS_TTL_SECONDS` expiring, so this is what
+    a caller uses to make the next `load_tools` go back to the server. Nothing in
+    the deployment calls it today: Settings checks a server from the browser with
+    its own client, and a server whose id, URL or headers change lands on a new
+    `fingerprint` and therefore a new cache entry anyway. It stays because a cache
+    with no way to clear it is a trap, and because the tests reset state through
+    it rather than reaching into `_TOOLS`.
+    """
+    if servers is None:
+        _TOOLS.clear()
+        _INSTRUCTIONS.clear()
+        return
+
+    _TOOLS.pop(fingerprint(servers), None)
+    _INSTRUCTIONS.pop(fingerprint(servers), None)
+
+
 def _ui_meta(tool: Any) -> dict[str, Any]:
     """The `_meta.ui` block the adapter carried through, or an empty one."""
     meta = (tool.metadata or {}).get("mcp") or {}
@@ -346,16 +359,6 @@ def model_visible(tool: Any) -> bool:
         return True
 
     return "model" in visibility
-
-
-def invalidate(servers: tuple[McpServer, ...] | None = None) -> None:
-    """Drop cached tools, for one server set or all of them."""
-    if servers is None:
-        _TOOLS.clear()
-        _INSTRUCTIONS.clear()
-        return
-
-    _TOOLS.pop(fingerprint(servers), None)
 
 
 async def resolve_server(assistant_id: str, server_id: str) -> McpServer | None:
