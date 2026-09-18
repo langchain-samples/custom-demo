@@ -13,6 +13,7 @@ import dataclasses
 from typing import Any, cast
 
 from deepagents import RubricMiddleware, SubAgent, create_deep_agent
+from deepagents.middleware.skills import SkillsMiddleware, SkillsState
 from deepagents.middleware.subagents import GENERAL_PURPOSE_SUBAGENT
 from langchain.agents.middleware import (
     AgentMiddleware,
@@ -471,6 +472,47 @@ class ToolSelection(AgentMiddleware):
         return await handler(self._apply(request))
 
 
+# The state a skills load has not run against yet. `SkillsMiddleware.before_agent` reads
+# its argument for one thing, `"skills_metadata" in state`, so a state without that key
+# is what asks it to load. `messages` is required by the TypedDict and unread here.
+_UNLOADED: SkillsState = {"messages": []}
+
+
+class SkillsRefresh(SkillsMiddleware):
+    """Reload the skills catalogue every turn, so a skill the agent writes takes effect.
+
+    `SkillsMiddleware.before_agent` loads the catalogue once and then returns early for
+    the rest of the thread: its guard is `"skills_metadata" in state`, and that key is
+    checkpointed. Right for a library that only changes at provisioning time, wrong for
+    this assistant, which authors its own skills. Without a reload the skill it just
+    saved stays absent from the list for the life of the thread, so the agent is told to
+    follow a file that is never offered to it and cannot see its own work.
+
+    So hand the loader an empty state, failing its guard and forcing the load. Two
+    instances then exist: the framework's, built from `create_deep_agent(skills=...)`,
+    which renders the prompt section, and this one, built with `system_prompt=None` so it
+    only loads. That is deliberate. Both read the same `skills_metadata` key and every
+    before_agent hook runs before the model, so the section the model reads is rendered
+    from this turn's reload, and no second copy of the section is appended.
+
+    The reload reads the tree through the process-cached Hub backend (see
+    `runtime/backends.py:_CTXHUB_CACHE`), so after the first turn it is a dict scan
+    rather than a Hub round trip. The duplicate load on turn one is that same scan.
+    """
+
+    def __init__(self, *, backend: Any, sources: list[str]) -> None:
+        """Build a load-only instance; the framework's own renders the prompt section."""
+        super().__init__(backend=backend, sources=sources, system_prompt=None)
+
+    def before_agent(self, state, runtime, config):
+        """Reload the catalogue on the sync path, bypassing the load-once guard."""
+        return super().before_agent(_UNLOADED, runtime, config)
+
+    async def abefore_agent(self, state, runtime, config):
+        """Reload the catalogue on the async (deployment) path."""
+        return await super().abefore_agent(_UNLOADED, runtime, config)
+
+
 # Where deepagents looks for SKILL.md bundles. One prefix, resolved per run by
 # DynamicBackend to the assistant's Context Hub skills repo (empty for a StateBackend
 # assistant, so a no-op). Named once because the main agent and the general-purpose
@@ -559,12 +601,19 @@ def _build_agent(model: str | None, checkpointer):
     require_model_key(model_id)
     llm = build_chat_model(model_id)
 
+    # One instance, shared by the agent and by SkillsRefresh below, so the catalogue is
+    # listed through the same filesystem the file tools write to.
+    backend = DynamicBackend()
+
     # ToolCallLimitMiddleware subclasses AgentMiddleware but binds an invariant
     # generic param that type checkers don't accept as assignable to the base — a
     # third-party typing gap, not a runtime issue. cast at this interop boundary.
     middleware = cast(
         "list[AgentMiddleware]",
         [
+            # Contributes a before_agent hook only, so its position among the
+            # request-shaping middleware below does not matter.
+            SkillsRefresh(backend=backend, sources=list(_SKILL_SOURCES)),
             ConfigurableModel(),
             # Before the prompt middleware, so the tools it discovers are already
             # in the ContextVar when `_mcp_note` describes them to the model.
@@ -616,8 +665,9 @@ def _build_agent(model: str | None, checkpointer):
         # One shared backend that resolves per run (see DynamicBackend): sandbox VM
         # default + the assistant's Context Hub skills repo mounted at /skills/, which
         # this tells deepagents to surface. For default (StateBackend) assistants
-        # /skills/ is empty — a no-op.
-        backend=DynamicBackend(),
+        # /skills/ is empty — a no-op. The same instance backs SkillsRefresh, so the
+        # catalogue is listed through the filesystem the tools write to.
+        backend=backend,
         skills=list(_SKILL_SOURCES),
         context_schema=Context,
         checkpointer=checkpointer,

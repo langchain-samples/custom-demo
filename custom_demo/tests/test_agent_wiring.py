@@ -482,3 +482,99 @@ def test_a_subagent_is_told_it_has_nobody_to_ask():
         prompt = spec["system_prompt"]
         assert "working alone" in prompt, spec["name"]
         assert "reply IS the deliverable" in prompt, spec["name"]
+
+
+# --- agent-authored skills: the catalogue has to be rebuilt every turn ---
+
+
+class _OneSkill:
+    """A backend holding exactly one skill, shaped the way SkillsMiddleware scans.
+
+    `ls` may return a bare list of entry dicts rather than an `LsResult`, which is the
+    cheaper half of the contract to satisfy here. Both the sync and async halves are
+    implemented because the deployment loads skills through the async hook.
+    """
+
+    def __init__(self, name="drafting"):
+        self.name = name
+        self.listed = 0
+
+    def _body(self) -> bytes:
+        return f"---\nname: {self.name}\ndescription: Draft things.\n---\n\n# Draft\n".encode()
+
+    def ls(self, path="/"):
+        self.listed += 1
+        return [{"path": f"{path.rstrip('/')}/{self.name}", "is_dir": True}]
+
+    async def als(self, path="/"):
+        return self.ls(path)
+
+    def download_files(self, paths):
+        return [SimpleNamespace(content=self._body(), error=None) for _ in paths]
+
+    async def adownload_files(self, paths):
+        return self.download_files(paths)
+
+
+def _refresher(backend):
+    return A.SkillsRefresh(backend=backend, sources=list(A._SKILL_SOURCES))
+
+
+def test_the_skills_catalogue_reloads_even_when_the_thread_already_has_one():
+    """A skill the agent writes mid-thread must reach the next turn's catalogue.
+
+    `SkillsMiddleware.before_agent` returns None forever once `skills_metadata` is in
+    state, and that key is checkpointed with the thread. An assistant that writes its
+    own skills would never see one it just saved, so this bypass is load-bearing.
+    """
+    backend = _OneSkill()
+    refresher = _refresher(backend)
+    stale = {"skills_metadata": [], "messages": []}
+
+    update = refresher.before_agent(cast("Any", stale), cast("Any", None), cast("Any", None))
+
+    assert update is not None, "a populated thread state suppressed the reload"
+    assert [skill["name"] for skill in update["skills_metadata"]] == ["drafting"]
+    assert backend.listed == 1  # the reload actually re-listed the source
+
+
+def test_the_reloaded_catalogue_also_arrives_on_the_deployment_path():
+    backend = _OneSkill()
+    refresher = _refresher(backend)
+
+    update = asyncio.run(
+        refresher.abefore_agent(
+            cast("Any", {"skills_metadata": []}), cast("Any", None), cast("Any", None)
+        )
+    )
+
+    assert update is not None
+    assert [skill["name"] for skill in update["skills_metadata"]] == ["drafting"]
+
+
+def test_the_refresher_renders_no_second_skills_section():
+    """Only the framework's instance may write the prompt fragment.
+
+    Both instances read the same state key, so a refresher that also rendered would
+    append the whole catalogue to the system prompt twice.
+    """
+    refresher = _refresher(_OneSkill())
+    assert refresher.system_prompt_template is None
+
+    request = SimpleNamespace(state={"skills_metadata": []}, override=lambda **kw: kw)
+    assert refresher.modify_request(cast("Any", request)) is request
+
+
+def test_the_refresher_lists_the_filesystem_the_file_tools_write_to(monkeypatch):
+    """One backend instance, or the catalogue could describe a different filesystem."""
+    captured = {}
+    monkeypatch.setattr(A, "require_model_key", lambda *_: None)
+    monkeypatch.setattr(A, "build_chat_model", lambda *_: None)
+    monkeypatch.setattr(A, "create_deep_agent", lambda **kwargs: captured.update(kwargs))
+
+    A.build_agent(deployed=True)
+
+    refreshers = [m for m in captured["middleware"] if isinstance(m, A.SkillsRefresh)]
+    assert len(refreshers) == 1
+    assert refreshers[0]._backend is captured["backend"]
+    assert refreshers[0].sources == captured["skills"]
