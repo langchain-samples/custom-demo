@@ -440,5 +440,19 @@ function ok(name, fn) {
     assert.ok(/not a\s+chart/i.test(text), text.slice(-400));
   });
 
+  ok("the shell is told it cannot see the workspace and must not claim it can", () => {
+    const text = voiceInstructions({ customer: "Mary Kay", industry: "software delivery" });
+    // The shell has no filesystem, so every document request has to reach the tool. Without
+    // this it treats authoring as its own job and the agent is never asked.
+    assert.ok(/no filesystem/i.test(text), text.slice(-700));
+    assert.ok(/workspace\/artifacts/.test(text), text.slice(-700));
+    assert.ok(/not limited to data queries/i.test(text), text.slice(-700));
+    // And it must not answer from belief: a file it never asked about is a file it cannot
+    // confirm or deny, which is how it came to deny an artifact the agent had just written.
+    assert.ok(/never say a file exists or does not exist/i.test(text), text.slice(-700));
+    // Filler while a call is in flight stays allowed: the ban is on claims, not on holding.
+    assert.ok(/still working on/i.test(text), text.slice(-700));
+  });
+
   console.log(`\n${passed} passed`);
 })();

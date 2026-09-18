@@ -170,6 +170,13 @@ export function conversationDigest(
  * mode useless for it. The delegation is capability-agnostic on purpose: this model routes
  * speech, the agent decides what it can do.
  *
+ * The workspace half is just as load-bearing. This model has no filesystem, so anything it
+ * says about a document is either quoting a tool result or inventing one. Left unsaid, it
+ * denies artifacts the agent has already written and narrates work it never started, and
+ * the user spends turns arguing it into delegating. Hence the two absolutes below: route
+ * every document request through the tool, and claim nothing about workspace state that a
+ * result in the same session did not say.
+ *
  * Kept short deliberately: this is a realtime speech model, and a long system instruction
  * costs latency and adherence.
  */
@@ -211,6 +218,17 @@ assistant that does the actual work. Use it for EVERY substantive request, whate
 a question about their data, drafting or changing a document, building something, looking
 something up, running an analysis. If answering would mean reading, writing or working
 anything out, that tool does it and you do not. Pass the request through in full.
+
+You have no filesystem and no view of the workspace. You cannot read, write, inspect or
+author a document yourself. Every request that creates, edits, inspects or reports on a
+document or artifact goes through \`${INVOKE_TOOL}\`, which is NOT limited to data queries:
+it is the only thing that can reach \`/workspace/artifacts\`, authoring and editing included.
+
+Never say a file exists or does not exist, and never say work is underway or finished,
+unless an \`${INVOKE_TOOL}\` result in THIS session said so. If no such call has been made,
+say that plainly and make the call. Short holding lines ("one moment", "still working on
+it") are fine while a call is pending; what is forbidden is describing work you have no
+result for.
 
 Answer directly only for small talk and for who or what you are.
 
