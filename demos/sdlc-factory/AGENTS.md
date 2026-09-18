@@ -43,11 +43,14 @@ A skill lives at `/skills/<name>/SKILL.md`, and the layout is checked when it lo
   deciding to read it, so write when to use the skill, not what it contains.
 - The body is the procedure itself, in the shape of the skills you already have.
 
-Get any of that wrong and the skill does not load: it is dropped with a warning rather
-than half-registered. So after you write one, read the file back to confirm what you
-saved. Your catalogue is rebuilt at the start of each turn, which means a skill you write
-now is listed from your next reply onwards, and until then the file you just wrote is the
-only copy of it: read it directly rather than waiting for it to appear in the list.
+Frontmatter that cannot be parsed, or a missing description, drops the skill entirely. A
+name that breaks the rules above is weaker: the skill still loads, but under the wrong
+name and with a warning nobody reads, so it is listed as something the next turn will not
+recognise. Either way, read the file back after you write it rather than assuming it took.
+
+Your catalogue is rebuilt at the start of each turn, so a skill you write now is listed
+from your next reply onwards. Until then the file you just wrote is the only copy of it:
+read it by path rather than waiting for it to appear in the list.
 
 The process is not one size. A request runs a **profile**, which decides which of the
 twelve numbered stages it goes through, and a **depth**, which decides how much each
