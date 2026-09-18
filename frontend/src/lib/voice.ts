@@ -711,6 +711,13 @@ export interface VoiceSessionHooks {
     approval?: string;
     /** The agent run's LangSmith id, recorded on the tool span to link the traces. */
     runId?: string;
+    /**
+     * Why the turn produced nothing: refused before it started (no assistant selected,
+     * no system prompt) or failed mid-run. Kept apart from `answer` because these two
+     * are not interchangeable to a listener, who would otherwise hear a settings
+     * instruction read out as the agent's reply.
+     */
+    error?: string;
   }>;
   /** Answer an approval the agent paused on, with the option the user spoke. */
   resume(
@@ -1068,6 +1075,25 @@ export class VoiceSession {
       const question = String(call.args.question || "");
       const span = await this.hooks.openToolSpan(question);
       const out = await this.hooks.ask(question, span.headers || {}, narrate);
+      // A turn that produced no answer at all. Reported as a FAILURE rather than spoken:
+      // the reason is either a refusal aimed at the presenter ("pick a Context Hub agent
+      // repo") or a run that broke, and reading either out as `answer` tells the user
+      // their question was answered when no agent ever saw it.
+      if (out.error && !out.answer) {
+        if (span.tool_id) {
+          this.hooks.closeToolSpan(span.tool_id, { status: "error", error: out.error });
+        }
+        ws.send(
+          JSON.stringify(
+            systemTurnMessage(
+              `that question never reached the assistant: ${out.error} ` +
+                "Say so briefly, do not answer it yourself, and wait.",
+            ),
+          ),
+        );
+        return;
+      }
+
       const payload = out.approval
         ? { status: "needs_approval", approval: out.approval }
         : spokenResult(out.answer, out.widgets);

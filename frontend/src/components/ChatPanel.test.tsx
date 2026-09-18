@@ -333,7 +333,10 @@ describe("the voice handle", () => {
     const ui = panel({ guard: () => blocked });
     const handle = ui.handle;
     const refused = await act(() => handle.current!.ask("write the brief"));
-    expect(refused.answer).toBe(blocked);
+    // As an ERROR and not as an answer: voice reads an `answer` out loud, so a refusal
+    // returned there is heard as the agent's reply to the question it never ran.
+    expect(refused.error).toBe(blocked);
+    expect(refused.answer).toBe("");
 
     // The assistant loads and the guard now allows the send. The handle must see that.
     blocked = null;

@@ -191,6 +191,10 @@ export default function App() {
     workspace: meta?.ls_artifacts?.workspace,
     project: meta?.customer,
     customer: meta?.customer,
+    // The same selection every typed turn runs against, so a spoken turn's root span
+    // names the assistant its runs resolve their prompt from.
+    assistantId: session.selectedId,
+    agentRepo: session.draft.agentRepo,
     voiceName: (meta?.voice as { voice_name?: string } | undefined)?.voice_name,
     persona: voicePersona,
   });

@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatPanelHandle } from "@/components/ChatPanel";
 import { ensureThread, getThreadState, voiceToken, voiceTrace } from "@/lib/api";
+import { GRAPH_ID } from "@/lib/config";
 import {
   conversationDigest,
   INVOKE_TOOL,
@@ -23,6 +24,14 @@ export interface VoiceSessionOptions {
   workspace?: string;
   project?: string;
   customer?: string;
+  /**
+   * The selected assistant and the Context Hub agent repo its runs resolve their prompt
+   * from. Recorded on the conversation's root span: a `voice_session` without them is
+   * unattributable in traces, and "which assistant was this?" is the first question
+   * anyone asks of a spoken turn that went wrong.
+   */
+  assistantId?: string;
+  agentRepo?: string;
   /** Prebuilt voice name from `metadata.voice.voice_name`; falls back to the house voice. */
   voiceName?: string;
   /**
@@ -66,7 +75,7 @@ function toBase64(bytes: Uint8Array): string {
 }
 
 export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
-  const { chat, workspace, project, customer, voiceName, persona } = opts;
+  const { chat, workspace, project, customer, assistantId, agentRepo, voiceName, persona } = opts;
   const [state, setState] = useState<VoiceState>("idle");
   const [activity, setActivity] = useState("");
   const [speaking, setSpeaking] = useState(false);
@@ -135,7 +144,13 @@ export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
           action: "session",
           workspace,
           project,
-          metadata: { customer: customer || "", thread_id: threadId },
+          metadata: {
+            customer: customer || "",
+            thread_id: threadId,
+            assistant_id: assistantId || "",
+            agent_repo: agentRepo || "",
+            graph_id: GRAPH_ID,
+          },
         });
         traceId.current = String(started.session_id || "");
 
@@ -153,6 +168,9 @@ export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
               widgets: (out?.widgets || []) as { title?: string; value?: string }[],
               approval: out?.approval,
               runId: out?.runId,
+              // A turn the panel refused or that failed mid-run: forwarded so the shell
+              // reports a failure instead of speaking the refusal as the agent's answer.
+              error: out?.error,
             };
           },
           resume: async (choice) => {
@@ -211,7 +229,7 @@ export function useVoiceSession(opts: VoiceSessionOptions): VoiceSessionView {
         session.current = null;
       }
     })();
-  }, [chat, workspace, project, customer, voiceName, persona]);
+  }, [chat, workspace, project, customer, assistantId, agentRepo, voiceName, persona]);
 
   return {
     state,

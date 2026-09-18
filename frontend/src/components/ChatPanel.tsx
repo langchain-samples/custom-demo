@@ -1444,7 +1444,10 @@ export default function ChatPanel({
    * typed one, and a second code path would drift from the first within a week.
    *
    * The App guard still applies (no assistant selected, etc.) so voice cannot start a
-   * run the typed path would have refused.
+   * run the typed path would have refused. A refusal comes back as `error`, never as
+   * `answer`: the guard's text is an instruction to the presenter ("pick a Context Hub
+   * agent repo"), and a caller that cannot see the screen reads an `answer` out loud as
+   * though the agent had produced it.
    */
   useImperativeHandle(
     handleRef,
@@ -1455,7 +1458,7 @@ export default function ChatPanel({
         onProgress?: (toolName: string) => void,
       ) => {
         const blocked = guardRef.current?.(question);
-        if (blocked) return { answer: blocked, widgets: [] };
+        if (blocked) return { answer: "", widgets: [], error: blocked };
         return runTurnRef.current({ question, headers, onProgress });
       },
       resumeWith: (value: unknown) => runTurnRef.current({ resume: value }),
