@@ -1,8 +1,9 @@
 """Adapt per-run configuration to assistant resources and Context Hub filesystems.
 
 The resource layer owns VM lifetime. This module owns only the execution topology:
-a sandbox default exposes execute, a /skills/ route exposes the Hub bundle, and the
-artifacts directory routes to a Hub documents repo when the assistant names one.
+a sandbox default exposes execute, a /skills/ route exposes the Hub bundle the agent
+both follows and edits, and the artifacts directory routes to a Hub documents repo when
+the assistant names one.
 """
 
 from __future__ import annotations
@@ -32,18 +33,34 @@ def _get_or_create_sandbox(runtime) -> Any | None:
     return sandbox.ensure_sandbox(key, seed=spec)
 
 
-# Prompt and skills repos only. A ContextHubBackend loads the repo's whole tree on first
-# access and then holds it, which is right for content that changes at provisioning time
-# and wrong for anything with a second writer. Documents have one: see `_docs_route`.
-_CTXHUB_CACHE: dict[tuple[str, str | None], Any] = {}
+# A ContextHubBackend loads the repo's whole tree on first access and then holds it, and
+# `ContextHubBackend._commit` folds every successful write back into that tree. So one
+# instance per (repo, workspace, class) is both cheap and self-consistent for a writer
+# living in this process: the agent saves a skill, and every later turn in this container
+# reads it back without a Hub round trip.
+#
+# What a held tree cannot see is a write from somewhere else: another replica, or a
+# `scripts/seed_sdlc_demo.py` re-push landing while this container is warm. Such a push
+# still succeeds (RebasingBackend rebases onto it) but the read side stays on the tree it
+# holds until the process restarts, which is the normal end of a re-push anyway.
+#
+# Documents cannot accept even that much, because their second writer is a person editing
+# in the browser DURING a turn: see `_docs_route`.
+_CTXHUB_CACHE: dict[tuple[str, str | None, str], Any] = {}
 
 
-def _ctxhub_backend(repo: str, ws: str | None) -> Any:
-    """Reuse the workspace-scoped Hub backend across filesystem operations."""
-    key = (repo, ws)
+def _ctxhub_backend(repo: str, ws: str | None, cls: type[ContextHubBackend]) -> Any:
+    """Reuse the workspace-scoped Hub backend of class `cls` across filesystem operations.
+
+    `cls` is passed rather than defaulted so callers name it at the call site, where the
+    module global is read. A default would bind this module's class object once at
+    definition time, which is invisible until something replaces the global: the backend
+    tests do exactly that, and a defaulted parameter silently ignores the replacement.
+    """
+    key = (repo, ws, cls.__name__)
     backend = _CTXHUB_CACHE.get(key)
     if backend is None:
-        backend = ContextHubBackend(repo, client=scoped_client(ws))
+        backend = cls(repo, client=scoped_client(ws))
         _CTXHUB_CACHE[key] = backend
 
     return backend
@@ -56,14 +73,18 @@ def _ctxhub_backend(repo: str, ws: str | None) -> Any:
 ARTIFACTS_MOUNT = "/workspace/artifacts/"
 
 
-class DocumentsBackend(ContextHubBackend):
-    """A Hub documents backend that re-reads before giving up on a conflicting write.
+class RebasingBackend(ContextHubBackend):
+    """A Hub backend that re-reads before giving up on a conflicting write.
 
-    The documents repo has TWO writers: the agent through this backend, and a person
-    saving in the browser through `web/docs.py`. So the tree moves under a turn, the
-    parent commit this backend is holding stops being the head, and Hub answers the next
-    push with a conflict. That would surface as a failed turn even when nothing is really
-    in conflict: the person edited one document and the agent is writing another.
+    Use this for any repo with more than one writer. Two have them. The documents repo is
+    written by the agent through this backend and by a person saving in the browser
+    through `web/docs.py`. The skills repo is written by the agent, which authors its own
+    skills, and by `scripts/seed_sdlc_demo.py`, which re-pushes the bundle.
+
+    Either way the tree moves under a turn, the parent commit this backend is holding
+    stops being the head, and Hub answers the next push with a conflict. That would
+    surface as a failed turn even when nothing is really in conflict: the other writer
+    touched one file and this one is writing another.
 
     Reload the tree and retry ONCE. A second conflict is a genuine race worth raising,
     and a retry loop over someone else's commits would eventually bury one of them.
@@ -109,7 +130,7 @@ def _docs_route(docs_repo: str | None, ws: str | None) -> dict[str, BackendProto
         # backend keeps the tree it first loaded, so after a person saves in the browser
         # the agent would read the superseded text and reason over documents that have
         # moved on, which is worse than any failure: it looks like it worked.
-        return {ARTIFACTS_MOUNT: DocumentsBackend(docs_repo, client=scoped_client(ws))}
+        return {ARTIFACTS_MOUNT: RebasingBackend(docs_repo, client=scoped_client(ws))}
     except Exception as exc:
         raise BackendSourceError(
             f"This assistant's documents are its Context Hub repo {docs_repo!r}, mounted "
@@ -140,7 +161,10 @@ def _resolve_backends(runtime) -> tuple[BackendProtocol, dict[str, BackendProtoc
     ws = ctx.ls_workspace
     if agent_repo and not skills_repo:
         try:
-            return _ctxhub_backend(agent_repo, ws), _docs_route(ctx.docs_repo, ws)
+            return (
+                _ctxhub_backend(agent_repo, ws, ContextHubBackend),
+                _docs_route(ctx.docs_repo, ws),
+            )
         except BackendSourceError:
             raise
         except Exception as exc:
@@ -155,7 +179,11 @@ def _resolve_backends(runtime) -> tuple[BackendProtocol, dict[str, BackendProtoc
     routes: dict[str, BackendProtocol] = _docs_route(ctx.docs_repo, ws)
     if skills_repo:
         try:
-            routes["/skills/"] = _ctxhub_backend(skills_repo, ws)
+            # RebasingBackend, because this assistant writes its own skills (see the
+            # prompt's "Your skills are yours to change") and the seed script re-pushes
+            # the bundle, so the mount has two writers. Still cached: a held tree is what
+            # makes an agent-authored skill readable on the next turn for free.
+            routes["/skills/"] = _ctxhub_backend(skills_repo, ws, RebasingBackend)
         except Exception as exc:
             raise BackendSourceError(
                 f"This assistant's skills are its Context Hub repo {skills_repo!r}, mounted "

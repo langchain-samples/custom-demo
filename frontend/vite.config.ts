@@ -9,6 +9,9 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // Vendored until it ships from npm. Source, not a build: it is ours,
+      // and a source alias keeps it in the SPA's typecheck and lint.
+      "@langchain/react": path.resolve(__dirname, "./packages/langchain-react/src"),
     },
   },
   server: {
