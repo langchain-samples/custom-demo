@@ -95,12 +95,21 @@ FALLBACK_PROMPT = _FALLBACK_CORE + _GROUNDING_CLAUSE
 # Appended to whatever prompt a run resolved (Hub, Context Hub AGENTS.md, or inline),
 # because this describes a CAPABILITY the deployment has rather than anything about a
 # particular customer, so it applies whatever an assistant's own prompt says.
-ARTIFACT_NOTE = """
+#
+# Dashboards are optional, so the guidance is in two pieces. ARTIFACT_NOTE is
+# unconditional: any assistant can write an HTML artifact. WIDGET_NOTE and
+# WIDGET_DELIVERABLE_TEST speak for `push_widget` and are appended only when that tool
+# is bound (`runtime/agent.py:_hub_system_prompt`), because an assistant whose
+# capability note says DASHBOARDS ARE OFF must not also be told that widgets are how it
+# answers by default.
+WIDGET_NOTE = """
 
 WIDGETS FIRST, unless the user asked for something else. `push_widget` is how you answer \
 by default: reach for it whenever the point can be made with a KPI, a bar/line/pie chart, \
 a table or a text block, which is nearly always. An explicit request for a document, a \
-page, or an HTML asset overrides this.
+page, or an HTML asset overrides this."""
+
+ARTIFACT_NOTE = """
 
 HTML artifacts, for what widgets cannot express. When the user needs something the widget \
 types genuinely cannot represent (a formatted document or letter, a print-ready report, a \
@@ -134,7 +143,12 @@ a second one. Nothing in the document should be a control for the document.
 - To change an artifact afterwards, use `edit_file` on the same path. Do NOT rewrite the \
 whole file to adjust part of it. Before writing a NEW file, check `/workspace/artifacts/` \
 for one you already made for this subject and edit that instead of leaving near-duplicates \
-behind.
+behind."""
+
+# The closing bullet of the artifact list when widgets are live: it chooses between an
+# artifact and a dashboard, so it belongs to the widget guidance, but it reads in place
+# at the end of ARTIFACT_NOTE and is appended there.
+WIDGET_DELIVERABLE_TEST = """
 - Whether to ALSO build the dashboard is decided by ONE test, not by judgement: does the \
 request name an HTML asset, a document, a page, a one-pager or a report file? If YES, do \
 not call `push_widget` at all this turn - the artifact is the deliverable and the analysis \

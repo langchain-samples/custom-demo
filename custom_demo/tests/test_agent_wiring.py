@@ -83,6 +83,54 @@ def test_capability_note_empty_for_unset_selection():
     assert A._capability_note(_rt(None)) == ""  # default selection → no note (unchanged path)
 
 
+# --- the composed prompt says ONE thing about widgets ---
+
+
+class _PromptReq:
+    """Minimal ModelRequest stand-in for the `@dynamic_prompt` middleware."""
+
+    def __init__(self, enabled):
+        self.runtime = _rt(enabled)
+        self.system_prompt = ""
+        self.system_message: Any = None
+
+    def override(self, **kw):
+        self.system_message = kw["system_message"]
+        return self
+
+
+def _composed_prompt(enabled) -> str:
+    req = _PromptReq(enabled)
+    A._hub_system_prompt.wrap_model_call(cast("Any", req), lambda r: r)
+    return req.system_message.text
+
+
+def test_composed_prompt_drops_widget_guidance_when_push_widget_is_off(monkeypatch):
+    """Dashboards off must not arrive alongside "widgets are how you answer"."""
+    monkeypatch.setenv("SANDBOX_ENABLED", "1")
+    prompt = _composed_prompt(["web_search"])
+    assert "DASHBOARDS ARE OFF" in prompt
+    assert "WIDGETS FIRST" not in prompt
+    assert "visualize it with `push_widget`" not in prompt
+    assert "HTML artifacts" in prompt  # artifact authoring survives without widgets
+
+
+def test_composed_prompt_keeps_widget_guidance_when_push_widget_is_on(monkeypatch):
+    monkeypatch.setenv("SANDBOX_ENABLED", "1")
+    prompt = _composed_prompt(["web_search", "push_widget"])
+    assert "DASHBOARDS ARE OFF" not in prompt
+    assert "WIDGETS FIRST" in prompt
+    assert "visualize it with `push_widget`" in prompt
+
+
+def test_composed_prompt_keeps_widget_guidance_for_the_default_selection(monkeypatch):
+    """`push_widget` is on by default, so the common path is unchanged."""
+    monkeypatch.setenv("SANDBOX_ENABLED", "1")
+    prompt = _composed_prompt(None)
+    assert "WIDGETS FIRST" in prompt
+    assert "visualize it with `push_widget`" in prompt
+
+
 # --- dynamic subagents are part of every agent ---
 
 

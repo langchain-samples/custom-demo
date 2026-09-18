@@ -35,7 +35,13 @@ from custom_demo.resources.sandbox import SEED_MAX_FILES
 from custom_demo.runtime.backends import DynamicBackend
 from custom_demo.runtime.mcp_servers import instructions_for, load_tools, parse_servers
 from custom_demo.runtime.mocking import enable_mocking
-from custom_demo.runtime.prompt import ARTIFACT_NOTE, FALLBACK_PROMPT, pull_agent_prompt
+from custom_demo.runtime.prompt import (
+    ARTIFACT_NOTE,
+    FALLBACK_PROMPT,
+    WIDGET_DELIVERABLE_TEST,
+    WIDGET_NOTE,
+    pull_agent_prompt,
+)
 from custom_demo.runtime.tools import (
     all_tools,
     allowed_tool_names,
@@ -62,12 +68,15 @@ def _hub_system_prompt(request: ModelRequest) -> str:
     else:
         base = FALLBACK_PROMPT
 
+    widgets = _widgets_available(request.runtime)
     ours = (
         base
         + _capability_note(request.runtime)
         + _mcp_note(request.runtime)
         + _sandbox_note(request.runtime)
+        + (WIDGET_NOTE if widgets else "")
         + ARTIFACT_NOTE
+        + (WIDGET_DELIVERABLE_TEST if widgets else "")
         + _subagents_note()
     )
     # Compose deepagents' middleware-built prompt (SkillsMiddleware catalogue,
@@ -82,6 +91,11 @@ def _hub_system_prompt(request: ModelRequest) -> str:
             return f"{framework}\n\n{ours}"
 
     return ours
+
+
+def _widgets_available(runtime) -> bool:
+    """Whether `push_widget` is bound for this run, so widget guidance may be prompted."""
+    return "push_widget" in allowed_tool_names(get_ctx(runtime).enabled_tools)
 
 
 def _sandbox_note(runtime) -> str:
@@ -141,9 +155,14 @@ def _sandbox_note(runtime) -> str:
         "parse an uploaded PDF with code rather than asking the user to transcribe it. You cannot "
         "see the pixels of an image file; identify it and work with the text or data you can "
         "extract. To add libraries, `pip install --break-system-packages <packages>` (the system "
-        "Python is externally managed, so a bare `pip install` will refuse). When you produce a "
-        "result worth showing (a forecast, a breakdown, figures pulled out of a document), "
-        "visualize it with `push_widget`, don't only describe it."
+        "Python is externally managed, so a bare `pip install` will refuse)."
+        + (
+            " When you produce a "
+            "result worth showing (a forecast, a breakdown, figures pulled out of a document), "
+            "visualize it with `push_widget`, don't only describe it."
+            if _widgets_available(runtime)
+            else ""
+        )
     )
 
 
