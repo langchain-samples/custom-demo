@@ -19,7 +19,7 @@ from custom_demo.config import routing_key, scoped_client
 
 # Absolute import: Agent Server loads this entrypoint as a top-level module (no
 # package parent), so a relative `from .agent` import would fail here.
-from custom_demo.runtime.agent import build_agent
+from custom_demo.runtime.agent import answer_setup_failure, build_agent
 
 base_graph = build_agent(deployed=True)
 
@@ -54,10 +54,17 @@ async def graph(config: Any):
     which avoids the "can't set both context and configurable" error. `ls_workspace`
     needs an org-scoped key to switch tenants; `ls_project` is the project name.
     Both optional — with neither set we yield the graph unwrapped (default behavior).
+
+    An assistant whose own configuration cannot start a turn is served by the
+    answer-only graph `answer_setup_failure` builds, so the refusal arrives as a reply
+    the presenter can read instead of a run that ends with no output at all. Trace
+    routing is unchanged either way: the failed turn belongs in the same project as
+    every other turn of that assistant.
     """
     configurable = (config or {}).get("configurable", {}) or {}
     workspace_id = configurable.get("ls_workspace") or None
     project_name = configurable.get("ls_project") or None
+    turn_graph = answer_setup_failure(configurable) or base_graph
     # NO DISTRIBUTED-TRACING PARENT HERE, deliberately, and it is worth reading why before
     # adding one back. Voice mode wants the agent run nested inside its `invoke_deep_agent`
     # span (see voice/trace.py), and LangSmith documents exactly that: send `langsmith-trace`,
@@ -81,9 +88,9 @@ async def graph(config: Any):
     # records the agent run's id on its tool span instead (`closeToolSpan`), which gives a
     # click-through without putting the trace at risk.
     if not workspace_id and not project_name:
-        yield base_graph
+        yield turn_graph
         return
 
     client = _client_for_workspace(workspace_id) if workspace_id else None
     with tracing_context(enabled=True, client=client, project_name=project_name):
-        yield base_graph
+        yield turn_graph

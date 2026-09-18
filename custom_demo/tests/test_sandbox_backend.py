@@ -37,6 +37,7 @@ import pytest
 from deepagents.backends import CompositeBackend, LangSmithSandbox, StateBackend
 from deepagents.backends.protocol import FileDownloadResponse, FileInfo, LsResult
 from deepagents.middleware.filesystem import supports_execution
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables.config import var_child_runnable_config
 
 from custom_demo.core.ctx import Context
@@ -942,6 +943,31 @@ def test_a_spec_less_assistant_fails_the_same_way_on_every_turn(monkeypatch):
             B._resolve_backends(_rt(customer="McKesson", sandbox_seed=None))
 
     assert client.created == []
+
+
+def test_a_spec_less_assistant_answers_with_the_reason_rather_than_killing_the_turn(monkeypatch):
+    """The refusal above has to reach the person who can act on it.
+
+    Reported from production: it was raised inside the first middleware that touches
+    the filesystem, so it left the graph, the root run recorded `outputs: null` and a
+    traceback, and the turn produced no answer at all. The presenter saw a dead chat
+    rather than the sentence naming what is misconfigured. So the turn is served by an
+    answer-only graph instead, still with no VM and no stand-in dataset.
+    """
+    client = _install_client(monkeypatch)
+    graph = A.answer_setup_failure({"customer": "McKesson", "sandbox_key": "mckesson-a1b2c3"})
+    assert graph is not None
+    state = asyncio.run(graph.ainvoke({"messages": [HumanMessage("hey")], "rubric": ""}))
+    answer = state["messages"][-1]
+    assert isinstance(answer, AIMessage)
+    assert "no `sandbox_seed` spec" in answer.content
+    assert client.created == []  # answered without acquiring anything
+
+
+def test_an_assistant_that_can_be_set_up_runs_the_real_agent(monkeypatch):
+    """The boundary is for the refusal only: a healthy assistant is untouched by it."""
+    _install_client(monkeypatch)
+    assert A.answer_setup_failure({"customer": "McKesson", "sandbox_seed": _SEED}) is None
 
 
 def test_prewarm_runtime_and_browser_share_the_assistant_resource(monkeypatch):

@@ -8,10 +8,10 @@ the customer's name. That is the shipped-a-generic-assistant bug, and it is wors
 than a failed turn: the presenter cannot tell it happened.
 
 So a configured repo that will not load raises `PromptSourceError`, naming the
-repo, and the caller lets it propagate to the SPA (which renders the exception's
-message, not its class). A Hub blip failing a turn rather than degrading quietly is
-deliberate, so it is pinned here, along with the one path that legitimately still
-falls back: an assistant that asked for no repo at all.
+repo, and the turn answers with that message (its text, not its class) instead of
+a real reply. A Hub blip costing a turn rather than degrading quietly is deliberate,
+so it is pinned here, along with the one path that legitimately still falls back: an
+assistant that asked for no repo at all.
 """
 
 from __future__ import annotations
@@ -109,6 +109,25 @@ def test_a_repo_with_no_agents_md_raises_as_well(monkeypatch):
             pull_agent_prompt(_REPO)
 
         assert _REPO in str(caught.value)
+
+
+def test_the_refusal_is_the_turns_answer_rather_than_a_run_with_no_output():
+    """Where the refusal lands, which is the difference between a message and nothing.
+
+    Raised through the model call it escaped the graph, so the root run recorded
+    `outputs: null` and a traceback and the turn produced no answer at all. The
+    boundary turns it into the assistant's reply, without supplying a prompt of its
+    own: the run still gets no real answer out of the model.
+    """
+    boundary = A.SetupFailureBoundary()
+
+    def _refuse(_request):
+        raise PromptSourceError(f"Could not load this assistant's prompt from {_REPO!r}")
+
+    answer = boundary.wrap_model_call(SimpleNamespace(), _refuse)
+    assert isinstance(answer, AIMessage)
+    assert _REPO in answer.content
+    assert not answer.tool_calls  # nothing left to run, so the turn ends here
 
 
 # --- the path that legitimately still falls back ----------------------------

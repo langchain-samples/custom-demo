@@ -10,8 +10,9 @@ Two paths, and only one of them is a fallback:
 - An assistant with NO `agent_repo` asked for nothing in particular, so it gets
   `FALLBACK_PROMPT`, the grounded bug-free prompt. `agent.py` applies that directly.
 - An assistant WITH an `agent_repo` asked for that customer's prompt. If the repo
-  will not load, `pull_agent_prompt` raises `PromptSourceError` and the turn fails
-  with a message naming the repo. It deliberately does NOT fall back: a Hub outage,
+  will not load, `pull_agent_prompt` raises `PromptSourceError`, and the turn ends
+  with that message naming the repo as its answer (`runtime/agent.py` holds the
+  boundary that puts it there). It deliberately does NOT fall back: a Hub outage,
   a typo'd repo handle, a deleted repo and a missing permission would all be
   indistinguishable from "this customer has no prompt", and the run would answer as
   a GENERIC assistant wearing the customer's name. A visibly failed turn the
@@ -281,9 +282,10 @@ def pull_agent_prompt(repo: str, workspace: str | None = None) -> str:
     ever called for an assistant that HAS an `agent_repo` (the no-repo case takes
     `FALLBACK_PROMPT` in `agent.py` without coming here), so every failure here is
     a configured prompt that could not be delivered, never an absent one. Callers
-    let it propagate: the SPA renders the message, which says which assistant's
-    prompt could not be loaded, instead of the run silently becoming a generic
-    assistant. A Hub blip now fails the turn, which is the intent.
+    let it propagate as far as `agent.py:SetupFailureBoundary`, which answers the
+    turn with this message, saying which assistant's prompt could not be loaded
+    instead of the run silently becoming a generic assistant. A Hub blip still ends
+    the turn without a real answer, which is the intent.
     """
     try:
         agent = _prompt_client(workspace).pull_agent(repo)

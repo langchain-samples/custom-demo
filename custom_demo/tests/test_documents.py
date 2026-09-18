@@ -9,6 +9,7 @@ pass while the product silently lost documents.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from json import JSONDecodeError
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -305,6 +306,90 @@ def test_a_second_conflict_stops_and_reports_rather_than_retrying_forever():
     assert hub.pushes == 2
     assert result.error
     assert "req-204/functional-spec.md" not in hub.tree
+
+
+class GarbledHub(RacingHub):
+    """A Hub that answers the first `garbled` pushes with a body the SDK cannot parse.
+
+    Reported from production: `push_agent` reads `response.json()["commit"]` and the
+    response carried HTML, so a `JSONDecodeError` came out of the push. It is not a
+    `LangSmithError`, which is the only family the vendor backend converts into a
+    result, so it escaped the tool, the graph and the turn. `commits` says whether the
+    delta reached the tree before the response was mangled, which is the difference
+    between work to keep and work to replay.
+    """
+
+    def __init__(self, garbled: int, *, commits: bool = False):
+        """Mangle the response of the first `garbled` pushes, committing them or not."""
+        super().__init__(conflicts=0)
+        self.garbled = garbled
+        self.commits = commits
+
+    def push_agent(self, _identifier, *, files, parent_commit=None, **_kwargs):
+        self.pushes += 1
+        mangled = self.garbled > 0
+        self.garbled -= 1
+        if not mangled or self.commits:
+            # A `None` entry is the deletion marker the real Hub drops from the tree.
+            for path, entry in files.items():
+                if entry is None:
+                    self.tree.pop(path, None)
+                else:
+                    self.tree[path] = entry.content
+
+            self.head = f"c{9 + self.pushes:04d}"
+
+        if mangled:
+            raise JSONDecodeError("Expecting value", "<html>502</html>", 0)
+
+        return f"https://hub/x:{self.head}"
+
+
+def test_a_push_the_hub_never_confirmed_is_replayed_rather_than_failing_the_turn():
+    """The delete that killed a turn: an unparseable push response is not a tool result.
+
+    It has to become one. The turn carries the rest of the agent's work, and a
+    traceback out of the delete tool discards all of it.
+    """
+    hub = GarbledHub(garbled=1)
+    backend = B.DocumentsBackend("acme-docs", client=cast("Any", hub))
+    result = backend.delete("/req-204/brief.md")
+    assert result.error is None
+    assert hub.pushes == 2  # the mangled response, then the replay
+    assert "req-204/brief.md" not in hub.tree
+
+
+def test_work_the_hub_did_record_is_kept_rather_than_pushed_twice():
+    """An unparseable response says nothing about what the repo now holds.
+
+    So re-read it. The delta was committed here, and reporting that delete as failed
+    would leave the agent telling the user it did not do work it actually did.
+    """
+    hub = GarbledHub(garbled=1, commits=True)
+    backend = B.DocumentsBackend("acme-docs", client=cast("Any", hub))
+    result = backend.delete("/req-204/brief.md")
+    assert result.error is None
+    assert hub.pushes == 1  # the tree already agreed, so nothing was replayed
+    assert "req-204/brief.md" not in hub.tree
+
+
+def test_a_write_the_hub_keeps_refusing_reaches_the_model_as_a_failed_tool_result():
+    """One replay, then the failure is reported by naming the path, not by raising."""
+    hub = GarbledHub(garbled=2)
+    backend = B.DocumentsBackend("acme-docs", client=cast("Any", hub))
+    result = backend.write("/req-204/functional-spec.md", "drafted by the agent")
+    assert hub.pushes == 2
+    assert result.error and "req-204/functional-spec.md" in result.error
+    assert "req-204/functional-spec.md" not in hub.tree
+
+
+def test_an_edit_the_hub_never_confirmed_is_reported_and_not_replayed():
+    """A replacement is not idempotent, so replaying one the repo may hold applies it twice."""
+    hub = GarbledHub(garbled=1, commits=True)
+    backend = B.DocumentsBackend("acme-docs", client=cast("Any", hub))
+    result = backend.edit("/req-204/brief.md", "someone else", "the agent")
+    assert hub.pushes == 1
+    assert result.error and "req-204/brief.md" in result.error
 
 
 def test_the_private_commit_hook_this_depends_on_still_exists():

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextvars
 import dataclasses
+from types import SimpleNamespace
 from typing import Any, cast
 
 from deepagents import RubricMiddleware, SubAgent, create_deep_agent
@@ -20,7 +21,9 @@ from langchain.agents.middleware import (
     dynamic_prompt,
 )
 from langchain.chat_models import init_chat_model
+from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import START, MessagesState, StateGraph
 
 from custom_demo.config import (
     MODEL,
@@ -31,11 +34,16 @@ from custom_demo.config import (
     sandbox_enabled,
 )
 from custom_demo.core.ctx import Context, get_ctx
-from custom_demo.resources.sandbox import SEED_MAX_FILES
-from custom_demo.runtime.backends import DynamicBackend
+from custom_demo.resources.sandbox import SEED_MAX_FILES, SeedSpecError
+from custom_demo.runtime.backends import DynamicBackend, turn_blocking_failure
 from custom_demo.runtime.mcp_servers import instructions_for, load_tools, parse_servers
 from custom_demo.runtime.mocking import enable_mocking
-from custom_demo.runtime.prompt import ARTIFACT_NOTE, FALLBACK_PROMPT, pull_agent_prompt
+from custom_demo.runtime.prompt import (
+    ARTIFACT_NOTE,
+    FALLBACK_PROMPT,
+    PromptSourceError,
+    pull_agent_prompt,
+)
 from custom_demo.runtime.tools import (
     all_tools,
     allowed_tool_names,
@@ -433,6 +441,72 @@ class ConfigurableModel(AgentMiddleware):
         return await handler(self._apply(request))
 
 
+class SetupFailureBoundary(AgentMiddleware):
+    """Answer the turn with a typed setup refusal instead of letting it kill the run.
+
+    `pull_agent_prompt` and `seed_script_or_raise` refuse rather than substitute, which
+    is the intent and stays the intent: nothing here supplies a default prompt or a
+    default seed spec. What it changes is where the refusal lands. Raised from inside a
+    model call, it leaves the graph, the root run records `outputs: null` and a
+    traceback, and the presenter's turn produces nothing at all, so the sentence naming
+    the misconfigured repo never reaches the person who can fix it. Returning it as the
+    assistant's message puts it on screen and ends the turn there.
+
+    Sits ahead of `_hub_system_prompt` in the middleware list, so it wraps the prompt
+    resolution it is here to catch. Both hooks, because the local path invokes the agent
+    synchronously and the deployment runs it async.
+    """
+
+    @staticmethod
+    def _answer(exc: Exception) -> AIMessage:
+        """The refusal as the assistant's own reply, which is the message for the human."""
+        return AIMessage(content=str(exc))
+
+    def wrap_model_call(self, request, handler):
+        """Answer with a setup refusal raised on the sync (local) invocation path."""
+        try:
+            return handler(request)
+        except (PromptSourceError, SeedSpecError) as exc:
+            return self._answer(exc)
+
+    async def awrap_model_call(self, request, handler):
+        """Answer with a setup refusal raised on the async (deployment) path."""
+        try:
+            return await handler(request)
+        except (PromptSourceError, SeedSpecError) as exc:
+            return self._answer(exc)
+
+
+def answer_setup_failure(configurable: dict[str, Any]) -> Any | None:
+    """A graph that answers with this assistant's setup refusal, or None when it has none.
+
+    `SetupFailureBoundary` cannot reach a refusal raised before the first model call, and
+    the seed spec is read by whichever middleware touches the filesystem first, inside
+    `before_agent`. Core middleware runs ahead of ours there, so the only boundary left is
+    outside the agent: `graph.py` asks this per run, and a turn that cannot be set up is
+    served by a one-node graph whose reply is the refusal, rather than by the agent that
+    would abort in its first middleware.
+
+    Still no substitution: this graph answers and stops, with no model call, no VM and no
+    stand-in dataset.
+    """
+    message = turn_blocking_failure(get_ctx(SimpleNamespace(context=configurable)))
+    if message is None:
+        return None
+
+    def answer(state: MessagesState) -> dict[str, Any]:
+        """Reply with the refusal, which is the whole turn."""
+        return {"messages": [AIMessage(content=message)]}
+
+    # ty doesn't recognize langgraph's own MessagesState as satisfying its StateLike
+    # bound (the same third-party typing gap `setup_graph.py` hits); it is valid
+    # langgraph state at runtime.
+    builder = StateGraph(MessagesState, context_schema=Context)  # ty: ignore[invalid-argument-type]
+    builder.add_node("setup_failure", answer)
+    builder.add_edge(START, "setup_failure")
+    return builder.compile()
+
+
 class ToolSelection(AgentMiddleware):
     """Expose only the catalogue tools this assistant enabled.
 
@@ -569,6 +643,9 @@ def _build_agent(model: str | None, checkpointer):
             # Before the prompt middleware, so the tools it discovers are already
             # in the ContextVar when `_mcp_note` describes them to the model.
             McpTools(),
+            # Ahead of the prompt middleware too: earlier in the list wraps further
+            # out, which is what lets it answer with a prompt the Hub refused.
+            SetupFailureBoundary(),
             _hub_system_prompt,
             # Per-run call caps declared by the registry. Each is inert when its
             # tool isn't offered.

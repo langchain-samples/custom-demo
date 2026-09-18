@@ -7,15 +7,16 @@ artifacts directory routes to a Hub documents repo when the assistant names one.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 from deepagents.backends import CompositeBackend, ContextHubBackend, StateBackend
-from deepagents.backends.protocol import BackendProtocol
+from deepagents.backends.protocol import BackendProtocol, DeleteResult, EditResult, WriteResult
 from langgraph.runtime import get_runtime
 from langsmith.utils import LangSmithConflictError
 
 from custom_demo.config import scoped_client
-from custom_demo.core.ctx import get_ctx
+from custom_demo.core.ctx import Context, get_ctx
 from custom_demo.resources import sandbox
 
 
@@ -30,6 +31,28 @@ def _get_or_create_sandbox(runtime) -> Any | None:
     sandbox.seed_script_or_raise(spec)
     key = sandbox.sandbox_key_from(ctx.sandbox_key, ctx.agent_repo, ctx.customer)
     return sandbox.ensure_sandbox(key, seed=spec)
+
+
+def turn_blocking_failure(ctx: Context) -> str | None:
+    """The sentence a turn has to answer with when this assistant cannot be set up, else None.
+
+    The same validation `_get_or_create_sandbox` runs, and the same refusal: an
+    assistant with no `sandbox_seed` spec still gets no VM and no substitute dataset.
+    What this adds is a place to ask BEFORE the graph starts. The first middleware to
+    touch the filesystem resolves the backend from inside `before_agent`, where a raise
+    leaves the whole run with `outputs: null` and a traceback, so the presenter sees an
+    unanswered turn rather than the sentence naming what is misconfigured. `graph.py`
+    reads this per run and answers with it instead.
+    """
+    if not sandbox.sandbox_enabled():
+        return None
+
+    try:
+        sandbox.seed_script_or_raise(ctx.sandbox_seed)
+    except sandbox.SeedSpecError as exc:
+        return str(exc)
+
+    return None
 
 
 # Prompt and skills repos only. A ContextHubBackend loads the repo's whole tree on first
@@ -56,8 +79,17 @@ def _ctxhub_backend(repo: str, ws: str | None) -> Any:
 ARTIFACTS_MOUNT = "/workspace/artifacts/"
 
 
+def _unconfirmed(file_path: str, exc: Exception) -> str:
+    """The tool-result text for a documents change the Hub never confirmed."""
+    return (
+        f"The documents repo did not confirm the change to {file_path}: "
+        f"{type(exc).__name__}: {exc}. Read the file back before relying on either "
+        "version of it, and tell the user the document may not be stored."
+    )
+
+
 class DocumentsBackend(ContextHubBackend):
-    """A Hub documents backend that re-reads before giving up on a conflicting write.
+    """A Hub documents backend that re-reads before giving up on a write.
 
     The documents repo has TWO writers: the agent through this backend, and a person
     saving in the browser through `web/docs.py`. So the tree moves under a turn, the
@@ -65,12 +97,22 @@ class DocumentsBackend(ContextHubBackend):
     push with a conflict. That would surface as a failed turn even when nothing is really
     in conflict: the person edited one document and the agent is writing another.
 
-    Reload the tree and retry ONCE. A second conflict is a genuine race worth raising,
+    Reload the tree and retry ONCE. A second conflict is a genuine race worth reporting,
     and a retry loop over someone else's commits would eventually bury one of them.
 
-    `_commit` is deepagents-internal, so this depends on a private method rather than a
-    public API. `test_documents.py` pins the behaviour, so a release that renames it
-    fails a test here instead of quietly restoring the conflict.
+    A push can also fail in a way that says nothing about what the repo now holds: an
+    HTTP response body the SDK cannot parse raises out of `push_agent` before any commit
+    hash is read, so the delta may be committed, may not be, and the vendor backend only
+    turns a `LangSmithError` into a result the tool layer can report. Anything else
+    escapes the tool, the graph and the turn. So the three mutating entry points below
+    settle that state themselves: re-read the tree, keep the work if the delta is already
+    there, retry once if it is not, and report a failure the model can relay as a tool
+    result naming the path. They are public API, so the recovery holds whether or not the
+    private push hook `_commit` below is the route a given deepagents release takes.
+
+    `_commit` is deepagents-internal, so the rebase depends on a private method rather
+    than a public API. `test_documents.py` pins the behaviour, so a release that renames
+    it fails a test here instead of quietly restoring the conflict.
     """
 
     def _commit(self, changes: dict[str, str | None]) -> None:
@@ -78,13 +120,67 @@ class DocumentsBackend(ContextHubBackend):
         try:
             super()._commit(changes)
         except LangSmithConflictError:
-            # Drop the stale snapshot and re-read, which also refreshes the parent commit
-            # this push chains onto. `changes` is a delta, so replaying it on the new head
-            # is exactly a rebase: the other writer's revision survives.
-            self._cache = None
-            self._commit_hash = None
-            self._ensure_cache()
+            # `changes` is a delta, so replaying it on the new head is exactly a rebase:
+            # the other writer's revision survives.
+            self._reread()
             super()._commit(changes)
+
+    def _reread(self) -> dict[str, str]:
+        """Drop the held snapshot and re-read the tree, refreshing the parent commit too."""
+        self._cache = None
+        self._commit_hash = None
+        return self._ensure_cache()
+
+    def write(self, file_path: str, content: str) -> WriteResult:
+        """Commit `content` to `file_path`, settling a push the Hub never confirmed."""
+        try:
+            return super().write(file_path, content)
+        except Exception:  # noqa: BLE001 - anything escaping the vendor backend leaves the commit state unknown
+            try:
+                if self._reread().get(self._strip_prefix(file_path)) == content:
+                    return WriteResult(path=file_path)
+
+                return super().write(file_path, content)
+            except Exception as exc:  # noqa: BLE001 - a failed tool result, not a failed turn
+                return WriteResult(error=_unconfirmed(file_path, exc))
+
+    def edit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> EditResult:
+        """Edit `file_path`, reporting rather than replaying a push the Hub never confirmed.
+
+        Deliberately not retried: a replacement is not idempotent, so replaying one the
+        repo may already hold could apply it twice. The re-read still runs, so the next
+        tool call reads the tree as it actually is and the model can edit again from there.
+        """
+        try:
+            return super().edit(file_path, old_string, new_string, replace_all)
+        except Exception as exc:  # noqa: BLE001 - reported to the model rather than escaping the turn
+            with contextlib.suppress(Exception):
+                self._reread()
+
+            return EditResult(error=_unconfirmed(file_path, exc))
+
+    def delete(self, file_path: str) -> DeleteResult:
+        """Delete `file_path`, settling a push the Hub never confirmed."""
+        try:
+            return super().delete(file_path)
+        except Exception:  # noqa: BLE001 - anything escaping the vendor backend leaves the commit state unknown
+            try:
+                base = self._strip_prefix(file_path).rstrip("/")
+                remaining = [
+                    path for path in self._reread() if path == base or path.startswith(base + "/")
+                ]
+                if not remaining:
+                    return DeleteResult(path=file_path)
+
+                return super().delete(file_path)
+            except Exception as exc:  # noqa: BLE001 - a failed tool result, not a failed turn
+                return DeleteResult(error=_unconfirmed(file_path, exc))
 
 
 class BackendSourceError(RuntimeError):
