@@ -322,6 +322,40 @@ def test_mcp_note_names_the_server_behind_each_tool(monkeypatch):
     assert "`fieldlink_get_shipment` (Fieldlink): Look one consignment up." in note
 
 
+def test_mcp_note_says_the_tool_list_is_current_for_this_turn():
+    """A bare list let the model answer "did my new server connect?" from its own history.
+
+    The whole conversation is replayed every turn, so an undated block is outweighed by
+    what the model said about its tools earlier. The block has to say it is recomputed.
+    """
+    remote = SimpleNamespace(name="g_get_file_contents", description="Read a file.")
+    token = A._mcp_tools.set((remote,))
+    try:
+        note = A._mcp_note(SimpleNamespace(context=Context(mcp_servers=_SERVER)))
+    finally:
+        A._mcp_tools.reset(token)
+
+    assert "recomputed for every turn" in note
+    assert "RIGHT NOW" in note
+    assert "earlier turn in this same conversation" in note
+    assert "never from what you said earlier or from the conversation history" in note
+    assert "start a new thread" in note
+    # the currency statement qualifies the list, so it has to come above it
+    assert note.index("recomputed for every turn") < note.index("`g_get_file_contents`")
+
+
+def test_mcp_note_leaves_the_unavailable_branch_without_the_currency_statement():
+    """The currency statement belongs to the tool list; a down server still just reports down."""
+    token = A._mcp_tools.set(())
+    try:
+        note = A._mcp_note(SimpleNamespace(context=Context(mcp_servers=_SERVER)))
+    finally:
+        A._mcp_tools.reset(token)
+
+    assert "CONNECTED SYSTEMS UNAVAILABLE" in note
+    assert "recomputed for every turn" not in note
+
+
 def test_mcp_note_is_empty_without_mcp_tools():
     assert A._mcp_note(SimpleNamespace(context=Context(mcp_servers=None))) == ""
 

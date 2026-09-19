@@ -282,7 +282,14 @@ def _mcp_note(runtime) -> str:
         f"\n\nCONNECTED SYSTEMS ({names}). These tools reach the customer's own live systems "
         "through MCP. Prefer them over your local data files for anything they cover, and never "
         "invent a "
-        "value one of them could return (a tracking id, a status, a date):\n" + "\n".join(lines)
+        "value one of them could return (a tracking id, a status, a date). This list is "
+        "recomputed for every turn and describes exactly the connected systems you have RIGHT "
+        "NOW, so it can differ from what you had on an earlier turn in this same conversation. "
+        "Answer any question about which connected systems or tools you have from this list "
+        "only, never from what you said earlier or from the conversation history. If the user "
+        "says they have just connected or changed a server, check this list and use the tools "
+        "it names, rather than telling them the change has not taken effect, to reload the "
+        "assistant, or to start a new thread:\n" + "\n".join(lines)
     )
 
     # A server's own `instructions` last, so it qualifies the tools just listed.
