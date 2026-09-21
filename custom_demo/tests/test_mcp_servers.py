@@ -17,8 +17,8 @@ from types import SimpleNamespace
 from typing import Literal
 
 import pytest
-from langchain.mcp.apps import filter_model_visible_tools
 from fastmcp import Client
+from langchain.mcp.apps import filter_model_visible_tools
 from mcp.types import ElicitResult, InputRequiredResult
 from starlette.testclient import TestClient
 
