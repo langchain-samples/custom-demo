@@ -7,12 +7,15 @@
  * gets rendered apps, and where the pieces came from is our problem.
  */
 
-/** The binding a server declared, as the stamping middleware emits it. */
-export interface McpAppMetadata {
-  resourceUri: string;
-  mimeType: string;
-  visibility?: string[];
-}
+/**
+ * The `ui://` document a tool opens, as the stamping middleware emits it.
+ *
+ * A bare URI. The mime type is fixed for every MCP App, and the resource read
+ * returns the authoritative one anyway; a tool's `visibility` is enforced
+ * where the host builds `allowedTools`, and cannot reach a stamp regardless,
+ * since a stamp only lands on a call the model made.
+ */
+export type McpAppUri = string;
 
 /** One tool call that ships a UI, with everything needed to render it. */
 export interface McpAppPart {
@@ -26,7 +29,7 @@ export interface McpAppPart {
    * is what lets the app mount early enough to be streamed into.
    */
   messageId: string;
-  app: McpAppMetadata;
+  app: McpAppUri;
   /** Arguments as they stand. Changes while the model is still writing them. */
   input: Record<string, unknown>;
   /** The result, once the tool has returned. */
@@ -52,14 +55,14 @@ export interface McpAppThread {
  * therefore subscribes to both and takes half from each, which is the one
  * thing about MCP Apps on LangGraph that is not guessable.
  */
-function appsFromValues(values: unknown): Record<string, McpAppMetadata> {
+function appsFromValues(values: unknown): Record<string, McpAppUri> {
   const messages = (values as { messages?: unknown[] } | undefined)?.messages ?? [];
-  const apps: Record<string, McpAppMetadata> = {};
+  const apps: Record<string, McpAppUri> = {};
   for (const message of messages) {
     const stamped = (message as { additional_kwargs?: { mcp_app?: unknown } })
       ?.additional_kwargs?.mcp_app;
     if (stamped && typeof stamped === "object") {
-      Object.assign(apps, stamped as Record<string, McpAppMetadata>);
+      Object.assign(apps, stamped as Record<string, McpAppUri>);
     }
   }
 
@@ -95,7 +98,7 @@ function toolResult(message: {
  */
 export function mcpAppParts(
   thread: McpAppThread,
-  byName: Record<string, McpAppMetadata> = {},
+  byName: Record<string, McpAppUri> = {},
 ): McpAppPart[] {
   const messages = (thread.messages ?? []) as Record<string, any>[];
   const stamped = appsFromValues(thread.values);

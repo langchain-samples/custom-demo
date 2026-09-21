@@ -198,12 +198,12 @@ function AppFrame({
       toolCallId,
       toolName,
       messageId: toolCallId,
-      app: { resourceUri: resource.uri, mimeType: resource.mimeType },
+      app: resource.uri,
       input: toolArguments,
       output: toolResult as McpAppPart["output"],
       streaming: Boolean(streaming),
     }),
-    [toolCallId, toolName, resource.uri, resource.mimeType, toolArguments, toolResult, streaming],
+    [toolCallId, toolName, resource.uri, toolArguments, toolResult, streaming],
   );
 
   // Already read, by the lookup that found the binding. Resolving from hand

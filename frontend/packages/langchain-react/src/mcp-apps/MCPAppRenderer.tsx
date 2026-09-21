@@ -14,7 +14,7 @@
  */
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { AppBridge, PostMessageTransport } from "@modelcontextprotocol/ext-apps/app-bridge";
-import type { McpAppMetadata, McpAppPart, McpAppThread } from "./bindings";
+import type { McpAppPart, McpAppThread, McpAppUri } from "./bindings";
 import { toolInputAction } from "./ordering";
 import { readDocument, type McpAppResource } from "./documents";
 import { useMCPApps } from "./useMCPApps";
@@ -102,7 +102,7 @@ export interface McpAppConfig {
       }
     | { direct: true; className?: string; style?: CSSProperties };
   /** Read the `ui://` document. Usually a route on the host's own backend. */
-  loadResource: (app: McpAppMetadata) => Promise<McpAppResource>;
+  loadResource: (uri: McpAppUri) => Promise<McpAppResource>;
   /**
    * Bindings by tool name, usually read once from the host's own route.
    *
@@ -111,7 +111,7 @@ export interface McpAppConfig {
    * it the app waits for the per-call stamp, which arrives after the
    * arguments are already complete.
    */
-  apps?: Record<string, McpAppMetadata>;
+  apps?: Record<string, McpAppUri>;
   handlers?: McpAppHandlers;
   hostInfo?: { name: string; version: string };
   /** Merged into the context handed to every view. */
@@ -206,7 +206,7 @@ export function MCPApp({
    * bridge several times a second, and the only visible symptom is an app
    * that never finishes its handshake.
    */
-  const uri = part.app.resourceUri;
+  const uri = part.app;
   const load = useRef(loadResource);
   load.current = loadResource;
 
@@ -380,7 +380,7 @@ export function MCPApp({
   const common = {
     ref: frame,
     title: `MCP app for ${part.toolName}`,
-    "aria-label": part.app.resourceUri,
+    "aria-label": part.app,
     className: sandbox.className,
     style: sandbox.style ?? { width: "100%", height, border: 0 },
   };
