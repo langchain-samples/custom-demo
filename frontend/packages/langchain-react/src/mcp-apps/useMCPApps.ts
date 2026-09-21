@@ -17,7 +17,7 @@
  *     ))}
  */
 import { useEffect, useMemo, useRef } from "react";
-import { mcpAppParts, type McpAppMetadata, type McpAppPart, type McpAppThread } from "./bindings";
+import { mcpAppParts, type McpAppPart, type McpAppThread, type McpAppUri } from "./bindings";
 import { readDocument, type McpAppResource } from "./documents";
 
 export interface UseMCPAppsOptions {
@@ -28,7 +28,7 @@ export interface UseMCPAppsOptions {
    * the tool, so its arguments can stream; without it the app waits for the
    * per-call stamp, which arrives once the message is already complete.
    */
-  apps?: Record<string, McpAppMetadata>;
+  apps?: Record<string, McpAppUri>;
   /**
    * Passing this reads the app documents up front.
    *
@@ -36,7 +36,7 @@ export interface UseMCPAppsOptions {
    * naming a tool and the view being ready to hear, and reading the document
    * is the largest thing in it.
    */
-  loadResource?: (app: McpAppMetadata) => Promise<McpAppResource>;
+  loadResource?: (uri: McpAppUri) => Promise<McpAppResource>;
 }
 
 export interface MCPApps {
@@ -56,8 +56,8 @@ export function useMCPApps(thread: McpAppThread, options: UseMCPAppsOptions = {}
 
   useEffect(() => {
     if (!read.current) return;
-    for (const app of Object.values(apps ?? {})) {
-      void readDocument(app.resourceUri, read.current).catch(() => {});
+    for (const uri of Object.values(apps ?? {})) {
+      void readDocument(uri, read.current).catch(() => {});
     }
   }, [apps]);
 

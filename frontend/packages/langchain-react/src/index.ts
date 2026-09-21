@@ -17,5 +17,5 @@ export {
   type McpAppHandlers,
 } from "./mcp-apps/MCPAppRenderer";
 export { useMCPApps as experimental_useMCPApps, type MCPApps, type UseMCPAppsOptions } from "./mcp-apps/useMCPApps";
-export type { McpAppMetadata, McpAppPart } from "./mcp-apps/bindings";
+export type { McpAppPart, McpAppUri } from "./mcp-apps/bindings";
 export type { McpAppResource } from "./mcp-apps/documents";
