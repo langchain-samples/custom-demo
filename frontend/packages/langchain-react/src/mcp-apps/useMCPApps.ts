@@ -6,15 +6,17 @@
  * turn that opened it. A component that rendered every app itself would be
  * making a layout decision it is in no position to make.
  *
+ * An app is one of a message's tool calls, drawn differently, so it is placed
+ * in the loop a host already runs over those calls:
+ *
  *     const mcpApps = useMCPApps(thread, { apps, loadResource });
  *
- *     {messages.map((message) => (
- *       <MyTurn key={message.id} message={message}>
- *         {mcpApps.forMessage(message.id).map((part) => (
- *           <MCPApp key={part.toolCallId} part={part} {...config} />
- *         ))}
- *       </MyTurn>
- *     ))}
+ *     {message.tool_calls.map((call) => {
+ *       const app = mcpApps.forCall(call.id);
+ *       return app
+ *         ? <MCPApp key={call.id} part={app} {...config} />
+ *         : <MyToolChip key={call.id} call={call} />;
+ *     })}
  */
 import { useEffect, useMemo, useRef } from "react";
 import { mcpAppParts, type McpAppPart, type McpAppThread, type McpAppUri } from "./bindings";
@@ -43,8 +45,14 @@ export interface UseMCPAppsOptions {
 export interface MCPApps {
   /** Every app in the thread, in the order their calls were made. */
   all: McpAppPart[];
-  /** The apps opened by one message, which is usually zero or one. */
-  forMessage: (messageId: string) => McpAppPart[];
+  /**
+   * The app a tool call opens, or undefined for an ordinary tool.
+   *
+   * The granularity a conversation renders at: a host already loops over a
+   * message's `tool_calls` to draw them, and an app is one of those calls
+   * drawn differently, in its place among the others.
+   */
+  forCall: (toolCallId: string) => McpAppPart | undefined;
   /** Whether a tool result belongs to an app, and is therefore already drawn. */
   isAppResult: (toolCallId: string) => boolean;
 }
@@ -64,19 +72,13 @@ export function useMCPApps(thread: McpAppThread, options: UseMCPAppsOptions): MC
 
   return useMemo(() => {
     const all = mcpAppParts(thread, apps);
-    const byMessage = new Map<string, McpAppPart[]>();
-    const callIds = new Set<string>();
-    for (const part of all) {
-      const group = byMessage.get(part.messageId);
-      if (group) group.push(part);
-      else byMessage.set(part.messageId, [part]);
-      callIds.add(part.toolCallId);
-    }
+    const byCall = new Map<string, McpAppPart>();
+    for (const part of all) byCall.set(part.toolCallId, part);
 
     return {
       all,
-      forMessage: (messageId: string) => byMessage.get(messageId) ?? [],
-      isAppResult: (toolCallId: string) => callIds.has(toolCallId),
+      forCall: (toolCallId: string) => byCall.get(toolCallId),
+      isAppResult: (toolCallId: string) => byCall.has(toolCallId),
     };
   }, [thread, apps]);
 }
