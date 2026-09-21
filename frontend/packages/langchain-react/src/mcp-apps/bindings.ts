@@ -10,8 +10,7 @@
  *
  * A bare URI. The mime type is fixed for every MCP App, and the resource read
  * returns the authoritative one anyway; a tool's `visibility` is enforced
- * where the host builds `allowedTools`, and cannot reach a stamp regardless,
- * since a stamp only lands on a call the model made.
+ * on the route that proxies a view's call.
  */
 export type McpAppUri = string;
 
@@ -27,7 +26,8 @@ export interface McpAppPart {
    * is what lets the app mount early enough to be streamed into.
    */
   messageId: string;
-  app: McpAppUri;
+  /** The `ui://` document this call opens. */
+  uri: McpAppUri;
   /** Arguments as they stand. Changes while the model is still writing them. */
   input: Record<string, unknown>;
   /** The result, once the tool has returned. */
@@ -76,7 +76,7 @@ function toolResult(message: {
  */
 export function mcpAppParts(
   thread: McpAppThread,
-  apps: Record<string, McpAppUri> = {},
+  appUris: Record<string, McpAppUri> = {},
 ): McpAppPart[] {
   const messages = (thread.messages ?? []) as Record<string, any>[];
 
@@ -98,15 +98,15 @@ export function mcpAppParts(
       // itself arrives too late to be useful: LangGraph puts a message's
       // `additional_kwargs` in a state snapshot emitted once the message is
       // COMPLETE, by which point every partial has already gone past.
-      const app = apps[call.name];
-      if (!app) continue;
+      const uri = appUris[call.name];
+      if (!uri) continue;
 
       const output = outputs.get(call.id);
       parts.push({
         toolCallId: call.id,
         toolName: call.name,
         messageId: String(message.id ?? ""),
-        app,
+        uri,
         input: (call.args ?? {}) as Record<string, unknown>,
         output,
         // A call whose result has not arrived while the run is still going is

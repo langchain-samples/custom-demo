@@ -9,12 +9,12 @@
  * An app is one of a message's tool calls, drawn differently, so it is placed
  * in the loop a host already runs over those calls:
  *
- *     const mcpApps = useMCPApps(thread, { apps, loadResource });
+ *     const mcpApps = useMCPApps(thread, { appUris, loadResource });
  *
  *     {message.tool_calls.map((call) => {
  *       const app = mcpApps.forCall(call.id);
  *       return app
- *         ? <MCPApp key={call.id} part={app} {...config} />
+ *         ? <MCPApp key={call.id} app={app} {...config} />
  *         : <MyToolChip key={call.id} call={call} />;
  *     })}
  */
@@ -31,7 +31,7 @@ export interface UseMCPAppsOptions {
    * and proxies a view's tool call, and passes it here. Answering once is
    * enough: `resourceUri` is declared on the tool and never varies per call.
    */
-  apps: Record<string, McpAppUri>;
+  appUris: Record<string, McpAppUri>;
   /**
    * Passing this reads the app documents up front.
    *
@@ -61,22 +61,22 @@ export interface MCPApps {
 
 /** The apps in a thread, grouped so they can be placed. */
 export function useMCPApps(thread: McpAppThread, options: UseMCPAppsOptions): MCPApps {
-  const { apps, loadResource } = options;
+  const { appUris, loadResource } = options;
   const read = useRef(loadResource);
   read.current = loadResource;
 
   useEffect(() => {
     if (!read.current) return;
-    for (const uri of Object.values(apps)) {
+    for (const uri of Object.values(appUris)) {
       void readDocument(uri, read.current).catch(() => {});
     }
-  }, [apps]);
+  }, [appUris]);
 
   return useMemo(() => {
-    const all = mcpAppParts(thread, apps);
+    const all = mcpAppParts(thread, appUris);
     const byCall = new Map<string, McpAppPart>();
     for (const part of all) byCall.set(part.toolCallId, part);
 
     return { all, forCall: (toolCallId: string) => byCall.get(toolCallId) };
-  }, [thread, apps]);
+  }, [thread, appUris]);
 }
