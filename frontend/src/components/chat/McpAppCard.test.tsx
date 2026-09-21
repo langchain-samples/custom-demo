@@ -9,25 +9,49 @@
  * them would be worse than no card.
  *
  * The app's own half of the conversation is exercised for real against a built
- * app in `custom_demo/tests/signature_app_test.js`; the protocol is pinned in
- * `src/lib/mcpAppHost.test.ts`.
+ * app in `custom_demo/tests/signature_app_test.js`; the protocol itself is the
+ * SDK's, pinned in its own tests.
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { McpAppCard } from "./McpAppCard";
 
-const bridge = vi.hoisted(() => ({ current: null as null | Record<string, ReturnType<typeof vi.fn>> }));
+/**
+ * The bridge the renderer drives, stubbed.
+ *
+ * The renderer lives in `@langchain/langgraph-sdk` and imports the real
+ * `AppBridge` from the same module this replaces, which is why the SDK is
+ * inlined in `vite.config.ts`: vitest externalises node_modules by default and
+ * a mock cannot reach inside an external module.
+ *
+ * `initialized` is the interesting one. The renderer sends a view nothing until
+ * the view reports it, so a stub that never fires the event produces a card
+ * that draws and then sits silent, which is the failure this file exists to
+ * catch. `emitReady` is how a test says the view answered.
+ */
+const bridge = vi.hoisted(() => ({ current: null as null | Record<string, any> }));
 vi.mock("@modelcontextprotocol/ext-apps/app-bridge", () => ({
   PostMessageTransport: class {},
   AppBridge: class {
+    listeners: Record<string, ((e: unknown) => void)[]> = {};
     constructor() {
-      bridge.current = this as unknown as Record<string, ReturnType<typeof vi.fn>>;
+      bridge.current = this as unknown as Record<string, any>;
+    }
+    addEventListener = vi.fn((name: string, fn: (e: unknown) => void) => {
+      (this.listeners[name] ??= []).push(fn);
+    });
+    removeEventListener = vi.fn((name: string, fn: (e: unknown) => void) => {
+      this.listeners[name] = (this.listeners[name] ?? []).filter((f) => f !== fn);
+    });
+    emitReady() {
+      for (const fn of this.listeners.initialized ?? []) fn({});
     }
     connect = vi.fn(async () => {});
     sendToolInput = vi.fn(async () => {});
     sendToolInputPartial = vi.fn(async () => {});
     sendToolResult = vi.fn(async () => {});
     sendHostContextChange = vi.fn(async () => {});
+    sendSandboxResourceReady = vi.fn(async () => {});
     teardownResource = vi.fn(async () => ({}));
   },
 }));
@@ -49,6 +73,7 @@ function draw(overrides: Partial<Parameters<typeof McpAppCard>[0]> = {}) {
   return render(
     <McpAppCard
       toolName="meridian_propose_rebalance"
+      toolCallId="call-1"
       toolArguments={{ account_id: "MW-10241" }}
       toolResult={{ structuredContent: { household: "Whitfield Family Trust" } }}
       streaming={false}
@@ -119,8 +144,8 @@ it("does not look for an app when no server is connected", async () => {
 });
 
 it("forwards each streamed argument frame as a partial, then one complete input", async () => {
-  // The link the other tests miss. `mcpAppHost.test.ts` proves the bridge sends
-  // a partial when told to; `ChatPanel` proves a `messages/partial` frame
+  // The link the other tests miss. The SDK proves the bridge sends a partial
+  // when told to; `ChatPanel` proves a `messages/partial` frame
   // patches `toolArgs`. Nothing joined them, so a card that failed to re-fire on
   // a changed argument object would still pass both and quietly render the
   // diagram in one jump, which is the exact bug this flow exists to avoid.
@@ -128,6 +153,9 @@ it("forwards each streamed argument frame as a partial, then one complete input"
   const { rerender } = draw({ streaming: true, toolResult: undefined, toolArguments: { elements: "[{a" } });
   await waitFor(() => expect(bridge.current).toBeTruthy());
   const b = bridge.current as NonNullable<typeof bridge.current>;
+  // The view answers the handshake. Nothing may be sent before it does, so a
+  // test that skipped this would see no input at all, correctly.
+  await act(async () => b.emitReady());
 
   // Successive accumulated frames, as the server sends them: each carries the
   // whole partial value so far, not a delta.
@@ -135,6 +163,7 @@ it("forwards each streamed argument frame as a partial, then one complete input"
     rerender(
       <McpAppCard
         toolName="meridian_propose_rebalance"
+        toolCallId="call-1"
         toolArguments={{ elements }}
         streaming
         servers={SERVERS}
@@ -145,6 +174,7 @@ it("forwards each streamed argument frame as a partial, then one complete input"
   rerender(
     <McpAppCard
       toolName="meridian_propose_rebalance"
+      toolCallId="call-1"
       toolArguments={{ elements: "[{a:1},{b:2},{c:3}]" }}
       streaming={false}
       servers={SERVERS}
@@ -177,6 +207,7 @@ it("waits with a skeleton until the model has written any arguments", async () =
   rerender(
     <McpAppCard
       toolName="meridian_propose_rebalance"
+      toolCallId="call-1"
       toolArguments={{ elements: "[{a" }}
       streaming
       servers={SERVERS}
@@ -194,7 +225,13 @@ it("does not put the skeleton back when a later frame parses to nothing", async 
   await waitFor(() => expect(container.querySelector("[aria-hidden]")).toBeNull());
 
   rerender(
-    <McpAppCard toolName="meridian_propose_rebalance" toolArguments={{}} streaming servers={SERVERS} />,
+    <McpAppCard
+      toolName="meridian_propose_rebalance"
+      toolCallId="call-1"
+      toolArguments={{}}
+      streaming
+      servers={SERVERS}
+    />,
   );
   // Sticky on purpose: a skeleton reappearing over a drawing already on screen
   // is worse than the wait it was there to explain.

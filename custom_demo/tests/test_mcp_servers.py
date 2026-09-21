@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from typing import Literal
 
 import pytest
+from langchain.mcp.apps import filter_model_visible_tools
 from fastmcp import Client
 from mcp.types import ElicitResult, InputRequiredResult
 from starlette.testclient import TestClient
@@ -125,8 +126,14 @@ def test_model_visible_hides_only_the_app_only_tools(visibility, seen):
     Excalidraw is the live case: `create_view` is for the model, while
     `save_checkpoint` and friends are `visibility: ["app"]`. Handing those to the
     model invites it to call a tool meant for the App's own bookkeeping.
+
+    The rule lives in `langchain.mcp.apps` now. This still tests it, because
+    what matters here is that the tools this deployment builds carry the
+    metadata that filter reads, in the shape it reads it from.
     """
-    assert m.model_visible(_tool("t", visibility)) is seen
+    tool = _tool("t", visibility)
+
+    assert bool(filter_model_visible_tools([tool])) is seen
 
 
 def test_instructions_are_cached_beside_the_tools(monkeypatch):

@@ -1996,6 +1996,8 @@ function ItemView({
     return (
       <McpAppCard
         toolName={item.toolName}
+        // `app:<tool_call_id>`, so the id the bridge keys on is the call's.
+        toolCallId={item.id.replace(/^app:/, "")}
         toolArguments={item.toolArgs}
         toolResult={item.toolResult}
         streaming={item.streaming}
