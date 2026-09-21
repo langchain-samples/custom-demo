@@ -22,13 +22,14 @@ import { readDocument, type McpAppResource } from "./documents";
 
 export interface UseMCPAppsOptions {
   /**
-   * Bindings by tool name, usually read once from the host's own route.
+   * Which tool names ship a UI, and the `ui://` document each opens.
    *
-   * Worth passing. With it an app is recognised the moment the model names
-   * the tool, so its arguments can stream; without it the app waits for the
-   * per-call stamp, which arrives once the message is already complete.
+   * Required, because it is the only thing that says a call is an app. A host
+   * reads it once from its own route, the same route that reads a document
+   * and proxies a view's tool call, and passes it here. Answering once is
+   * enough: `resourceUri` is declared on the tool and never varies per call.
    */
-  apps?: Record<string, McpAppUri>;
+  apps: Record<string, McpAppUri>;
   /**
    * Passing this reads the app documents up front.
    *
@@ -49,14 +50,14 @@ export interface MCPApps {
 }
 
 /** The apps in a thread, grouped so they can be placed. */
-export function useMCPApps(thread: McpAppThread, options: UseMCPAppsOptions = {}): MCPApps {
+export function useMCPApps(thread: McpAppThread, options: UseMCPAppsOptions): MCPApps {
   const { apps, loadResource } = options;
   const read = useRef(loadResource);
   read.current = loadResource;
 
   useEffect(() => {
     if (!read.current) return;
-    for (const uri of Object.values(apps ?? {})) {
+    for (const uri of Object.values(apps)) {
       void readDocument(uri, read.current).catch(() => {});
     }
   }, [apps]);

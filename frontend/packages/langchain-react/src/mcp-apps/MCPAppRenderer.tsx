@@ -103,15 +103,6 @@ export interface McpAppConfig {
     | { direct: true; className?: string; style?: CSSProperties };
   /** Read the `ui://` document. Usually a route on the host's own backend. */
   loadResource: (uri: McpAppUri) => Promise<McpAppResource>;
-  /**
-   * Bindings by tool name, usually read once from the host's own route.
-   *
-   * Optional, and worth passing. With it an app mounts as soon as the model
-   * names the tool, so the arguments reach the view as they stream; without
-   * it the app waits for the per-call stamp, which arrives after the
-   * arguments are already complete.
-   */
-  apps?: Record<string, McpAppUri>;
   handlers?: McpAppHandlers;
   hostInfo?: { name: string; version: string };
   /** Merged into the context handed to every view. */
@@ -145,14 +136,22 @@ export interface MCPAppProps extends McpAppConfig {
 export interface MCPAppRendererProps extends McpAppConfig {
   /** Straight from `useStream`. */
   thread: McpAppThread;
+  /**
+   * Which tool names ship a UI, and the `ui://` document each opens.
+   *
+   * Only the thread-scanning form needs it: `MCPApp` is handed a part whose
+   * app is already resolved. A host reads this once from the same route that
+   * reads a document and proxies a view's tool call.
+   */
+  apps: Record<string, McpAppUri>;
 }
 
 const DEFAULT_INNER_SANDBOX = "allow-scripts allow-forms";
 
 
 /** Render every app in the thread. Renders nothing when there are none. */
-export function MCPAppRenderer({ thread, ...config }: MCPAppRendererProps) {
-  const mcpApps = useMCPApps(thread, { apps: config.apps, loadResource: config.loadResource });
+export function MCPAppRenderer({ thread, apps, ...config }: MCPAppRendererProps) {
+  const mcpApps = useMCPApps(thread, { apps, loadResource: config.loadResource });
   return (
     <>
       {mcpApps.all.map((part) => (

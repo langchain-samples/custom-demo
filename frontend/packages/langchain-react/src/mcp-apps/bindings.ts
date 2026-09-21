@@ -1,10 +1,8 @@
 /**
- * Reading MCP App bindings out of a LangGraph stream.
+ * Finding the MCP Apps in a LangGraph thread.
  *
- * This is the part a host would otherwise have to write itself, and the reason
- * it is not obvious is that the two halves arrive in two different streams.
  * Nothing here is exported from the package: a caller passes the thread and
- * gets rendered apps, and where the pieces came from is our problem.
+ * the map of which tools ship a UI, and gets back the calls worth rendering.
  */
 
 /**
@@ -38,35 +36,16 @@ export interface McpAppPart {
   streaming: boolean;
 }
 
-/** The thread shape this package needs, which is what `useStream` returns. */
+/**
+ * The thread shape this package needs, which is what `useStream` returns.
+ *
+ * `messages` only. A host subscribing to `stream_mode: "messages"` has
+ * everything the renderer wants, because which tools ship a UI is answered
+ * once by the host's own route rather than carried on each call.
+ */
 export interface McpAppThread {
   messages?: unknown[];
-  values?: unknown;
   isLoading?: boolean;
-}
-
-/**
- * The bindings carried by a values snapshot, keyed by tool call id.
- *
- * They ride in `values` and NOT in `messages`. Messages mode emits the model's
- * chunks as they are produced, and middleware that stamps the binding runs
- * after the handler, so the chunks are already gone: measured at 0 occurrences
- * in a messages stream against 3 in a values stream of the same run. A host
- * therefore subscribes to both and takes half from each, which is the one
- * thing about MCP Apps on LangGraph that is not guessable.
- */
-function appsFromValues(values: unknown): Record<string, McpAppUri> {
-  const messages = (values as { messages?: unknown[] } | undefined)?.messages ?? [];
-  const apps: Record<string, McpAppUri> = {};
-  for (const message of messages) {
-    const stamped = (message as { additional_kwargs?: { mcp_app?: unknown } })
-      ?.additional_kwargs?.mcp_app;
-    if (stamped && typeof stamped === "object") {
-      Object.assign(apps, stamped as Record<string, McpAppUri>);
-    }
-  }
-
-  return apps;
 }
 
 /**
@@ -91,17 +70,15 @@ function toolResult(message: {
 /**
  * Every tool call in the thread that ships a UI.
  *
- * A join across the two streams: the calls and their results come from the
- * messages, the bindings from the values snapshot, and `tool_call_id` is the
- * key they share. Calls with no binding are dropped, so a thread full of
+ * The calls and their results come from the messages, and `apps` says which
+ * tool names ship a UI. Calls with no binding are dropped, so a thread full of
  * ordinary tools produces nothing and costs nothing.
  */
 export function mcpAppParts(
   thread: McpAppThread,
-  byName: Record<string, McpAppUri> = {},
+  apps: Record<string, McpAppUri> = {},
 ): McpAppPart[] {
   const messages = (thread.messages ?? []) as Record<string, any>[];
-  const stamped = appsFromValues(thread.values);
 
   const outputs = new Map<string, McpAppPart["output"]>();
   for (const message of messages) {
@@ -115,14 +92,13 @@ export function mcpAppParts(
     if (message.type !== "ai") continue;
     for (const call of (message.tool_calls ?? []) as Record<string, any>[]) {
       if (!call.id || !call.name) continue;
-      // By NAME first, and that ordering is the whole reason arguments can
-      // stream. A binding known up front identifies an app from the tool name
-      // alone, which the model writes before it writes the arguments. The
-      // per-call stamp arrives in a state snapshot emitted once the message is
-      // complete, so a host that waits for it has already missed every
-      // partial. The stamp stays as the fallback, for a host that has no
-      // up-front map and for tools that appear without one.
-      const app = byName[call.name] ?? stamped[call.id];
+      // By NAME, which is what lets arguments stream. A map known up front
+      // identifies an app from the tool name alone, and the model writes the
+      // name before it writes the arguments. Anything carried on the call
+      // itself arrives too late to be useful: LangGraph puts a message's
+      // `additional_kwargs` in a state snapshot emitted once the message is
+      // COMPLETE, by which point every partial has already gone past.
+      const app = apps[call.name];
       if (!app) continue;
 
       const output = outputs.get(call.id);
