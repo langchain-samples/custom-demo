@@ -51,10 +51,12 @@ export interface MCPApps {
    * The granularity a conversation renders at: a host already loops over a
    * message's `tool_calls` to draw them, and an app is one of those calls
    * drawn differently, in its place among the others.
+   *
+   * Also answers it for a `ToolMessage`, whose `tool_call_id` is the same key:
+   * a truthy result means the view already shows that result, so printing the
+   * JSON under it would say the same thing twice.
    */
   forCall: (toolCallId: string) => McpAppPart | undefined;
-  /** Whether a tool result belongs to an app, and is therefore already drawn. */
-  isAppResult: (toolCallId: string) => boolean;
 }
 
 /** The apps in a thread, grouped so they can be placed. */
@@ -75,10 +77,6 @@ export function useMCPApps(thread: McpAppThread, options: UseMCPAppsOptions): MC
     const byCall = new Map<string, McpAppPart>();
     for (const part of all) byCall.set(part.toolCallId, part);
 
-    return {
-      all,
-      forCall: (toolCallId: string) => byCall.get(toolCallId),
-      isAppResult: (toolCallId: string) => byCall.has(toolCallId),
-    };
+    return { all, forCall: (toolCallId: string) => byCall.get(toolCallId) };
   }, [thread, apps]);
 }
