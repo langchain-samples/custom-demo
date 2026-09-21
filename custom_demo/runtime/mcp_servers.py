@@ -165,11 +165,16 @@ def build_group(servers: tuple[McpServer, ...]):
     from fastmcp import Client  # noqa: PLC0415
     from fastmcp.client.group import ClientGroup  # noqa: PLC0415
     from fastmcp.client.transports import StreamableHttpTransport  # noqa: PLC0415
+    from langchain.mcp.apps import MCP_APPS_EXTENSION  # noqa: PLC0415
 
     return ClientGroup(
         {
             s.id: Client(
                 StreamableHttpTransport(s.url, headers=s.headers or None),
+                # Says this host renders MCP Apps. A server that gates
+                # `_meta.ui` on the capability sends none of it otherwise, and
+                # every app-only tool then reads as visible to the model.
+                extensions=[MCP_APPS_EXTENSION],
                 cache=True,
                 mode="auto",
                 timeout=CONNECT_TIMEOUT_SECONDS,
@@ -189,10 +194,11 @@ _LOCKS: dict[str, asyncio.Lock] = {}
 async def load_tools(servers: tuple[McpServer, ...]) -> list[Any]:
     """Adapted LangChain tools for `servers`, cached for `TOOLS_TTL_SECONDS`.
 
-    App-only tools are dropped: the agent must not see them, and that filter is
-    the ONE thing about MCP Apps this deployment still knows (see
-    `model_visible`). Everything else, which tools ship a UI and which are open
-    to apps, is the browser's business now that it holds its own MCP client.
+    App-only tools are dropped: the agent must not see them, and that filter,
+    `langchain.mcp.apps.filter_model_visible_tools`, is the ONE thing about MCP
+    Apps this deployment still knows. Everything else, which tools ship a UI and
+    which are open to apps, is the browser's business now that it holds its own
+    MCP client.
     The cache holds every tool the server published and the filter runs on the
     way out.
 
@@ -204,11 +210,17 @@ async def load_tools(servers: tuple[McpServer, ...]) -> list[Any]:
     if not servers:
         return []
 
+    # Local, like the fastmcp imports above and for the same reason: importing
+    # `langchain.mcp.apps` runs `langchain.mcp.__init__`, which pulls the
+    # adapter and with it the whole mcp client stack. Measured at about
+    # 1,000ms, and this module is on the graph's import path.
+    from langchain.mcp.apps import filter_model_visible_tools  # noqa: PLC0415
+
     key = fingerprint(servers)
     now = time.monotonic()
     hit = _TOOLS.get(key)
     if hit and hit[0] > now:
-        return [t for t in hit[1] if model_visible(t)]
+        return filter_model_visible_tools(hit[1])
 
     lock = _LOCKS.setdefault(key, asyncio.Lock())
     async with lock:
@@ -216,7 +228,7 @@ async def load_tools(servers: tuple[McpServer, ...]) -> list[Any]:
         # should use what it produced, not load again.
         hit = _TOOLS.get(key)
         if hit and hit[0] > time.monotonic():
-            return [t for t in hit[1] if model_visible(t)]
+            return filter_model_visible_tools(hit[1])
 
         try:
             tools, said = await asyncio.wait_for(
@@ -239,7 +251,7 @@ async def load_tools(servers: tuple[McpServer, ...]) -> list[Any]:
             return []
 
         _TOOLS[key] = (time.monotonic() + TOOLS_TTL_SECONDS, tools)
-        return [t for t in tools if model_visible(t)]
+        return filter_model_visible_tools(tools)
 
 
 async def _discover_each(servers: tuple[McpServer, ...]) -> tuple[list[Any], dict[str, str]]:
@@ -333,32 +345,6 @@ def invalidate(servers: tuple[McpServer, ...] | None = None) -> None:
 
     _TOOLS.pop(fingerprint(servers), None)
     _INSTRUCTIONS.pop(fingerprint(servers), None)
-
-
-def _ui_meta(tool: Any) -> dict[str, Any]:
-    """The `_meta.ui` block the adapter carried through, or an empty one."""
-    meta = (tool.metadata or {}).get("mcp") or {}
-    return (((meta.get("tool") or {}).get("_meta") or {}).get("ui")) or {}
-
-
-def model_visible(tool: Any) -> bool:
-    """Whether the agent is allowed to see this tool.
-
-    MCP Apps (SEP-1865) lets a server mark a tool `_meta.ui.visibility: ["app"]`,
-    meaning only its own App may call it, and the rule for a host is a MUST: a
-    tool whose visibility omits `"model"` is kept out of the agent's tool list.
-    Excalidraw's server is the worked example, publishing `create_view` to the
-    model and `save_checkpoint` / `read_checkpoint` / `export_to_excalidraw` to
-    the app alone.
-
-    Defaults to visible. Omitting the key means `["model", "app"]`, which is
-    every ordinary tool on every server that has never heard of the extension.
-    """
-    visibility = _ui_meta(tool).get("visibility")
-    if not isinstance(visibility, list):
-        return True
-
-    return "model" in visibility
 
 
 async def resolve_server(assistant_id: str, server_id: str) -> McpServer | None:

@@ -91,7 +91,6 @@ frontend/src/
   components/chat/McpAppCard.tsx     Streaming MCP Apps and stable iframe presentation
   components/chat/McpElicitationCard.tsx  Schema form for MCP interrupts
   lib/mcpClients.ts         Browser MCP clients, metadata, resources and app-call checks
-  lib/mcpAppHost.ts         Official AppBridge adapter for SEP-1865
   lib/api.ts                HTTP transport, thread URL persistence and frontend wire types
   lib/queries.ts            React Query reads and cache keys
 demos/sdlc-factory/          Software-factory demo: agent prompt and one skill per SDLC phase
@@ -324,15 +323,16 @@ its growing skeleton covers the empty-input phase. `structuredFromToolMessage` r
 artifact's `structured_content` before falling back to parsing JSON text. Do not mistake the
 model-facing text for the app's structured result, in either live streaming or rehydration.
 
-`mcpAppHost.ts` uses the official `@modelcontextprotocol/ext-apps` `AppBridge` and
-`PostMessageTransport`: SEP-1865 JSON-RPC, negotiation, notification ordering and source-window
-validation belong to the SDK. Send a complete `toolInfo.tool`, including `inputSchema`.
-Keep the bridge's MCP client argument `null` even though the browser has clients: automatic
-forwarding would bypass our `resolveAppCall` checks. Explicit handlers resolve unprefixed tool
-names within the opener's server and refuse cross-server or non-app-visible calls. Missing
-visibility permits app calls; an explicit list must include `app`. Resource reads use the
-opener's server. Unsupported `ui/message` and model-context requests fail rather than being
-silently accepted; the current app card does not wire those optional handlers.
+`experimental_MCPApp`, from `@langchain/langgraph-sdk/react`, is the SEP-1865 half: JSON-RPC,
+negotiation, notification ordering, source-window validation and the frame. It sends a view
+nothing until the view reports `initialized`, so a test driving it has to play that side.
+`McpAppCard` passes the tool's `inputSchema` through, since `toolInfo.tool` must be complete or
+an SDK-built app rejects the handshake. `callTool` and `readResource` arrive as handlers rather
+than as an MCP client: given a client the bridge forwards a view's calls automatically, which
+would bypass `resolveAppCall`. Those handlers resolve unprefixed tool names within the opener's
+server and refuse cross-server or non-app-visible calls. Missing visibility permits app calls; an
+explicit list must include `app`. Display mode is declarative through `hostContext`, which is how
+the card's Exit button tells a fullscreen app to put its own chrome back.
 
 The iframe uses `srcDoc` and `sandbox="allow-scripts"`, never `allow-same-origin`. This prevents
 access to the host DOM/storage but is not, by itself, a complete network-egress restriction.

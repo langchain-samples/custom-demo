@@ -12,15 +12,27 @@
  * is why the app can call tools freely and why there is no answer to give back.
  *
  * The iframe is sandboxed to `allow-scripts` ONLY. No `allow-same-origin`, so
- * the server's HTML has no route to this page's origin, cookies or storage. The
- * conversation with it is SEP-1865, in `lib/mcpAppHost.ts`.
+ * the server's HTML has no route to this page's origin, cookies or storage.
+ *
+ * The SEP-1865 conversation itself is `experimental_MCPApp` from the SDK: the
+ * handshake, the lifecycle, the input ordering and the frame are the same in
+ * every host, and this file is the card around one. What stays here is what is
+ * ours: which resource to read, who may call what, the waiting state, and the
+ * fullscreen chrome.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { IconApps, IconX } from "@tabler/icons-react";
+import { experimental_MCPApp as MCPApp } from "@langchain/langgraph-sdk/react";
+import type { McpAppCall, McpAppResource } from "@langchain/langgraph-sdk/react";
 import type { McpServerConfig } from "@/lib/api";
 import { callMcpToolForApp, readMcpApp, readMcpResource } from "@/lib/mcpClients";
-import { createMcpAppHost, type McpToolResult } from "@/lib/mcpAppHost";
 import { skeletonReveal } from "@/lib/artifacts";
+
+/** A tool result as the host hands it to a view. */
+export interface McpToolResult {
+  structuredContent?: unknown;
+  content?: unknown[];
+}
 
 export interface McpAppCardProps {
   /** The tool whose app this is, namespaced as `{server}_{tool}`. */
@@ -144,11 +156,9 @@ function AppFrame({
   toolResult,
   streaming,
   servers,
-  html,
+  resource,
   inputSchema,
-}: McpAppCardProps & { html: string; inputSchema?: Record<string, unknown> }) {
-  const ref = useRef<HTMLIFrameElement | null>(null);
-  const host = useRef<ReturnType<typeof createMcpAppHost> | null>(null);
+}: McpAppCardProps & { resource: McpAppResource; inputSchema?: Record<string, unknown> }) {
   const [height, setHeight] = useState(320);
   const [mode, setMode] = useState("inline");
   // The app has something to draw once the model has written any arguments.
@@ -160,38 +170,8 @@ function AppFrame({
   const [waitedMs, setWaitedMs] = useState(0);
 
   useEffect(() => {
-    const bridge = createMcpAppHost({
-      toolName,
-      toolInputSchema: inputSchema,
-      // Clamped here rather than in the host: the ceiling is this card's
-      // layout, and it is the same number the host advertises as maxHeight.
-      onHeight: (h) => setHeight(Math.min(Math.max(h, 160), 640)),
-      onToolCall: (name, args) => callMcpToolForApp(servers, toolName, name, args),
-      onReadResource: (uri) => readMcpResource(servers, toolName, uri),
-      // Excalidraw's Edit button asks for exactly this. Declining it, which is
-      // all a host advertising inline-only can do, is why that button did
-      // nothing.
-      displayModes: ["inline", "fullscreen"],
-      // `setMode` is stable, so granting a mode never rebuilds the host and so
-      // never reloads the app.
-      onDisplayMode: setMode,
-    });
-    host.current = bridge;
-    // The SDK's transport owns the message listener now, so the only wiring
-    // left is handing it the frame once. NOT on `onLoad`: the app opens its
-    // handshake as soon as its inline script runs, which is before load fires,
-    // and a transport attached late would miss `ui/initialize` entirely.
-    const win = ref.current?.contentWindow;
-    if (win) void bridge.connect(win).catch(() => {});
-    return () => {
-      bridge.teardown("The app was closed.");
-      host.current = null;
-    };
-    // Deliberately NOT keyed on the arguments or the result. Those change on
-    // every streamed frame, and rebuilding the host would tear down a handshake
-    // the iframe never repeats: its document does not reload, so the app would
-    // sit there talking to a host that had forgotten it.
-  }, [toolName, servers, inputSchema]);
+    if (Object.keys(toolArguments).length > 0) setHasInput(true);
+  }, [toolArguments]);
 
   useEffect(() => {
     if (hasInput) return;
@@ -200,21 +180,8 @@ function AppFrame({
     return () => clearInterval(tick);
   }, [hasInput]);
 
-  // Feed the call in as it arrives.
-  useEffect(() => {
-    host.current?.setToolInput(toolArguments, !streaming);
-    if (Object.keys(toolArguments).length > 0) setHasInput(true);
-  }, [toolArguments, streaming]);
-
-  useEffect(() => {
-    if (toolResult) host.current?.setToolResult(toolResult);
-  }, [toolResult]);
-
-  /** Leave fullscreen, and tell the app so it can put its own chrome back. */
-  const collapse = useCallback(() => {
-    host.current?.setDisplayMode("inline");
-    setMode("inline");
-  }, []);
+  /** Leave fullscreen. `hostContext` tells the app, so it can restore its chrome. */
+  const collapse = useCallback(() => setMode("inline"), []);
 
   useEffect(() => {
     if (mode !== "fullscreen") return;
@@ -226,6 +193,20 @@ function AppFrame({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [mode, collapse]);
+
+  /** The call, in the shape the renderer takes. */
+  const call: McpAppCall = useMemo(
+    () => ({
+      toolName,
+      resource,
+      input: toolArguments,
+      output: toolResult
+        ? { content: toolResult.content ?? [], structuredContent: toolResult.structuredContent }
+        : undefined,
+      streaming: Boolean(streaming),
+    }),
+    [toolName, resource, toolArguments, toolResult, streaming],
+  );
 
   const full = mode === "fullscreen";
   return (
@@ -250,13 +231,32 @@ function AppFrame({
         className={`relative w-full${full ? " min-h-0 flex-1" : ""}`}
         style={full ? undefined : { height }}
       >
-        <iframe
-          ref={ref}
-          title={`MCP app for ${toolName}`}
-          srcDoc={html}
-          // See the note above: allow-same-origin must never be added here.
-          sandbox="allow-scripts"
-          className="h-full w-full rounded-lg border border-border bg-background"
+        <MCPApp
+          app={call}
+          // `direct`, not a proxy: we serve the SPA from one origin and have
+          // nowhere to put a second. Stricter than the proxy it replaces, since
+          // the view gets an opaque origin and therefore no network at all.
+          sandbox={{
+            direct: true,
+            className: "h-full w-full rounded-lg border border-border bg-background",
+          }}
+          toolInputSchema={inputSchema}
+          hostInfo={{ name: "custom-demo", version: "0.1.0" }}
+          // Excalidraw's Edit button asks for fullscreen. Declining it, which is
+          // all a host advertising inline-only can do, is why that button did
+          // nothing.
+          hostContext={{ displayMode: mode, availableDisplayModes: ["inline", "fullscreen"] }}
+          // Never wired straight to the MCP client: `callMcpToolForApp` is
+          // where a tool the server did not open to apps is refused, and a view
+          // is server-authored HTML.
+          callTool={({ name, arguments: args, app }) =>
+            callMcpToolForApp(servers, app.toolName, name, args)
+          }
+          readResource={({ uri, app }) => readMcpResource(servers, app.toolName, uri)}
+          // Clamped here rather than in the renderer: the ceiling is this
+          // card's layout.
+          onResize={({ height: h }) => setHeight(Math.min(Math.max(h, 160), 640))}
+          onDisplayMode={setMode}
         />
         {!hasInput && <Waiting reveal={skeletonReveal(waitedMs)} />}
       </div>
@@ -273,15 +273,28 @@ function AppFrame({
  */
 export function McpAppCard(props: McpAppCardProps) {
   const { toolName, servers } = props;
-  const [app, setApp] = useState<{ html: string; input_schema?: Record<string, unknown> } | null>(
-    null,
-  );
+  const [app, setApp] = useState<{
+    resource: McpAppResource;
+    inputSchema?: Record<string, unknown>;
+  } | null>(null);
 
   useEffect(() => {
     let live = true;
     if (!toolName || !servers.length) return;
     void readMcpApp(servers, toolName).then((found) => {
-      if (live) setApp(found ? { html: found.html, input_schema: found.inputSchema } : null);
+      if (!live) return;
+      setApp(
+        found
+          ? {
+              resource: {
+                uri: found.resourceUri,
+                mimeType: "text/html;profile=mcp-app",
+                html: found.html,
+              },
+              inputSchema: found.inputSchema,
+            }
+          : null,
+      );
     });
     return () => {
       live = false;
@@ -300,7 +313,7 @@ export function McpAppCard(props: McpAppCardProps) {
         <IconApps size={13} />
         {toolLabel(toolName)}
       </div>
-      <AppFrame {...props} html={app.html} inputSchema={app.input_schema} />
+      <AppFrame {...props} resource={app.resource} inputSchema={app.inputSchema} />
     </div>
   );
 }
