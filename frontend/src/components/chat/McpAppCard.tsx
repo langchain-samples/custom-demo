@@ -198,7 +198,7 @@ function AppFrame({
       toolCallId,
       toolName,
       messageId: toolCallId,
-      app: resource.uri,
+      uri: resource.uri,
       input: toolArguments,
       output: toolResult as McpAppPart["output"],
       streaming: Boolean(streaming),
@@ -277,7 +277,7 @@ function AppFrame({
         style={full ? undefined : { height }}
       >
         <MCPApp
-          part={part}
+          app={part}
           // One origin here, so no proxy. See the note at the top of the file.
           sandbox={{
             direct: true,

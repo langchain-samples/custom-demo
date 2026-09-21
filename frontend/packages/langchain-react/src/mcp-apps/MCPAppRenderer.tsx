@@ -2,7 +2,7 @@
  * Render the MCP Apps in a LangGraph thread.
  *
  * Hand it what `useStream` returned and it renders the apps, if there are any.
- * There is no part type to construct, no adapter to write, and no second
+ * There is no wrapper type to construct, no adapter to write, and no second
  * lookup to tell which tools ship a UI: the thread already contains that, and
  * finding it is this component's job rather than the caller's.
  *
@@ -24,9 +24,10 @@ export interface McpAppHandlers {
   /**
    * Proxy a `tools/call`.
    *
-   * SEP-1865 makes refusing a tool whose `visibility` omits `"app"` a MUST, so
-   * this is never wired straight to an MCP client: it goes to the host, which
-   * checks first.
+   * SEP-1865 makes refusing a tool whose `visibility` omits `"app"` a MUST,
+   * and the route behind this is where that happens. Never wire it straight
+   * to an MCP client: the check has to sit somewhere the view cannot reach,
+   * which a browser is not.
    */
   callTool?: (params: {
     name: string;
@@ -56,21 +57,6 @@ export interface McpAppHandlers {
    * rather than guess.
    */
   onDisplayMode?: (mode: string) => void;
-  /**
-   * Tools a view may call, by name. Optional.
-   *
-   * Set it and a call to anything else never leaves the page. Leave it unset
-   * and every call goes to `callTool`, which is the host's server route and
-   * the only place the decision actually counts: a browser check is a
-   * courtesy to the view, since the page it is defending is the same page a
-   * determined caller controls.
-   *
-   * So this is an optimisation, not the enforcement, and a host that has no
-   * list up front should not be made to fetch one. Passing it late is fine:
-   * handlers are read at call time rather than captured when the frame is
-   * built.
-   */
-  allowedTools?: string[];
 }
 
 /** Everything an app needs that is the same for all of them. */
@@ -123,7 +109,8 @@ export interface McpAppConfig {
 
 /** One app, placed wherever the conversation puts it. */
 export interface MCPAppProps extends McpAppConfig {
-  part: McpAppPart;
+  /** The call to draw, from `useMCPApps(...).forCall(id)`. */
+  app: McpAppPart;
 }
 
 /**
@@ -139,30 +126,30 @@ export interface MCPAppRendererProps extends McpAppConfig {
   /**
    * Which tool names ship a UI, and the `ui://` document each opens.
    *
-   * Only the thread-scanning form needs it: `MCPApp` is handed a part whose
+   * Only the thread-scanning form needs it: `MCPApp` is handed a call whose
    * app is already resolved. A host reads this once from the same route that
    * reads a document and proxies a view's tool call.
    */
-  apps: Record<string, McpAppUri>;
+  appUris: Record<string, McpAppUri>;
 }
 
 const DEFAULT_INNER_SANDBOX = "allow-scripts allow-forms";
 
 
 /** Render every app in the thread. Renders nothing when there are none. */
-export function MCPAppRenderer({ thread, apps, ...config }: MCPAppRendererProps) {
-  const mcpApps = useMCPApps(thread, { apps, loadResource: config.loadResource });
+export function MCPAppRenderer({ thread, appUris, ...config }: MCPAppRendererProps) {
+  const mcpApps = useMCPApps(thread, { appUris, loadResource: config.loadResource });
   return (
     <>
       {mcpApps.all.map((part) => (
-        <MCPApp key={part.toolCallId} part={part} {...config} />
+        <MCPApp key={part.toolCallId} app={part} {...config} />
       ))}
     </>
   );
 }
 
 export function MCPApp({
-  part,
+  app,
   sandbox,
   loadResource,
   handlers,
@@ -185,7 +172,6 @@ export function MCPApp({
   const innerSandbox = direct ? null : sandbox.innerSandbox;
 
   // Read at call time, not captured. A handler set or changed after the frame
-  // exists still applies, which is what makes a late `allowedTools` harmless.
   const live = useRef(handlers);
   live.current = handlers;
 
@@ -199,13 +185,13 @@ export function MCPApp({
   /*
    * Effects here key on STRINGS, never on the objects around them.
    *
-   * `thread` is a fresh object on every stream frame, so every part and every
-   * binding derived from it is fresh too. An effect keyed on `part.app` would
+   * `thread` is a fresh object on every stream frame, so every app and every
+   * binding derived from it is fresh too. An effect keyed on `app.uri` would
    * therefore re-read the document, replace the resource, and tear down the
    * bridge several times a second, and the only visible symptom is an app
    * that never finishes its handshake.
    */
-  const uri = part.app;
+  const uri = app.uri;
   const load = useRef(loadResource);
   load.current = loadResource;
 
@@ -225,7 +211,7 @@ export function MCPApp({
     const win = frame.current?.contentWindow;
     if (!resource || !win) return;
 
-    const app = new AppBridge(
+    const appBridge = new AppBridge(
       // No MCP client. Given one the SDK forwards a view's calls automatically,
       // which applies none of the checks SEP-1865 requires, so the two proxied
       // methods arrive as handlers instead and the host answers them.
@@ -244,7 +230,7 @@ export function MCPApp({
           // partial answer: an app built on that SDK rejects the handshake.
           toolInfo: {
             tool: {
-              name: part.toolName,
+              name: app.toolName,
               inputSchema: config.current.toolInputSchema ?? { type: "object" },
             },
           },
@@ -254,26 +240,18 @@ export function MCPApp({
         } as never,
       },
     );
-    setBridge(app);
+    setBridge(appBridge);
 
-    app.onsizechange = ({ height: h }) => {
+    appBridge.onsizechange = ({ height: h }) => {
       if (typeof h !== "number") return;
       const report = live.current?.onResize;
       if (report) report({ height: h });
       else setHeight(Math.min(Math.max(h, 160), 900));
     };
 
-    app.oncalltool = async (params) => {
+    appBridge.oncalltool = async (params) => {
       const call = live.current?.callTool;
-      const allowed = live.current?.allowedTools;
       if (!call) throw new Error("This host does not proxy tool calls.");
-      // Only when the host said which tools are open. Refusing everything
-      // when it did not would make an unset allowlist look like a server that
-      // denies every tool, which is the opposite of what omitting it means.
-      if (allowed && !allowed.includes(String(params.name))) {
-        throw new Error(`${params.name} is not open to apps`);
-      }
-
       const out = await call({
         name: String(params.name),
         arguments: (params.arguments ?? {}) as Record<string, unknown>,
@@ -285,13 +263,13 @@ export function MCPApp({
       };
     };
 
-    app.onreadresource = async (params) => {
+    appBridge.onreadresource = async (params) => {
       const read = live.current?.readResource;
       if (!read) throw new Error("This host does not proxy resources/read.");
       return { contents: (await read({ uri: String(params.uri) })) as never };
     };
 
-    app.onopenlink = async (params) => {
+    appBridge.onopenlink = async (params) => {
       const url = String(params.url ?? "");
       const open = live.current?.openLink;
       if (open) return (await open({ url }), {});
@@ -302,7 +280,7 @@ export function MCPApp({
       return {};
     };
 
-    app.onrequestdisplaymode = async (params) => {
+    appBridge.onrequestdisplaymode = async (params) => {
       const wanted = String(params.mode ?? "");
       const offered = (config.current.hostContext?.availableDisplayModes as string[]) ?? ["inline"];
       if (offered.includes(wanted)) {
@@ -313,7 +291,7 @@ export function MCPApp({
       return { mode: mode.current as "inline" | "fullscreen" | "pip" };
     };
 
-    app.onmessage = async (params) => {
+    appBridge.onmessage = async (params) => {
       const push = live.current?.onMessage;
       if (!push) throw new Error("This host cannot accept a message right now.");
       const text = String((params.content as { text?: string })?.text ?? "").trim();
@@ -324,8 +302,8 @@ export function MCPApp({
 
     // Only in proxy mode. Rendering direct, the document is already the
     // frame's `srcDoc` and there is no proxy to hand it to.
-    app.onsandboxready = () => {
-      void app.sendSandboxResourceReady({
+    appBridge.onsandboxready = () => {
+      void appBridge.sendSandboxResourceReady({
         html: resource.html,
         sandbox: innerSandbox ?? DEFAULT_INNER_SANDBOX,
         csp: (resource.meta?.csp ?? undefined) as never,
@@ -338,14 +316,14 @@ export function MCPApp({
     // effect would miss it and then wait forever for something already past.
     setReady(false);
     const onReady = () => setReady(true);
-    app.addEventListener("initialized", onReady);
+    appBridge.addEventListener("initialized", onReady);
 
-    void app.connect(new PostMessageTransport(win, win));
+    void appBridge.connect(new PostMessageTransport(win, win));
     return () => {
       // A request, not a notification: the spec has the host give the view a
       // chance to save what the person typed before the frame goes.
-      app.removeEventListener("initialized", onReady);
-      void app.teardownResource({ reason: "The app was closed." }).catch(() => {});
+      appBridge.removeEventListener("initialized", onReady);
+      void appBridge.teardownResource({ reason: "The app was closed." }).catch(() => {});
       setBridge(null);
       setReady(false);
     };
@@ -359,7 +337,7 @@ export function MCPApp({
     // a host that had forgotten it. The uri and html below are the identity
     // that actually matters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resource?.uri, resource?.html, part.toolName, innerSandbox, proxyUrl]);
+  }, [resource?.uri, resource?.html, app.toolName, innerSandbox, proxyUrl]);
 
   // The host moved the app itself, so tell the view: it may have its own
   // chrome to put back. Declarative on purpose, so there is no imperative
@@ -371,15 +349,15 @@ export function MCPApp({
     void bridge.sendHostContextChange({ displayMode: wanted as "inline" | "fullscreen" | "pip" });
   }, [bridge, wanted]);
 
-  useToolInput(bridge, ready, part);
+  useToolInput(bridge, ready, app);
 
   if (failed) return <div role="alert">Could not load the app: {failed}</div>;
   if (!resource) return <>{fallback ?? null}</>;
 
   const common = {
     ref: frame,
-    title: `MCP app for ${part.toolName}`,
-    "aria-label": part.app,
+    title: `MCP app for ${app.toolName}`,
+    "aria-label": app.uri,
     className: sandbox.className,
     style: sandbox.style ?? { width: "100%", height, border: 0 },
   };
@@ -405,7 +383,7 @@ export function MCPApp({
 /**
  * Feed the call to the view as it arrives.
  *
- * This is the part worth having. SEP-1865 defines `tool-input-partial` so a
+ * SEP-1865 defines `tool-input-partial` so a
  * view can draw while the model is still writing the arguments, and a host
  * that only ever sends the final `tool-input` leaves every app blank until the
  * call is complete. LangGraph's messages stream parses partial JSON as it
@@ -417,7 +395,7 @@ export function MCPApp({
  * still sends its one final input, so a view never waits on a partial that
  * already happened.
  */
-function useToolInput(bridge: AppBridge | null, ready: boolean, part: McpAppPart) {
+function useToolInput(bridge: AppBridge | null, ready: boolean, app: McpAppPart) {
   const sentFinal = useRef(false);
   const sentResult = useRef(false);
 
@@ -426,35 +404,35 @@ function useToolInput(bridge: AppBridge | null, ready: boolean, part: McpAppPart
     sentResult.current = false;
   }, [bridge]);
 
-  const input = JSON.stringify(part.input);
+  const input = JSON.stringify(app.input);
   useEffect(() => {
     if (!bridge || !ready) return;
 
     const action = toolInputAction({
       ready,
       sentFinal: sentFinal.current,
-      streaming: part.streaming,
+      streaming: app.streaming,
     });
     if (action === "partial") {
-      void bridge.sendToolInputPartial({ arguments: part.input });
+      void bridge.sendToolInputPartial({ arguments: app.input });
     } else if (action === "final") {
       // Exactly one, and nothing after it. A run that finished before the
       // view was ready still gets its final input, so a view never waits on a
       // partial that already happened.
       sentFinal.current = true;
-      void bridge.sendToolInput({ arguments: part.input });
+      void bridge.sendToolInput({ arguments: app.input });
     }
 
-    if (part.output && !sentResult.current) {
+    if (app.output && !sentResult.current) {
       sentResult.current = true;
-      void bridge.sendToolResult(part.output as never);
+      void bridge.sendToolResult(app.output as never);
     }
     // `ready` is load-bearing: `initialized` often arrives after the result
     // does, and without it this never re-runs to send anything.
     //
-    // `part.input` is deliberately absent: it is a new object on every frame,
+    // `app.input` is deliberately absent: it is a new object on every frame,
     // so depending on it would send a partial per render rather than per
     // actual change. `input` is its JSON, which changes only when it does.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bridge, ready, input, part.streaming, part.output]);
+  }, [bridge, ready, input, app.streaming, app.output]);
 }
