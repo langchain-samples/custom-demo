@@ -73,7 +73,6 @@ function draw(overrides: Partial<Parameters<typeof McpAppCard>[0]> = {}) {
   return render(
     <McpAppCard
       toolName="meridian_propose_rebalance"
-      toolCallId="call-1"
       toolArguments={{ account_id: "MW-10241" }}
       toolResult={{ structuredContent: { household: "Whitfield Family Trust" } }}
       streaming={false}
@@ -163,8 +162,7 @@ it("forwards each streamed argument frame as a partial, then one complete input"
     rerender(
       <McpAppCard
         toolName="meridian_propose_rebalance"
-        toolCallId="call-1"
-        toolArguments={{ elements }}
+          toolArguments={{ elements }}
         streaming
         servers={SERVERS}
       />,
@@ -174,7 +172,6 @@ it("forwards each streamed argument frame as a partial, then one complete input"
   rerender(
     <McpAppCard
       toolName="meridian_propose_rebalance"
-      toolCallId="call-1"
       toolArguments={{ elements: "[{a:1},{b:2},{c:3}]" }}
       streaming={false}
       servers={SERVERS}
@@ -207,7 +204,6 @@ it("waits with a skeleton until the model has written any arguments", async () =
   rerender(
     <McpAppCard
       toolName="meridian_propose_rebalance"
-      toolCallId="call-1"
       toolArguments={{ elements: "[{a" }}
       streaming
       servers={SERVERS}
@@ -227,7 +223,6 @@ it("does not put the skeleton back when a later frame parses to nothing", async 
   rerender(
     <McpAppCard
       toolName="meridian_propose_rebalance"
-      toolCallId="call-1"
       toolArguments={{}}
       streaming
       servers={SERVERS}

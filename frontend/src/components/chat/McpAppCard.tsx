@@ -23,7 +23,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { IconApps, IconX } from "@tabler/icons-react";
 import { experimental_MCPApp as MCPApp } from "@langchain/langgraph-sdk/react";
-import type { McpAppPart, McpAppResource } from "@langchain/langgraph-sdk/react";
+import type { McpAppCall, McpAppResource } from "@langchain/langgraph-sdk/react";
 import type { McpServerConfig } from "@/lib/api";
 import { callMcpToolForApp, readMcpApp, readMcpResource } from "@/lib/mcpClients";
 import { skeletonReveal } from "@/lib/artifacts";
@@ -37,8 +37,6 @@ export interface McpToolResult {
 export interface McpAppCardProps {
   /** The tool whose app this is, namespaced as `{server}_{tool}`. */
   toolName: string;
-  /** The call this app belongs to, which is its identity to the bridge. */
-  toolCallId: string;
   /**
    * What it was called with, as they stand.
    *
@@ -154,7 +152,6 @@ function Waiting({ reveal }: { reveal: number }) {
  */
 function AppFrame({
   toolName,
-  toolCallId,
   toolArguments,
   toolResult,
   streaming,
@@ -197,23 +194,18 @@ function AppFrame({
     return () => window.removeEventListener("keydown", onKey);
   }, [mode, collapse]);
 
-  /**
-   * The call, in the shape the renderer takes.
-   *
-   * `messageId` is empty because this card is placed by `ChatPanel`'s own item
-   * list, not by the thread projection the hook would otherwise do for us.
-   */
-  const part: McpAppPart = useMemo(
+  /** The call, in the shape the renderer takes. */
+  const call: McpAppCall = useMemo(
     () => ({
-      toolCallId,
       toolName,
-      messageId: "",
       resource,
       input: toolArguments,
-      output: toolResult ? { content: toolResult.content ?? [], structuredContent: toolResult.structuredContent } : undefined,
+      output: toolResult
+        ? { content: toolResult.content ?? [], structuredContent: toolResult.structuredContent }
+        : undefined,
       streaming: Boolean(streaming),
     }),
-    [toolCallId, toolName, resource, toolArguments, toolResult, streaming],
+    [toolName, resource, toolArguments, toolResult, streaming],
   );
 
   const full = mode === "fullscreen";
@@ -240,7 +232,7 @@ function AppFrame({
         style={full ? undefined : { height }}
       >
         <MCPApp
-          app={part}
+          app={call}
           // `direct`, not a proxy: we serve the SPA from one origin and have
           // nowhere to put a second. Stricter than the proxy it replaces, since
           // the view gets an opaque origin and therefore no network at all.
@@ -257,10 +249,10 @@ function AppFrame({
           // Never wired straight to the MCP client: `callMcpToolForApp` is
           // where a tool the server did not open to apps is refused, and a view
           // is server-authored HTML.
-          callTool={({ name, arguments: args }) =>
-            callMcpToolForApp(servers, toolName, name, args)
+          callTool={({ name, arguments: args, app }) =>
+            callMcpToolForApp(servers, app.toolName, name, args)
           }
-          readResource={({ uri }) => readMcpResource(servers, toolName, uri)}
+          readResource={({ uri, app }) => readMcpResource(servers, app.toolName, uri)}
           // Clamped here rather than in the renderer: the ceiling is this
           // card's layout.
           onResize={({ height: h }) => setHeight(Math.min(Math.max(h, 160), 640))}
