@@ -65,6 +65,7 @@ export function ToolsSection({ specs, enabled, onChange, defaultOpen }: Props) {
                 title={spec.always_on ? "Always on - the dashboard depends on it" : undefined}
               >
                 <Switch
+                  size="sm"
                   className="mt-0.5 shrink-0"
                   checked={isOn(spec, enabled)}
                   disabled={spec.always_on}

@@ -15,6 +15,8 @@ export interface SwitchProps {
   label?: string;
   ariaLabel?: string;
   className?: string;
+  /** "sm" fits beside a compact input row; "default" is beUI's size. */
+  size?: "sm" | "default";
 }
 
 export function Switch({
@@ -24,7 +26,9 @@ export function Switch({
   label,
   ariaLabel,
   className,
+  size = "default",
 }: SwitchProps) {
+  const small = size === "sm";
   const id = useId();
   const thumbRef = useRef<HTMLDivElement>(null);
   const reduce = useReducedMotion();
@@ -65,7 +69,8 @@ export function Switch({
           initial={false}
           data-state={checked ? "checked" : "unchecked"}
           className={cn(
-            "group peer inline-flex h-7 w-12 shrink-0 cursor-pointer items-center px-1 rounded-full outline-none transition-colors duration-200",
+            "group peer inline-flex shrink-0 cursor-pointer items-center rounded-full outline-none transition-colors duration-200",
+            small ? "h-5 w-9 px-0.5" : "h-7 w-12 px-1",
             "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
             "disabled:cursor-not-allowed disabled:opacity-60",
             checked ? "justify-end bg-primary" : "justify-start bg-muted-foreground/60",
@@ -75,12 +80,15 @@ export function Switch({
             ref={thumbRef}
             layout
             animate={{ scale: squish ? 0.9 : 1 }}
-            className="pointer-events-none block h-5 w-5 rounded-full bg-background shadow-md"
+            className={cn(
+              "pointer-events-none block rounded-full bg-background shadow-md",
+              small ? "size-4" : "size-5",
+            )}
           >
             {/* Stretch toward the destination while active. */}
             <div
               className={cn(
-                "size-5",
+                small ? "size-4" : "size-5",
                 squish && (checked ? "ml-1" : "mr-1"),
               )}
             />

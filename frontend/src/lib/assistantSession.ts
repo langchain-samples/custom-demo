@@ -1,4 +1,4 @@
-import type { Assistant, AssistantMetadata, McpServerConfig, QuickAction, RunContext } from "./api";
+import type { Assistant, AssistantMetadata, McpServerConfig, QuickAction, RemoteAgentConfig, RunContext } from "./api";
 import { DEFAULT_TINT } from "./branding";
 import { DEFAULT_CURATED } from "./fonts";
 import { coerceTheme, type Theme } from "./theme";
@@ -26,9 +26,10 @@ export interface AssistantDraft {
   /** null inherits defaults; [] explicitly disables optional catalogue tools. */
   enabledTools: string[] | null;
   mcpServers: McpServerConfig[];
+  remoteAgents: RemoteAgentConfig[];
 }
 
-export type BrandingDraft = Omit<AssistantDraft, "lsWorkspace" | "agentRepo" | "model" | "enabledTools" | "mcpServers">;
+export type BrandingDraft = Omit<AssistantDraft, "lsWorkspace" | "agentRepo" | "model" | "enabledTools" | "mcpServers" | "remoteAgents">;
 
 export const WORKSPACE_LS_KEY = "dashboardWorkspace";
 export const LAST_OWNER_LS_KEY = "lastOwner";
@@ -56,7 +57,7 @@ export function blankDraft(workspace: string): AssistantDraft {
     brandTint: DEFAULT_TINT, logo: "", actions: [], theme: "dark", voiceName: "",
     fontHeading: "", fontHeadingFallback: DEFAULT_CURATED,
     fontBody: "", fontBodyFallback: DEFAULT_CURATED, fontSource: "google",
-    agentRepo: "", model: "", enabledTools: null, mcpServers: [],
+    agentRepo: "", model: "", enabledTools: null, mcpServers: [], remoteAgents: [],
   };
 }
 
@@ -84,6 +85,7 @@ export function draftFromAssistant(assistant: Assistant, workspace: string): Ass
     model: (ctx.model as string) || "",
     enabledTools: Array.isArray(ctx.enabled_tools) ? (ctx.enabled_tools as string[]) : null,
     mcpServers: Array.isArray(ctx.mcp_servers) ? (ctx.mcp_servers as McpServerConfig[]) : [],
+    remoteAgents: Array.isArray(ctx.remote_agents) ? (ctx.remote_agents as RemoteAgentConfig[]) : [],
   };
 }
 
@@ -97,6 +99,8 @@ export function sessionRunContext(draft: AssistantDraft, project: string): RunCo
   if (draft.enabledTools !== null) context.enabled_tools = draft.enabledTools;
   const servers = draft.mcpServers.filter((s) => s.enabled !== false && s.url.trim());
   if (servers.length) context.mcp_servers = servers;
+  const agents = draft.remoteAgents.filter((a) => a.enabled !== false && a.url.trim());
+  if (agents.length) context.remote_agents = agents;
   return context;
 }
 

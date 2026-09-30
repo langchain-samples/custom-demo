@@ -1,7 +1,7 @@
 import type { Assistant, UpdateAssistantInput } from "./api";
 
 type Edit = (current: Assistant) => UpdateAssistantInput;
-type Channel = "branding" | "model" | "tools" | "mcp";
+type Channel = "branding" | "model" | "tools" | "mcp" | "remote_agents";
 
 interface AssistantStore {
   get: (id: string) => Assistant | undefined;

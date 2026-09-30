@@ -1,0 +1,11 @@
+sku,product,unit,list_price_usd,billing,min_term_months
+GL-BLK-6030-100,GreenLake for Block Storage (Alletra 6030 class) 100 TiB reserve,per month,4900,monthly,36
+GL-BLK-6070-250,GreenLake for Block Storage (Alletra 6070 class) 250 TiB reserve,per month,10400,monthly,36
+GL-BLK-MP-500,GreenLake for Block Storage (Alletra MP B10000) 500 TiB reserve,per month,19800,monthly,36
+GL-BLK-BURST-TIB,Usage above reserve,per TiB per month,52,monthly,
+GL-DR-REPL,Disaster recovery replication add-on,per array per month,650,monthly,36
+GL-SVC-PROACT,Proactive care service,per array per month,420,monthly,36
+HW-6070-BASE,Alletra 6070 base array (capex purchase),each,186000,one-time,
+HW-SSD-S6X-7T6,S6X 7.68 TB NVMe SSD (spare),each,2150,one-time,
+HW-SSD-S7-7T6,S7 7.68 TB NVMe SSD (spare),each,2390,one-time,
+SVC-INSTALL,Installation and data migration,per array,9500,one-time,

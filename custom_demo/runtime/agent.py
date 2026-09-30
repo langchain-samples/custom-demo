@@ -37,6 +37,7 @@ from custom_demo.runtime.backends import DynamicBackend
 from custom_demo.runtime.mcp_servers import instructions_for, load_tools, parse_servers
 from custom_demo.runtime.mocking import enable_mocking
 from custom_demo.runtime.prompt import ARTIFACT_NOTE, FALLBACK_PROMPT, pull_agent_prompt
+from custom_demo.runtime.remote_subagents import RemoteAgents, remote_agents_note
 from custom_demo.runtime.tools import (
     all_tools,
     allowed_tool_names,
@@ -67,6 +68,7 @@ def _hub_system_prompt(request: ModelRequest) -> str:
         base
         + _capability_note(request.runtime)
         + _mcp_note(request.runtime)
+        + remote_agents_note()
         + _sandbox_note(request.runtime)
         + ARTIFACT_NOTE
         + _subagents_note()
@@ -618,6 +620,9 @@ def _build_agent(model: str | None, checkpointer):
             # Before the prompt middleware, so the tools it discovers are already
             # in the ContextVar when `_mcp_note` describes them to the model.
             McpTools(),
+            # Same position and reason as McpTools: the remote agents it discovers are in
+            # its ContextVar before `_hub_system_prompt` describes them.
+            RemoteAgents(),
             _hub_system_prompt,
             # Per-run call caps declared by the registry. Each is inert when its
             # tool isn't offered.

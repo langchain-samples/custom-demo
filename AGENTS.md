@@ -59,6 +59,8 @@ custom_demo/
   runtime/tools/simulated.py Draft generation and human interrupts
   runtime/tools/web_search.py Real Tavily results
   runtime/mcp_servers.py     Remote discovery, adaptation, instructions and server lookup
+  runtime/remote_agents.py   A2A agent cards, transport, background tasks and thread wake-up
+  runtime/remote_subagents.py Remote agents as per-run subagents: dynamic `task`, task tools
   runtime/widgets.py         Validated widget contract
   runtime/mocking.py         Per-invocation tool mocking
   provisioning/setup.py     Discovery, pure planning and resource preparation
@@ -67,6 +69,8 @@ custom_demo/
   provisioning/resource_tags.py  Application tagging
   web/routes.py             HTTP route assembly
   web/mcp.py                Streaming byte proxy to configured MCP servers
+  web/a2a.py                Shadows /a2a/{id}: adds SubscribeToTask and push notifications
+  web/remote_agents.py      Remote agent card probe and background-task progress stream
   web/docs.py               List, read, save and revision routes for documents
   web/                      Metadata, cleanup, sandbox, MCP, voice and eval handlers
   voice/                    Voice token minting and trace support
@@ -191,6 +195,7 @@ The build order in `runtime/agent.py` is load-bearing:
 | 1 | `RubricMiddleware` | Required at build, inert without a rubric; its after-hook must run last |
 | 2 | `ConfigurableModel` | Apply the run's model choice |
 | 3 | `McpTools` | Discover tools before the prompt describes them |
+| 3b | `RemoteAgents` | Discover remote A2A agents and rebuild `task` before the prompt describes them |
 | 4 | `_hub_system_prompt` | Fetch the configured prompt per model call and append runtime notes |
 | 5 | Catalogue call limits | Apply each enabled tool's caps |
 | 6 | QuickJS interpreter | Required orchestration before final filtering |
@@ -200,6 +205,22 @@ After-hooks run in reverse. Both sync and async hooks must remain callable. MCP'
 pass through without discovery; synchronous in-process eval/traffic runs do not acquire remote
 MCP tools through that middleware. The async tool-call hook must supply adapted tool objects
 as well as the model-call hook advertising them.
+
+`RemoteAgents` makes the subagent list per-run. `create_deep_agent(subagents=...)` fixes it at
+build, so the middleware replaces the built-in `task` tool on each model call with one that lists
+the built-in subagents plus the assistant's `context.remote_agents`, forwarding built-in names to
+the original tool. Its tool hook hands `ToolNode` the same objects and swaps the dynamic `task`
+into `runtime.tools`, which is where interpreter `task()` resolves it. `start_remote_task` runs an
+agent in the background; on completion `remote_agents._notify` enqueues a run on the parent
+thread (`multitask_strategy="enqueue"`), and the SPA's run watcher joins runs it did not start.
+Remote agents are called with `SendStreamingMessage`: a blocking `task` forwards progress as
+`remote_agent_progress` custom frames the SPA draws as subagent cards, and a background task
+buffers its progress for `GET /remote-tasks/{id}/stream`. Background tasks live in this process;
+after a restart that route and `check_remote_task` reattach to the agent itself (`SubscribeToTask`,
+`ListTasks`). `web/a2a.py` supplies `SubscribeToTask` and the push-config methods the Agent Server
+lacks, built from `langgraph_api`'s private A2A helpers, which `test_a2a_extensions.py` pins; it
+imports them lazily because that module needs a running server's config. Local runs need
+`langgraph dev --n-jobs-per-worker` above 1.
 
 No `write_todos` is installed. `_subagent_specs` always supplies `researcher`, `analyst` and an
 explicit `general-purpose` subagent, with safe tools on every spec and skills sources on the

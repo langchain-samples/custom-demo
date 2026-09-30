@@ -78,6 +78,7 @@ function ServerRow({
     <div className="flex flex-col gap-2 rounded-lg border border-border bg-panel-2 p-2.5">
       <div className="flex items-center gap-2">
         <Switch
+          size="sm"
           className="shrink-0"
           checked={enabled}
           onCheckedChange={(v) => onEdit({ enabled: !!v })}

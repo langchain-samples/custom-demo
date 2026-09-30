@@ -1,0 +1,7 @@
+order,customer,placed,items,promised_date,status
+SO-771204,Trey Research,2026-09-10,1x HW-6070-BASE; 1x SVC-INSTALL,2026-10-06,In fulfilment
+SO-771388,Northwind Health,2026-09-18,4x HW-SSD-S6X-7T6,2026-09-25,Backordered
+SO-771402,Contoso Financial,2026-09-19,2x HW-SSD-S7-7T6,2026-09-26,Delivered
+SO-771519,Woodgrove Bank,2026-09-23,1x GL-BLK-MP-500 onboarding kit,2026-10-02,Shipped
+SO-771560,Fourth Coffee,2026-09-24,1x HW-SSD-S6X-7T6 (proactive replacement for array CZ26F5LL3N bay 9),2026-09-29,Backordered
+SO-771611,Fabrikam Manufacturing,2026-09-26,2x HW-SSD-S7-7T6,2026-10-01,Picked

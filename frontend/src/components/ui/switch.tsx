@@ -13,13 +13,14 @@ function Switch({
   disabled,
   className,
   "aria-label": ariaLabel,
+  size,
 }: {
   checked?: boolean
   onCheckedChange?: (checked: boolean) => void
   disabled?: boolean
   className?: string
   "aria-label"?: string
-  /** Accepted for API-compat with the old shadcn switch; visual size is beUI's. */
+  /** "sm" for compact settings rows; "default" is beUI's size. */
   size?: "sm" | "default"
 }) {
   return (
@@ -29,6 +30,7 @@ function Switch({
       disabled={disabled}
       className={className}
       ariaLabel={ariaLabel}
+      size={size}
     />
   )
 }

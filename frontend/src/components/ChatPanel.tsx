@@ -27,8 +27,17 @@ import {
   IconTarget,
   IconUser,
 } from "@tabler/icons-react";
-import type { QuickAction, ReviewInterrupt, RunContext, ThreadMessage, Widget } from "@/lib/api";
-import { ensureThread, getThreadState, resetThread, runStream, savedThreadId } from "@/lib/api";
+import type { QuickAction, RemoteProgress, ReviewInterrupt, RunContext, ThreadMessage, Widget } from "@/lib/api";
+import {
+  ensureThread,
+  getThreadState,
+  joinRunStream,
+  listActiveRuns,
+  resetThread,
+  runStream,
+  savedThreadId,
+  streamRemoteTask,
+} from "@/lib/api";
 import { mcpAppBindings } from "@/lib/mcpClients";
 import {
   isDeliberateReset,
@@ -320,6 +329,29 @@ interface ReviewItem {
   /** Cleared once approved, so the editor collapses to a read-only card. */
   done: boolean;
 }
+/**
+ * A remote agent working in the background (`start_remote_task`). Outlives the turn
+ * that started it: it keeps streaming after that turn ends, until the agent finishes
+ * and the server wakes the conversation with its answer.
+ */
+interface RemoteTaskItem {
+  kind: "remote_task";
+  id: string;
+  taskId: string;
+  agent: string;
+  steps: string[];
+  text: string;
+  state: string;
+  done: boolean;
+  error?: string;
+}
+/** A `remote_agent_progress` frame a remote `task` call streams (runtime/remote_subagents.py). */
+interface RemoteProgressFrame extends RemoteProgress {
+  type: "remote_agent_progress";
+  call_id?: string;
+  agent: string;
+  label?: string;
+}
 type Item =
   | UserItem
   | ActivityItem
@@ -327,7 +359,8 @@ type Item =
   | AssistantItem
   | FeedbackItem
   | ReviewItem
-  | AppItem;
+  | AppItem
+  | RemoteTaskItem;
 
 /* ------------------------------- Goals ---------------------------------- */
 
@@ -441,6 +474,8 @@ export default function ChatPanel({
 
   const idRef = useRef(0);
   const busyRef = useRef(false);
+  // Runs this tab started or already joined, so the run watcher never follows one twice.
+  const ownRunsRef = useRef(new Set<string>());
   /** True once this session has sent or resumed anything of its own. */
   const interactedRef = useRef(false);
   /**
@@ -503,6 +538,42 @@ export default function ChatPanel({
 
   const patchItem = (id: string, fn: (it: Item) => Item) =>
     setItems((prev) => prev.map((it) => (it.id === id ? fn(it) : it)));
+
+  /**
+   * Show a background remote task's progress live, in a card that outlives its turn.
+   *
+   * Started when `start_remote_task` returns, and again on page load for any task the
+   * thread still records as working, so a reload reattaches instead of going dark.
+   * The server replays what the task has done so far, then streams the rest.
+   */
+  const followedTasksRef = useRef(new Set<string>());
+  const followRemoteTask = (taskId: string, agent: string) => {
+    const threadId = savedThreadId();
+    if (!threadId || followedTasksRef.current.has(taskId)) return;
+    followedTasksRef.current.add(taskId);
+    const id = `remote-task:${taskId}`;
+    setItems((prev) => [
+      ...prev,
+      { kind: "remote_task", id, taskId, agent, steps: [], text: "", state: "working", done: false },
+    ]);
+    const patch = (fn: (it: RemoteTaskItem) => RemoteTaskItem) =>
+      patchItem(id, (it) => (it.kind === "remote_task" ? fn(it) : it));
+    void (async () => {
+      try {
+        for await (const p of streamRemoteTask(taskId, threadId)) {
+          if (p.kind === "step" && p.text) patch((it) => ({ ...it, steps: [...it.steps, p.text as string] }));
+          else if ((p.kind === "text" || p.kind === "answer") && p.text) patch((it) => ({ ...it, text: p.text as string }));
+          else if (p.kind === "state" && p.state) {
+            patch((it) => ({ ...it, state: p.state as string, done: !!p.final, error: p.error }));
+          }
+        }
+      } catch (err) {
+        patch((it) => ({ ...it, error: err instanceof Error ? err.message : String(err) }));
+      } finally {
+        patch((it) => ({ ...it, done: true }));
+      }
+    })();
+  };
 
   /**
    * The rendered items, readable synchronously. A resume has to look at the
@@ -568,6 +639,12 @@ export default function ChatPanel({
      * during a 60-second run; the typed path shows the same thing as chips.
      */
     onProgress?: (toolName: string) => void;
+    /**
+     * Follow a run this browser did NOT start, such as the one the server enqueues
+     * when a background remote task finishes, replaying it from its first event.
+     * `notice` stands in for the user turn, since nobody typed one.
+     */
+    join?: { runId: string; notice: string };
   }): Promise<TurnResult> => {
     const {
       question,
@@ -577,12 +654,13 @@ export default function ChatPanel({
       quotes: quoted = [],
       headers,
       onProgress,
+      join,
     } = opts;
     const isResume = resume !== undefined;
     // Returned rather than thrown: a programmatic caller (voice) needs something to say,
     // and "a turn was already running" is a normal race there, not a failure.
     if (busyRef.current) return { answer: "", widgets: [], error: "already running" };
-    if (!isResume && !question) return { answer: "", widgets: [], error: "nothing to ask" };
+    if (!isResume && !question && !join) return { answer: "", widgets: [], error: "nothing to ask" };
 
     busyRef.current = true;
     setBusy(true);
@@ -606,6 +684,7 @@ export default function ChatPanel({
             },
           ]
         : []),
+      ...(join ? [{ kind: "user" as const, id: nextId(), text: join.notice, images: [], docs: [], quotes: [] }] : []),
       { kind: "activity", id: activityId, chips: [] },
       { kind: "subagents", id: subagentId, groups: [] },
       { kind: "assistant", id: bubbleId, text: PLACEHOLDER_TEXT, streaming: true, markdown: false },
@@ -685,6 +764,10 @@ export default function ChatPanel({
     // The `task` TOOL's own args, keyed by its tool_call id. An interpreter
     // dispatch has no args in the stream at all; it is read back off the script.
     const taskArgs: Record<string, TaskDispatch> = {};
+    // Remote agents called with `task`, drawn as subagent cards from the progress
+    // frames they stream (they run on another server, so no subgraph namespace exists).
+    const remoteOrder: string[] = [];
+    const remoteGroups: Record<string, SubagentGroup> = {};
     let answer = "";
     /**
      * What the bubble is currently SHOWING, which is not the same as the answer.
@@ -698,7 +781,7 @@ export default function ChatPanel({
      * separately is what allows "linger until something replaces it".
      */
     let shownText = "";
-    let runId: string | null = null;
+    let runId: string | null = join?.runId ?? null;
     let errorMsg: string | null = null;
     let interrupt: ReviewInterrupt | null = null;
     // Every tool call's arguments this turn, by tool name, latest frame wins.
@@ -885,6 +968,11 @@ export default function ChatPanel({
         }
       } else if (msg.type === "tool" && msg.name !== "push_widget") {
         const cid = msg.tool_call_id;
+        if (msg.name === "start_remote_task") {
+          // Wire format: the tool's reply text from runtime/remote_subagents.py (`start`).
+          const started = /task_id=([0-9a-f-]{36}) on (\S+?)\./.exec(contentToText(msg.content));
+          if (started) followRemoteTask(started[1], started[2]);
+        }
         // The write landed: hand the artifact over as finished so App re-reads the
         // file. Until this fires, what the tab shows is the streamed argument, which
         // for edit_file is not the document at all.
@@ -957,7 +1045,7 @@ export default function ChatPanel({
         it.kind === "subagents"
           ? {
               ...it,
-              groups: subOrder.map((k) => {
+              groups: [...subOrder.map((k) => {
                 const dispatch = dispatchFor(k);
                 const type = dispatch?.subagentType || "";
                 return {
@@ -971,10 +1059,37 @@ export default function ChatPanel({
                   invokedWith: dispatch?.description || undefined,
                   done: false,
                 };
-              }),
+              }), ...remoteOrder.map((k) => remoteGroups[k])],
             }
           : it,
       );
+
+    const onRemoteProgress = (frame: RemoteProgressFrame) => {
+      const key = `remote:${frame.call_id || frame.agent}`;
+      if (!remoteGroups[key]) {
+        remoteOrder.push(key);
+        const dispatch = frame.call_id ? taskArgs[frame.call_id] : undefined;
+        remoteGroups[key] = {
+          key,
+          label: `${frame.label || frame.agent} (remote)`,
+          type: frame.agent,
+          chips: [],
+          text: "",
+          invokedWith: dispatch?.description || undefined,
+          done: false,
+        };
+      }
+      const g = remoteGroups[key];
+      if (frame.kind === "step" && frame.text) {
+        const chip = { id: `${key}:${g.chips.length}`, name: "step", arg: frame.text, result: frame.text };
+        remoteGroups[key] = { ...g, chips: [...g.chips, chip] };
+      } else if ((frame.kind === "text" || frame.kind === "answer") && frame.text) {
+        remoteGroups[key] = { ...g, text: frame.text };
+      } else if (frame.kind === "state" && frame.final) {
+        remoteGroups[key] = { ...g, done: true };
+      }
+      syncSubagents();
+    };
 
     const onSubagentMessage = (ns: string[], msg: ThreadMessage | undefined) => {
       if (!msg || typeof msg !== "object") return;
@@ -998,26 +1113,29 @@ export default function ChatPanel({
     const runContext = getRunContext();
     try {
       const tid = await ensureThread();
-      for await (const { event, data, namespace } of runStream({
-        threadId: tid,
-        assistantId,
-        ...(isResume
-          ? { resume }
-          : {
-              messages: [
-                {
-                  role: "user",
-                  content: imageContent(withQuotes(withDocs(question!, sent), quoted), images),
-                },
-              ],
-            }),
-        context: runContext,
-        signal: controller.signal,
-        headers,
-        // Sticky: re-sent every turn until the goal is met or cleared. A resume
-        // carries no input, but the rubric is already on the thread's state.
-        rubric: goalRef.current?.text,
-      })) {
+      const frames = join
+        ? joinRunStream({ threadId: tid, runId: join.runId, signal: controller.signal })
+        : runStream({
+            threadId: tid,
+            assistantId,
+            ...(isResume
+              ? { resume }
+              : {
+                  messages: [
+                    {
+                      role: "user",
+                      content: imageContent(withQuotes(withDocs(question!, sent), quoted), images),
+                    },
+                  ],
+                }),
+            context: runContext,
+            signal: controller.signal,
+            headers,
+            // Sticky: re-sent every turn until the goal is met or cleared. A resume
+            // carries no input, but the rubric is already on the thread's state.
+            rubric: goalRef.current?.text,
+          });
+      for await (const { event, data, namespace } of frames) {
         let parsed: unknown;
         try {
           parsed = JSON.parse(data);
@@ -1029,11 +1147,20 @@ export default function ChatPanel({
           // not hijack the feedback run_id.
           if (!isSubagentNamespace(namespace)) {
             const d = parsed as { run_id?: string };
-            if (d && d.run_id) runId = d.run_id;
+            if (d && d.run_id) {
+              runId = d.run_id;
+              ownRunsRef.current.add(d.run_id);
+            }
           }
           continue;
         }
         if (event === "custom") {
+          // A remote agent's progress during a blocking `task` call, drawn as its card.
+          const remote = parsed as RemoteProgressFrame;
+          if (!isSubagentNamespace(namespace) && remote?.type === "remote_agent_progress") {
+            onRemoteProgress(remote);
+            continue;
+          }
           // RubricMiddleware grading the turn against the active goal. Root frames
           // only: a subagent cannot finish the user's goal.
           const frame = parsed as RubricFrame;
@@ -1439,6 +1566,39 @@ export default function ChatPanel({
   runTurnRef.current = runTurn;
 
   /**
+   * Follow runs on this thread that this browser did not start.
+   *
+   * A background remote task that finishes enqueues a run on the thread
+   * (custom_demo/runtime/remote_agents.py) to hand the orchestrator its result. The
+   * chat did not send it, so without this the answer would only appear on the next
+   * page load. While idle, look for a queued or running run we have not seen and
+   * join it through the same `runTurn` a typed question uses.
+   */
+  useEffect(() => {
+    let live = true;
+    const tick = async () => {
+      const tid = savedThreadId();
+      if (!live || busyRef.current || !tid) return;
+      const runs = await listActiveRuns(tid).catch(() => []);
+      const next = runs.find((r) => !ownRunsRef.current.has(r.run_id));
+      if (!live || !next || busyRef.current) return;
+      ownRunsRef.current.add(next.run_id);
+      const agent = typeof next.metadata?.remote_agent === "string" ? next.metadata.remote_agent : "";
+      void runTurnRef.current({
+        join: {
+          runId: next.run_id,
+          notice: agent ? `Background task finished: ${agent}` : "A background run started on this thread",
+        },
+      });
+    };
+    const timer = window.setInterval(() => void tick(), 4000);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  /**
    * The voice shell's way in. Deliberately the SAME `runTurn` the composer calls: a
    * spoken question has to produce the same widgets, chips, transcript and trace as a
    * typed one, and a second code path would drift from the first within a week.
@@ -1512,6 +1672,12 @@ export default function ChatPanel({
       const messages = state.values?.messages ?? [];
       const restored = rehydrateItems(messages, apps);
       if (restored.length) setItems(restored);
+      // Reattach to background remote tasks still running when the page was left.
+      const tasks = (state.values as { remote_tasks?: Record<string, { agent: string; status: string }> })
+        .remote_tasks;
+      for (const [taskId, task] of Object.entries(tasks ?? {})) {
+        if (task.status === "working") followRemoteTask(taskId, task.agent);
+      }
       // Reopen the documents this conversation wrote. Registered with no content: the
       // write arguments in the transcript are a partial or a patch, so App re-reads each
       // one from the store it actually lives in.
@@ -2067,6 +2233,7 @@ function ItemView({
       </div>
     );
   }
+  if (item.kind === "remote_task") return <RemoteTaskCard item={item} />;
   if (item.kind === "subagents") {
     const groups = item.groups.filter((g) => g.chips.length > 0 || g.text);
     if (!groups.length) return null;
@@ -2143,6 +2310,53 @@ function ItemView({
     <MessageBubble variant="soft" align="start" className="text-sm leading-relaxed">
       <MessageBubbleContent>{item.text}</MessageBubbleContent>
     </MessageBubble>
+  );
+}
+
+/**
+ * A background remote task: which agent, how far it has got, and its answer forming.
+ * Open while it runs, so the person can see it working; the answer itself reaches the
+ * conversation when the server wakes the orchestrator with it.
+ */
+function RemoteTaskCard({ item }: { item: RemoteTaskItem }) {
+  const [open, setOpen] = useState(true);
+  const status = item.error ? "failed" : item.done ? item.state : "working in the background";
+  return (
+    <div className="flex flex-col overflow-hidden rounded-lg border border-border bg-panel-2 text-xs text-muted-foreground">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-2 px-2.5 py-1.5 text-left hover:text-brand"
+      >
+        {open ? <IconChevronDown size={14} className="shrink-0" /> : <IconChevronRight size={14} className="shrink-0" />}
+        <IconRobot size={15} className="shrink-0" stroke={2} />
+        <span className="font-semibold text-foreground">{item.agent} (remote)</span>
+        {item.steps.length > 0 && (
+          <span className="text-[11px] text-muted-foreground">
+            {item.steps.length} step{item.steps.length === 1 ? "" : "s"}
+          </span>
+        )}
+        <span className="ml-auto flex items-center gap-1.5 text-[11px]">
+          {!item.done && <IconLoader2 size={14} className="animate-spin opacity-70" />}
+          {status}
+        </span>
+      </button>
+      {open && (item.steps.length > 0 || item.text || item.error) && (
+        <div className="flex flex-col gap-1 border-t border-border px-2.5 py-2">
+          {item.steps.slice(-6).map((step, i) => (
+            <div key={i} className="truncate font-mono text-[11px]">
+              {step}
+            </div>
+          ))}
+          {item.text && (
+            <div className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-md border border-border bg-background px-2 py-1.5 text-[12px] leading-relaxed text-foreground">
+              {item.text}
+            </div>
+          )}
+          {item.error && <div className="text-[11px]">{item.error}</div>}
+        </div>
+      )}
+    </div>
   );
 }
 

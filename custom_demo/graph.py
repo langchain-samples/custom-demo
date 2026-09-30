@@ -4,8 +4,9 @@
 built once; Agent Server supplies persistence and each assistant supplies configuration.
 The factory routes traces using `configurable.ls_workspace` and `ls_project`.
 
-Agent runs keep independent trace roots. Voice records their run IDs for navigation
-rather than assigning an inbound distributed-tracing parent.
+Agent runs keep independent trace roots, with one exception: a run started by another
+agent's remote-subagent call nests under that call's span (see
+`runtime/remote_agents.py:remote_parent`).
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from custom_demo.config import routing_key, scoped_client
 # Absolute import: Agent Server loads this entrypoint as a top-level module (no
 # package parent), so a relative `from .agent` import would fail here.
 from custom_demo.runtime.agent import build_agent
+from custom_demo.runtime.remote_agents import remote_parent
 
 base_graph = build_agent(deployed=True)
 
@@ -58,28 +60,18 @@ async def graph(config: Any):
     configurable = (config or {}).get("configurable", {}) or {}
     workspace_id = configurable.get("ls_workspace") or None
     project_name = configurable.get("ls_project") or None
-    # NO DISTRIBUTED-TRACING PARENT HERE, deliberately, and it is worth reading why before
-    # adding one back. Voice mode wants the agent run nested inside its `invoke_deep_agent`
-    # span (see voice/trace.py), and LangSmith documents exactly that: send `langsmith-trace`,
-    # read it off `configurable`, wrap the run in `tracing_context(parent=...)`.
-    #
-    # Measured on Agent Server 0.11.1 AND 0.13.0, and it fails in TWO different ways depending
-    # on what the parent handle points at:
-    #
-    #   - A ROOT-level parent (the documented shape: a traced Python caller using the SDK or
-    #     RemoteGraph with `rt.to_headers()`) keeps the run and propagates the TRACE ID, but
-    #     not the parentage: the run lands in the caller's trace as a SECOND ROOT.
-    #   - A NON-ROOT parent - which is what voice mode needs, since the span to nest under is
-    #     the `invoke_deep_agent` tool span - loses the run entirely. Not nested, not at its
-    #     own root, not anywhere, and nothing errors, because ingestion is asynchronous.
-    #
-    # A control run with the header removed traces normally, full tree, and the same handle
-    # nests correctly when the child is a plain `@traceable` in one process. So the mechanism
-    # works; what does not is Agent Server's run identity deferring to an inbound parent.
-    #
-    # An unnested trace is a cosmetic loss. A missing trace is the demo. So the voice shell
-    # records the agent run's id on its tool span instead (`closeToolSpan`), which gives a
-    # click-through without putting the trace at risk.
+    parent = remote_parent(configurable)
+    if parent is not None:
+        # The caller's project, not this assistant's: a trace renders as one tree only
+        # within one project.
+        client = _client_for_workspace(workspace_id) if workspace_id else None
+        with tracing_context(
+            enabled=True, client=client, project_name=parent.session_name, parent=parent
+        ):
+            yield base_graph
+
+        return
+
     if not workspace_id and not project_name:
         yield base_graph
         return

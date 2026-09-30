@@ -15,6 +15,7 @@ import { TypographySection } from "./settings/TypographySection";
 import { AgentConfig } from "./settings/AgentConfig";
 import { ToolsSection } from "./settings/ToolsSection";
 import { McpSection } from "./settings/McpSection";
+import { RemoteAgentsSection } from "./settings/RemoteAgentsSection";
 import { DeleteAssistant } from "./settings/DeleteAssistant";
 import { DemoTraffic } from "./settings/DemoTraffic";
 import { VoicePicker } from "./settings/VoicePicker";
@@ -35,7 +36,7 @@ function errMsg(error: unknown): string {
 export function SettingsPanel({ open, onOpenChange, session }: SettingsPanelProps) {
   const {
     draft: cfg, selectedId, selectedAssistant, visibleAssistants, workspaces, organization,
-    workspaceReset, fontStatus, editBranding, previewPrompt, editModel, editTools, editMcpServers,
+    workspaceReset, fontStatus, editBranding, previewPrompt, editModel, editTools, editMcpServers, editRemoteAgents,
   } = session;
   const agents = useAgents(cfg.lsWorkspace).data ?? EMPTY_NAMES;
   const toolSpecs = useTools().data ?? EMPTY_TOOLS;
@@ -219,6 +220,7 @@ export function SettingsPanel({ open, onOpenChange, session }: SettingsPanelProp
                 />
                 <ToolsSection specs={toolSpecs} enabled={cfg.enabledTools} onChange={editTools} />
                 <McpSection servers={cfg.mcpServers} onChange={editMcpServers} />
+                <RemoteAgentsSection agents={cfg.remoteAgents} onChange={editRemoteAgents} />
                 <DemoTraffic
                   target={selectedAssistant ? {
                     project: (selectedAssistant.context?.ls_project as string) || selectedAssistant.metadata?.customer || selectedAssistant.name || "",

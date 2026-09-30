@@ -47,6 +47,9 @@ class Context(BaseModel):
     # Remote MCP servers this assistant connects to: [{id?, label, url, token?, headers?}].
     # Their tools are discovered per run and namespaced `{id}_{tool}` (mcp_servers.py).
     mcp_servers: list[dict] | None = None
+    # Remote A2A agents offered as subagents: [{id?, label, url, token?, headers?}], where
+    # url is an agent card or an A2A endpoint. Resolved per run (runtime/remote_agents.py).
+    remote_agents: list[dict] | None = None
 
 
 def get_ctx(runtime: Any) -> Context:

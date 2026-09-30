@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { updateAssistant, type Assistant, type McpServerConfig, type SetupInput, type Workspace } from "@/lib/api";
+import { updateAssistant, type Assistant, type McpServerConfig, type RemoteAgentConfig, type SetupInput, type Workspace } from "@/lib/api";
 import { getAssistantId, isAssistantId, setAssistantId } from "@/lib/config";
 import { qk, useAssistants, useRefetchAssistants, useWorkspaces } from "@/lib/queries";
 import { traceProject } from "@/lib/trace";
@@ -134,6 +134,14 @@ export function useAssistantSession(onResetConversation: () => void) {
     }
   }, [edits, setPreview]);
 
+  const editRemoteAgents = useCallback((remoteAgents: RemoteAgentConfig[]) => {
+    setPreview({ ...draftRef.current, remoteAgents });
+    const id = selectedIdRef.current;
+    if (isAssistantId(id)) {
+      edits.schedule(id, "remote_agents", (current) => ({ context: { ...current.context, remote_agents: remoteAgents } }), 800);
+    }
+  }, [edits, setPreview]);
+
   const create = useCallback(async (input: SetupInput) => {
     if (input.owner) writeSessionPreference(LAST_OWNER_LS_KEY, input.owner);
     const prepared = await prepareAndPublishAssistant(input);
@@ -169,7 +177,7 @@ export function useAssistantSession(onResetConversation: () => void) {
     runContext: sessionRunContext(draft, traceProject(selectedAssistant, selectedId)),
     getRunContext, assistantsPending: assistantsQuery.isPending,
     visibleAssistants, workspaces, organization: workspacesQuery.data?.organization ?? "", workspaceReset,
-    fontStatus, selectWorkspace, selectAssistant, editBranding, previewPrompt, editTools, editModel, editMcpServers,
+    fontStatus, selectWorkspace, selectAssistant, editBranding, previewPrompt, editTools, editModel, editMcpServers, editRemoteAgents,
     create, remove,
   };
 }

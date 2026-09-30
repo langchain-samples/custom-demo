@@ -144,6 +144,8 @@ export interface RunContext {
   enabled_tools?: string[];
   /** Remote MCP servers this assistant connects to. Omit when there are none. */
   mcp_servers?: McpServerConfig[];
+  /** Remote A2A agents offered as subagents (runtime/remote_subagents.py). Omit when none. */
+  remote_agents?: RemoteAgentConfig[];
   /**
    * The assistant's own sandbox VM name, minted at setup. Unique per assistant,
    * unlike `agent_repo`/`customer`, which are derived from the customer name and so
@@ -213,6 +215,36 @@ export interface McpServerConfig {
   url: string;
   token?: string;
   enabled?: boolean;
+}
+
+/**
+ * One remote A2A agent on an assistant's context. `url` is its agent card or its A2A
+ * endpoint; `id` is the subagent name the model calls it by, so it stays stable once
+ * the agent is in use, like an MCP server's id. `token` is sent as `x-api-key`.
+ */
+export interface RemoteAgentConfig {
+  id?: string;
+  label: string;
+  url: string;
+  token?: string;
+  enabled?: boolean;
+}
+
+/** What the deployment read off a remote agent's card (web/remote_agents.py). */
+export type RemoteAgentProbe =
+  | { ok: true; id: string; name: string; description: string; endpoint: string }
+  | { ok: false; id: string; error: string };
+
+/** Read a remote agent's card through the deployment, before a turn depends on it. */
+export async function probeRemoteAgent(agent: RemoteAgentConfig): Promise<RemoteAgentProbe> {
+  const res = await fetch(`${getApiBase()}/remote-agents/probe`, {
+    method: "POST",
+    headers: apiHeaders(),
+    body: JSON.stringify(agent),
+  });
+  const body = await res.json();
+  if (!res.ok) return { ok: false, id: agent.id || "", error: body.error || `HTTP ${res.status}` };
+  return body as RemoteAgentProbe;
 }
 
 /** One tool a probed MCP server advertises. `app` is its `ui://` MCP App, if any. */
@@ -599,6 +631,109 @@ export interface RunStreamOptions {
   rubric?: string;
 }
 
+/** Decode an SSE body into `{ event, data, namespace }` frames (see `runStream`). */
+async function* readSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SSEEvent> {
+  const reader = body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    // Strip CR so CRLF / `\r\n\r\n` SSE framing normalizes to `\n` / `\n\n`.
+    buf += dec.decode(value, { stream: true }).replace(/\r/g, "");
+    let idx: number;
+    while ((idx = buf.indexOf("\n\n")) >= 0) {
+      const raw = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      let event = "message";
+      const dataLines: string[] = [];
+      for (const line of raw.split("\n")) {
+        if (line.startsWith("event:")) event = line.slice(6).trim();
+        else if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
+      }
+      if (dataLines.length) {
+        // The server suffixes the event name with the emitting subgraph's
+        // namespace (`event|tools:abc|…`) when stream_subgraphs is on; split it
+        // off so the caller can route root vs subagent frames.
+        const { event: base, namespace } = splitStreamEvent(event);
+        yield { event: base, data: dataLines.join("\n"), namespace };
+      }
+    }
+  }
+}
+
+/**
+ * Join a run this browser did not start, replaying it from its first event.
+ *
+ * The server enqueues a run on a thread when a background remote task finishes
+ * (custom_demo/runtime/remote_agents.py), and creates it resumable with the same
+ * stream modes `runStream` uses, so `Last-Event-ID: -1` replays every frame and the
+ * chat renders it exactly like a turn it started.
+ */
+export async function* joinRunStream(opts: {
+  threadId: string;
+  runId: string;
+  signal?: AbortSignal;
+}): AsyncGenerator<SSEEvent> {
+  const res = await fetch(`${getApiBase()}/threads/${opts.threadId}/runs/${opts.runId}/stream`, {
+    headers: { ...apiHeaders(), "Last-Event-ID": "-1" },
+    signal: opts.signal,
+  });
+  if (!res.ok || !res.body) throw await errorFrom(res);
+  yield* readSse(res.body);
+}
+
+/**
+ * One progress item from a remote agent (custom_demo/runtime/remote_agents.py:progress):
+ * a `step` it took, the `text` of its answer so far (whole, not a delta), its final
+ * `answer`, or a `state` change, `final` on the last.
+ */
+export interface RemoteProgress {
+  kind: "task" | "step" | "text" | "answer" | "state";
+  text?: string;
+  state?: string;
+  final?: boolean;
+  error?: string;
+}
+
+/**
+ * Follow a background remote task: everything it has done so far, then live, until it
+ * ends. `threadId` lets the server find the task again after a restart, when it
+ * reattaches to the remote agent with `SubscribeToTask` (web/remote_agents.py).
+ */
+export async function* streamRemoteTask(
+  taskId: string,
+  threadId: string,
+  signal?: AbortSignal,
+): AsyncGenerator<RemoteProgress> {
+  const url = `${getApiBase()}/remote-tasks/${taskId}/stream?thread_id=${encodeURIComponent(threadId)}`;
+  const res = await fetch(url, { headers: apiHeaders(), signal });
+  if (!res.ok || !res.body) throw await errorFrom(res);
+  for await (const { data } of readSse(res.body)) {
+    yield JSON.parse(data) as RemoteProgress;
+  }
+}
+
+/** A run on a thread, as much as the chat needs to decide whether to follow it. */
+export interface ThreadRun {
+  run_id: string;
+  status: string;
+  metadata?: Record<string, unknown>;
+}
+
+/** Runs on a thread that are queued or in progress, oldest first. */
+export async function listActiveRuns(threadId: string): Promise<ThreadRun[]> {
+  const runs: ThreadRun[] = [];
+  for (const status of ["running", "pending"]) {
+    const res = await fetch(`${getApiBase()}/threads/${threadId}/runs?status=${status}&limit=10`, {
+      headers: apiHeaders(),
+    });
+    if (!res.ok) throw await errorFrom(res);
+    runs.push(...((await res.json()) as ThreadRun[]));
+  }
+  return runs.reverse();
+}
+
 /**
  * Stream a run over SSE (stream_mode:"messages") and yield each decoded
  * `{ event, data }` block. Framing is CRLF-normalized (\r stripped) so
@@ -639,33 +774,7 @@ export async function* runStream(opts: RunStreamOptions): AsyncGenerator<SSEEven
   });
   if (!res.ok || !res.body) throw await errorFrom(res);
 
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buf = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    // Strip CR so CRLF / `\r\n\r\n` SSE framing normalizes to `\n` / `\n\n`.
-    buf += dec.decode(value, { stream: true }).replace(/\r/g, "");
-    let idx: number;
-    while ((idx = buf.indexOf("\n\n")) >= 0) {
-      const raw = buf.slice(0, idx);
-      buf = buf.slice(idx + 2);
-      let event = "message";
-      const dataLines: string[] = [];
-      for (const line of raw.split("\n")) {
-        if (line.startsWith("event:")) event = line.slice(6).trim();
-        else if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
-      }
-      if (dataLines.length) {
-        // The server suffixes the event name with the emitting subgraph's
-        // namespace (`event|tools:abc|…`) when stream_subgraphs is on; split it
-        // off so the caller can route root vs subagent frames.
-        const { event: base, namespace } = splitStreamEvent(event);
-        yield { event: base, data: dataLines.join("\n"), namespace };
-      }
-    }
-  }
+  yield* readSse(res.body);
 }
 
 /**
