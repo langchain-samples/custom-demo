@@ -7,6 +7,11 @@
     "assistant_setup": "./custom_demo/setup_graph.py:graph"
   },
   "env": ".env",
+  "dockerfile_lines": [
+    "ENV SPA_DIR=/spa",
+    "COPY frontend /spa-src",
+    "RUN /spa-src/scripts/build-in-image.sh"
+  ],
   "auth": {
     "path": "./custom_demo/auth.py:auth"
   },

@@ -24,7 +24,8 @@
  * contexts, and the mic path already owns one at the playback rate.
  */
 
-const SAMPLE_URL = "/sfx/keyboard-typing.mp3";
+/** Under the app's base path. Read at fetch time: plain node has no `import.meta.env`. */
+const SAMPLE_PATH = "sfx/keyboard-typing.mp3";
 /** Playback gain. The asset peaks at -5.3dB, so 1.0 cannot clip. */
 const GAIN = 1;
 /** Ramp on start/stop. Without it, cutting a loop dead is an audible click. */
@@ -65,7 +66,7 @@ export class TypingSound {
    */
   private async load(): Promise<void> {
     try {
-      const res = await fetch(SAMPLE_URL);
+      const res = await fetch(`${import.meta.env.BASE_URL}${SAMPLE_PATH}`);
       if (!res.ok) return;
       this.buffer = await this.ctx.decodeAudioData(await res.arrayBuffer());
       if (this.running) this.play();

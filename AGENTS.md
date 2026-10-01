@@ -72,6 +72,7 @@ custom_demo/
   web/a2a.py                Shadows /a2a/{id}: adds SubscribeToTask and push notifications
   web/remote_agents.py      Remote agent card probe and background-task progress stream
   web/docs.py               List, read, save and revision routes for documents
+  web/spa.py                The built SPA at /ui, its runtime config.js, and the auth exemption
   web/                      Metadata, cleanup, sandbox, MCP, voice and eval handlers
   voice/                    Voice token minting and trace support
   config.py                 Environment, model and scoped-client configuration

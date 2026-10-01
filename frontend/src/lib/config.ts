@@ -1,8 +1,9 @@
 /**
  * Connection config for the LangGraph Agent Server.
  *
- * Base URL precedence: localStorage "lgUrl" → `window.LG.url` (config.js) →
- * build-time `VITE_LG_URL` (set in the hosting env, e.g. Vercel) →
+ * Base URL precedence: localStorage "lgUrl" → `window.LG.url` (config.js, which
+ * the deployment writes as its own origin and token, see custom_demo/web/spa.py) →
+ * build-time `VITE_LG_URL` (frontend/.env.local for a local dev server) →
  * http://127.0.0.1:2024. The assistant id is a UUID (a specific assistant
  * variant) or the graph id "dashboard_agent" (the graph's default assistant).
  */

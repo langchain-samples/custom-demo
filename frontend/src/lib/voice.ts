@@ -870,8 +870,8 @@ export class VoiceSession {
     // more portable than forcing a second context at 16k.
     const ctx = new AudioContext({ sampleRate: PLAYBACK_RATE });
     this.ctx = ctx;
-    await ctx.audioWorklet.addModule("/pcm-recorder-processor.js");
-    await ctx.audioWorklet.addModule("/pcm-player-processor.js");
+    await ctx.audioWorklet.addModule(`${import.meta.env.BASE_URL}pcm-recorder-processor.js`);
+    await ctx.audioWorklet.addModule(`${import.meta.env.BASE_URL}pcm-player-processor.js`);
 
     this.player = new AudioWorkletNode(ctx, "pcm-player-processor");
     this.player.connect(ctx.destination);

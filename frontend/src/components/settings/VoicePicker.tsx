@@ -101,7 +101,7 @@ export function VoicePicker({ value, onChange }: VoicePickerProps) {
       <audio
         key={chosen}
         ref={audio}
-        src={`/voice-samples/${chosen}.mp3`}
+        src={`${import.meta.env.BASE_URL}voice-samples/${chosen}.mp3`}
         onEnded={() => setPlaying(false)}
         preload="none"
       />

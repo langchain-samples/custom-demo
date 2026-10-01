@@ -5,7 +5,7 @@ and use connected tools. Each customer gets their own branding, instructions and
 
 [Watch the walkthrough](https://www.loom.com/share/d5ce4bb5a2b5485baef75d0a1d84f825).
 
-If you're a LangChain employee, you can access a hosted version [here](https://custom-demo-langchain.vercel.app/).
+If you're a LangChain employee, the hosted version is the shared deployment's `/ui/` path.
 
 ## Prerequisites
 
@@ -67,7 +67,7 @@ Its `context` controls execution; `metadata` holds branding and quick actions.
 | Mode | How |
 |---|---|
 | **Local** | `./run.sh`; override ports with `PORT` and `SPA_PORT` |
-| **Deployed** | The configured LangSmith GitHub integration deploys the backend; Vercel builds the frontend. Configure `VITE_LG_URL` and `VITE_LG_API_KEY` in Vercel; provider keys belong on the backend deployment. |
+| **Deployed** | The configured LangSmith GitHub integration deploys the Agent Server, and its image builds the SPA and serves it at `/ui/` (`custom_demo/web/spa.py`). Provider keys and `APP_SHARED_SECRET` belong on the deployment. Each preview deployment serves its own SPA against itself. |
 | **Local frontend, deployed backend** | Set `VITE_LG_URL` and `VITE_LG_API_KEY` in `frontend/.env.local`, then `npm --prefix frontend run dev -- --port 3000`. An existing `lgUrl` localStorage override takes precedence. |
 | **Voice** | Click the composer microphone. Requires `GEMINI_API_KEY` on the backend; no per-assistant enable flag. |
 | **Connected systems / MCP Apps** | Add a server in **Settings → MCP servers**, then press **Test**. See below. |

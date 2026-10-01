@@ -18,7 +18,8 @@ credentials.json
 token.json
 
 # --- build noise ---
-frontend
+# frontend/ itself is needed: dockerfile_lines in langgraph.json build it into the image.
+frontend/dist
 chat-langchain-lite
 .git
 .claude

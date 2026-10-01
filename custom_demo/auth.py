@@ -17,6 +17,8 @@ import os
 
 from langgraph_sdk import Auth
 
+from custom_demo.web.spa import is_spa_path
+
 auth = Auth()
 
 
@@ -33,17 +35,18 @@ def _provided_token(headers: dict[bytes, bytes] | None, authorization: str | Non
 
 @auth.authenticate
 async def authenticate(
+    path: str = "",
     headers: dict[bytes, bytes] | None = None,
     authorization: str | None = None,
 ) -> dict[str, str]:
     """Gate the deployment behind a shared secret.
 
     When `APP_SHARED_SECRET` is unset, auth is disabled (local dev). Otherwise the
-    provided token must match it (constant-time), else 401.
+    provided token must match it (constant-time), else 401. The SPA's own pages are
+    open (`custom_demo/web/spa.py` says why).
     """
     secret = os.getenv("APP_SHARED_SECRET", "").strip()
-    if not secret:
-        # No secret configured → auth disabled (local dev).
+    if not secret or is_spa_path(path):
         return {"identity": "anonymous"}
 
     token = _provided_token(headers, authorization)

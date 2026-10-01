@@ -27,8 +27,8 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm test
-      # The exact build Vercel runs (tsc -b && vite build) — catches type errors
-      # that `tsc --noEmit` misses in build mode.
+      # tsc -b && vite build. The image build skips tsc, so this is where type errors
+      # surface, including ones `tsc --noEmit` misses in build mode.
       - run: npm run build
       # The plain-node tests in custom_demo/tests/*.js, which import the real
       # frontend modules via Node's native type stripping. They were in no job at
@@ -94,8 +94,8 @@ jobs:
   # keeping both would race two deploys on every merge, and the pinned id becomes a broken
   # build the moment that deployment is deleted.
   #
-  # The frontend is still deployed separately by Vercel's GitHub integration, and points at
-  # the Agent Server through VITE_LG_URL in the Vercel project's environment.
+  # The frontend ships in the same image: langgraph.json's dockerfile_lines build it, and
+  # custom_demo/web/spa.py serves it at /ui/.
 
   # --- Optional nightly live tests (uncomment + add ANTHROPIC_API_KEY secret) ---
   # Runs the real-LLM hallucination test off the PR path: slow, costs tokens, and

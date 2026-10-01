@@ -19,6 +19,7 @@ from custom_demo.web.mcp import mcp_proxy
 from custom_demo.web.metadata import agents, project_url, projects, tools, trace_url, workspaces
 from custom_demo.web.remote_agents import remote_agent_probe, remote_task_stream
 from custom_demo.web.sandbox import sandbox_file, sandbox_files, sandbox_upload
+from custom_demo.web.spa import spa_routes
 from custom_demo.web.traffic import demo_traffic, demo_traffic_status
 from custom_demo.web.voice import voice_token, voice_trace
 
@@ -52,5 +53,6 @@ app = Starlette(
         Route("/evals/status", evals_status, methods=["GET"]),
         Route("/demo-traffic", demo_traffic, methods=["POST"]),
         Route("/demo-traffic/status", demo_traffic_status, methods=["GET"]),
+        *spa_routes(),
     ]
 )

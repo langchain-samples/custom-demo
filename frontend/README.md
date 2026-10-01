@@ -11,7 +11,7 @@ npm ci
 npm run dev            # Vite dev server on :3000, expects the agent on :2024
 npm run lint           # oxlint + the em-dash check
 npm test               # vitest
-npm run build          # tsc -b && vite build, the exact build Vercel runs
+npm run build          # tsc -b && vite build, the build CI gates on
 ```
 
 Point it at a different backend with `VITE_LG_URL` and `VITE_LG_API_KEY`, or at runtime
