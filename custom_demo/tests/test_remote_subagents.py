@@ -12,12 +12,19 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 from types import SimpleNamespace
+from typing import Annotated
 
 import pytest
 from langchain.tools import ToolRuntime
 from langchain_core.tools import StructuredTool
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.config import get_config
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.types import Command
 from langsmith import tracing_context
 from langsmith.run_trees import RunTree
+from pydantic import BaseModel, Field
 
 from custom_demo.runtime import remote_agents as ra
 from custom_demo.runtime import remote_subagents as rs
@@ -56,7 +63,7 @@ def _static_task() -> StructuredTool:
 def _fake_stream(answer: str):
     """A `stream_message` stand-in that plays a short, well-formed A2A event sequence."""
 
-    async def stream(agent, text, context_id, trace=None, task_id=None):
+    async def stream(agent, text, context_id, trace=None, task_id=None, resume=None):
         yield {"task": {"id": "ctx:run", "status": {"state": "TASK_STATE_SUBMITTED"}}}
         tool = {"tool_results": [{"content": "read /data/orders.csv\nmore"}]}
         yield {
@@ -76,36 +83,6 @@ def _fake_stream(answer: str):
 async def _no_task(agent, context_id):
     """`latest_task` for a context the agent has never seen."""
     return None
-
-
-def _asking_stream(question: str, options: list[str], sent: list[dict]):
-    """A `stream_message` stand-in for an Agent Server whose graph interrupts.
-
-    It plays the events `langgraph_api` emits for an interrupt (an `Interrupt` data
-    artifact, then a final `input-required` status carrying the prompt), and records
-    every message it is sent.
-    """
-
-    async def stream(agent, text, context_id, trace=None, task_id=None):
-        sent.append({"text": text, "context": context_id, "task_id": task_id})
-        yield {"task": {"id": "remote-1", "status": {"state": "TASK_STATE_SUBMITTED"}}}
-        value = {"kind": "user_question", "question": question, "options": options}
-        yield {
-            "taskId": "remote-1",
-            "kind": "artifact-update",
-            "artifact": {"name": "Interrupt", "parts": [{"data": {"id": "i1", "value": value}}]},
-        }
-        yield {
-            "taskId": "remote-1",
-            "kind": "status-update",
-            "status": {
-                "state": "TASK_STATE_INPUT_REQUIRED",
-                "message": {"role": "ROLE_AGENT", "parts": [{"text": question}]},
-            },
-            "final": True,
-        }
-
-    return stream
 
 
 def test_parse_agents_slugs_ids_and_skips_entries_without_a_url():
@@ -229,7 +206,7 @@ def test_a_finished_background_task_wakes_its_parent_thread(monkeypatch):
 def test_a_failed_background_task_still_reports_back(monkeypatch):
     notified: list[ra.BackgroundTask] = []
 
-    async def boom(agent, text, context_id, trace=None, task_id=None):
+    async def boom(agent, text, context_id, trace=None, task_id=None, resume=None):
         raise ra.RemoteAgentError("Order and Supply Tracker: overloaded")
         yield {}  # an async generator, like the real stream
 
@@ -297,36 +274,78 @@ def test_an_unmarked_trace_parent_is_ignored():
     assert ra.trace_headers() == {}
 
 
-class _Paused(Exception):
-    """Stands in for the `GraphInterrupt` that `interrupt` raises inside a real run."""
+class _FakeAgentServer:
+    """An A2A agent whose graph asks a question, then wants an approval, then answers.
+
+    Plays the events `langgraph_api` emits (an `Interrupt` data artifact, then a final
+    `input-required` status) and records every message it is sent.
+    """
+
+    QUESTION = {"kind": "user_question", "question": "Which order?", "options": ["A-1", "B-2"]}
+    APPROVAL = {
+        "action_requests": [{"name": "ship_order", "arguments": {}, "description": "Ship it?"}],
+        "review_configs": [{"action_name": "ship_order", "allowed_decisions": ["approve"]}],
+    }
+
+    def __init__(self) -> None:
+        self.sent: list[dict] = []
+
+    async def stream(self, agent, text, context_id, trace=None, task_id=None, resume=None):
+        self.sent.append(
+            {"text": text, "context": context_id, "task_id": task_id, "resume": resume}
+        )
+        rounds = len(self.sent)
+        yield {"task": {"id": "remote-1", "status": {"state": "TASK_STATE_SUBMITTED"}}}
+        if rounds < 3:
+            value = self.QUESTION if rounds == 1 else self.APPROVAL
+            yield {
+                "taskId": "remote-1",
+                "kind": "artifact-update",
+                "artifact": {
+                    "name": "Interrupt",
+                    "parts": [{"data": {"id": f"i{rounds}", "value": value}}],
+                },
+            }
+            yield {
+                "taskId": "remote-1",
+                "kind": "status-update",
+                "status": {"state": "TASK_STATE_INPUT_REQUIRED"},
+                "final": True,
+            }
+            return
+
+        yield {"kind": "artifact-update", "artifact": {"parts": [{"text": "B-2 shipped"}]}}
+        yield {"kind": "status-update", "status": {"state": "TASK_STATE_COMPLETED"}, "final": True}
 
 
-def _remote_call(dynamic, call_id="call-7"):
-    """Call the dynamic `task` once, on a runtime shaped like a graph's."""
-    runtime = SimpleNamespace(
-        stream_writer=lambda frame: None,
-        tool_call_id=call_id,
-        config={"configurable": {"thread_id": "thread-1"}, "metadata": {"assistant_id": "a-1"}},
-        state={},
-    )
-    coroutine = dynamic.coroutine
-    assert coroutine is not None
-    return asyncio.run(
-        coroutine(description="where is it", subagent_type="order_tracker", runtime=runtime)
-    )
+class _ParentState(BaseModel):
+    """The parent graph's state: just its messages."""
+
+    messages: Annotated[list, add_messages] = Field(default_factory=list)
 
 
-def test_the_waiting_tasks_question_and_options_are_read_off_the_interrupt():
-    sent: list[dict] = []
+def _parent_graph(node):
+    """A checkpointed one-node parent graph, so `interrupt` and resume behave as in a run."""
+    graph = StateGraph(_ParentState)
+    graph.add_node("tools", node)
+    graph.add_edge(START, "tools")
+    graph.add_edge("tools", END)
+    return graph.compile(checkpointer=InMemorySaver())
 
-    async def run():
-        return await ra.run_streaming(AGENT, "x", "ctx", lambda item: None, None)
 
-    stream = _asking_stream("Which order?", ["A-1", "B-2"], sent)
-    task = asyncio.run(_with_stream(stream, run))
+def _graph_runtime(call_id: str) -> SimpleNamespace:
+    """A tool runtime carrying the running graph's config, as `ToolNode` builds one."""
+    return SimpleNamespace(stream_writer=None, tool_call_id=call_id, config=get_config(), state={})
+
+
+def test_the_waiting_tasks_question_and_options_are_read_off_the_interrupt(monkeypatch):
+    server = _FakeAgentServer()
+    monkeypatch.setattr(ra, "stream_message", server.stream)
+    task = asyncio.run(ra.run_streaming(AGENT, "x", "ctx", lambda item: None))
     assert ra.needs_input(task)
     assert task["id"] == "remote-1"
     assert ra.input_request(task) == ("Which order?", ["A-1", "B-2"])
+    assert ra.pending_interrupt(task) == _FakeAgentServer.QUESTION
 
 
 def test_a_plain_status_message_is_the_question_when_there_is_no_interrupt_payload():
@@ -338,145 +357,98 @@ def test_a_plain_status_message_is_the_question_when_there_is_no_interrupt_paylo
     }
     assert ra.needs_input(task)
     assert ra.input_request(task) == ("Sign in at https://idp.test", [])
+    payload = rs.interrupt_payload(AGENT, task)
+    assert payload["kind"] == "user_question"
+    assert "authenticate" in payload["question"]
 
 
-async def _with_stream(stream, run):
-    original = ra.stream_message
-    ra.stream_message = stream
-    try:
-        return await run()
-    finally:
-        ra.stream_message = original
-
-
-def test_a_remote_question_pauses_the_parent_and_the_answer_resumes_the_same_task(monkeypatch):
-    sent: list[dict] = []
-    stream = _asking_stream("Which order?", ["A-1", "B-2"], sent)
-    remote: dict[str, dict] = {}
-
-    async def latest_task(agent, context_id):
-        return remote.get(context_id)
-
-    async def record(agent, text, context_id, trace=None, task_id=None):
-        # First message: the agent asks. The answer: the agent finishes.
-        if task_id is None:
-            async for event in stream(agent, text, context_id, trace, task_id):
-                yield event
-
-            remote[context_id] = {
-                "id": "remote-1",
-                "status": {"state": "TASK_STATE_INPUT_REQUIRED"},
-                "artifacts": [
-                    {
-                        "parts": [
-                            {
-                                "data": {
-                                    "value": {"question": "Which order?", "options": ["A-1", "B-2"]}
-                                }
-                            }
-                        ]
-                    }
-                ],
-            }
-            return
-
-        sent.append({"text": text, "context": context_id, "task_id": task_id})
-        yield {"kind": "artifact-update", "artifact": {"parts": [{"text": "A-1 ships Friday"}]}}
-        yield {"kind": "status-update", "status": {"state": "TASK_STATE_COMPLETED"}, "final": True}
-
-    asked: list[dict] = []
-    resume: list[object] = []
-
-    def fake_interrupt(payload):
-        asked.append(payload)
-        if not resume:
-            raise _Paused
-
-        return resume[0]
-
-    monkeypatch.setattr(ra, "stream_message", record)
-    monkeypatch.setattr(ra, "current_task", latest_task)
-    monkeypatch.setattr(rs, "interrupt", fake_interrupt)
+def test_every_remote_question_reaches_the_human_and_each_answer_is_sent_once(monkeypatch):
+    # The case a plain function gets wrong: two questions in one `task` call. Each
+    # resume must send only the newest answer, never replay the first into the second.
+    server = _FakeAgentServer()
+    monkeypatch.setattr(ra, "stream_message", server.stream)
+    monkeypatch.setattr(ra, "current_task", _no_task)
     dynamic = rs.dynamic_task_tool(_static_task(), [AGENT])
+    coroutine = dynamic.coroutine
+    assert coroutine is not None
 
-    with pytest.raises(_Paused):
-        _remote_call(dynamic)
+    async def tools(state):
+        out = await coroutine(
+            description="ship it", subagent_type="order_tracker", runtime=_graph_runtime("call-7")
+        )
+        return {"messages": [("ai", str(out))]}
 
-    assert asked[0]["kind"] == "user_question"
-    assert asked[0]["options"] == ["A-1", "B-2"]
-    assert "Which order?" in asked[0]["question"]
+    graph = _parent_graph(tools)
+    config = {"configurable": {"thread_id": "t-sync"}}
 
-    # The resume re-runs the tool from the top, as LangGraph does.
-    resume.append({"answer": "A-1"})
-    assert _remote_call(dynamic) == "A-1 ships Friday"
-    first, answer = sent
-    assert answer == {"text": "A-1", "context": first["context"], "task_id": "remote-1"}
-    assert [m["text"] for m in sent].count("where is it") == 1
+    async def run():
+        first = await graph.ainvoke({"messages": [("user", "go")]}, config)
+        second = await graph.ainvoke(Command(resume={"answer": "B-2"}), config)
+        approve = {"decisions": [{"type": "approve"}]}
+        final = await graph.ainvoke(Command(resume=approve), config)
+        return first, second, final
 
+    first, second, final = asyncio.run(run())
+    asked = first["__interrupt__"][0].value
+    assert asked["kind"] == "user_question"
+    assert asked["options"] == ["A-1", "B-2"]
+    # The approval reaches the human as an approval, not as a question about one.
+    assert second["__interrupt__"][0].value["action_requests"][0]["name"] == "ship_order"
+    assert final["messages"][-1].content == "B-2 shipped"
 
-def test_a_second_question_in_one_call_is_held_for_update_remote_task(monkeypatch):
-    sent: list[dict] = []
-    stream = _asking_stream("And which site?", [], sent)
-    waiting = {
-        "id": "remote-1",
-        "status": {"state": "TASK_STATE_INPUT_REQUIRED"},
-        "artifacts": [{"parts": [{"data": {"value": "Which order?"}}]}],
-    }
-
-    async def latest_task(agent, context_id):
-        return waiting
-
-    monkeypatch.setattr(ra, "stream_message", stream)
-    monkeypatch.setattr(ra, "current_task", latest_task)
-    monkeypatch.setattr(rs, "interrupt", lambda payload: {"answer": "A-1"})
-    dynamic = rs.dynamic_task_tool(_static_task(), [AGENT])
-
-    result = _remote_call(dynamic, call_id="call-9")
-    message = result.update["messages"][0].content
-    assert "And which site?" in message
-    assert "update_remote_task" in message
-    (task_id,) = result.update["remote_tasks"]
-    held = ra.get_task(task_id)
-    assert held is not None and held.remote_task_id == "remote-1"
-    assert sent == [{"text": "A-1", "context": task_id, "task_id": "remote-1"}]
+    request, answer, decision = server.sent
+    assert request["text"] == "ship it" and request["task_id"] is None
+    assert answer["resume"] == {"answer": "B-2"} and answer["task_id"] == "remote-1"
+    assert decision["resume"] == {"decisions": [{"type": "approve"}]}
+    assert {m["context"] for m in server.sent} == {request["context"]}
 
 
-def test_answering_a_waiting_background_task_resumes_its_remote_task(monkeypatch):
-    sent: list[dict] = []
+def test_a_waiting_background_task_is_answered_only_by_the_human(monkeypatch):
+    server = _FakeAgentServer()
     notes: list[str] = []
-    asking = _asking_stream("Which order?", [], sent)
-    finishing = _fake_stream("A-1 ships Friday")
-
-    async def stream(agent, text, context_id, trace=None, task_id=None):
-        play = finishing if task_id else asking
-        if task_id:
-            sent.append({"text": text, "context": context_id, "task_id": task_id})
-
-        async for event in play(agent, text, context_id, trace, task_id):
-            yield event
 
     async def fake_notify(task):
         notes.append(ra.notification_text(task))
 
-    monkeypatch.setattr(ra, "stream_message", stream)
+    monkeypatch.setattr(ra, "stream_message", server.stream)
     monkeypatch.setattr(ra, "_notify", fake_notify)
+    tools = {t.name: t for t in rs.background_tools([AGENT]) if isinstance(t, StructuredTool)}
+    ask = tools["ask_user_for_remote_task"].coroutine
+    update = tools["update_remote_task"].coroutine
+    assert ask is not None and update is not None
+    held: dict[str, str] = {}
 
-    async def run() -> ra.BackgroundTask:
-        task = ra.start_background(AGENT, "investigate", "thread-1", "assistant-1")
+    async def node(state):
+        out = await ask(task_id=held["id"], runtime=_graph_runtime("call-ask"))
+        return {"messages": [("ai", out.update["messages"][0].content)]}
+
+    graph = _parent_graph(node)
+
+    async def run():
+        task = ra.start_background(AGENT, "ship it", "thread-1", "assistant-1")
+        held["id"] = task.task_id
         assert task.job is not None
         await task.job
-        ra.restart_background(task, "A-1")
+        refusal = await update(
+            task_id=task.task_id, message="B-2", runtime=SimpleNamespace(state={}, config={})
+        )
+        config = {"configurable": {"thread_id": "t-bg"}}
+        paused = await graph.ainvoke({"messages": [("user", "x")]}, config)
+        await graph.ainvoke(Command(resume={"answer": "B-2"}), config)
         await task.job
-        return task
+        return task, refusal, paused
 
-    task = asyncio.run(run())
-    waiting, finished = notes
-    assert "status: input_required" in waiting
-    assert "Which order?" in waiting
-    assert f"update_remote_task(task_id={task.task_id!r}" in waiting
-    assert sent[-1] == {"text": "A-1", "context": task.task_id, "task_id": "remote-1"}
-    assert "status: completed" in finished
-    assert "A-1 ships Friday" in finished
+    task, refusal, paused = asyncio.run(run())
+    assert "status: input_required" in notes[0]
+    assert f"ask_user_for_remote_task(task_id={task.task_id!r})" in notes[0]
+    assert "waiting for the user" in refusal
+    assert (
+        paused["__interrupt__"][0].value["question"]
+        == "Order and Supply Tracker asks: Which order?"
+    )
+    assert len(server.sent) == 2
+    assert server.sent[1]["resume"] == {"answer": "B-2"}
+    assert server.sent[1]["task_id"] == "remote-1"
 
 
 def test_the_current_task_takes_its_state_from_get_task(monkeypatch):

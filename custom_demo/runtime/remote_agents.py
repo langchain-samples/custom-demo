@@ -314,15 +314,23 @@ def stream_message(
     context_id: str,
     trace: dict[str, str] | None = None,
     task_id: str | None = None,
+    resume: Any = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """`SendStreamingMessage`: the task's events as it works, ending with its final status.
 
     `task_id` answers a task that is waiting for input; A2A resumes that task rather
     than starting a new one, and the Agent Server refuses the resume without it.
+    `resume` rides along as a `{"resume": value}` data part, which the Agent Server
+    hands its graph as `Command(resume=value)` unflattened (an approval's decisions
+    keep their structure); `text` is the same answer for any other A2A server.
     """
+    parts: list[dict[str, Any]] = [{"text": text}]
+    if resume is not None:
+        parts.append({"data": {"resume": resume}})
+
     message: dict[str, Any] = {
         "role": "ROLE_USER",
-        "parts": [{"text": text}],
+        "parts": parts,
         "messageId": str(uuid.uuid4()),
         "contextId": context_id,
     }
@@ -383,6 +391,7 @@ async def run_streaming(
     on_progress: Callable[[dict[str, Any]], None],
     trace: dict[str, str] | None = None,
     task_id: str | None = None,
+    resume: Any = None,
 ) -> dict[str, Any]:
     """Send a message, report its progress as it streams, and return the task as it ended.
 
@@ -396,7 +405,7 @@ async def run_streaming(
     remote_id = task_id
     status_message: dict[str, Any] | None = None
     data_artifacts: list[dict[str, Any]] = []
-    async for event in stream_message(agent, text, context_id, trace, task_id):
+    async for event in stream_message(agent, text, context_id, trace, task_id, resume):
         remote_id = (event.get("task") or {}).get("id") or event.get("taskId") or remote_id
         artifact = event.get("artifact") or {}
         if any("data" in part for part in artifact.get("parts", [])):
@@ -468,6 +477,28 @@ WAITING_STATES = frozenset({"input_required", "auth_required"})
 def needs_input(task: dict[str, Any]) -> bool:
     """Whether the task is paused until someone answers it."""
     return task_state(task) in WAITING_STATES
+
+
+def pending_interrupt(task: dict[str, Any]) -> Any:
+    """The value a waiting Agent Server graph passed to `interrupt()`, if it sent one."""
+    for artifact in task.get("artifacts") or []:
+        for part in artifact.get("parts", []):
+            value = (part.get("data") or {}).get("value")
+            if value is not None:
+                return value
+
+    return None
+
+
+def answer_text(resume: Any) -> str:
+    """A resume value as plain text, for a server that only reads text parts."""
+    if isinstance(resume, dict) and "answer" in resume:
+        return str(resume["answer"])
+
+    if isinstance(resume, str):
+        return resume
+
+    return json.dumps(resume, ensure_ascii=False)
 
 
 def input_request(task: dict[str, Any]) -> tuple[str, list[str]]:
@@ -546,8 +577,10 @@ class BackgroundTask:
     # Captured when the task starts, inside `start_remote_task`, so the remote run nests
     # under that tool call even though it finishes long after the call returned.
     trace: dict[str, str] = field(default_factory=dict)
-    # The remote task the next run answers, when it was waiting for input.
+    # The remote task the next run answers, when it was waiting for input, and the
+    # human's answer as they gave it.
     resume_id: str | None = None
+    resume_value: Any = None
 
     def publish(self, item: dict[str, Any]) -> None:
         """Record one progress item and hand it to every current watcher."""
@@ -602,11 +635,7 @@ def hold_waiting(
     parent_thread: str | None,
     parent_assistant: str | None,
 ) -> BackgroundTask:
-    """Hold a task that is waiting for input, so `update_remote_task` can answer it.
-
-    The `task` tool asks the user once itself; a remote agent that asks again within
-    the same call is handed to the model this way (`remote_subagents.py` says why).
-    """
+    """Hold again a waiting task this process lost (a restart, another worker), to answer it."""
     task = BackgroundTask(
         task_id=context_id,
         agent=agent,
@@ -621,13 +650,15 @@ def hold_waiting(
     return task
 
 
-def restart_background(task: BackgroundTask, description: str) -> None:
+def restart_background(task: BackgroundTask, description: str, resume: Any = None) -> None:
     """Run an existing task again with new instructions, in the same remote context.
 
-    A task waiting for input is answered on its own remote task id, which resumes it;
-    any other task gets a new remote task in the same conversation.
+    A task waiting for input is answered on its own remote task id, which resumes it,
+    with `resume` as the structured answer; any other task gets a new remote task in
+    the same conversation.
     """
     task.resume_id = task.remote_task_id if task.result and needs_input(task.result) else None
+    task.resume_value = resume
     task.cancelled = False
     task.result = None
     task.error = None
@@ -639,7 +670,13 @@ async def _run(task: BackgroundTask) -> None:
     """Drive one remote task to its end, then report back to the thread that started it."""
     try:
         task.result = await run_streaming(
-            task.agent, task.description, task.task_id, task.publish, task.trace, task.resume_id
+            task.agent,
+            task.description,
+            task.task_id,
+            task.publish,
+            task.trace,
+            task.resume_id,
+            task.resume_value,
         )
     except asyncio.CancelledError:
         task.cancelled = True
@@ -672,9 +709,9 @@ def waiting_note(task: BackgroundTask) -> str:
     question, options = input_request(task.result)
     offered = f"\nOffered answers: {', '.join(options)}" if options else ""
     return (
-        f"{task.agent.name} is waiting for input and asks:\n{question}{offered}\n\n"
-        f"Answer with update_remote_task(task_id={task.task_id!r}, message=...). If only "
-        "the user can answer, ask them first; never invent an answer for them."
+        f"{task.agent.name} is waiting for the user and asks:\n{question}{offered}\n\n"
+        f"Call ask_user_for_remote_task(task_id={task.task_id!r}) to put the question to "
+        "the user; their answer goes straight to the agent. You cannot answer it yourself."
     )
 
 
