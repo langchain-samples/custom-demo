@@ -43,7 +43,7 @@ async def authenticate(
 
     When `APP_SHARED_SECRET` is unset, auth is disabled (local dev). Otherwise the
     provided token must match it (constant-time), else 401. The SPA's own pages are
-    open (`custom_demo/web/spa.py` says why).
+    gated by Basic auth on the same secret instead (`custom_demo/web/spa.py` says why).
     """
     secret = os.getenv("APP_SHARED_SECRET", "").strip()
     if not secret or is_spa_path(path):
