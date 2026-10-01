@@ -149,6 +149,19 @@ def review(runtime: ToolRuntime, kind: str, payload: dict, build) -> dict:
     return {**result, "status": "approved_by_user", "approved": True}
 
 
+def user_answer(resume: Any) -> str:
+    """The text a `user_question` interrupt was resumed with.
+
+    The chat sends `{"answer": "..."}`, sometimes wrapped as `{"draft": {"answer": ...}}`.
+    """
+    if isinstance(resume, dict):
+        inner = resume.get("draft") if isinstance(resume.get("draft"), dict) else resume
+        if isinstance(inner, dict):
+            return str(inner.get("answer", "") or "")
+
+    return str(resume or "")
+
+
 @tool
 def ask_user(question: str, options: list[str]) -> str:
     """Ask the user ONE short clarifying question as multiple choice and wait.
@@ -170,14 +183,9 @@ def ask_user(question: str, options: list[str]) -> str:
     # A no-artifact interrupt: nothing is generated or cached, so (unlike `review`)
     # no `_pending` guard is needed — `interrupt` raises on the first pass and, when
     # the node re-executes on resume, returns the client's value instead of raising.
-    answer = interrupt({"kind": "user_question", "question": question, "options": choices})
-    if isinstance(answer, dict):
-        # Client sends {"answer": "..."} (or wraps it as {"draft": {"answer": ...}}).
-        inner = answer.get("draft") if isinstance(answer.get("draft"), dict) else answer
-        if isinstance(inner, dict):
-            return str(inner.get("answer", "") or "")
-
-    return str(answer or "")
+    return user_answer(
+        interrupt({"kind": "user_question", "question": question, "options": choices})
+    )
 
 
 @tool

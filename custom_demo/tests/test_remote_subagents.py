@@ -56,7 +56,7 @@ def _static_task() -> StructuredTool:
 def _fake_stream(answer: str):
     """A `stream_message` stand-in that plays a short, well-formed A2A event sequence."""
 
-    async def stream(agent, text, context_id, trace=None):
+    async def stream(agent, text, context_id, trace=None, task_id=None):
         yield {"task": {"id": "ctx:run", "status": {"state": "TASK_STATE_SUBMITTED"}}}
         tool = {"tool_results": [{"content": "read /data/orders.csv\nmore"}]}
         yield {
@@ -69,6 +69,41 @@ def _fake_stream(answer: str):
         }
         yield {"kind": "artifact-update", "artifact": {"parts": [{"text": answer}]}}
         yield {"kind": "status-update", "status": {"state": "TASK_STATE_COMPLETED"}, "final": True}
+
+    return stream
+
+
+async def _no_task(agent, context_id):
+    """`latest_task` for a context the agent has never seen."""
+    return None
+
+
+def _asking_stream(question: str, options: list[str], sent: list[dict]):
+    """A `stream_message` stand-in for an Agent Server whose graph interrupts.
+
+    It plays the events `langgraph_api` emits for an interrupt (an `Interrupt` data
+    artifact, then a final `input-required` status carrying the prompt), and records
+    every message it is sent.
+    """
+
+    async def stream(agent, text, context_id, trace=None, task_id=None):
+        sent.append({"text": text, "context": context_id, "task_id": task_id})
+        yield {"task": {"id": "remote-1", "status": {"state": "TASK_STATE_SUBMITTED"}}}
+        value = {"kind": "user_question", "question": question, "options": options}
+        yield {
+            "taskId": "remote-1",
+            "kind": "artifact-update",
+            "artifact": {"name": "Interrupt", "parts": [{"data": {"id": "i1", "value": value}}]},
+        }
+        yield {
+            "taskId": "remote-1",
+            "kind": "status-update",
+            "status": {
+                "state": "TASK_STATE_INPUT_REQUIRED",
+                "message": {"role": "ROLE_AGENT", "parts": [{"text": question}]},
+            },
+            "final": True,
+        }
 
     return stream
 
@@ -108,8 +143,9 @@ def test_dynamic_task_lists_remote_agents_and_forwards_built_ins(monkeypatch):
     assert "order_tracker" in dynamic.description
 
     monkeypatch.setattr(ra, "stream_message", _fake_stream("shipped"))
+    monkeypatch.setattr(ra, "current_task", _no_task)
     frames: list[dict] = []
-    runtime = SimpleNamespace(stream_writer=frames.append, tool_call_id="call-1")
+    runtime = SimpleNamespace(stream_writer=frames.append, tool_call_id="call-1", config={})
     coroutine = dynamic.coroutine
     assert coroutine is not None
 
@@ -193,7 +229,7 @@ def test_a_finished_background_task_wakes_its_parent_thread(monkeypatch):
 def test_a_failed_background_task_still_reports_back(monkeypatch):
     notified: list[ra.BackgroundTask] = []
 
-    async def boom(agent, text, context_id, trace=None):
+    async def boom(agent, text, context_id, trace=None, task_id=None):
         raise ra.RemoteAgentError("Order and Supply Tracker: overloaded")
         yield {}  # an async generator, like the real stream
 
@@ -259,3 +295,210 @@ def test_an_unmarked_trace_parent_is_ignored():
         ra.remote_parent({"langsmith-trace": header, "langsmith-metadata": '{"other": 1}'}) is None
     )
     assert ra.trace_headers() == {}
+
+
+class _Paused(Exception):
+    """Stands in for the `GraphInterrupt` that `interrupt` raises inside a real run."""
+
+
+def _remote_call(dynamic, call_id="call-7"):
+    """Call the dynamic `task` once, on a runtime shaped like a graph's."""
+    runtime = SimpleNamespace(
+        stream_writer=lambda frame: None,
+        tool_call_id=call_id,
+        config={"configurable": {"thread_id": "thread-1"}, "metadata": {"assistant_id": "a-1"}},
+        state={},
+    )
+    coroutine = dynamic.coroutine
+    assert coroutine is not None
+    return asyncio.run(
+        coroutine(description="where is it", subagent_type="order_tracker", runtime=runtime)
+    )
+
+
+def test_the_waiting_tasks_question_and_options_are_read_off_the_interrupt():
+    sent: list[dict] = []
+
+    async def run():
+        return await ra.run_streaming(AGENT, "x", "ctx", lambda item: None, None)
+
+    stream = _asking_stream("Which order?", ["A-1", "B-2"], sent)
+    task = asyncio.run(_with_stream(stream, run))
+    assert ra.needs_input(task)
+    assert task["id"] == "remote-1"
+    assert ra.input_request(task) == ("Which order?", ["A-1", "B-2"])
+
+
+def test_a_plain_status_message_is_the_question_when_there_is_no_interrupt_payload():
+    task = {
+        "status": {
+            "state": "TASK_STATE_AUTH_REQUIRED",
+            "message": {"parts": [{"text": "Sign in at https://idp.test"}]},
+        }
+    }
+    assert ra.needs_input(task)
+    assert ra.input_request(task) == ("Sign in at https://idp.test", [])
+
+
+async def _with_stream(stream, run):
+    original = ra.stream_message
+    ra.stream_message = stream
+    try:
+        return await run()
+    finally:
+        ra.stream_message = original
+
+
+def test_a_remote_question_pauses_the_parent_and_the_answer_resumes_the_same_task(monkeypatch):
+    sent: list[dict] = []
+    stream = _asking_stream("Which order?", ["A-1", "B-2"], sent)
+    remote: dict[str, dict] = {}
+
+    async def latest_task(agent, context_id):
+        return remote.get(context_id)
+
+    async def record(agent, text, context_id, trace=None, task_id=None):
+        # First message: the agent asks. The answer: the agent finishes.
+        if task_id is None:
+            async for event in stream(agent, text, context_id, trace, task_id):
+                yield event
+
+            remote[context_id] = {
+                "id": "remote-1",
+                "status": {"state": "TASK_STATE_INPUT_REQUIRED"},
+                "artifacts": [
+                    {
+                        "parts": [
+                            {
+                                "data": {
+                                    "value": {"question": "Which order?", "options": ["A-1", "B-2"]}
+                                }
+                            }
+                        ]
+                    }
+                ],
+            }
+            return
+
+        sent.append({"text": text, "context": context_id, "task_id": task_id})
+        yield {"kind": "artifact-update", "artifact": {"parts": [{"text": "A-1 ships Friday"}]}}
+        yield {"kind": "status-update", "status": {"state": "TASK_STATE_COMPLETED"}, "final": True}
+
+    asked: list[dict] = []
+    resume: list[object] = []
+
+    def fake_interrupt(payload):
+        asked.append(payload)
+        if not resume:
+            raise _Paused
+
+        return resume[0]
+
+    monkeypatch.setattr(ra, "stream_message", record)
+    monkeypatch.setattr(ra, "current_task", latest_task)
+    monkeypatch.setattr(rs, "interrupt", fake_interrupt)
+    dynamic = rs.dynamic_task_tool(_static_task(), [AGENT])
+
+    with pytest.raises(_Paused):
+        _remote_call(dynamic)
+
+    assert asked[0]["kind"] == "user_question"
+    assert asked[0]["options"] == ["A-1", "B-2"]
+    assert "Which order?" in asked[0]["question"]
+
+    # The resume re-runs the tool from the top, as LangGraph does.
+    resume.append({"answer": "A-1"})
+    assert _remote_call(dynamic) == "A-1 ships Friday"
+    first, answer = sent
+    assert answer == {"text": "A-1", "context": first["context"], "task_id": "remote-1"}
+    assert [m["text"] for m in sent].count("where is it") == 1
+
+
+def test_a_second_question_in_one_call_is_held_for_update_remote_task(monkeypatch):
+    sent: list[dict] = []
+    stream = _asking_stream("And which site?", [], sent)
+    waiting = {
+        "id": "remote-1",
+        "status": {"state": "TASK_STATE_INPUT_REQUIRED"},
+        "artifacts": [{"parts": [{"data": {"value": "Which order?"}}]}],
+    }
+
+    async def latest_task(agent, context_id):
+        return waiting
+
+    monkeypatch.setattr(ra, "stream_message", stream)
+    monkeypatch.setattr(ra, "current_task", latest_task)
+    monkeypatch.setattr(rs, "interrupt", lambda payload: {"answer": "A-1"})
+    dynamic = rs.dynamic_task_tool(_static_task(), [AGENT])
+
+    result = _remote_call(dynamic, call_id="call-9")
+    message = result.update["messages"][0].content
+    assert "And which site?" in message
+    assert "update_remote_task" in message
+    (task_id,) = result.update["remote_tasks"]
+    held = ra.get_task(task_id)
+    assert held is not None and held.remote_task_id == "remote-1"
+    assert sent == [{"text": "A-1", "context": task_id, "task_id": "remote-1"}]
+
+
+def test_answering_a_waiting_background_task_resumes_its_remote_task(monkeypatch):
+    sent: list[dict] = []
+    notes: list[str] = []
+    asking = _asking_stream("Which order?", [], sent)
+    finishing = _fake_stream("A-1 ships Friday")
+
+    async def stream(agent, text, context_id, trace=None, task_id=None):
+        play = finishing if task_id else asking
+        if task_id:
+            sent.append({"text": text, "context": context_id, "task_id": task_id})
+
+        async for event in play(agent, text, context_id, trace, task_id):
+            yield event
+
+    async def fake_notify(task):
+        notes.append(ra.notification_text(task))
+
+    monkeypatch.setattr(ra, "stream_message", stream)
+    monkeypatch.setattr(ra, "_notify", fake_notify)
+
+    async def run() -> ra.BackgroundTask:
+        task = ra.start_background(AGENT, "investigate", "thread-1", "assistant-1")
+        assert task.job is not None
+        await task.job
+        ra.restart_background(task, "A-1")
+        await task.job
+        return task
+
+    task = asyncio.run(run())
+    waiting, finished = notes
+    assert "status: input_required" in waiting
+    assert "Which order?" in waiting
+    assert f"update_remote_task(task_id={task.task_id!r}" in waiting
+    assert sent[-1] == {"text": "A-1", "context": task.task_id, "task_id": "remote-1"}
+    assert "status: completed" in finished
+    assert "A-1 ships Friday" in finished
+
+
+def test_the_current_task_takes_its_state_from_get_task(monkeypatch):
+    # Agent Server 0.13.0 lists an interrupted task as completed; only GetTask, which
+    # checks the thread, says it is waiting. The listed task's artifacts are kept.
+    listed = {
+        "id": "remote-1",
+        "status": {"state": "TASK_STATE_COMPLETED"},
+        "artifacts": [{"parts": [{"data": {"value": "Which order?"}}]}],
+    }
+    calls: list[str] = []
+
+    async def rpc(agent, method, params, timeout):
+        calls.append(method)
+        if method == "ListTasks":
+            return {"tasks": [listed]}
+
+        return {"id": "remote-1", "status": {"state": "TASK_STATE_INPUT_REQUIRED"}}
+
+    monkeypatch.setattr(ra, "_rpc", rpc)
+    task = asyncio.run(ra.current_task(AGENT, "ctx"))
+    assert task is not None
+    assert calls == ["ListTasks", "GetTask"]
+    assert ra.needs_input(task)
+    assert ra.input_request(task) == ("Which order?", [])

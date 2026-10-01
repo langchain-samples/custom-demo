@@ -309,22 +309,27 @@ async def _sse_results(
 
 
 def stream_message(
-    agent: RemoteAgent, text: str, context_id: str, trace: dict[str, str] | None = None
+    agent: RemoteAgent,
+    text: str,
+    context_id: str,
+    trace: dict[str, str] | None = None,
+    task_id: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
-    """`SendStreamingMessage`: the task's events as it works, ending with its final status."""
-    return _sse_results(
-        agent,
-        "SendStreamingMessage",
-        {
-            "message": {
-                "role": "ROLE_USER",
-                "parts": [{"text": text}],
-                "messageId": str(uuid.uuid4()),
-                "contextId": context_id,
-            }
-        },
-        trace,
-    )
+    """`SendStreamingMessage`: the task's events as it works, ending with its final status.
+
+    `task_id` answers a task that is waiting for input; A2A resumes that task rather
+    than starting a new one, and the Agent Server refuses the resume without it.
+    """
+    message: dict[str, Any] = {
+        "role": "ROLE_USER",
+        "parts": [{"text": text}],
+        "messageId": str(uuid.uuid4()),
+        "contextId": context_id,
+    }
+    if task_id:
+        message["taskId"] = task_id
+
+    return _sse_results(agent, "SendStreamingMessage", {"message": message}, trace)
 
 
 def subscribe(agent: RemoteAgent, task_id: str) -> AsyncIterator[dict[str, Any]]:
@@ -377,16 +382,29 @@ async def run_streaming(
     context_id: str,
     on_progress: Callable[[dict[str, Any]], None],
     trace: dict[str, str] | None = None,
+    task_id: str | None = None,
 ) -> dict[str, Any]:
-    """Send a message, report its progress as it streams, and return the finished task.
+    """Send a message, report its progress as it streams, and return the task as it ended.
 
-    The returned task has the shape `task_text` and `task_state` read, built from what
-    streamed: the answer artifact (or the last text), and the final state.
+    The returned task has the shape `task_text`, `task_state` and `input_request` read,
+    built from what streamed: its id, the answer artifact (or the last text), any data
+    artifact (an interrupt's payload), and the final status with its message.
     """
     answer = ""
     latest_text = ""
     state = "TASK_STATE_WORKING"
-    async for event in stream_message(agent, text, context_id, trace):
+    remote_id = task_id
+    status_message: dict[str, Any] | None = None
+    data_artifacts: list[dict[str, Any]] = []
+    async for event in stream_message(agent, text, context_id, trace, task_id):
+        remote_id = (event.get("task") or {}).get("id") or event.get("taskId") or remote_id
+        artifact = event.get("artifact") or {}
+        if any("data" in part for part in artifact.get("parts", [])):
+            data_artifacts.append(artifact)
+
+        if event.get("kind") == "status-update" and event.get("final"):
+            status_message = (event.get("status") or {}).get("message")
+
         for item in progress(event):
             on_progress(item)
             if item["kind"] == "answer":
@@ -396,9 +414,15 @@ async def run_streaming(
             elif item["kind"] == "state":
                 state = f"TASK_STATE_{item['state'].upper()}"
 
+    status: dict[str, Any] = {"state": state}
+    if status_message:
+        status["message"] = status_message
+
     return {
-        "status": {"state": state},
-        "artifacts": [{"parts": [{"text": answer or latest_text}]}],
+        "id": remote_id,
+        "contextId": context_id,
+        "status": status,
+        "artifacts": [{"parts": [{"text": answer or latest_text}]}, *data_artifacts],
     }
 
 
@@ -409,15 +433,70 @@ async def latest_task(agent: RemoteAgent, context_id: str) -> dict[str, Any] | N
     return tasks[0] if tasks else None
 
 
+async def current_task(agent: RemoteAgent, context_id: str) -> dict[str, Any] | None:
+    """The newest task in a context, with the state `GetTask` reports for it.
+
+    `ListTasks` alone is not enough: measured on Agent Server 0.13.0, it reports a task
+    whose graph is interrupted as `completed`, while `GetTask` checks the thread and
+    says `input-required`. `GetTask` carries no artifacts there, so the listed task's
+    are kept.
+    """
+    listed = await latest_task(agent, context_id)
+    if listed is None:
+        return None
+
+    got = await _rpc(agent, "GetTask", {"id": listed["id"]}, timeout=30)
+    return {**listed, **got, "artifacts": got.get("artifacts") or listed.get("artifacts") or []}
+
+
 async def cancel_task(agent: RemoteAgent, task_id: str) -> None:
     """Ask the agent to stop a task."""
     await _rpc(agent, "CancelTask", {"id": task_id}, timeout=30)
 
 
 def task_state(task: dict[str, Any]) -> str:
-    """A task's state in plain words: working, completed, failed, canceled."""
+    """A task's state in plain words: working, completed, failed, canceled, input_required."""
     raw = str((task.get("status") or {}).get("state", "unknown"))
-    return raw.removeprefix("TASK_STATE_").lower()
+    return raw.removeprefix("TASK_STATE_").lower().replace("-", "_")
+
+
+# The two A2A states in which a task is paused, waiting for the client to send it a
+# message on the same task. Neither is terminal: the task resumes when that arrives.
+WAITING_STATES = frozenset({"input_required", "auth_required"})
+
+
+def needs_input(task: dict[str, Any]) -> bool:
+    """Whether the task is paused until someone answers it."""
+    return task_state(task) in WAITING_STATES
+
+
+def input_request(task: dict[str, Any]) -> tuple[str, list[str]]:
+    """What a waiting task asks, and the answers it offers, if it lists any.
+
+    An Agent Server interrupt arrives as a data artifact of `{id, value}` parts; when
+    the value is a question with options (the `user_question` shape `ask_user` raises),
+    those are kept. Otherwise the question is the status message's text, then the
+    value itself, then the task's text.
+    """
+    question = ""
+    options: list[str] = []
+    for artifact in task.get("artifacts") or []:
+        for part in artifact.get("parts", []):
+            value = (part.get("data") or {}).get("value")
+            if isinstance(value, dict) and value.get("question"):
+                question = str(value["question"])
+                options = [str(o) for o in value.get("options") or [] if str(o).strip()]
+            elif isinstance(value, str) and value.strip() and not question:
+                question = value.strip()
+            elif value is not None and not question:
+                question = json.dumps(value, ensure_ascii=False)
+
+    message = (task.get("status") or {}).get("message") or {}
+    texts = _texts(message.get("parts", []))
+    if texts and not options:
+        question = "\n\n".join(texts)
+
+    return question or task_text(task) or "(the agent did not say what it needs)", options
 
 
 def task_text(task: dict[str, Any]) -> str:
@@ -461,11 +540,14 @@ class BackgroundTask:
     # everyone watching now (`web/remote_agents.py:remote_task_stream`).
     events: list[dict[str, Any]] = field(default_factory=list)
     watchers: set[asyncio.Queue] = field(default_factory=set)
-    # The remote agent's own id for the task, once its first event names it.
+    # The remote agent's own id for the task, once its first event names it. Sent back
+    # when answering the task while it waits for input.
     remote_task_id: str | None = None
     # Captured when the task starts, inside `start_remote_task`, so the remote run nests
     # under that tool call even though it finishes long after the call returned.
     trace: dict[str, str] = field(default_factory=dict)
+    # The remote task the next run answers, when it was waiting for input.
+    resume_id: str | None = None
 
     def publish(self, item: dict[str, Any]) -> None:
         """Record one progress item and hand it to every current watcher."""
@@ -478,8 +560,11 @@ class BackgroundTask:
 
     @property
     def done(self) -> bool:
-        """Whether nothing more will be published."""
-        return self.job is not None and self.job.done()
+        """Whether nothing more will be published until the task is given a new message."""
+        if self.job is None:
+            return self.result is not None
+
+        return self.job.done()
 
 
 # task id -> task. Process-wide, like the MCP and card caches. A restart loses the
@@ -509,8 +594,40 @@ def start_background(
     return task
 
 
+def hold_waiting(
+    agent: RemoteAgent,
+    context_id: str,
+    description: str,
+    result: dict[str, Any],
+    parent_thread: str | None,
+    parent_assistant: str | None,
+) -> BackgroundTask:
+    """Hold a task that is waiting for input, so `update_remote_task` can answer it.
+
+    The `task` tool asks the user once itself; a remote agent that asks again within
+    the same call is handed to the model this way (`remote_subagents.py` says why).
+    """
+    task = BackgroundTask(
+        task_id=context_id,
+        agent=agent,
+        description=description,
+        parent_thread=parent_thread,
+        parent_assistant=parent_assistant,
+        result=result,
+        remote_task_id=result.get("id"),
+        trace=trace_headers(),
+    )
+    _TASKS[task.task_id] = task
+    return task
+
+
 def restart_background(task: BackgroundTask, description: str) -> None:
-    """Run an existing task again with new instructions, in the same remote context."""
+    """Run an existing task again with new instructions, in the same remote context.
+
+    A task waiting for input is answered on its own remote task id, which resumes it;
+    any other task gets a new remote task in the same conversation.
+    """
+    task.resume_id = task.remote_task_id if task.result and needs_input(task.result) else None
     task.cancelled = False
     task.result = None
     task.error = None
@@ -522,7 +639,7 @@ async def _run(task: BackgroundTask) -> None:
     """Drive one remote task to its end, then report back to the thread that started it."""
     try:
         task.result = await run_streaming(
-            task.agent, task.description, task.task_id, task.publish, task.trace
+            task.agent, task.description, task.task_id, task.publish, task.trace, task.resume_id
         )
     except asyncio.CancelledError:
         task.cancelled = True
@@ -543,7 +660,22 @@ def notification_text(task: BackgroundTask) -> str:
 
     assert task.result is not None
     state = task_state(task.result)
+    if needs_input(task.result):
+        return f"{head}\nstatus: {state}\n\n{waiting_note(task)}"
+
     return f"{head}\nstatus: {state}\n\n{task_text(task.result) or '(no text in the answer)'}"
+
+
+def waiting_note(task: BackgroundTask) -> str:
+    """Tell the model what a waiting task asks and how to answer it."""
+    assert task.result is not None
+    question, options = input_request(task.result)
+    offered = f"\nOffered answers: {', '.join(options)}" if options else ""
+    return (
+        f"{task.agent.name} is waiting for input and asks:\n{question}{offered}\n\n"
+        f"Answer with update_remote_task(task_id={task.task_id!r}, message=...). If only "
+        "the user can answer, ask them first; never invent an answer for them."
+    )
 
 
 async def _notify(task: BackgroundTask) -> None:

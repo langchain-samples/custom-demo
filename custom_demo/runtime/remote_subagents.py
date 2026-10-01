@@ -16,6 +16,14 @@ what `McpTools` does for tools:
 Built-in subagents run unchanged: the dynamic `task` forwards any `subagent_type` it
 does not own to the original tool.
 
+A remote agent that stops for input (A2A `input-required` or `auth-required`) pauses
+the parent run with the same `user_question` interrupt `ask_user` raises, so the chat
+draws its question card, and the answer resumes the remote task. Once per `task` call:
+on resume the tool re-runs from the top and every earlier `interrupt` in it replays
+its answer, and nothing in the run records which answers already reached the remote
+agent, so a second question would be answered with the first reply. A second
+question is handed to the model instead, held for `update_remote_task`.
+
 Async only, like `McpTools`: a sync run (evals, unit tests) sees no remote agents.
 """
 
@@ -32,11 +40,12 @@ from langchain.agents.middleware import AgentMiddleware, AgentState
 from langchain.tools import ToolRuntime
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool, StructuredTool
-from langgraph.types import Command
+from langgraph.types import Command, interrupt
 from pydantic import BaseModel, Field
 
 from custom_demo.core.ctx import get_ctx
 from custom_demo.runtime import remote_agents as ra
+from custom_demo.runtime.tools.simulated import user_answer
 
 TASK_TOOL = "task"
 
@@ -134,13 +143,33 @@ def dynamic_task_tool(static: BaseTool, agents: list[ra.RemoteAgent]) -> Structu
                     }
                 )
 
+        context = _call_context(runtime)
         try:
-            answer = await ra.run_streaming(
-                agent, description, _new_context(), report, ra.trace_headers()
+            # A re-run on resume finds the task this call already started, by its
+            # context, instead of sending the request a second time.
+            answer = await ra.current_task(agent, context) or await ra.run_streaming(
+                agent, description, context, report, ra.trace_headers()
             )
         except Exception as exc:  # noqa: BLE001 - the model is told the agent failed
             report({"kind": "state", "state": "failed", "final": True})
             return f"Remote agent {agent.name} failed: {type(exc).__name__}: {exc}"
+
+        if ra.needs_input(answer):
+            # Outside the `try`: `interrupt` pauses the run by raising, and that must reach
+            # LangGraph rather than be reported as the agent failing.
+            reply = user_answer(interrupt(_question(agent, answer)))
+            try:
+                answer = await ra.run_streaming(
+                    agent, reply, context, report, ra.trace_headers(), answer.get("id")
+                )
+            except Exception as exc:  # noqa: BLE001 - the model is told the agent failed
+                report({"kind": "state", "state": "failed", "final": True})
+                return f"Remote agent {agent.name} failed: {type(exc).__name__}: {exc}"
+
+        if ra.needs_input(answer):
+            thread, assistant = _parent(runtime)
+            held = ra.hold_waiting(agent, context, description, answer, thread, assistant)
+            return _recorded(held, ra.task_state(answer), ra.waiting_note(held), runtime)
 
         text = ra.task_text(answer)
         state = ra.task_state(answer)
@@ -156,9 +185,34 @@ def dynamic_task_tool(static: BaseTool, agents: list[ra.RemoteAgent]) -> Structu
     )
 
 
-def _new_context() -> str:
-    """A fresh A2A context id: one conversation on the remote side per dispatch."""
-    return str(uuid.uuid4())
+def _call_context(runtime: ToolRuntime) -> str:
+    """The A2A context for one `task` call: one remote conversation per dispatch.
+
+    Derived from the thread and the tool call rather than random, so the re-run that
+    follows an interrupt reaches the same remote conversation.
+    """
+    thread, _ = _parent(runtime)
+    call = getattr(runtime, "tool_call_id", None) or uuid.uuid4().hex
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"remote-task:{thread}:{call}"))
+
+
+def _question(agent: ra.RemoteAgent, task: dict) -> dict:
+    """The `user_question` interrupt for a remote agent that is waiting for input.
+
+    No options means the chat offers a text box rather than choices.
+    """
+    question, options = ra.input_request(task)
+    if ra.task_state(task) == "auth_required":
+        question = (
+            f"{question}\n\n({agent.label} needs you to authenticate before it can continue.)"
+        )
+
+    return {
+        "kind": "user_question",
+        "question": f"{agent.label} asks: {question}",
+        "options": options,
+        "remote_agent": agent.name,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -227,6 +281,9 @@ def _held_report(task: ra.BackgroundTask) -> str:
     if task.error:
         return f"{task.agent.name} task {task.task_id}: failed: {task.error}"
 
+    if task.result and ra.needs_input(task.result):
+        return f"{task.agent.name} task {task.task_id}: {status}\n\n{ra.waiting_note(task)}"
+
     return f"{task.agent.name} task {task.task_id}: {status}\n\n{ra.task_text(task.result or {})}"
 
 
@@ -248,7 +305,9 @@ class _TaskIdArgs(BaseModel):
 class _UpdateArgs(_TaskIdArgs):
     """Input schema for `update_remote_task`."""
 
-    message: str = Field(description="New instructions; the agent restarts with them.")
+    message: str = Field(
+        description="New instructions (the agent restarts with them), or the answer to a task waiting for input."
+    )
 
 
 class _NoArgs(BaseModel):
@@ -298,9 +357,16 @@ def background_tools(agents: list[ra.RemoteAgent]) -> list[BaseTool]:
         if agent is None:
             return f"No remote task {task_id!r} on this thread."
 
-        remote = await ra.latest_task(agent, task_id.strip())
+        remote = await ra.current_task(agent, task_id.strip())
         if remote is None:
             return f"{agent.name} has no record of task {task_id}."
+
+        if ra.needs_input(remote):
+            question, _ = ra.input_request(remote)
+            return (
+                f"{agent.name} task {task_id}: {ra.task_state(remote)}\n\n{question}\n\n"
+                f"Answer with update_remote_task(task_id={task_id.strip()!r}, message=...)."
+            )
 
         return f"{agent.name} task {task_id}: {ra.task_state(remote)}\n\n{ra.task_text(remote)}"
 
@@ -317,7 +383,7 @@ def background_tools(agents: list[ra.RemoteAgent]) -> list[BaseTool]:
         return _recorded(task, "cancelled", f"Cancelled {task.task_id}.", runtime)
 
     async def update(task_id: str, message: str, runtime: ToolRuntime) -> str | Command:
-        task = ra.get_task(task_id)
+        task = ra.get_task(task_id) or await _rehold_waiting(task_id, runtime)
         if task is None:
             return f"No remote task {task_id!r} held by this server."
 
@@ -330,6 +396,22 @@ def background_tools(agents: list[ra.RemoteAgent]) -> list[BaseTool]:
         ra.restart_background(task, message)
         note = f"Sent new instructions to {task.task_id}; you will be notified when it finishes."
         return _recorded(task, "working", note, runtime)
+
+    async def _rehold_waiting(task_id: str, runtime: ToolRuntime) -> ra.BackgroundTask | None:
+        """A waiting task this process does not hold (a restart, another worker), held again."""
+        record = (runtime.state.get("remote_tasks") or {}).get(task_id.strip())
+        if record is None or record["agent"] not in by_name:
+            return None
+
+        agent = by_name[record["agent"]]
+        remote = await ra.current_task(agent, task_id.strip())
+        if remote is None or not ra.needs_input(remote):
+            return None
+
+        thread, assistant = _parent(runtime)
+        return ra.hold_waiting(
+            agent, task_id.strip(), record["description"], remote, thread, assistant
+        )
 
     async def list_tasks(runtime: ToolRuntime) -> str:
         records = runtime.state.get("remote_tasks") or {}
@@ -375,7 +457,8 @@ def background_tools(agents: list[ra.RemoteAgent]) -> list[BaseTool]:
             "update_remote_task",
             update,
             _UpdateArgs,
-            "Give a running background task new instructions; it restarts with them in the same conversation.",
+            "Give a background task new instructions (it restarts with them in the same "
+            "conversation), or answer a task that is waiting for input.",
         ),
         tool("cancel_remote_task", cancel, _TaskIdArgs, "Stop a background remote task."),
         tool(
