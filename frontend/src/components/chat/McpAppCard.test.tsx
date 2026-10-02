@@ -8,9 +8,7 @@
  * negative ones. Most tools ship no UI, and a card that appeared beside all of
  * them would be worse than no card.
  *
- * The app's own half of the conversation is exercised for real against a built
- * app in `custom_demo/tests/signature_app_test.js`; the protocol itself is the
- * SDK's, pinned in its own tests.
+ * The protocol itself is the SDK's, pinned in its own tests.
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act, cleanup, render, waitFor } from "@testing-library/react";

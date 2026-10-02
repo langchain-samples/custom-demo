@@ -55,8 +55,8 @@ jobs:
           python-version: "3.13"
       # Installs deps + dev tools (ruff, ty, pytest) into .venv on that interpreter.
       - run: uv sync --locked
-      - run: uv run ruff check custom_demo scripts evals mcp_demo_server
-      - run: uv run ruff format --check custom_demo scripts evals mcp_demo_server
+      - run: uv run ruff check custom_demo scripts evals fleet_mcp_server
+      - run: uv run ruff format --check custom_demo scripts evals fleet_mcp_server
       # House rule ruff has no equivalent for: after an indented block ends, the next
       # statement at the same indentation needs a blank line in front of it. E301/E302/E303
       # only cover methods and top-level defs, so this is its own checker - the Python
@@ -69,7 +69,7 @@ jobs:
       # nowhere and copy-pasting a documented pytest command failed. Resolution is
       # mechanical, so the next stale path fails here instead of being found by hand.
       - run: uv run python scripts/check_doc_paths.py
-      - run: uv run ty check custom_demo scripts evals mcp_demo_server
+      - run: uv run ty check custom_demo scripts evals fleet_mcp_server
       # Import smoke: catches broken imports (e.g. a removed tool still referenced).
       # These four are the entrypoints langgraph.json names, so importing them
       # reaches the whole package. Named by ENTRYPOINT rather than by internal

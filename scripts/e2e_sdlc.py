@@ -34,7 +34,7 @@ from custom_demo.resources import docs as D
 # while someone was using it: their request folder went with the repo, and their turns
 # queued behind these long ones until the browser gave up. A test that shares a mutable
 # resource with a live demo will eventually destroy that demo's work, so it gets its own.
-ASSISTANT_NAME = "Mary Kay Software Factory (e2e)"
+ASSISTANT_NAME = "Contoso Software Factory (e2e)"
 GRAPH_ID = "dashboard_agent"
 
 # A documents repo this script is allowed to delete has to look like a test fixture. The

@@ -99,10 +99,9 @@ frontend/src/
   lib/api.ts                HTTP transport, thread URL persistence and frontend wire types
   lib/queries.ts            React Query reads and cache keys
 demos/sdlc-factory/          Software-factory demo: agent prompt and one skill per SDLC phase
-mcp_demo_server/             Fieldlink Logistics and Meridian Wealth examples
-  apps/src/                 Four React MCP Apps using the official extension hooks
-  apps/build.sh             Build the shared apps/app.js bundle
-  apps.py                   Inline the bundle and styles into served app documents
+demos/agent-hub/             Orchestrator plus specialist agents reached as remote A2A subagents
+demos/fleet-triage/          Storage fleet-triage agent: prompt, skills and grading rubric
+fleet_mcp_server/            Mock Fleet Ops MCP server the fleet-triage agent investigates through
 scripts/                    Local runners, connectivity and repository checks
 ```
 
@@ -362,11 +361,8 @@ This host does not implement the spec's separate-origin sandbox proxy or enforce
 do not describe it as supporting every third-party app or as having no possible network access.
 Keep fullscreen changes on a stable wrapper: reparenting the iframe reloads it and loses edits.
 
-`mcp_demo_server/apps/src/` contains four React views using the official `useApp` hooks.
-`apps/build.sh` builds one shared `apps/app.js`; `apps.py` inlines it and `shell.css` into the
-served document. Register input/result listeners before connecting so the first notification
-is not lost. Components receive data, arguments and a call function rather than hand-written
-protocol handlers. Signature and MCP conformance tests exercise the served bundle and wire contract.
+An app's views register input/result listeners before connecting so the first notification
+is not lost.
 
 ### Elicitation and media
 

@@ -425,7 +425,7 @@ function ok(name, fn) {
   });
 
   ok("delegation is capability-agnostic, so the shell cannot refuse the agent's own work", () => {
-    const text = voiceInstructions({ customer: "Mary Kay", industry: "software delivery" });
+    const text = voiceInstructions({ customer: "Contoso", industry: "software delivery" });
     // This instruction once called the agent "the analytics agent" and scoped its tool to
     // "data, metrics, accounts, orders or reports". An assistant whose job is drafting
     // documents then correctly concluded the tool did not apply and REFUSED to write one,

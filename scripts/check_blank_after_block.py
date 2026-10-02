@@ -65,7 +65,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # The Python this repo owns. `chat-langchain-lite/` is deliberately absent: it is a
 # gitignored sibling project, not ours to reformat.
-DEFAULT_TARGETS = ("custom_demo", "scripts", "evals", "mcp_demo_server")
+DEFAULT_TARGETS = ("custom_demo", "scripts", "evals", "fleet_mcp_server")
 
 # Never walked, even when they sit inside a target.
 SKIP_DIRS = frozenset({".venv", ".git", "__pycache__", "node_modules", ".langgraph_api"})

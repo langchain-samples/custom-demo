@@ -181,7 +181,7 @@ def test_a_root_anchored_path_must_resolve_from_the_root_exactly(tmp_path: Path)
 
 
 def test_a_leading_dot_slash_is_repo_root_relative(tmp_path: Path):
-    text = "Run `./scripts/run_mcp_server.sh --tunnel`, not `./scripts/seed_assistants.py`.\n"
+    text = "Run `./scripts/preflight.py --quick`, not `./scripts/seed_assistants.py`.\n"
     assert cited(text, tmp_path) == ["scripts/seed_assistants.py"]
 
 

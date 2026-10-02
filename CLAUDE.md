@@ -14,7 +14,7 @@ everything.
 
 Do not restate any of these anywhere. Run the check instead.
 
-`uv run ruff check custom_demo scripts evals mcp_demo_server`, with
+`uv run ruff check custom_demo scripts evals fleet_mcp_server`, with
 `select = ["E","W","F","I","UP","B","C4","D","PLC0415","TID252","BLE001","RUF100"]`
 and `E501` ignored:
 

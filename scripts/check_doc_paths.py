@@ -108,11 +108,11 @@ ROOT = Path(__file__).resolve().parent.parent
 # Top-level directories this repo owns. A token starting with one of these is read as a
 # path from the repo root and must resolve there exactly.
 ROOT_ANCHORS = frozenset(
-    {"custom_demo", "frontend", "evals", "scripts", "docs", "mcp_demo_server", ".github"}
+    {"custom_demo", "frontend", "evals", "scripts", "docs", "fleet_mcp_server", "demos", ".github"}
 )
 
 # Extensions a citation may end in. `.sh` is here beyond the source languages because
-# `scripts/run_mcp_server.sh` is cited in AGENTS.md and README.md and is checkable.
+# shell entrypoints such as `run.sh` are cited in the docs and are checkable.
 SOURCE_EXTS = (
     ".py",
     ".ts",
@@ -218,7 +218,7 @@ def _strip_edges(raw: str) -> str:
         token = token[:-1]
 
     if token.startswith("./"):
-        # `./scripts/run_mcp_server.sh` in a shell line is repo-root-relative.
+        # `./scripts/preflight.py` in a shell line is repo-root-relative.
         token = token[2:]
 
     return token.lstrip("(`'\"")

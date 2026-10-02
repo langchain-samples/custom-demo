@@ -38,7 +38,7 @@ DEMO = ROOT / "demos" / "sdlc-factory"
 
 # The customer's site, so brand lookup resolves the right domain rather than guessing one
 # from the name.
-WEBSITE = "marykay.com"
+WEBSITE = "contoso.com"
 
 # What this assistant is ABOUT, which is not what the customer sells. The SPA builds its
 # opening placeholder from this field ("Ask me anything about ..."), and for most demos
@@ -218,7 +218,7 @@ def main() -> int:
     """Push the demo's Hub content and bind an assistant to it."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--slug", default="mary-kay-factory", help="repo-name prefix")
-    parser.add_argument("--customer", default="Mary Kay", help="customer name for branding")
+    parser.add_argument("--customer", default="Contoso", help="customer name for branding")
     parser.add_argument("--workspace", default=None, help="LangSmith workspace id")
     parser.add_argument("--url", default="http://127.0.0.1:2024", help="Agent Server URL")
     parser.add_argument("--owner", default=None, help="name shown in the assistant picker")

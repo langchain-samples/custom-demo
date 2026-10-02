@@ -248,7 +248,7 @@ def test_task_text_reads_every_place_an_answer_can_be(task, expected):
 
 
 def test_trace_headers_round_trip_into_a_parent_in_the_callers_project():
-    span = RunTree(name="task", run_type="tool", session_name="HPE Agent Hub")
+    span = RunTree(name="task", run_type="tool", session_name="Contoso Agent Hub")
     with tracing_context(parent=span):
         headers = ra.trace_headers()
 
@@ -261,7 +261,7 @@ def test_trace_headers_round_trip_into_a_parent_in_the_callers_project():
     parent = ra.remote_parent(configurable)
     assert parent is not None
     assert str(parent.id) == str(span.id)
-    assert parent.session_name == "HPE Agent Hub"
+    assert parent.session_name == "Contoso Agent Hub"
 
 
 def test_an_unmarked_trace_parent_is_ignored():
