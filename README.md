@@ -37,12 +37,25 @@ uv run python scripts/preflight.py     # checks connectivity; makes real API cal
 Open <http://127.0.0.1:3000>. In **Settings**, choose a workspace, then **+ New** to enter a
 use case. Setup creates the branded assistant, sample files, skills and questions.
 
-**Setup time:** A new use case takes about 30 seconds to setup. 
-Sandbox prewarming runs in the background; 
-the first turn can be slow while the VM and analysis packages start.
+## Creating your agent in the UI
+When you open the UI, you'll be met with a popup.
 
-> Optionally enable `demo traffic` to populate 200 sample traces for Monitoring, Insights and Engine.
+All you need to create a new agent is:
+- Brand Name (optional)
+- Brand Website (optional... for setting up the UI Skin)
+- Use Case (optional; can use the brand website to infer a use case)
 
+A new use case takes about 30 seconds to setup. Behind the scenes, we are... 
+- pulling the brand details
+- writing the system prompt
+- provisioning a sandbox
+- creating some dummy files in the sandbox
+- creating some skills
+- creating some "quick prompts" for you to click to demo the agent
+
+> Tip: Optionally enable `demo traffic` to populate 200 sample traces for Monitoring, Insights and Engine.
+
+You can further tweak your agent in the side-panel.
 
 ## Architecture
 
