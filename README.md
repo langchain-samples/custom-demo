@@ -2,13 +2,13 @@
 
 ### Summary
 This repo is a chat agent built on `deepagents`. It showcases every feature of DeepAgents (and many features of LangSmith). 
-- DeepAgents: Subagents, Skills, Code-execution, Generative UI, voice, ...
+- DeepAgents: Subagents, Skills, Code-execution, Generative UI, file read/write, voice, ...
 - LangSmith: Context Hub, deployments, evals, sandboxes, monitoring, Engine, ...
 
 If you're wanting to build your own chat agent, this should hopefully serve as a useful reference for your coding agent to see how each feature is used.
 
 ### Customizable!
-Customize agents (supported by the `assistants primitive`) for your use case. Customize the:
+Customize agents for your use case. Customize the:
 - system prompt
 - skills
 - tools (through suppling your own mcp server url's)
@@ -56,18 +56,6 @@ A basic **`create_deep_agent` with custom tools and middleware**, plus a React f
 - **Sandbox** owns working files; Context Hub stores prompts and skills.
 - **Frontend** streams tool activity, dashboards and HTML assets from the same conversation.
 
-### Assistants: 
-**A use-case-specific configuration of the shared demo agent. **
-
-Its `context` controls execution; `metadata` holds branding and quick actions.
-
-```jsonc
-// Research: dashboards, web search and a connected operations system.
-{
-  "enabled_tools": ["push_widget", "web_search"],
-  "mcp_servers": [{ "id": "ops", "label": "Operations", "url": "https://your-server.example/mcp" }]
-}
-```
 
 Implementation details: [AGENTS.md](AGENTS.md). Development and checks: [CLAUDE.md](CLAUDE.md).
 More demos: [voice](docs/voice-mode.md), [MCP Apps](docs/mcp-apps-with-deep-agents.html),
