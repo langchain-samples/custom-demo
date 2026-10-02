@@ -11,7 +11,7 @@ If you're wanting to build your own chat agent, this should hopefully serve as a
 Customize agents for your use case. Customize the:
 - system prompt
 - skills
-- tools (through suppling your own mcp server url's)
+- tools (through suppling your own mcp server urls)
 - subagents (through suplying your own A2A agent urls)
 - UI "skin" (logo/name/color)
 
@@ -20,25 +20,20 @@ Otherwise you can easily run locally and just supply your own LangSmith Api Key.
 
 ## Run locally
 
-### Prerequisites
+`cp .env.example .env`
 
-- **uv** and **Python 3.13** (uv installs the pinned Python version).
-- **Node 22.12+ and npm** for the frontend.
-- Set `LANGSMITH_API_KEY` and `ANTHROPIC_API_KEY` in the root `.env` (for the default model).
-
+Set `LANGSMITH_API_KEY` and `ANTHROPIC_API_KEY` in the root `.env`.
 
 ```bash
 uv sync --group dev
-cp .env.example .env                   # fill in LangSmith and model-provider keys
 uv run python scripts/preflight.py     # checks connectivity; makes real API calls
 ./run.sh                              # backend :2024, frontend :3000
 ```
 
-Open <http://127.0.0.1:3000>. In **Settings**, choose a workspace, then **+ New** to enter a
-use case. Setup creates the branded assistant, sample files, skills and questions.
+Open <http://127.0.0.1:3000>.
 
 ## Creating your agent in the UI
-When you open the UI, you'll be met with a modal.
+When you open the UI, you'll be met with a setup modal.
 
 All you need to provide to create a new agent is:
 - Company Name (optional)
@@ -59,7 +54,7 @@ You can further tweak your agent in the side-panel.
 
 ## Architecture
 
-A basic `deepagent`, using `assistants` to store per-agent configuration, plus a React frontend:
+A `deepagent`, using `assistants` to store per-use-case configuration, plus a React frontend:
 
 - **Setup** resolves the customer scenario and prepares data, skills, prompts and evals.
 - **Runtime** applies the assistant's model/tools, reads its prompt fresh and runs the agent.
