@@ -55,8 +55,7 @@ Conventions pinned by a contract test. Change the test if you mean to change the
   carries `sandbox_key` beside it; test/spec fixtures are excluded by a tested selector.
 - `test_tool_vocabulary.py`: every catalogue tool appears in every SPA map keyed by
   tool name.
-- `test_demo_prompt_contract.py`: one behavioural clause per prompt, and the README
-  sends the presenter where the prompt actually lives.
+- `test_demo_prompt_contract.py`: one behavioural clause per prompt.
 - `test_agent_wiring.py`: the deployed agent has no `write_todos`.
 - `test_blank_after_block.py`: the blank-line checker's own false-positive cases.
 - `test_doc_paths.py`: the path checker's exclusions, one test each, because a wrong

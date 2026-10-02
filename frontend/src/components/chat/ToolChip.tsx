@@ -61,7 +61,6 @@ export function ToolChip({ chip }: { chip: ChipData }) {
   // Capability tools render a typed card, which is the point of calling them —
   // so those start (and stay) expanded. Plumbing tools collapse once complete.
   const cardTool = hasToolCard(chip.name);
-  const card = hasResult ? renderToolResult(chip.name, chip.result as string) : null;
 
   const argText = chip.arg && chip.arg.length > 120 ? chip.arg.slice(0, 120) + "…" : chip.arg;
 
@@ -79,18 +78,29 @@ export function ToolChip({ chip }: { chip: ChipData }) {
       collapseOnComplete={!cardTool}
       copyText={chip.result ?? chip.code ?? undefined}
     >
-      <div className="flex min-w-0 flex-col gap-1.5">
-        {/* The code/command that ran, syntax-highlighted (our CodeView; heredoc
-            bodies in their own language). Shown as soon as it's known. */}
-        {chip.code && <CodeView code={chip.code} lang={chip.codeLang || "js"} />}
-        {/* Output: the typed card, else the raw result — only once it has arrived. */}
-        {hasResult &&
-          (card ?? (
-            <pre className="m-0 max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background p-2 font-mono text-[11px] text-foreground">
-              {formatResult(chip.result as string)}
-            </pre>
-          ))}
-      </div>
+      <ToolChipBody chip={chip} />
     </ToolResult>
+  );
+}
+
+/**
+ * What a chip reveals when opened: the code it ran, then its typed card or raw output.
+ * Shared with ToolTimeline, whose rows open onto the same detail without this chrome.
+ */
+export function ToolChipBody({ chip }: { chip: ChipData }) {
+  const card = chip.result !== null ? renderToolResult(chip.name, chip.result) : null;
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5">
+      {/* The code/command that ran, syntax-highlighted (our CodeView; heredoc
+          bodies in their own language). Shown as soon as it's known. */}
+      {chip.code && <CodeView code={chip.code} lang={chip.codeLang || "js"} />}
+      {/* Output: the typed card, else the raw result - only once it has arrived. */}
+      {chip.result !== null &&
+        (card ?? (
+          <pre className="m-0 max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background p-2 font-mono text-[11px] text-foreground">
+            {formatResult(chip.result)}
+          </pre>
+        ))}
+    </div>
   );
 }

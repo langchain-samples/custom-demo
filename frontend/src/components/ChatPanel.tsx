@@ -53,6 +53,7 @@ import { McpAppCard } from "@/components/chat/McpAppCard";
 import { Button } from "@/components/motion/button";
 import { ToolChip, type ChipData } from "@/components/chat/ToolChip";
 import { ToolChipGroup } from "@/components/chat/ToolChipGroup";
+import { ToolActivityView } from "@/components/chat/ToolTimeline";
 import { ToolActivity, freezePendingChips } from "@/components/chat/toolActivity";
 import type { GraphSubagent } from "@/lib/agentGraph";
 import { FeedbackRow } from "@/components/chat/FeedbackRow";
@@ -1987,7 +1988,14 @@ export default function ChatPanel({
                 return it.groups.some((g) => g.chips.length > 0 || g.text);
               return true;
             });
-            return visible.map((it) => {
+            // Only the item the run is still working on shows its tool calls as a live
+            // timeline; once anything real follows (an answer, a card, a subagent), the
+            // burst has finished and folds into one row. The bare "Working…" placeholder
+            // does not count as moving on: it sits after the burst between tool calls.
+            const isPlaceholder = (it: Item) =>
+              it.kind === "assistant" && !!it.streaming && it.text === PLACEHOLDER_TEXT;
+            return visible.map((it, i) => {
+              const live = busy && visible.slice(i + 1).every(isPlaceholder);
               const side: "user" | "assistant" = it.kind === "user" ? "user" : "assistant";
               const showAvatar = side !== prevSide;
               prevSide = side;
@@ -1996,6 +2004,7 @@ export default function ChatPanel({
                   <ItemView
                     item={it}
                     busy={busy}
+                    live={live}
                     onApproveReview={approveReview}
                     mcpServers={mcpServers}
                   />
@@ -2119,11 +2128,14 @@ function Row({
 function ItemView({
   item,
   busy,
+  live,
   onApproveReview,
   mcpServers,
 }: {
   item: Item;
   busy?: boolean;
+  /** This is the item the run is still working on (nothing real follows it yet). */
+  live?: boolean;
   onApproveReview?: (id: string, value: Record<string, unknown>) => void;
   /** MCP servers on the active assistant, for reading a paused tool's own UI. */
   mcpServers: McpServerConfig[];
@@ -2219,13 +2231,14 @@ function ItemView({
     if (!item.chips.length) return null;
     return (
       <div className="flex flex-col gap-1.5">
-        {/* The whole burst folds into ONE openable row, whatever mix of tools it used.
-            Grouping by tool name split a single stretch of work into a dozen rows the
-            moment the agent alternated between reading and running, which is most of
-            the time. Keyed on the first chip so the row keeps its component, and
-            whether you opened it, as the stream adds to it - which is also what lets
-            one row span several model turns. */}
-        {item.chips.length === 1 ? (
+        {/* While the burst is live: the newest calls as a timeline, older ones folded
+            into one openable row above. Once the run moves on, the whole burst folds
+            into that one row (a lone call stays a plain chip). Mixed tools fold
+            together: grouping by tool name split a single stretch of work into a
+            dozen rows the moment the agent alternated between reading and running. */}
+        {live ? (
+          <ToolActivityView chips={item.chips} />
+        ) : item.chips.length === 1 ? (
           <ToolChip chip={item.chips[0]} />
         ) : (
           <ToolChipGroup key={item.chips[0].id} chips={item.chips} />

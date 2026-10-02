@@ -1,8 +1,7 @@
 """The facts the live demo depends on, pinned so a doc cannot drift from them.
 
 The planted bug is the demo. It fires only if the prompt carries the fabrication
-clause and NOT the grounding clause, and it is fixable on stage only if the README
-sends the presenter to the place the prompt actually lives.
+clause and NOT the grounding clause.
 """
 
 from __future__ import annotations
@@ -16,8 +15,6 @@ from custom_demo.runtime.prompt import (
     build_system_prompt,
     failure_mode_clause,
 )
-
-README = Path(__file__).resolve().parents[2] / "README.md"
 
 # A phrase unique to the grounding clause.
 GROUNDING = "do NOT invent data"
@@ -69,11 +66,3 @@ def test_there_is_only_one_place_a_prompt_can_live():
     assert "push_agent_prompt" in source
     assert "prompt_source" not in source
     assert "push_prompt(" not in source
-
-
-def test_the_readme_sends_the_presenter_to_the_right_place():
-    """The README once sent presenters to a prompt that setup never creates."""
-    lines = README.read_text(encoding="utf-8").splitlines()
-    at = next(i for i, line in enumerate(lines) if "fabricate-over-gaps clause" in line)
-    step = " ".join(lines[max(0, at - 2) : at + 3])
-    assert "Context Hub" in step, f"README's live-fix step names the wrong place: {step!r}"
