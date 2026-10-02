@@ -40,6 +40,10 @@ export class ToolActivity {
     }
   }
 
+  isComplete(id: string): boolean {
+    return (this.chips.get(id)?.result ?? null) !== null;
+  }
+
   codeFor(id: string): string {
     return this.chips.get(id)?.code || "";
   }

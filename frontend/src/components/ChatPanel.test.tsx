@@ -201,6 +201,25 @@ describe("streamed tool activity", () => {
     expect(ui.activity().subagents[1].chips[0].stopped).toBe(true);
   });
 
+  it("finishes a subagent card when its dispatching call returns, before the turn ends", async () => {
+    const ui = panel();
+    const run = await ui.start();
+    await run.send(message({ type: "ai", tool_calls: [
+      { id: "dispatch", name: "task", args: { subagent_type: "analyst", description: "Check the data" } },
+    ] }));
+    await run.send(message({ type: "ai", tool_calls: [
+      { id: "done-call", name: "ls", args: {} },
+      { id: "open-call", name: "grep", args: { pattern: "x" } },
+    ] }, ["tools:first"]));
+    await run.send(message({ type: "tool", tool_call_id: "done-call", content: "files" }, ["tools:first"]));
+    expect(ui.activity().subagents[0].done).toBe(false);
+    await run.send(message({ type: "tool", name: "task", tool_call_id: "dispatch", content: "Analysis" }));
+    expect(ui.activity().running).toBe(true);
+    expect(ui.activity().subagents[0].done).toBe(true);
+    expect(ui.activity().subagents[0].chips.map((chip) => chip.stopped)).toEqual([undefined, true]);
+    await run.finish();
+  });
+
   it("keeps interrupted calls live and transfers only pending main chips on resume", async () => {
     const ui = panel();
     const run = await ui.start();

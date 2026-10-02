@@ -980,7 +980,11 @@ export default function ChatPanel({
         if (cid && artifactPathByCall[cid]) {
           onArtifact?.({ path: artifactPathByCall[cid], content: "", streaming: false });
         }
-        if (activity.complete(cid, contentToText(msg.content))) syncChips();
+        if (activity.complete(cid, contentToText(msg.content))) {
+          syncChips();
+          // A dispatching call returning is what finishes its subagent cards.
+          if (cid && dispatchOrder.includes(cid)) syncSubagents();
+        }
         // The app was mounted when the call started; this closes it. Marking
         // `streaming` false is what turns the last partial into the single
         // `tool-input` the spec requires before a result.
@@ -1029,18 +1033,32 @@ export default function ChatPanel({
      * shares ONE root and separates by branch index). Sources that dispatch nothing
      * are skipped so they can't shift the pairing.
      */
-    const dispatchFor = (key: string): TaskDispatch | undefined => {
+    const dispatchSourceFor = (key: string): { callId: string; list: TaskDispatch[] } | undefined => {
       const sources = dispatchOrder
-        .map((id) => (taskArgs[id] ? [taskArgs[id]] : parseTaskDispatches(activity.codeFor(id))))
-        .filter((list) => list.length);
+        .map((id) => ({
+          callId: id,
+          list: taskArgs[id] ? [taskArgs[id]] : parseTaskDispatches(activity.codeFor(id)),
+        }))
+        .filter((source) => source.list.length);
       const roots = [...new Set(subOrder.map(subagentRoot))];
-      const list = sources[roots.indexOf(subagentRoot(key))];
+      return sources[roots.indexOf(subagentRoot(key))];
+    };
+    const dispatchFor = (key: string): TaskDispatch | undefined => {
+      const list = dispatchSourceFor(key)?.list;
       if (!list) return undefined;
       return list[taskBranch(key)] || list[0];
     };
+    // A subagent is finished once the call that dispatched it has its result: the
+    // `task` tool, or the `eval` whose script fanned it out, returns only after the
+    // subagent does. Without this a card would read as running until the whole turn ends.
+    const subagentDone = (key: string): boolean => {
+      const callId = dispatchSourceFor(key)?.callId;
+      return !!callId && activity.isComplete(callId);
+    };
 
-    // Rebuild the SubagentItem from subState. `done` stays false while streaming;
-    // the finally block freezes it (and any pending chip) once the run ends.
+    // Rebuild the SubagentItem from subState. A group is done once its dispatching
+    // call has returned (`subagentDone`); the finally block freezes any still open
+    // (and their pending chips) once the run ends.
     const syncSubagents = () =>
       patchItem(subagentId, (it) =>
         it.kind === "subagents"
@@ -1049,16 +1067,18 @@ export default function ChatPanel({
               groups: [...subOrder.map((k) => {
                 const dispatch = dispatchFor(k);
                 const type = dispatch?.subagentType || "";
+                const done = subagentDone(k);
+                const chips = subState[k].activity.snapshot();
                 return {
                   key: k,
-                  // The specialist's own name beats the generic "Subagent" — which
+                  // The specialist's own name beats the generic "Subagent" - which
                   // of the fleet ran is the point of showing the card at all.
                   label: type ? type[0].toUpperCase() + type.slice(1) : subState[k].label,
                   type: type || undefined,
-                  chips: subState[k].activity.snapshot(),
+                  chips: done ? freezePendingChips(chips) : chips,
                   text: subState[k].text,
                   invokedWith: dispatch?.description || undefined,
-                  done: false,
+                  done,
                 };
               }), ...remoteOrder.map((k) => remoteGroups[k])],
             }
@@ -2375,8 +2395,8 @@ function RemoteTaskCard({ item }: { item: RemoteTaskItem }) {
 
 /**
  * A collapsible "peer into subagent" card: its label, a live status (spinner
- * while running, ✓ once the run ends), and — when expanded — its streamed tool
- * chips and any text it produced. Distinct from the main answer bubble so
+ * while running, ✓ once it returns), a live timeline of its newest tool calls while
+ * it runs, and (when expanded) every streamed tool chip and any text it produced. Distinct from the main answer bubble so
  * subagent work is visible but never mistaken for the assistant's reply.
  */
 function SubagentCard({ group, index }: { group: SubagentGroup; index?: number }) {
@@ -2422,6 +2442,13 @@ function SubagentCard({ group, index }: { group: SubagentGroup; index?: number }
           {group.invokedWith.length > 160
             ? group.invokedWith.slice(0, 160) + "…"
             : group.invokedWith}
+        </div>
+      )}
+      {/* While it works, its newest calls show as a live timeline without opening the
+          card; once it is done the card folds back to its header. */}
+      {running && !open && count > 0 && (
+        <div className="border-t border-border px-2.5 py-2">
+          <ToolActivityView chips={group.chips} />
         </div>
       )}
       {open && (
