@@ -1,0 +1,5 @@
+order,carrier,tracking,shipped,estimated_delivery,last_scan
+SO-771402,UPS,1Z9A40W30358812201,2026-09-23,2026-09-26,2026-09-26 delivered Charlotte NC
+SO-771519,FedEx,7781 2231 0045,2026-09-27,2026-10-01,2026-09-28 in transit Memphis TN
+SO-771204,,,,2026-10-08,2026-09-27 awaiting installation crew schedule
+SO-771611,,,,2026-10-01,2026-09-29 picked at Houston DC

@@ -1,0 +1,6 @@
+ticket,opened,requester,category,summary,status,assigned_group,last_update
+INC0048211,2026-09-22,j.alvarez,Network / VPN,GlobalProtect gateway unreachable on macOS 26.1,In progress,Network Operations,2026-09-28 waiting on vendor patch
+INC0048377,2026-09-25,m.okoro,Hardware,Laptop battery swelling,Resolved,Depot Services,2026-09-26 replacement shipped
+INC0048402,2026-09-26,s.chen,Access,Needs access to Flex partner portal,Awaiting approval,Identity Team,2026-09-27 manager approval requested
+INC0048455,2026-09-27,a.kowalski,Software,Request for MATLAB license,Awaiting approval,Software Licensing,2026-09-28 cost center missing
+INC0048490,2026-09-28,p.nair,Email,Shared mailbox not appearing in Outlook,In progress,Collaboration,2026-09-29 permissions re-synced; allow 2 hours

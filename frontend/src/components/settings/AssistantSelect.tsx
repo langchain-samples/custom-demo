@@ -49,7 +49,7 @@ export function AssistantSelect({ value, assistants, onChange, onNewClick }: Pro
     <div className="flex flex-col gap-1.5">
       <Label className={LABEL_CLS}>
         Assistant name{" "}
-        <span className={HINT_CLS}>(project will be set to the customer name)</span>
+        <span className={HINT_CLS}>(project will be set to the company name)</span>
       </Label>
       <Combobox
         options={options}
