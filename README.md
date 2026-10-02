@@ -1,19 +1,33 @@
 # Custom Demo Agent
 
-A customizable deep agent for customer demos: analyze data, build dashboards or HTML assets,
-and use connected tools. Each customer gets their own branding, instructions and sample questions.
+### Summary
+This repo is a chat agent built on `deepagents`. It showcases every feature of DeepAgents (and many features of LangSmith). 
+- DeepAgents: Subagents, Skills, Code-execution, Generative UI, voice, ...
+- LangSmith: Context Hub, deployments, evals, sandboxes, monitoring, Engine, ...
+
+If you're wanting to build your own chat agent, this should hopefully serve as a useful reference for your coding agent to see how each feature is used.
+
+### Customizable!
+Customize agents (supported by the `assistants primitive`) for your use case. Customize the:
+- system prompt
+- skills
+- tools (through suppling your own mcp server url's)
+- subagents (through suplying your own A2A agent urls)
+- UI "skin" (logo/name/color)
 
 [Watch the walkthrough](https://www.loom.com/share/d5ce4bb5a2b5485baef75d0a1d84f825).
 
-If you're a LangChain employee, you can access a hosted version [here](https://custom-demos-599b02fd350b553b832acd74983fa55a.us.langgraph.app/ui/). It asks for a password: the deployment's `APP_SHARED_SECRET`.
+If you're a LangChain employee, you can access a hosted version [here](https://custom-demos-599b02fd350b553b832acd74983fa55a.us.langgraph.app/ui/). It requires a password. Ask @josiahcoad for it.
+Otherwise you can easily run locally and just supply your own LangSmith Api Key.
 
-## Prerequisites
+## Run locally
+
+### Prerequisites
 
 - **uv** and **Python 3.13** (uv installs the pinned Python version).
 - **Node 22.12+ and npm** for the frontend.
 - Set `LANGSMITH_API_KEY` and `ANTHROPIC_API_KEY` in the root `.env` (for the default model).
 
-## Run locally
 
 ```bash
 uv sync --group dev
@@ -30,13 +44,6 @@ Sandbox prewarming runs in the background;
 the first turn can be slow while the VM and analysis packages start.
 
 > Optionally enable `demo traffic` to populate 200 sample traces for Monitoring, Insights and Engine.
-
-## What this demos
-
-| Platform | Features |
-|---|---|
-| **Deep Agents** | Skills, sandbox/code execution, dynamic subagents, MCP tools and Apps, human approval, generative UI (streamed dashboards and HTML assets) |
-| **LangSmith** | Context Hub prompts/skills, tracing, Monitoring, Insights, **Engine** (issue detection), Evals and live prompt fixes |
 
 
 ## Architecture
@@ -62,18 +69,6 @@ Its `context` controls execution; `metadata` holds branding and quick actions.
 }
 ```
 
-## Additional ways to run
-
-| Mode | How |
-|---|---|
-| **Local** | `./run.sh`; override ports with `PORT` and `SPA_PORT` |
-| **Deployed** | The configured LangSmith GitHub integration deploys the Agent Server, and its image builds the SPA and serves it at `/ui/` (`custom_demo/web/spa.py`). Provider keys and `APP_SHARED_SECRET` belong on the deployment. Each preview deployment serves its own SPA against itself. |
-| **Local frontend, deployed backend** | Set `VITE_LG_URL` and `VITE_LG_API_KEY` in `frontend/.env.local`, then `npm --prefix frontend run dev -- --port 3000`. An existing `lgUrl` localStorage override takes precedence. |
-| **Voice** | Click the composer microphone. Requires `GEMINI_API_KEY` on the backend; no per-assistant enable flag. |
-| **Connected systems / MCP Apps** | Add a server in **Settings → MCP servers**, then press **Test**. See below. |
-
-
 Implementation details: [AGENTS.md](AGENTS.md). Development and checks: [CLAUDE.md](CLAUDE.md).
 More demos: [voice](docs/voice-mode.md), [MCP Apps](docs/mcp-apps-with-deep-agents.html),
 [release evals](evals/README.md) (these score the planted bug firing, opposite to presenter evals).
-
