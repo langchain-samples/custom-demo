@@ -38,14 +38,14 @@ Open <http://127.0.0.1:3000>. In **Settings**, choose a workspace, then **+ New*
 use case. Setup creates the branded assistant, sample files, skills and questions.
 
 ## Creating your agent in the UI
-When you open the UI, you'll be met with a popup.
+When you open the UI, you'll be met with a modal.
 
-All you need to create a new agent is:
-- Brand Name (optional)
-- Brand Website (optional... for setting up the UI Skin)
+All you need to provide to create a new agent is:
+- Company Name (optional)
+- Company Website (optional... for setting up the UI Skin)
 - Use Case (optional; can use the brand website to infer a use case)
 
-A new use case takes about 30 seconds to setup. Behind the scenes, we are... 
+A new use-case/agent takes about 40 seconds to setup. Behind the scenes, we are... 
 - pulling the brand details
 - writing the system prompt
 - provisioning a sandbox
@@ -59,8 +59,7 @@ You can further tweak your agent in the side-panel.
 
 ## Architecture
 
-
-A basic **`create_deep_agent` with custom tools and middleware**, plus a React frontend:
+A basic `deepagent`, using `assistants` to store per-agent configuration, plus a React frontend:
 
 - **Setup** resolves the customer scenario and prepares data, skills, prompts and evals.
 - **Runtime** applies the assistant's model/tools, reads its prompt fresh and runs the agent.
