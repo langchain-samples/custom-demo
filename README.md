@@ -5,7 +5,7 @@ and use connected tools. Each customer gets their own branding, instructions and
 
 [Watch the walkthrough](https://www.loom.com/share/d5ce4bb5a2b5485baef75d0a1d84f825).
 
-If you're a LangChain employee, you can access a hosted version [here](https://custom-demos-599b02fd350b553b832acd74983fa55a.us.langgraph.app/ui/). The browser asks for a password: it is the deployment's `APP_SHARED_SECRET`, with any username.
+If you're a LangChain employee, you can access a hosted version [here](https://custom-demos-599b02fd350b553b832acd74983fa55a.us.langgraph.app/ui/). It asks for a password: the deployment's `APP_SHARED_SECRET`.
 
 ## Prerequisites
 
