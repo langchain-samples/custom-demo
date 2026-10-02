@@ -245,7 +245,7 @@ export function NewAssistantDialog({
             />
           )}
           <Input
-            placeholder="Customer (used as the assistant name)"
+            placeholder="Company Name (used as the assistant name)"
             value={customer}
             onChange={(e) => {
               setCustomer(e.target.value);
@@ -254,7 +254,7 @@ export function NewAssistantDialog({
             {...IGNORE_AUTOFILL}
           />
           <Input
-            placeholder="Website (optional, e.g. acme.com)"
+            placeholder="Company Website (optional, e.g. acme.com)"
             value={website}
             onChange={(e) => {
               setWebsiteTouched(true);
