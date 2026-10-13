@@ -21,7 +21,7 @@
     "@headless-tree/react": "^1.7.0",
     "@langchain/langgraph-sdk": "file:vendor/langchain-langgraph-sdk-877b940.tgz",
     "@milkdown/crepe": "^7.22.1",
-    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/client": "^2.3.1",
     "@modelcontextprotocol/ext-apps": "^2.0.0",
     "@tabler/icons-react": "^3.45.0",
     "@tailwindcss/vite": "^4.3.3",
