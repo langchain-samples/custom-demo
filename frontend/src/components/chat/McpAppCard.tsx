@@ -239,6 +239,10 @@ function AppFrame({
           sandbox={{
             direct: true,
             className: "h-full w-full rounded-lg border border-border bg-background",
+            // Without this the renderer sets an inline `height` from its own state,
+            // which stays at its 340px default once `onResize` takes the reports,
+            // and overrides `h-full`: the card grows but the frame clips the app.
+            style: { width: "100%", height: "100%" },
           }}
           toolInputSchema={inputSchema}
           hostInfo={{ name: "custom-demo", version: "0.1.0" }}
