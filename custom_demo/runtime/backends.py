@@ -11,12 +11,18 @@ from __future__ import annotations
 from typing import Any
 
 from deepagents.backends import CompositeBackend, ContextHubBackend, StateBackend
-from deepagents.backends.protocol import BackendProtocol
+from deepagents.backends.protocol import (
+    BackendProtocol,
+    FileDownloadResponse,
+    GlobResult,
+    GrepResult,
+    LsResult,
+    ReadResult,
+)
 from langgraph.runtime import get_runtime
-from langsmith.utils import LangSmithConflictError
 
 from custom_demo.config import scoped_client
-from custom_demo.core.ctx import get_ctx
+from custom_demo.core.ctx import Context, get_ctx
 from custom_demo.resources import sandbox
 
 
@@ -41,8 +47,9 @@ def _get_or_create_sandbox(runtime) -> Any | None:
 #
 # What a held tree cannot see is a write from somewhere else: another replica, or a
 # `scripts/seed_sdlc_demo.py` re-push landing while this container is warm. Such a push
-# still succeeds (RebasingBackend rebases onto it) but the read side stays on the tree it
-# holds until the process restarts, which is the normal end of a re-push anyway.
+# still succeeds (ContextHubBackend reloads and replays its write on a conflict, up to
+# deepagents' retry cap) but the read side stays on the tree it holds until the process
+# restarts, which is the normal end of a re-push anyway.
 #
 # Documents cannot accept even that much, because their second writer is a person editing
 # in the browser DURING a turn: see `_docs_route`.
@@ -73,41 +80,6 @@ def _ctxhub_backend(repo: str, ws: str | None, cls: type[ContextHubBackend]) -> 
 ARTIFACTS_MOUNT = "/workspace/artifacts/"
 
 
-class RebasingBackend(ContextHubBackend):
-    """A Hub backend that re-reads before giving up on a conflicting write.
-
-    Use this for any repo with more than one writer. Two have them. The documents repo is
-    written by the agent through this backend and by a person saving in the browser
-    through `web/docs.py`. The skills repo is written by the agent, which authors its own
-    skills, and by `scripts/seed_sdlc_demo.py`, which re-pushes the bundle.
-
-    Either way the tree moves under a turn, the parent commit this backend is holding
-    stops being the head, and Hub answers the next push with a conflict. That would
-    surface as a failed turn even when nothing is really in conflict: the other writer
-    touched one file and this one is writing another.
-
-    Reload the tree and retry ONCE. A second conflict is a genuine race worth raising,
-    and a retry loop over someone else's commits would eventually bury one of them.
-
-    `_commit` is deepagents-internal, so this depends on a private method rather than a
-    public API. `test_documents.py` pins the behaviour, so a release that renames it
-    fails a test here instead of quietly restoring the conflict.
-    """
-
-    def _commit(self, changes: dict[str, str | None]) -> None:
-        """Push `changes`, rebasing onto the current head if someone else got there first."""
-        try:
-            super()._commit(changes)
-        except LangSmithConflictError:
-            # Drop the stale snapshot and re-read, which also refreshes the parent commit
-            # this push chains onto. `changes` is a delta, so replaying it on the new head
-            # is exactly a rebase: the other writer's revision survives.
-            self._cache = None
-            self._commit_hash = None
-            self._ensure_cache()
-            super()._commit(changes)
-
-
 class BackendSourceError(RuntimeError):
     """An explicitly configured Hub filesystem could not be constructed."""
 
@@ -130,7 +102,7 @@ def _docs_route(docs_repo: str | None, ws: str | None) -> dict[str, BackendProto
         # backend keeps the tree it first loaded, so after a person saves in the browser
         # the agent would read the superseded text and reason over documents that have
         # moved on, which is worse than any failure: it looks like it worked.
-        return {ARTIFACTS_MOUNT: RebasingBackend(docs_repo, client=scoped_client(ws))}
+        return {ARTIFACTS_MOUNT: ContextHubBackend(docs_repo, client=scoped_client(ws))}
     except Exception as exc:
         raise BackendSourceError(
             f"This assistant's documents are its Context Hub repo {docs_repo!r}, mounted "
@@ -139,7 +111,9 @@ def _docs_route(docs_repo: str | None, ws: str | None) -> dict[str, BackendProto
         ) from exc
 
 
-def _resolve_backends(runtime) -> tuple[BackendProtocol, dict[str, BackendProtocol]]:
+def _resolve_backends(
+    runtime, *, acquire_vm: bool = True
+) -> tuple[BackendProtocol, dict[str, BackendProtocol]]:
     """Resolve the current assistant's default filesystem and prefix routes.
 
     A sandbox default exposes execute; a StateBackend default does not. Skills
@@ -154,6 +128,10 @@ def _resolve_backends(runtime) -> tuple[BackendProtocol, dict[str, BackendProtoc
     Sandbox transport failures allow a state-only run. An explicitly named Hub repo
     must not silently disappear: construction failures raise BackendSourceError.
     Hub I/O happens on file access, not during backend construction.
+
+    `acquire_vm=False` is the managed (MDA) topology, where the platform owns the
+    sandbox: the default is a StateBackend placeholder and only the Hub routes are
+    real (see `HubMounts`).
     """
     ctx = get_ctx(runtime)
     skills_repo = ctx.skills_repo
@@ -174,24 +152,65 @@ def _resolve_backends(runtime) -> tuple[BackendProtocol, dict[str, BackendProtoc
                 f"{type(exc).__name__}: {exc}"
             ) from exc
 
+    if not acquire_vm:
+        return UnmountedBackend(), _hub_routes(ctx, ws)
+
     vm = _get_or_create_sandbox(runtime)
     default: BackendProtocol = vm if vm is not None else StateBackend()
+    routes = _hub_routes(ctx, ws)
+    return default, routes
+
+
+def _hub_routes(ctx: Context, ws: str | None) -> dict[str, BackendProtocol]:
+    """This assistant's Context Hub mounts: the documents directory and `/skills/`."""
     routes: dict[str, BackendProtocol] = _docs_route(ctx.docs_repo, ws)
-    if skills_repo:
+    if ctx.skills_repo:
         try:
-            # RebasingBackend, because this assistant writes its own skills (see the
-            # prompt's "Your skills are yours to change") and the seed script re-pushes
-            # the bundle, so the mount has two writers. Still cached: a held tree is what
-            # makes an agent-authored skill readable on the next turn for free.
-            routes["/skills/"] = _ctxhub_backend(skills_repo, ws, RebasingBackend)
+            # Two writers: this assistant writes its own skills (see the prompt's "Your
+            # skills are yours to change") and the seed script re-pushes the bundle.
+            # ContextHubBackend replays a write onto a moved head itself. Cached: a held
+            # tree is what makes an agent-authored skill readable on the next turn free.
+            routes["/skills/"] = _ctxhub_backend(ctx.skills_repo, ws, ContextHubBackend)
         except Exception as exc:
             raise BackendSourceError(
-                f"This assistant's skills are its Context Hub repo {skills_repo!r}, mounted "
-                f"at /skills/, and no backend could be built for it: "
+                f"This assistant's skills are its Context Hub repo {ctx.skills_repo!r}, "
+                f"mounted at /skills/, and no backend could be built for it: "
                 f"{type(exc).__name__}: {exc}"
             ) from exc
 
-    return default, routes
+    return routes
+
+
+class UnmountedBackend(BackendProtocol):
+    """The default under `HubMounts`: a path no Hub mount answers for holds nothing.
+
+    Not a StateBackend. Under MDA the agent's graph state is the platform's, and a
+    StateBackend reads a `files` channel that graph may not have; this placeholder is
+    only ever asked to list `/skills/` for an assistant without a skills repo, which is
+    empty. Writes never reach it: `HubRoutes` routes only mounted paths here.
+    """
+
+    def ls(self, path: str) -> LsResult:
+        """Nothing is listed outside a mount."""
+        return LsResult(entries=[])
+
+    def glob(self, pattern: str, path: str | None = None) -> GlobResult:
+        """Nothing matches outside a mount."""
+        return GlobResult(matches=[])
+
+    def grep(
+        self, pattern: str, path: str | None = None, glob: str | None = None, **_: Any
+    ) -> GrepResult:
+        """Nothing matches outside a mount."""
+        return GrepResult(matches=[])
+
+    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
+        """No file exists outside a mount."""
+        return ReadResult(error="file_not_found")
+
+    def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
+        """No file exists outside a mount."""
+        return [FileDownloadResponse(path=p, error="file_not_found") for p in paths]
 
 
 class DynamicBackend(CompositeBackend):
@@ -229,6 +248,10 @@ class DynamicBackend(CompositeBackend):
         if getattr(runtime, "context", None) is None:
             return StateBackend(), {}
 
+        return self._resolve_run(runtime)
+
+    def _resolve_run(self, runtime) -> tuple[BackendProtocol, dict[str, BackendProtocol]]:
+        """Resolve a run that carries assistant context."""
         return _resolve_backends(runtime)
 
     @property
@@ -245,3 +268,41 @@ class DynamicBackend(CompositeBackend):
     def sorted_routes(self):  # type: ignore[override]
         """Routes ordered longest-prefix-first for CompositeBackend."""
         return sorted(self.routes.items(), key=lambda kv: len(kv[0]), reverse=True)
+
+
+class HubMounts(DynamicBackend):
+    """The Context Hub half of `DynamicBackend`, for the managed (MDA) runtime.
+
+    MDA owns the agent's backend: its thread sandbox (or thread state) answers every
+    file tool. What it cannot express is this assistant's Hub mounts, `/skills/` and the
+    documents directory, so `runtime/hub_routes.py:HubRoutes` hands file calls on those
+    paths to tools built over this backend instead. The default is never reached for a
+    mounted path and is a StateBackend placeholder; it is the whole Hub repo for a
+    legacy `agent_repo`-only assistant, which runs without a sandbox.
+    """
+
+    def _resolve_run(self, runtime) -> tuple[BackendProtocol, dict[str, BackendProtocol]]:
+        """Resolve the Hub routes without acquiring an assistant VM."""
+        return _resolve_backends(runtime, acquire_vm=False)
+
+
+def hub_owns_filesystem(ctx: Context) -> bool:
+    """Whether this assistant's whole filesystem is its Context Hub agent repo.
+
+    The legacy topology `_resolve_backends` keeps for an assistant with `agent_repo` and
+    no `skills_repo`. Shared with the MDA agent factory, which runs such an assistant
+    without a sandbox so every file call reaches the Hub.
+    """
+    return bool(ctx.agent_repo and not ctx.skills_repo)
+
+
+def hub_mount_prefixes(ctx: Context) -> tuple[str, ...]:
+    """The path prefixes `HubMounts` answers for on this run, longest first."""
+    prefixes = []
+    if ctx.skills_repo:
+        prefixes.append("/skills/")
+
+    if ctx.docs_repo:
+        prefixes.append(ARTIFACTS_MOUNT)
+
+    return tuple(sorted(prefixes, key=len, reverse=True))

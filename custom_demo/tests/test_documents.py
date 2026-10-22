@@ -13,7 +13,9 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from deepagents.backends import ContextHubBackend
+
+# Private, and pinned on purpose: the bounded-retry test below is about this cap.
+from deepagents.backends.context_hub import _MAX_CONFLICT_RETRIES
 from langsmith.schemas import FileEntry
 from langsmith.utils import LangSmithConflictError, LangSmithNotFoundError
 from starlette.testclient import TestClient
@@ -284,38 +286,27 @@ def test_the_agent_write_rebases_when_a_person_committed_first():
     write reloads and replays rather than failing the turn or overwriting the tree.
     """
     hub = RacingHub(conflicts=1)
-    backend = B.RebasingBackend("acme-docs", client=cast("Any", hub))
+    backend = B.ContextHubBackend("acme-docs", client=cast("Any", hub))
     backend.write("/req-204/functional-spec.md", "drafted by the agent")
     assert hub.pushes == 2  # the refused push, then the replay
     assert hub.tree["req-204/functional-spec.md"] == "drafted by the agent"
     assert hub.tree["req-204/brief.md"] == "written by someone else"
 
 
-def test_a_second_conflict_stops_and_reports_rather_than_retrying_forever():
-    """One replay, then the failure reaches the caller.
+def test_repeated_conflicts_stop_and_report_rather_than_retrying_forever():
+    """A bounded number of replays, then the failure reaches the caller.
 
     `ContextHubBackend.write` turns a Hub error into a `WriteResult` carrying `error`
     rather than raising, so what the agent sees is a failed tool result. That is the
     right place for it to stop: a loop replaying over a second writer's commits would
     eventually bury one of them.
     """
-    hub = RacingHub(conflicts=2)
-    backend = B.RebasingBackend("acme-docs", client=cast("Any", hub))
+    hub = RacingHub(conflicts=_MAX_CONFLICT_RETRIES + 1)
+    backend = B.ContextHubBackend("acme-docs", client=cast("Any", hub))
     result = backend.write("/req-204/functional-spec.md", "drafted by the agent")
-    assert hub.pushes == 2
+    assert hub.pushes == _MAX_CONFLICT_RETRIES + 1
     assert result.error
     assert "req-204/functional-spec.md" not in hub.tree
-
-
-def test_the_private_commit_hook_this_depends_on_still_exists():
-    """Pins the dependency on a deepagents-internal method.
-
-    `RebasingBackend` overrides `ContextHubBackend._commit`. A release that renames it
-    would leave the override dead and silently restore the failed turns, so the rename
-    has to fail here instead.
-    """
-    assert callable(ContextHubBackend._commit)
-    assert B.RebasingBackend._commit is not ContextHubBackend._commit
 
 
 def test_documents_backends_are_never_shared_between_runs(monkeypatch):
@@ -331,7 +322,7 @@ def test_documents_backends_are_never_shared_between_runs(monkeypatch):
         built.append(repo)
         return SimpleNamespace(_repo=repo)
 
-    monkeypatch.setattr(B, "RebasingBackend", record)
+    monkeypatch.setattr(B, "ContextHubBackend", record)
     first = B._docs_route("acme-docs", None)[B.ARTIFACTS_MOUNT]
     second = B._docs_route("acme-docs", None)[B.ARTIFACTS_MOUNT]
     assert built == ["acme-docs", "acme-docs"]

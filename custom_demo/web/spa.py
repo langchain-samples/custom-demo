@@ -22,7 +22,7 @@ import hmac
 import json
 import os
 from html import escape
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlencode
 
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -30,6 +30,8 @@ from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import BaseRoute, Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+from custom_demo.agent_auth import agent_url, mint_token
 
 SPA_PREFIX = "/ui"
 
@@ -107,9 +109,35 @@ def _login_page(action: str, failed: bool) -> HTMLResponse:
     )
 
 
+def _login_url(next_path: str) -> str:
+    """The login page, carrying where to land afterwards when that is not the SPA root."""
+    login = f"{SPA_PREFIX}{LOGIN_PATH}"
+    if next_path == f"{SPA_PREFIX}/":
+        return login
+
+    return f"{login}?{urlencode({'next': next_path})}"
+
+
+def _safe_next(value: str | None) -> str:
+    """Where to send a fresh session: `value` when it stays inside the SPA, else its root.
+
+    Only a path under `/ui/` is honoured, so a crafted `next` cannot bounce a signed-in
+    browser to another origin.
+    """
+    if value and value.startswith(f"{SPA_PREFIX}/") and "\\" not in value:
+        return value
+
+    return f"{SPA_PREFIX}/"
+
+
 async def spa_login(request: Request) -> Response:
-    """Ask for the shared secret; on a match, set the session cookie and enter the SPA."""
-    action = f"{SPA_PREFIX}{LOGIN_PATH}"
+    """Ask for the shared secret; on a match, set the session cookie and enter the SPA.
+
+    A `next` query parameter survives the round trip, so a deep link such as the GTM
+    agent's prefilled new-demo URL still opens prefilled after signing in.
+    """
+    next_path = _safe_next(request.query_params.get("next"))
+    action = _login_url(next_path)
     if request.method == "GET":
         return _login_page(action, failed=False)
 
@@ -121,7 +149,7 @@ async def spa_login(request: Request) -> Response:
     if not hmac.compare_digest(password.encode(), secret.encode()):
         return _login_page(action, failed=True)
 
-    response = RedirectResponse(f"{SPA_PREFIX}/", status_code=303)
+    response = RedirectResponse(next_path, status_code=303)
     response.set_cookie(
         SESSION_COOKIE,
         session_value(secret),
@@ -155,16 +183,27 @@ class RequireSession:
             await self.app(scope, receive, send)
             return
 
-        await RedirectResponse(f"{SPA_PREFIX}{LOGIN_PATH}", status_code=303)(scope, receive, send)
+        # The query is what a deep link carries (the new-demo prefill), so it rides along
+        # to the login page and back. A bare path does not: every asset request would
+        # otherwise mint its own `next`.
+        query = scope["query_string"].decode("latin-1")
+        next_path = f"{scope['path']}?{query}" if query else f"{SPA_PREFIX}/"
+        await RedirectResponse(_login_url(next_path), status_code=303)(scope, receive, send)
 
 
 async def spa_config(request: Request) -> Response:
     """Point the SPA at this origin and hand it the deployment token.
 
     Reached only through `RequireSession`, so it returns the token to someone who
-    signed in with it.
+    signed in with it. When the agent runs on Managed Deep Agents (`AGENT_URL` set) it
+    also carries that deployment's URL and a token it accepts; the SPA refreshes the
+    token through `POST /agent-auth/token` before it expires.
     """
-    lg = {"apiKey": _secret()}
+    lg: dict[str, object] = {"apiKey": _secret()}
+    if agent_url():
+        token, expires = mint_token()
+        lg["agent"] = {"url": agent_url(), "token": token, "expiresAt": expires}
+
     body = f"window.LG = Object.assign({json.dumps(lg)}, {{ url: window.location.origin }});\n"
     return Response(body, media_type="text/javascript", headers={"Cache-Control": "no-store"})
 

@@ -14,7 +14,7 @@ everything.
 
 Do not restate any of these anywhere. Run the check instead.
 
-`uv run ruff check custom_demo scripts evals fleet_mcp_server`, with
+`uv run ruff check custom_demo scripts evals fleet_mcp_server agent.py identity.py sandbox`, with
 `select = ["E","W","F","I","UP","B","C4","D","PLC0415","TID252","BLE001","RUF100"]`
 and `E501` ignored:
 
@@ -28,7 +28,7 @@ and `E501` ignored:
 
 The rest of `.github/workflows/ci.yml`, where every step is a gate:
 
-- `ruff format --check` and `ty check`, same four paths.
+- `ruff format --check` and `ty check`, same paths.
 - `uv run python scripts/check_blank_after_block.py`: once an indented block ends, the
   next statement at that indentation needs a blank line above it. `--fix` inserts them.
 - `uv run python scripts/check_doc_paths.py`: every repo path cited in the Markdown, in

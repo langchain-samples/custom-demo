@@ -142,12 +142,11 @@ def _install_client(monkeypatch, client=None):
 def _stub_ctxhub(monkeypatch):
     """Hub backends that never hit the network; each carries the repo it mounted."""
     monkeypatch.setattr(B, "scoped_client", lambda workspace: None)
+    # Covers documents too: they construct ContextHubBackend directly rather than going
+    # through `_ctxhub_backend`, and the patch reaches both.
     monkeypatch.setattr(
         B, "ContextHubBackend", lambda repo, client=None: SimpleNamespace(_repo=repo)
     )
-    # Documents deliberately do NOT go through `_ctxhub_backend`, so patching the base
-    # class alone would leave this route building a real client.
-    monkeypatch.setattr(B, "RebasingBackend", lambda repo, client=None: SimpleNamespace(_repo=repo))
 
 
 def _mounted_repo(backend) -> str:
@@ -226,7 +225,7 @@ def test_a_documents_repo_that_cannot_be_mounted_fails_the_run(monkeypatch):
     def explode(repo, client=None):
         raise RuntimeError("no credentials for the hub")
 
-    monkeypatch.setattr(B, "RebasingBackend", explode)
+    monkeypatch.setattr(B, "ContextHubBackend", explode)
     _install_client(monkeypatch)
     with pytest.raises(B.BackendSourceError, match="eval-docs"):
         B._resolve_backends(_rt(customer="Eval Co", docs_repo="eval-docs"))
@@ -1022,27 +1021,6 @@ def test_one_dynamic_adapter_resolves_each_assistants_current_run(monkeypatch):
 
 
 # --- the skills mount is written by the agent, so it has to rebase and stay cached ---
-
-
-def test_the_skills_mount_rebases_on_a_conflicting_push(monkeypatch):
-    """The agent authors its own skills, so `/skills/` has a second writer.
-
-    The seed script re-pushes the bundle, so a plain `ContextHubBackend` here would hand
-    the turn a conflict for a push that is not really in conflict. Distinguishable stubs
-    rather than `_stub_ctxhub`, whose two fakes are deliberately identical.
-    """
-    monkeypatch.setattr(B, "scoped_client", lambda workspace: None)
-    monkeypatch.setattr(
-        B, "ContextHubBackend", lambda repo, client=None: SimpleNamespace(_kind="plain")
-    )
-    monkeypatch.setattr(
-        B, "RebasingBackend", lambda repo, client=None: SimpleNamespace(_kind="rebasing")
-    )
-    _install_client(monkeypatch)
-
-    _default, routes = B._resolve_backends(_rt(customer="Eval Co", skills_repo="eval-skills"))
-
-    assert getattr(routes["/skills/"], "_kind", "") == "rebasing"
 
 
 def test_the_skills_mount_is_reused_so_an_authored_skill_reads_back(monkeypatch):

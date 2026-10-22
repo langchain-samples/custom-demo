@@ -13,8 +13,8 @@ import json
 
 from starlette.responses import JSONResponse, StreamingResponse
 
+from custom_demo.agent_client import agent_client
 from custom_demo.runtime import remote_agents as ra
-from custom_demo.web.a2a import server_client
 from custom_demo.web.errors import err
 
 
@@ -118,7 +118,7 @@ async def _locate(thread_id: str, task_id: str) -> tuple[ra.RemoteAgent | None, 
     if not thread_id:
         return None, None
 
-    client = server_client()
+    client = agent_client()
     state = await client.threads.get_state(thread_id)
     values = state.get("values")
     tasks = values.get("remote_tasks") if isinstance(values, dict) else None

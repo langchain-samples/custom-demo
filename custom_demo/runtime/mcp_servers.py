@@ -362,13 +362,13 @@ async def resolve_server(assistant_id: str, server_id: str) -> McpServer | None:
     """
     # Local: langgraph_sdk pulls an http stack this module does not otherwise
     # need, and mcp_servers.py is on the graph's import path.
-    from langgraph_sdk import get_client  # noqa: PLC0415
+    from custom_demo.agent_client import agent_client  # noqa: PLC0415
 
     if not assistant_id:
         raise LookupError("no assistant was named, so no server list can be read")
 
     try:
-        assistant = await get_client().assistants.get(assistant_id)
+        assistant = await agent_client().assistants.get(assistant_id)
     except Exception as exc:
         # The likeliest cause by far, and the one worth naming: the SPA falls
         # back to the GRAPH id when no assistant has been chosen, and a graph

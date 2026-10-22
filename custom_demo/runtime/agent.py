@@ -33,11 +33,13 @@ from custom_demo.config import (
 )
 from custom_demo.core.ctx import Context, get_ctx
 from custom_demo.resources.sandbox import SEED_MAX_FILES
-from custom_demo.runtime.backends import DynamicBackend
+from custom_demo.runtime.backends import DynamicBackend, HubMounts
+from custom_demo.runtime.hub_routes import HubRoutes
 from custom_demo.runtime.mcp_servers import instructions_for, load_tools, parse_servers
 from custom_demo.runtime.mocking import enable_mocking
 from custom_demo.runtime.prompt import ARTIFACT_NOTE, FALLBACK_PROMPT, pull_agent_prompt
 from custom_demo.runtime.remote_subagents import RemoteAgents, remote_agents_note
+from custom_demo.runtime.seed import SeedThreadSandbox
 from custom_demo.runtime.tools import (
     all_tools,
     allowed_tool_names,
@@ -502,9 +504,17 @@ class SkillsRefresh(SkillsMiddleware):
     rather than a Hub round trip. The duplicate load on turn one is that same scan.
     """
 
-    def __init__(self, *, backend: Any, sources: list[str]) -> None:
-        """Build a load-only instance; the framework's own renders the prompt section."""
-        super().__init__(backend=backend, sources=sources, system_prompt=None)
+    def __init__(self, *, backend: Any, sources: list[str], render: bool = False) -> None:
+        """Build a load-only instance; the framework's own renders the prompt section.
+
+        `render=True` is the managed (MDA) build, where the skills bundle is not the
+        framework's (MDA lists only project skills), so this instance is the one that
+        writes the catalogue into the prompt.
+        """
+        if render:
+            super().__init__(backend=backend, sources=sources)
+        else:
+            super().__init__(backend=backend, sources=sources, system_prompt=None)
 
     def before_agent(self, state, runtime, config):
         """Reload the catalogue on the sync path, bypassing the load-once guard."""
@@ -557,19 +567,35 @@ _SUBAGENTS: list[SubAgent] = [
 ]
 
 
-def _subagent_specs() -> list[SubAgent]:
+def _subagent_specs(*, managed: bool = False) -> list[SubAgent]:
     """Return all specialists and the general-purpose agent with explicit safe tools.
 
     Every spec excludes human-interrupt tools. Declaring general-purpose prevents
     framework inheritance from reintroducing those tools, and explicitly supplies
     its skill sources. Tool wrappers preserve per-invocation evaluation mocking.
+
+    `managed` is the MDA build: the subagent's backend is the platform's, so its skills
+    come from a Hub-backed loader and its file calls on Hub paths go through
+    `HubRoutes`, the same pair the main agent carries.
     """
     tools = enable_mocking(subagent_tools())
     general_purpose: SubAgent = {
         **GENERAL_PURPOSE_SUBAGENT,
         "system_prompt": GENERAL_PURPOSE_SUBAGENT["system_prompt"] + _SUBAGENT_SOLO_CLAUSE,
-        "skills": list(_SKILL_SOURCES),
     }
+    if managed:
+        # cast: SubAgent declares an invariant middleware list type; same interop gap
+        # as the main agent's list in `agent_parts`.
+        general_purpose["middleware"] = cast(
+            "Any",
+            [
+                SkillsRefresh(backend=HubMounts(), sources=list(_SKILL_SOURCES), render=True),
+                HubRoutes(),
+            ],
+        )
+    else:
+        general_purpose["skills"] = list(_SKILL_SOURCES)
+
     return [cast("SubAgent", {**spec, "tools": tools}) for spec in (*_SUBAGENTS, general_purpose)]
 
 
@@ -597,15 +623,41 @@ def _rubric_middleware() -> RubricMiddleware:
     return RubricMiddleware(model=goal_model(), max_iterations=goal_max_iterations())
 
 
-def _build_agent(model: str | None, checkpointer):
-    """Construct the deep agent. See `build_agent` for the public entry point."""
+@dataclasses.dataclass(frozen=True)
+class AgentParts:
+    """Everything the agent is made of except its backend wiring and persistence.
+
+    Shared by the two hosts: `build_agent` hands it to `create_deep_agent` on a
+    LangSmith deployment or a local run, and the root `agent.py` hands it to MDA's
+    `define_deep_agent`, which owns backend, checkpointer and store itself.
+    """
+
+    model: Any
+    tools: list[Any]
+    middleware: list[AgentMiddleware]
+    subagents: list[SubAgent]
+    # What the skills catalogue is listed through. `create_deep_agent`'s backend on a
+    # LangSmith deployment; under MDA the platform owns the backend and this only
+    # answers the Hub mounts.
+    backend: Any
+
+
+def agent_parts(model: str | None = None, *, managed: bool = False) -> AgentParts:
+    """Construct the model, tools, middleware and subagents in their load-bearing order.
+
+    `managed=True` is the MDA build. The platform owns the backend, so `/skills/` and
+    the documents mount are applied by `HubRoutes` over `HubMounts` instead of being
+    CompositeBackend routes, the skills catalogue is rendered by `SkillsRefresh` itself,
+    and each thread's sandbox is seeded on its first turn by `SeedThreadSandbox`.
+    """
     model_id = model or MODEL
     require_model_key(model_id)
     llm = build_chat_model(model_id)
 
     # One instance, shared by the agent and by SkillsRefresh below, so the catalogue is
     # listed through the same filesystem the file tools write to.
-    backend = DynamicBackend()
+    backend = HubMounts() if managed else DynamicBackend()
+    managed_only: list[AgentMiddleware] = [SeedThreadSandbox(), HubRoutes()] if managed else []
 
     # ToolCallLimitMiddleware subclasses AgentMiddleware but binds an invariant
     # generic param that type checkers don't accept as assignable to the base — a
@@ -615,7 +667,10 @@ def _build_agent(model: str | None, checkpointer):
         [
             # Contributes a before_agent hook only, so its position among the
             # request-shaping middleware below does not matter.
-            SkillsRefresh(backend=backend, sources=list(_SKILL_SOURCES)),
+            SkillsRefresh(backend=backend, sources=list(_SKILL_SOURCES), render=managed),
+            # MDA only: a before_agent seed and a tool-call router, neither of which
+            # shapes the model request, so they sit with SkillsRefresh.
+            *managed_only,
             ConfigurableModel(),
             # Before the prompt middleware, so the tools it discovers are already
             # in the ContextVar when `_mcp_note` describes them to the model.
@@ -653,26 +708,36 @@ def _build_agent(model: str | None, checkpointer):
         "list[AgentMiddleware]",
         [*middleware[:-1], interpreter, middleware[-1]],
     )
-    subagents = _subagent_specs()
 
-    return create_deep_agent(
+    return AgentParts(
         model=llm,
         # Every catalogue tool is registered; ToolSelection hides the ones this
         # assistant hasn't enabled. Built-in deepagents tools are unaffected.
         # Wrapped so a dataset row can mock any tool per invocation. Inert unless
         # `mocking.using_mocks` installed a spec, so the deployment is unaffected.
         tools=enable_mocking(all_tools()),
+        middleware=middleware,
+        subagents=_subagent_specs(managed=managed),
+        backend=backend,
+    )
+
+
+def _build_agent(model: str | None, checkpointer):
+    """Construct the deep agent. See `build_agent` for the public entry point."""
+    parts = agent_parts(model)
+    return create_deep_agent(
+        model=parts.model,
+        tools=parts.tools,
         # cast: our middleware list is typed with ContextT=None, but create_deep_agent
         # binds ContextT to our context_schema (Context). Assignable at runtime; the
         # variance mismatch is a typing-only interop gap.
-        middleware=cast("Any", middleware),
-        subagents=subagents,
+        middleware=cast("Any", parts.middleware),
+        subagents=parts.subagents,
         # One shared backend that resolves per run (see DynamicBackend): sandbox VM
         # default + the assistant's Context Hub skills repo mounted at /skills/, which
         # this tells deepagents to surface. For default (StateBackend) assistants
-        # /skills/ is empty — a no-op. The same instance backs SkillsRefresh, so the
-        # catalogue is listed through the filesystem the tools write to.
-        backend=backend,
+        # /skills/ is empty — a no-op.
+        backend=parts.backend,
         skills=list(_SKILL_SOURCES),
         context_schema=Context,
         checkpointer=checkpointer,

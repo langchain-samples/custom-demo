@@ -373,6 +373,25 @@ def _revalidate_or_acquire(
     return backend
 
 
+def attach_named_sandbox(name: str) -> Any | None:
+    """Attach to the VM called `name`, restarting it if stopped; never create or seed one.
+
+    For a VM this module did not name: the managed (MDA) runtime's per-thread sandboxes
+    (see `resources/mda_sandbox.py`). Uncached, because those names are per thread.
+    Transport failures return None, like `attach_sandbox`.
+    """
+    try:
+        api_key, headers = _sandbox_key_credentials()
+        client = SandboxClient(api_key=api_key, headers=headers or None)
+        got = _acquire_raw(client, name, create=False)
+        if got is None or not _wait_ready(client, name):
+            return None
+
+        return LangSmithSandbox(got[0])
+    except Exception:  # noqa: BLE001 - callers handle unavailable infrastructure
+        return None
+
+
 def prewarm_sandbox(
     agent_repo: str | None = None,
     customer: str | None = None,

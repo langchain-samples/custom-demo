@@ -17,6 +17,9 @@ __pycache__/
 # LangGraph dev server (Agent Server) local state
 .langgraph_api/
 
+# Managed Deep Agents build output (mda build / dev / deploy)
+.mda/
+
 # Node
 node_modules/
 

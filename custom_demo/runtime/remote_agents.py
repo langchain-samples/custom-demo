@@ -30,7 +30,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -224,7 +223,11 @@ def trace_headers() -> dict[str, str]:
         return {}
 
     metadata = {**(run.metadata or {}), TRACE_MARKER: True}
-    baggage = f"langsmith-metadata={quote(json.dumps(metadata))},langsmith-project={quote(run.session_name)}"
+    baggage = f"langsmith-metadata={quote(json.dumps(metadata))}"
+    # Unset means the tracer's default project, which the callee resolves the same way.
+    if run.session_name:
+        baggage += f",langsmith-project={quote(run.session_name)}"
+
     return {"langsmith-trace": run.to_headers()["langsmith-trace"], "baggage": baggage}
 
 
@@ -720,8 +723,8 @@ async def _notify(task: BackgroundTask) -> None:
 
     `multitask_strategy="enqueue"` is the whole wake-up mechanism: an idle thread runs
     it at once, and a thread in the middle of a run gets it as the next run, after the
-    current one ends. The client is the in-process one (no URL), so this reaches the
-    Agent Server hosting the parent without leaving the process.
+    current one ends. `agent_client` reaches the deployment hosting the parent: the
+    in-process server on a LangSmith deployment, or the MDA deployment's own URL.
     """
     if not (task.parent_thread and task.parent_assistant):
         logger.warning("remote task %s finished with no parent thread to notify", task.task_id)
@@ -729,9 +732,9 @@ async def _notify(task: BackgroundTask) -> None:
 
     # Deferred: the SDK's in-process client is only meaningful inside the Agent Server,
     # and importing it at module load would bind every unit test to it.
-    from langgraph_sdk import get_client  # noqa: PLC0415 - see above
+    from custom_demo.agent_client import agent_client  # noqa: PLC0415 - see above
 
-    client = get_client(api_key=os.getenv("APP_SHARED_SECRET", "").strip() or None)
+    client = agent_client()
     try:
         await client.runs.create(
             task.parent_thread,

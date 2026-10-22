@@ -17,6 +17,7 @@ import os
 
 from langgraph_sdk import Auth
 
+from custom_demo.agent_auth import JWKS_PATH
 from custom_demo.web.spa import is_spa_path
 
 auth = Auth()
@@ -44,9 +45,11 @@ async def authenticate(
     When `APP_SHARED_SECRET` is unset, auth is disabled (local dev). Otherwise the
     provided token must match it (constant-time), else 401. The SPA's own pages are
     gated by a login page on the same secret instead (`custom_demo/web/spa.py` says why).
+    The JWKS is public: MDA fetches it without credentials to verify the tokens this
+    deployment signs (`custom_demo/agent_auth.py`).
     """
     secret = os.getenv("APP_SHARED_SECRET", "").strip()
-    if not secret or is_spa_path(path):
+    if not secret or is_spa_path(path) or path == JWKS_PATH:
         return {"identity": "anonymous"}
 
     token = _provided_token(headers, authorization)

@@ -21,11 +21,23 @@ const ENV_API_KEY = (import.meta.env.VITE_LG_API_KEY as string | undefined) || "
 /** Default Agent Server base URL (build-time env, else local dev). */
 export const DEFAULT_API_BASE = ENV_URL || "http://127.0.0.1:2024";
 
+/**
+ * Where the agent runs when it is on Managed Deep Agents rather than this
+ * deployment, and a token that deployment accepts (custom_demo/agent_auth.py).
+ * `expiresAt` is unix seconds.
+ */
+export interface AgentConnection {
+  url: string;
+  token: string;
+  expiresAt: number;
+}
+
 /** Shape of the optional `window.LG` base config injected via config.js. */
 export interface LGGlobal {
   url?: string;
   assistantId?: string;
   apiKey?: string;
+  agent?: AgentConnection;
 }
 
 declare global {
@@ -68,7 +80,7 @@ export function getApiBase(): string {
 
 /** Resolved assistant id (UUID or the "dashboard_agent" graph default). */
 export function getAssistantId(): string {
-  return readLS(LG_ASSISTANT_KEY) || windowLG().assistantId || GRAPH_ID;
+  return readLS(LG_ASSISTANT_KEY) || windowLG().assistantId || agentGraphId();
 }
 
 /** Persist the active assistant id to localStorage. */
@@ -96,4 +108,64 @@ export function apiHeaders(): Record<string, string> {
   const k = getApiKey();
   if (k) h["x-api-key"] = k;
   return h;
+}
+
+/* ------------------------- The agent's deployment ------------------------- */
+/*
+ * The agent (its assistants, threads and runs) can live on a Managed Deep Agents
+ * deployment while everything else (setup, files, evals, MCP proxy) stays on this
+ * one. config.js says which: `window.LG.agent` is present only when it is MDA.
+ * MDA turns the agent name `dashboard_agent` into the graph id `dashboard-agent`.
+ */
+
+const MDA_GRAPH_ID = "dashboard-agent";
+// Refresh this long before expiry, so a token never lapses mid-request.
+const TOKEN_SLACK_SECONDS = 60;
+
+let agentConnection: AgentConnection | undefined;
+
+function currentAgent(): AgentConnection | undefined {
+  return agentConnection || windowLG().agent;
+}
+
+/** Whether the agent runs on a Managed Deep Agents deployment. */
+export function agentOnMda(): boolean {
+  return Boolean(currentAgent()?.url);
+}
+
+/** Base URL for the agent's assistants, threads and runs. */
+export function getAgentBase(): string {
+  const agent = currentAgent();
+  return agent?.url ? agent.url.replace(/\/+$/, "") : getApiBase();
+}
+
+/** The graph id assistants are bound to on the agent's deployment. */
+export function agentGraphId(): string {
+  return agentOnMda() ? MDA_GRAPH_ID : GRAPH_ID;
+}
+
+/** Fetch a fresh MDA token from this deployment (POST /agent-auth/token). */
+async function refreshAgentToken(): Promise<AgentConnection> {
+  const res = await fetch(`${getApiBase()}/agent-auth/token`, {
+    method: "POST",
+    headers: apiHeaders(),
+    body: "{}",
+  });
+  if (!res.ok) throw new Error(`could not get a token for the agent: HTTP ${res.status}`);
+  const body = (await res.json()) as { url: string; token: string; expires_at: number };
+  agentConnection = { url: body.url, token: body.token, expiresAt: body.expires_at };
+  return agentConnection;
+}
+
+/**
+ * JSON headers for the agent's deployment: a bearer token on MDA (refreshed
+ * before it expires), otherwise the same headers as every other route.
+ */
+export async function agentHeaders(): Promise<Record<string, string>> {
+  let agent = currentAgent();
+  if (!agent?.url) return apiHeaders();
+  if (agent.expiresAt - TOKEN_SLACK_SECONDS <= Date.now() / 1000) {
+    agent = await refreshAgentToken();
+  }
+  return { "Content-Type": "application/json", Authorization: `Bearer ${agent.token}` };
 }

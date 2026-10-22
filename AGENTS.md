@@ -51,7 +51,10 @@ custom_demo/
   core/demo.py               DemoPlan and LsArtifacts
   resources/sandbox.py       VM identity, credentials, seed scripts, lifecycle/cache
   resources/docs.py          Versioned documents in a Context Hub repo, and their revisions
-  runtime/backends.py        DynamicBackend and Context Hub filesystem routing
+  resources/mda_sandbox.py   An MDA thread's sandbox name, for the file routes
+  runtime/backends.py        DynamicBackend, HubMounts and Context Hub filesystem routing
+  runtime/hub_routes.py      MDA only: file-tool calls on Hub mounts go to HubMounts
+  runtime/seed.py            MDA only: seed each thread's sandbox on its first turn
   runtime/agent.py           Shared model/middleware/agent construction and safe subagent specs
   runtime/prompt.py          Prompt templates and fresh Context Hub reads
   runtime/tools/registry.py  Catalogue, guidance, selection, call caps and HITL flags
@@ -76,11 +79,15 @@ custom_demo/
   web/                      Metadata, cleanup, sandbox, MCP, voice and eval handlers
   voice/                    Voice token minting and trace support
   config.py                 Environment, model and scoped-client configuration
+  agent_auth.py             Tokens this deployment signs for the MDA deployment, and their JWKS
+  agent_client.py           SDK clients for whichever deployment hosts the agent
   graph.py                  dashboard_agent entrypoint and trace routing
   setup_graph.py            assistant_setup entrypoint
   auth.py                   Shared-token deployment authentication
   webapp.py                 HTTP deployment entrypoint
   tests/                    Unit, contract, integration and explicit live tests
+agent.py, identity.py       Managed Deep Agents entry and identity (the agent on MDA)
+sandbox/                    MDA sandbox declaration and its setup.sh snapshot
 frontend/src/
   App.tsx                   Presenter-session owner and output layout
   lib/assistantSession.ts   Draft, preview and run-context projections
@@ -273,6 +280,41 @@ not acquire a sandbox. Preserve that compatibility branch until a migration is d
 File browsing, media reads and uploads use attach-only acquisition; no browser operation may
 provision a VM. Path/extension policies and sensitive-name exclusions live in `web/sandbox.py`;
 the allowed root defaults to `/workspace`. Uploads are writes, not a read-only capability.
+
+### The agent on Managed Deep Agents
+
+The agent can run on a Managed Deep Agents (MDA) deployment while setup, the SPA and
+every custom route stay on the LangSmith deployment. `AGENT_URL` selects it; unset,
+everything runs on the LangSmith deployment as described above.
+
+| Concern | LangSmith deployment | MDA |
+|---|---|---|
+| Entry | `custom_demo/graph.py` (`dashboard_agent`) | root `agent.py` (`dashboard-agent`) |
+| Parts | `runtime/agent.py:agent_parts()` | `agent_parts(managed=True)` |
+| Filesystem | `DynamicBackend`: assistant VM + Hub routes | platform sandbox per thread; `HubRoutes` over `HubMounts` |
+| Seed | once per assistant VM | once per thread, `SeedThreadSandbox` |
+| Skills catalogue | framework `SkillsMiddleware` | `SkillsRefresh(render=True)` |
+| Caller auth | shared token (`auth.py`) | RS256 token this deployment signs (`agent_auth.py`, `identity.py`) |
+| Assistant writes | `/assistants` | `/agent-assistants` here, relayed as the workspace |
+
+The SPA gets the MDA URL and a token from `config.js`, refreshes it at
+`POST /agent-auth/token`, and calls MDA directly for threads, runs and assistant reads.
+MDA verifies tokens against `GET /agent-auth/jwks.json`. Every token names one subject,
+so threads stay shared between everyone past the password, as on the LangSmith deployment.
+
+The root `agent.py` factory leaves the declared sandbox selected, or passes `None` when
+sandboxes are off or the assistant is Hub-only. Leaving it unset keeps MDA's plain
+per-thread sandbox name, which `resources/mda_sandbox.py` recomputes so the Files panel
+follows the open thread. Under `mda dev` sandboxes are unnamed, so the Files panel only
+finds them on a deployed MDA agent.
+
+Not carried over to MDA, each needing a decision:
+- Per-run trace routing (`graph.py`'s `ls_workspace`/`ls_project` context, and remote
+  subagent trace nesting). MDA builds the graph itself, so MDA runs trace to the MDA
+  deployment's project.
+- The A2A extensions in `web/a2a.py` (`SubscribeToTask`, push configs). They shadow the
+  built-in A2A route of the deployment that hosts the agent, which is no longer this one.
+- Uploading before the first message: a thread's sandbox exists only after its first run.
 
 ## 6. Execution and presentation contracts
 

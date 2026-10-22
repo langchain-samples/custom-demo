@@ -19,7 +19,14 @@
  *   POST   /evals/run  ·  GET /evals/status
  *   POST   /feedback
  */
-import { GRAPH_ID, apiHeaders, getApiBase } from "./config";
+import {
+  agentGraphId,
+  agentHeaders,
+  agentOnMda,
+  apiHeaders,
+  getAgentBase,
+  getApiBase,
+} from "./config";
 import { splitStreamEvent } from "./streamEvent";
 
 /* ----------------------------- Domain types ----------------------------- */
@@ -449,11 +456,15 @@ async function errorFrom(res: Response): Promise<Error> {
 
 /* ------------------------------- Threads -------------------------------- */
 
-/** Create a fresh server-side thread; returns its id. */
-export async function createThread(): Promise<string> {
-  const res = await fetch(`${getApiBase()}/threads`, {
+/**
+ * Create a fresh server-side thread; returns its id. On the agent's deployment by
+ * default; `onAgent: false` makes it on this one, for the assistant_setup graph,
+ * which stays here when the agent runs on Managed Deep Agents.
+ */
+export async function createThread(onAgent = true): Promise<string> {
+  const res = await fetch(`${onAgent ? getAgentBase() : getApiBase()}/threads`, {
     method: "POST",
-    headers: apiHeaders(),
+    headers: onAgent ? await agentHeaders() : apiHeaders(),
     body: "{}",
   });
   if (!res.ok) throw new Error("create thread failed: HTTP " + res.status);
@@ -523,8 +534,8 @@ export function resetThread(): void {
 
 /** Fetch a thread's persisted state (its message history). */
 export async function getThreadState(id: string): Promise<ThreadState> {
-  const res = await fetch(`${getApiBase()}/threads/${id}/state`, {
-    headers: apiHeaders(),
+  const res = await fetch(`${getAgentBase()}/threads/${id}/state`, {
+    headers: await agentHeaders(),
   });
   if (!res.ok) throw await errorFrom(res);
   return res.json();
@@ -675,8 +686,8 @@ export async function* joinRunStream(opts: {
   runId: string;
   signal?: AbortSignal;
 }): AsyncGenerator<SSEEvent> {
-  const res = await fetch(`${getApiBase()}/threads/${opts.threadId}/runs/${opts.runId}/stream`, {
-    headers: { ...apiHeaders(), "Last-Event-ID": "-1" },
+  const res = await fetch(`${getAgentBase()}/threads/${opts.threadId}/runs/${opts.runId}/stream`, {
+    headers: { ...(await agentHeaders()), "Last-Event-ID": "-1" },
     signal: opts.signal,
   });
   if (!res.ok || !res.body) throw await errorFrom(res);
@@ -725,8 +736,8 @@ export interface ThreadRun {
 export async function listActiveRuns(threadId: string): Promise<ThreadRun[]> {
   const runs: ThreadRun[] = [];
   for (const status of ["running", "pending"]) {
-    const res = await fetch(`${getApiBase()}/threads/${threadId}/runs?status=${status}&limit=10`, {
-      headers: apiHeaders(),
+    const res = await fetch(`${getAgentBase()}/threads/${threadId}/runs?status=${status}&limit=10`, {
+      headers: await agentHeaders(),
     });
     if (!res.ok) throw await errorFrom(res);
     runs.push(...((await res.json()) as ThreadRun[]));
@@ -766,9 +777,9 @@ export async function* runStream(opts: RunStreamOptions): AsyncGenerator<SSEEven
   }
   if (context && Object.keys(context).length) body.context = context;
 
-  const res = await fetch(`${getApiBase()}/threads/${threadId}/runs/stream`, {
+  const res = await fetch(`${getAgentBase()}/threads/${threadId}/runs/stream`, {
     method: "POST",
-    headers: { ...apiHeaders(), ...(headers || {}) },
+    headers: { ...(await agentHeaders()), ...(headers || {}) },
     body: JSON.stringify(body),
     signal,
   });
@@ -779,7 +790,8 @@ export async function* runStream(opts: RunStreamOptions): AsyncGenerator<SSEEven
 
 /**
  * Run an assistant to completion (runs/wait) and return the raw result.
- * Used for non-streaming graphs such as assistant_setup.
+ * Used for non-streaming graphs such as assistant_setup, which run on this
+ * deployment even when the agent is on Managed Deep Agents.
  */
 export async function runWait(
   threadId: string,
@@ -801,7 +813,7 @@ export async function runWait(
  * result, and surfaces graph-level errors. Mirrors the original `lgRunSetup()`.
  */
 export async function runSetup(input: SetupInput): Promise<SetupResult> {
-  const tid = await createThread();
+  const tid = await createThread(false);
   const out = await runWait(tid, "assistant_setup", input);
   if (out && out.status === "error") throw new Error(out.error || "setup failed");
   return (out && out.result) || {};
@@ -817,16 +829,17 @@ export async function runSetup(input: SetupInput): Promise<SetupResult> {
  */
 export async function listAssistants(limit = 100): Promise<Assistant[]> {
   try {
-    const res = await fetch(`${getApiBase()}/assistants/search`, {
+    const graphId = agentGraphId();
+    const res = await fetch(`${getAgentBase()}/assistants/search`, {
       method: "POST",
-      headers: apiHeaders(),
-      body: JSON.stringify({ graph_id: GRAPH_ID, limit }),
+      headers: await agentHeaders(),
+      body: JSON.stringify({ graph_id: graphId, limit }),
     });
     if (!res.ok) return [];
     const list = await res.json();
     if (!Array.isArray(list)) return [];
     return (list as Assistant[]).filter(
-      (a) => a.name !== GRAPH_ID && a.metadata?.created_by !== "system",
+      (a) => a.name !== graphId && a.metadata?.created_by !== "system",
     );
   } catch {
     return [];
@@ -834,13 +847,23 @@ export async function listAssistants(limit = 100): Promise<Assistant[]> {
 }
 
 
+/**
+ * Where assistant writes go. Managed Deep Agents lets a token caller read
+ * assistants but not write them, so on MDA they go through this deployment
+ * (custom_demo/web/agent_assistants.py), which writes as the workspace.
+ */
+function assistantWriteUrl(id?: string): string {
+  const base = agentOnMda() ? `${getApiBase()}/agent-assistants` : `${getApiBase()}/assistants`;
+  return id ? `${base}/${id}` : base;
+}
+
 /** Create a new assistant (POST /assistants). */
 export async function createAssistant(input: CreateAssistantInput): Promise<Assistant> {
-  const res = await fetch(`${getApiBase()}/assistants`, {
+  const res = await fetch(assistantWriteUrl(), {
     method: "POST",
     headers: apiHeaders(),
     body: JSON.stringify({
-      graph_id: GRAPH_ID,
+      graph_id: agentGraphId(),
       name: input.name,
       context: input.context || {},
       config: input.config || {},
@@ -853,7 +876,7 @@ export async function createAssistant(input: CreateAssistantInput): Promise<Assi
 
 /** Update an existing assistant (PATCH /assistants/{id}). */
 export async function updateAssistant(id: string, body: UpdateAssistantInput): Promise<Assistant> {
-  const res = await fetch(`${getApiBase()}/assistants/${id}`, {
+  const res = await fetch(assistantWriteUrl(id), {
     method: "PATCH",
     headers: apiHeaders(),
     body: JSON.stringify(body),
@@ -864,7 +887,7 @@ export async function updateAssistant(id: string, body: UpdateAssistantInput): P
 
 /** Delete an assistant (DELETE /assistants/{id}). 204 is treated as success. */
 export async function deleteAssistant(id: string): Promise<void> {
-  const res = await fetch(`${getApiBase()}/assistants/${id}`, {
+  const res = await fetch(assistantWriteUrl(id), {
     method: "DELETE",
     headers: apiHeaders(),
   });
@@ -1050,9 +1073,19 @@ export interface SandboxFile {
   sandbox_id?: string | null;
 }
 
-/** Shared sandbox-route query (`?sandbox_key=&agent_repo=&customer=`); blanks omitted. */
+/**
+ * The open conversation, which is what owns the sandbox when the agent runs on
+ * Managed Deep Agents (one sandbox per thread). The routes ignore it otherwise.
+ */
+function currentThreadId(): string {
+  return THREAD_ID || savedThreadId() || "";
+}
+
+/** Shared sandbox-route query (`?sandbox_key=&agent_repo=&customer=&thread_id=`); blanks omitted. */
 function sandboxQuery(target: SandboxTarget, extra: Record<string, string>): URLSearchParams {
   const qs = new URLSearchParams(extra);
+  const threadId = currentThreadId();
+  if (threadId) qs.set("thread_id", threadId);
   if (target.sandbox_key) qs.set("sandbox_key", target.sandbox_key);
   if (target.agent_repo) qs.set("agent_repo", target.agent_repo);
   if (target.customer) qs.set("customer", target.customer);
@@ -1183,6 +1216,7 @@ export async function uploadSandboxFiles(
       sandbox_key: target.sandbox_key || undefined,
       agent_repo: target.agent_repo || undefined,
       customer: target.customer || undefined,
+      thread_id: currentThreadId() || undefined,
       files: payload,
     }),
   });

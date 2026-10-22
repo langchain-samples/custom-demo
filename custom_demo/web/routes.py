@@ -11,6 +11,12 @@ from starlette.applications import Starlette
 from starlette.routing import Route
 
 from custom_demo.web.a2a import a2a_endpoint, agent_card
+from custom_demo.web.agent_assistants import (
+    create_agent_assistant,
+    delete_agent_assistant,
+    update_agent_assistant,
+)
+from custom_demo.web.agent_auth import agent_jwks, agent_token
 from custom_demo.web.cleanup import cleanup
 from custom_demo.web.docs import docs_file, docs_files, docs_save, docs_versions
 from custom_demo.web.evals import evals_run, evals_status
@@ -26,6 +32,13 @@ from custom_demo.web.voice import voice_token, voice_trace
 app = Starlette(
     routes=[
         Route("/feedback", feedback, methods=["POST"]),
+        # The issuer half of MDA identity (custom_demo/agent_auth.py). The JWKS is public.
+        Route("/agent-auth/jwks.json", agent_jwks, methods=["GET"]),
+        Route("/agent-auth/token", agent_token, methods=["POST"]),
+        # Assistant writes MDA only accepts from the workspace (web/agent_assistants.py).
+        Route("/agent-assistants", create_agent_assistant, methods=["POST"]),
+        Route("/agent-assistants/{assistant_id}", update_agent_assistant, methods=["PATCH"]),
+        Route("/agent-assistants/{assistant_id}", delete_agent_assistant, methods=["DELETE"]),
         Route("/tools", tools, methods=["GET"]),
         Route("/mcp/proxy/{server_id}", mcp_proxy, methods=["POST"]),
         Route("/remote-agents/probe", remote_agent_probe, methods=["POST"]),

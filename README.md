@@ -32,6 +32,25 @@ uv run python scripts/preflight.py     # checks connectivity; makes real API cal
 
 Open <http://127.0.0.1:3000>.
 
+## Agent on Managed Deep Agents (optional)
+
+The agent can run on [Managed Deep Agents](https://docs.langchain.com/langsmith/python/managed-deep-agents-overview)
+while setup, the UI and the custom routes stay on the LangSmith deployment.
+
+```bash
+uv run python scripts/agent_auth_key.py >> .env   # signing key, shared by both deployments
+mda deploy .                                       # prints the MDA deployment URL
+```
+
+Then set `AGENT_URL`, `AGENT_JWT_ISSUER` and `MDA_CORS_ORIGINS` in `.env` (see
+`.env.example`), redeploy the LangSmith deployment, and copy existing assistants across:
+
+```bash
+uv run python scripts/migrate_assistants_to_mda.py --from-url https://<langsmith-deployment>
+```
+
+What moves and what stays: [AGENTS.md](AGENTS.md), "The agent on Managed Deep Agents".
+
 ## Creating your agent in the UI
 When you open the UI, you'll be met with a setup modal.
 

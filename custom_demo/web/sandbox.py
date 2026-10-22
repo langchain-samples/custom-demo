@@ -19,7 +19,9 @@ import posixpath
 
 from starlette.responses import JSONResponse
 
+from custom_demo.agent_auth import agent_url
 from custom_demo.config import load_env
+from custom_demo.resources.mda_sandbox import attach_thread_sandbox
 from custom_demo.resources.sandbox import attach_sandbox, sandbox_enabled, sandbox_key_from
 from custom_demo.web.errors import err, route_error
 from custom_demo.web.files import (
@@ -107,9 +109,12 @@ async def _resolve_backend(request, params: dict | None = None):
             503, "sandbox_disabled", "Agent file access is turned off for this deployment."
         )
 
+    source = params if params is not None else request.query_params
+    if agent_url():
+        return await _resolve_thread_backend(source.get("thread_id") or "")
+
     # provisioning/setup.py writes `ls_artifacts.agent_repo = ""` when there is no Context Hub
     # repo, and the SPA forwards it verbatim → coerce "" to None like the runtime's `or`.
-    source = params if params is not None else request.query_params
     agent_repo = source.get("agent_repo") or None
     customer = source.get("customer") or None
     # The assistant's own VM name when it has one, so the browser opens the same VM the
@@ -122,6 +127,32 @@ async def _resolve_backend(request, params: dict | None = None):
     )
     if backend is None:
         return None, err(503, "sandbox_unavailable", "No sandbox files for this assistant.")
+
+    return backend, None
+
+
+async def _resolve_thread_backend(thread_id: str):
+    """(backend, None) for an MDA thread's sandbox, or (None, JSONResponse) explaining why not.
+
+    With the agent on Managed Deep Agents every conversation has its own sandbox, made
+    by the conversation's first run, so the Files panel follows the open thread. Attach
+    only, like the assistant-VM path: these routes never create a box.
+    """
+    if not thread_id:
+        return None, err(
+            409,
+            "no_thread",
+            "Each conversation has its own sandbox. Send a message first, then open Files.",
+        )
+
+    backend = await asyncio.to_thread(attach_thread_sandbox, thread_id)
+    if backend is None:
+        return None, err(
+            503,
+            "sandbox_unavailable",
+            "This conversation has no sandbox yet, or it has been reclaimed after idling. "
+            "Send a message to start one.",
+        )
 
     return backend, None
 
