@@ -15,7 +15,7 @@ Customize agents for your use case. Customize the:
 - subagents (through suplying your own A2A agent urls)
 - UI "skin" (logo/name/color)
 
-If you're a LangChain employee, you can access a hosted version [here](https://custom-demos-599b02fd350b553b832acd74983fa55a.us.langgraph.app/ui/). It requires a password. Ask @josiahcoad for it.
+If you're a LangChain employee, you can access a hosted version. Ask @josiahcoad for it for the url.
 Otherwise you can easily run locally and just supply your own LangSmith Api Key.
 
 ## Run locally
