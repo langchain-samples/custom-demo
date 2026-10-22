@@ -14,13 +14,15 @@
  * one editing the one on screen. Everything behind the modal is inert while it is
  * open, so there is only ever one thing to fill in.
  *
- * Mounted only while visible, so each open starts from a fresh prefill.
+ * Mounted only while visible, so each open starts from a fresh prefill. A deep link
+ * (`@/lib/demoPrefill`) can supply that prefill instead, including a workspace.
  */
 import { useEffect, useState, type ReactNode } from "react";
 import type { Workspace } from "@/lib/api";
 import { useSetupCountdown } from "./useSetupCountdown";
 import { Combobox } from "@/components/ui/combobox";
 import { guessWebsite } from "@/lib/website";
+import { matchWorkspace, type DemoPrefill } from "@/lib/demoPrefill";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
@@ -130,6 +132,8 @@ interface Props {
   initialWorkspace: string;
   /** Offered only when `initialWorkspace` is empty. */
   workspaces: Workspace[];
+  /** Values from a deep link. A workspace here is asked for even when the panel has one. */
+  prefill?: DemoPrefill | null;
   creating: boolean;
   onCreate: (values: NewAssistantValues) => void;
   onCancel: () => void;
@@ -147,6 +151,7 @@ export function NewAssistantDialog({
   workspaces,
   organization = "",
   workspaceReset = false,
+  prefill = null,
   creating,
   onCreate,
   onCancel,
@@ -154,13 +159,19 @@ export function NewAssistantDialog({
   // Hidden once we know who you are. It is prefilled from localStorage and almost never
   // changed, so on every run after the first it is a field to skip past. Change it in
   // Customize if you need to.
-  const knowsOwner = !!initialOwner;
-  const [owner, setOwner] = useState(initialOwner);
+  // A link that names someone shows the field, so a name you did not type is visible.
+  const knowsOwner = !!initialOwner && !prefill?.owner;
+  const [owner, setOwner] = useState(prefill?.owner || initialOwner);
   // Asked for only when there is nothing selected behind the modal, which on a first run
   // is the whole reason a separate onboarding dialog would otherwise exist: the rest of
   // it would be this same form with fewer fields.
-  const needsWorkspace = !initialWorkspace;
+  const linkedWorkspace = prefill?.workspace || "";
+  const needsWorkspace = !initialWorkspace || !!linkedWorkspace;
   const [workspace, setWorkspace] = useState("");
+  // A named workspace that is not in this org leaves the picker blank and says so,
+  // rather than logging the customer's traces to whichever default happens to exist.
+  const linkedMatch = linkedWorkspace ? matchWorkspace(linkedWorkspace, workspaces) : undefined;
+  const linkedMissing = !!linkedWorkspace && workspaces.length > 0 && !linkedMatch;
 
   // Default to "Demo" once the list arrives. An effect and not a useState initializer,
   // because the workspaces load asynchronously and are usually still empty at mount - the
@@ -168,17 +179,23 @@ export function NewAssistantDialog({
   // so it only ever fills a BLANK field and cannot overwrite a deliberate choice.
   useEffect(() => {
     if (!needsWorkspace || workspace) return;
+    if (linkedWorkspace) {
+      if (linkedMatch) setWorkspace(linkedMatch.id);
+      return;
+    }
     const named = (want: string) =>
       workspaces.find((w) => (w.name || "").trim().toLowerCase() === want);
     const fallback = DEFAULT_WORKSPACE_NAMES.map(named).find(Boolean);
     if (fallback) setWorkspace(fallback.id);
-  }, [needsWorkspace, workspace, workspaces]);
-  const [customer, setCustomer] = useState("");
-  const [website, setWebsite] = useState("");
+  }, [needsWorkspace, workspace, workspaces, linkedWorkspace, linkedMatch]);
+  const [customer, setCustomer] = useState(prefill?.customer || "");
+  const [website, setWebsite] = useState(
+    () => prefill?.website || guessWebsite(prefill?.customer || ""),
+  );
   // Once you type in the website field it is yours: the guess below stops overwriting it,
   // including when you clear it, which is how you say "this customer has no site".
-  const [websiteTouched, setWebsiteTouched] = useState(false);
-  const [useCase, setUseCase] = useState("");
+  const [websiteTouched, setWebsiteTouched] = useState(!!prefill?.website);
+  const [useCase, setUseCase] = useState(prefill?.useCase || "");
   const [failureMode, setFailureMode] = useState("hallucination");
   /**
    * Sticky across creates. Still OFF by default on a machine that has never set it - it
@@ -219,6 +236,12 @@ export function NewAssistantDialog({
                   Your saved workspace is not in{" "}
                   {organization ? organization : "this organization"} any more, so it has
                   been cleared. Pick one to carry on.
+                </p>
+              )}
+              {linkedMissing && (
+                <p className="m-0 rounded-md border border-border bg-panel-2 px-2 py-1.5 text-[11px] leading-snug text-foreground">
+                  The link asked for the workspace "{linkedWorkspace}", which is not in{" "}
+                  {organization ? organization : "this organization"}. Pick one to carry on.
                 </p>
               )}
               <Combobox

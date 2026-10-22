@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useAgents, useTools } from "@/lib/queries";
 import { LAST_OWNER_LS_KEY, readSessionPreference } from "@/lib/assistantSession";
+import { clearDemoPrefillFromUrl, readDemoPrefill } from "@/lib/demoPrefill";
 import type { AssistantSession } from "@/lib/hooks/useAssistantSession";
 import type { ToolSpec } from "@/lib/api";
 import { WorkspaceSelect } from "./settings/WorkspaceSelect";
@@ -41,6 +42,8 @@ export function SettingsPanel({ open, onOpenChange, session }: SettingsPanelProp
   const agents = useAgents(cfg.lsWorkspace).data ?? EMPTY_NAMES;
   const toolSpecs = useTools().data ?? EMPTY_TOOLS;
   const [showNewForm, setShowNewForm] = useState(false);
+  // Read once at load: a deep link opens the create dialog filled in, then leaves the URL.
+  const [prefill, setPrefill] = useState(() => readDemoPrefill(window.location.search));
   const [creating, setCreating] = useState(false);
   const [demoBrief, setDemoBrief] = useState<DemoBrief | null>(null);
   const onboardingCheckedRef = useRef(false);
@@ -83,6 +86,17 @@ export function SettingsPanel({ open, onOpenChange, session }: SettingsPanelProp
   }, [workspaceReset]);
 
   useEffect(() => {
+    if (!prefill) return;
+    clearDemoPrefillFromUrl();
+    setShowNewForm(true);
+  }, [prefill]);
+
+  function closeNewForm() {
+    setShowNewForm(false);
+    setPrefill(null);
+  }
+
+  useEffect(() => {
     if (session.assistantsPending || onboardingCheckedRef.current) return;
     onboardingCheckedRef.current = true;
     if (!readSessionPreference(LAST_OWNER_LS_KEY)) setShowNewForm(true);
@@ -112,7 +126,7 @@ export function SettingsPanel({ open, onOpenChange, session }: SettingsPanelProp
         onOpenChange(false);
         setDemoBrief({ customer: values.customer, brief, flow });
       }
-      setShowNewForm(false);
+      closeNewForm();
     } catch (error) {
       window.alert("Setup failed: " + errMsg(error));
     } finally {
@@ -142,9 +156,10 @@ export function SettingsPanel({ open, onOpenChange, session }: SettingsPanelProp
           workspaces={workspaces}
           organization={organization}
           workspaceReset={workspaceReset}
+          prefill={prefill}
           creating={creating}
           onCreate={handleCreate}
-          onCancel={() => setShowNewForm(false)}
+          onCancel={closeNewForm}
         />
       )}
       <Sheet open={open} onOpenChange={onOpenChange}>
@@ -171,8 +186,8 @@ export function SettingsPanel({ open, onOpenChange, session }: SettingsPanelProp
             <AssistantSelect
               value={selectedId}
               assistants={visibleAssistants}
-              onChange={(id) => { setShowNewForm(false); session.selectAssistant(id); }}
-              onNewClick={() => setShowNewForm((shown) => !shown)}
+              onChange={(id) => { closeNewForm(); session.selectAssistant(id); }}
+              onNewClick={() => { setPrefill(null); setShowNewForm((shown) => !shown); }}
             />
             {session.guards.hasAssistant && (
               <>

@@ -80,3 +80,28 @@ def test_the_session_is_an_hmac_of_the_secret_not_the_secret():
     assert not session_ok(session_value("s3cret"), "other")
     assert not session_ok(None, "s3cret")
     assert session_ok(None, "")
+
+
+def test_a_deep_link_query_survives_signing_in(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    response = client.get("/ui/?customer_name=Walmart&use_case=x%20y", follow_redirects=False)
+    assert response.status_code == 303
+    login = response.headers["location"]
+    assert login.startswith("/ui/login?next=")
+
+    page = client.get(login)
+    assert page.status_code == 200
+    assert "next=%2Fui%2F%3Fcustomer_name%3DWalmart" in page.text
+
+    signed_in = client.post(login, data={"password": "s3cret"}, follow_redirects=False)
+    assert signed_in.status_code == 303
+    assert signed_in.headers["location"] == "/ui/?customer_name=Walmart&use_case=x%20y"
+
+
+@pytest.mark.parametrize("target", ["https://evil.test/", "//evil.test/ui/", "/tools", "/ui\\evil"])
+def test_next_never_leaves_the_spa(monkeypatch, tmp_path, target):
+    client = _client(monkeypatch, tmp_path)
+    response = client.post(
+        "/ui/login", params={"next": target}, data={"password": "s3cret"}, follow_redirects=False
+    )
+    assert response.headers["location"] == "/ui/"
