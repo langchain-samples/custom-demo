@@ -43,6 +43,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import time
 import traceback
 from typing import Any, cast
@@ -441,9 +442,28 @@ def judge_prompt_name(dataset: str) -> str:
 
 
 # Cheap first: the judge runs on every row of every re-run, and none of these criteria
-# need a frontier model. Substring hints rather than a model list, because workspace
-# settings are named by whoever created them ("gpt-5.4-nano-custom-0").
-_CHEAP_MODEL_HINTS = ("nano", "mini", "flash", "haiku", "lite", "small")
+# need a frontier model. Name-token hints rather than a model list, because workspace
+# settings are named by whoever created them ("gpt-5.4-nano-custom-0"). Whole tokens, not
+# substrings: "gemini" contains "mini". The ORDER is the preference: an earlier hint beats
+# a later one, and names tie-break alphabetically, so the same workspace always yields the
+# same judge. "haiku" leads because a Claude Haiku
+# setting is the one measured grading this judge prompt cleanly (structured output,
+# every row scored).
+_CHEAP_MODEL_HINTS = ("haiku", "mini", "nano", "flash", "lite", "small")
+
+
+def _routed_host(setting: dict) -> bool:
+    """Is this a third-party host's model routed through a gateway, e.g. `baseten/...`?
+
+    Those names carry the host as a path prefix (`baseten/`, `fireworks/`, `gemini/`) on
+    the setting name or its model id. They rank after first-party models whatever their
+    name says: they rotate in and out of the gateway, and one of them
+    (`baseten/DeepSeek-V4-Flash-0731`, picked as "the first flash model alphabetically")
+    answered HTTP 500 on every judged row, so the baseline read 0/3.
+    """
+    kwargs = (setting.get("settings") or {}).get("kwargs") or {}
+    model = kwargs.get("model") or kwargs.get("model_name") or ""
+    return "/" in str(setting.get("name") or "") or "/" in str(model)
 
 
 def _secret_refs(model: dict) -> set[str]:
@@ -488,13 +508,14 @@ def judge_model_manifest(client) -> tuple[str, dict]:
     def rank(s: dict) -> tuple:
         cls = str(((s.get("settings") or {}).get("id") or [""])[-1])
         name = str(s.get("name") or "").lower()
+        tokens = set(re.split(r"[^a-z0-9]+", name))
+        hint = next(
+            (i for i, h in enumerate(_CHEAP_MODEL_HINTS) if h in tokens),
+            len(_CHEAP_MODEL_HINTS),
+        )
         # `CustomModelEndpoint` is a playground wrapper rather than a chat model, so it
         # sorts last: a real chat-model class is what the evaluator runner is known to load.
-        return (
-            cls == "CustomModelEndpoint",
-            not any(h in name for h in _CHEAP_MODEL_HINTS),
-            name,
-        )
+        return (cls == "CustomModelEndpoint", _routed_host(s), hint, name)
 
     pick = sorted(usable, key=rank)[0]
     return str(pick["id"]), cast("dict", pick["settings"])

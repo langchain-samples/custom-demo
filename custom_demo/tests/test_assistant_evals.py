@@ -1008,6 +1008,71 @@ def test_the_cheapest_usable_model_wins():
     assert AE.judge_model_manifest(fake)[0] == "model-1"
 
 
+def _gateway_setting(sid: str, name: str, model: str, cls: str = "ChatOpenAI") -> dict:
+    """A gateway-backed playground setting, as a LangSmith workspace lists it."""
+    return {
+        "id": sid,
+        "name": name,
+        "available_in_evaluators": True,
+        "settings": {
+            "lc": 1,
+            "type": "constructor",
+            "id": ["langchain", "chat_models", "openai", cls],
+            "kwargs": {
+                "model": model,
+                "openai_api_key": {"lc": 1, "type": "secret", "id": ["LC_GATEWAY_KEY"]},
+            },
+        },
+    }
+
+
+def test_a_routed_host_never_beats_a_first_party_model():
+    """The pick that read every baseline 0/3, from a real workspace's settings.
+
+    Every name below matched a cheap hint, so the alphabetical tie-break chose
+    `baseten/DeepSeek-V4-Flash-0731`, which answered HTTP 500 on every judged row.
+    """
+    settings = [
+        _gateway_setting(
+            "ds", "baseten/DeepSeek-V4-Flash-0731", "baseten/deepseek-ai/DeepSeek-V4-Flash-0731"
+        ),
+        _gateway_setting(
+            "fw", "fireworks/glm-5p3-flash", "fireworks/accounts/fireworks/models/glm-5p3-flash"
+        ),
+        _gateway_setting(
+            "gm", "gemini/gemini-3-flash-preview", "gemini/models/gemini-3-flash-preview"
+        ),
+        _gateway_setting("mini", "gpt-5.4-mini", "gpt-5.4-mini"),
+        _gateway_setting(
+            "haiku", "claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001", "ChatAnthropic"
+        ),
+        _gateway_setting("opus", "claude-opus-5-5", "claude-opus-5-5", "ChatAnthropic"),
+    ]
+    fake = _FakeRulesClient(settings=settings, secrets=["LC_GATEWAY_KEY"])
+    assert AE.judge_model_manifest(fake)[0] == "haiku"
+
+    no_haiku = _FakeRulesClient(
+        settings=[s for s in settings if s["id"] != "haiku"], secrets=["LC_GATEWAY_KEY"]
+    )
+    assert AE.judge_model_manifest(no_haiku)[0] == "mini"
+
+    only_routed = _FakeRulesClient(settings=settings[:3], secrets=["LC_GATEWAY_KEY"])
+    # Still a pick rather than no judge at all, and the same pick every time. "gemini"
+    # holds the substring "mini" and must not outrank the two "flash" names for it.
+    assert AE.judge_model_manifest(only_routed)[0] == "ds"
+
+
+def test_the_judge_pick_does_not_depend_on_listing_order():
+    settings = [
+        _gateway_setting("mini", "gpt-5.4-mini", "gpt-5.4-mini"),
+        _gateway_setting("nano", "gpt-5.4-nano", "gpt-5.4-nano"),
+        _gateway_setting("haiku", "claude-haiku-5-5", "claude-haiku-5-5", "ChatAnthropic"),
+    ]
+    for ordering in (settings, settings[::-1], settings[1:] + settings[:1]):
+        fake = _FakeRulesClient(settings=ordering, secrets=["LC_GATEWAY_KEY"])
+        assert AE.judge_model_manifest(fake)[0] == "haiku"
+
+
 def test_ensure_dataset_evaluator_attaches_nothing_when_no_model_can_score(monkeypatch):
     """No usable model means no evaluator at all, on purpose.
 
