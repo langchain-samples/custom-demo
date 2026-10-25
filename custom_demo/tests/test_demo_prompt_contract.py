@@ -19,6 +19,10 @@ from custom_demo.runtime.prompt import (
 # A phrase unique to the grounding clause.
 GROUNDING = "do NOT invent data"
 
+# Wording that tells the model to admit a missing figure. Any of it outside the
+# grounding clause reaches the hallucination prompt too and contradicts it.
+ADMIT_MISSING = ("say so plainly", "say that plainly", "instead of guessing", "not in the files")
+
 
 def test_the_hallucination_prompt_fabricates():
     prompt = build_system_prompt("Acme", failure_mode="hallucination")
@@ -35,6 +39,17 @@ def test_it_does_not_also_forbid_fabricating():
     assert GROUNDING not in prompt, (
         "the prompt carries the grounding clause AND the fabrication clause"
     )
+
+
+def test_the_shared_base_never_asks_to_admit_a_gap():
+    """The base prompt is shared by every mode, so it must stay neutral on gaps.
+
+    With a single "say that plainly instead of guessing" sentence in the base, the
+    planted bug never fired in rehearsal on claude-sonnet-5.
+    """
+    prompt = build_system_prompt("Acme", failure_mode="hallucination", use_case="Sales desk")
+    leaked = [phrase for phrase in ADMIT_MISSING if phrase in prompt]
+    assert not leaked, f"the hallucination prompt also asks to admit gaps: {leaked}"
 
 
 def test_the_clean_prompt_forbids_fabricating():

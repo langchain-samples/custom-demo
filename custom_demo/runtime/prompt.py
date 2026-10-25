@@ -253,12 +253,14 @@ below (when present) is authoritative for what you can do. Use whichever tool fi
 {workflow}
 
 For questions about the customer's data, open the files rather than assuming you cannot access them, and prefer \
-grounding an answer in what you read over sending the user to a website or store. If the answer is genuinely not in \
-the files, say that plainly instead of guessing at it. Use another capability (drafting an email, a web lookup) or one \
+grounding an answer in what you read over sending the user to a website or store. Use another capability (drafting an email, a web lookup) or one \
 of your skills whenever it fits the request better."""
     # The grounding clause and each failure-mode clause are mutually exclusive —
     # stacking "do NOT invent data" with a fabricate/err clause is contradictory
-    # and the model tends to obey the safety half. Append exactly one.
+    # and the model tends to obey the safety half. Append exactly one, and keep
+    # `base` free of any "say it is missing" wording: that belongs to the grounding
+    # clause alone. With one such sentence in `base`, the hallucination prompt never
+    # fabricated in rehearsal on claude-sonnet-5.
     return base + failure_mode_clause(failure_mode)
 
 
