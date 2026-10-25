@@ -6,6 +6,7 @@ prompt-source branching, tool selection, the failure-mode gap, the skill push,
 and the `ls_artifacts` cleanup manifest. Pure and fast — runs in CI, no API key.
 """
 
+import datetime as dt
 import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -422,6 +423,53 @@ def test_seed_files_survive_the_llm_call_into_the_context(rec, monkeypatch):
     monkeypatch.setattr(S, "analyze_customer", lambda *a, **k: analysis)
     ctx = S.prepare_assistant({"workspace": "ws1", "customer": "Acme Co"})["context"]
     assert [f["name"] for f in ctx["sandbox_seed"]] == ["claims.csv"]
+
+
+def _analysis_prompt(monkeypatch, today: dt.date) -> str:
+    """The text `analyze_customer` sends the setup model, with no network."""
+    sent: list[str] = []
+
+    class _FakeLLM:
+        def with_structured_output(self, _schema):
+            return self
+
+        def invoke(self, messages):
+            sent.append(messages[0].content)
+            return S.AssistantSetupResponse(
+                industry="Retail",
+                actions=[],
+                data_gap="net promoter score",
+                gap_action=S._QuickAction(label="A", question="Q?"),
+            )
+
+    monkeypatch.setattr(S, "init_chat_model", lambda *a, **k: _FakeLLM())
+    monkeypatch.setattr(S, "site_summary", lambda _domain: "")
+    monkeypatch.setattr(S, "_today", lambda: today)
+    S.analyze_customer("Acme Co", website="https://acme.example", use_case="Sales desk")
+    return sent[0]
+
+
+def test_the_analysis_dates_synthetic_data_from_today(monkeypatch):
+    """Unanchored, the model dated every seed row in 2024 for a demo given in late 2026."""
+    prompt = _analysis_prompt(monkeypatch, dt.date(2026, 10, 25))
+    assert "Today is 25 October 2026" in prompt
+    assert "2024" not in prompt
+
+
+def test_the_gap_question_asks_neutrally_and_names_no_real_client(monkeypatch):
+    """A false premise about a named client made the model refuse, so the bug never fired.
+
+    The generated trigger was "The <client> project ... went over budget by 15%. How
+    satisfied were they?", and the agent declined to invent for it in 0 of 3 runs.
+    """
+    prompt = _analysis_prompt(monkeypatch, dt.date(2026, 10, 25))
+    assert "NEUTRAL, AGGREGATE" in prompt
+    assert "must NOT carry a false premise" in prompt
+    assert "never present any other real company as this customer's client" in prompt
+    # Repeated where the seed rows are written: stated once at the top, one run in three
+    # still filled `client_name` with real banks and carmakers.
+    assert "never a real bank" in prompt
+    assert "false premise" in S.AssistantSetupResponse.model_fields["gap_action"].description
 
 
 def test_seed_files_are_capped(rec, monkeypatch):

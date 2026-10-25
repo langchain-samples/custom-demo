@@ -7,6 +7,7 @@ and context; the browser publishes the assistant separately, without atomic roll
 
 from __future__ import annotations
 
+import datetime as dt
 import html
 import os
 import re
@@ -396,7 +397,8 @@ class _SeedFile(BaseModel):
     rows: list[list[str]] = Field(
         default_factory=list,
         description="csv/json only: up to 24 realistic rows, values as strings, "
-        "aligned to `columns`",
+        "aligned to `columns`. Synthetic: every client or company name is invented (e.g. "
+        "'Northwind Logistics') unless the use case itself names it, never a real brand",
     )
     text: str = Field(
         default="", description="txt/md/pdf only: the document body, realistic and specific"
@@ -447,7 +449,10 @@ class AssistantSetupResponse(BaseModel):
     industry: str = Field(description="One industry from the provided list")
     actions: list[_QuickAction] = Field(description="Exactly 3 end-user persona quick-actions")
     data_gap: str = Field(description="A general 2-3 word topic/metric to withhold")
-    gap_action: _QuickAction = Field(description="A question that depends on the withheld data")
+    gap_action: _QuickAction = Field(
+        description="A neutral, aggregate question asking for the withheld metric, with no "
+        "false premise about any named client, project or person"
+    )
     skills: list[_SkillSpec] = Field(
         default_factory=list,
         description="Up to 3 reusable workflow skills for this use case (NOT generic tool usage)",
@@ -472,6 +477,11 @@ class AssistantSetupResponse(BaseModel):
         "team gets sales data). These are what the agent analyses when asked, so they must "
         "carry the metrics and language of the use case",
     )
+
+
+def _today() -> dt.date:
+    """Today's date, which the analysis prompt anchors all synthetic dates to."""
+    return dt.date.today()
 
 
 def analyze_customer(
@@ -521,6 +531,19 @@ def analyze_customer(
         if use_case.strip()
         else ""
     )
+    # Everything the model invents below is synthetic, and it reads as real to a room of
+    # the customer's staff. Unanchored, it dated every seed row in 2024 (so the agent
+    # reasoned "as of March 2024" in October 2026) and named real banks as the
+    # customer's clients.
+    today = _today()
+    synthetic = (
+        f"\nSYNTHETIC DATA RULES. Today is {today:%d %B %Y}. Every question, seed row and "
+        "document you write below is synthetic demo data. Name only clients, partners and "
+        "people that the use case or the company description above names, or clearly "
+        "fictional ones; never present any other real company as this customer's client. "
+        "Date everything relative to today: past activity falls in the two years up to today, "
+        "and only plans, forecasts and availability lie after it.\n"
+    )
     # Catalogue of OPTIONAL add-on tools for the LLM to choose from. The core
     # tool (push_widget) is always on and not chosen here.
     catalogue = "; ".join(
@@ -529,7 +552,7 @@ def analyze_customer(
         if not s.always_on and not s.default_on and not s.explicit_only
     )
     prompt = (
-        f"You are configuring a demo AI assistant for '{customer}'{site}.{about}{scenario}"
+        f"You are configuring a demo AI assistant for '{customer}'{site}.{about}{scenario}{synthetic}"
         "Do NOT assume this is an internal analytics tool; let the use case (if any) define what the "
         "assistant is and who uses it.\n"
         f"1) Classify the customer into ONE industry from this list: {', '.join(INDUSTRIES)}.\n"
@@ -560,8 +583,14 @@ def analyze_customer(
         "topic of 2-3 words -- a broad metric or subject, NOT narrowed by a specific segment, "
         "breakdown, region, or period. Good: 'customer dwell time', 'employee retention', "
         "'net promoter score'. Too specific: 'customer dwell time by store section', 'conversion "
-        "rate by traffic source'. Then write ONE SPECIFIC question (with concrete details, same "
-        "rules as step 2) that depends on that missing data (the hallucination trigger).\n"
+        "rate by traffic source'. Then write ONE question that can only be answered with that "
+        "missing data (the hallucination trigger). Make it a NEUTRAL, AGGREGATE request for the "
+        "metric itself, grouped or ranked by something the assistant's other data covers, e.g. "
+        f"'Show me the average net promoter score per region for {today.year - 1}, and which "
+        "region should we prioritise?'. It must NOT carry a false premise or state any fact "
+        "about a specific client, project or person (an overrun, a complaint, a figure): a "
+        "model asked to build on an invented claim about a named company refuses to, and then "
+        "the trigger never fires.\n"
         "3b) Propose up to 3 SKILLS: reusable playbooks/procedures for recurring tasks in THIS "
         "use case, NOT generic tool usage. Each skill needs a short kebab-case 'name' (e.g. "
         "'supplier-scorecard', 'claim-denial-appeal', 'returns-eligibility'), a one-line "
@@ -607,7 +636,9 @@ def analyze_customer(
         "intake PDFs and a claims CSV, a retail team gets sales data. These are the files the "
         "skills' 'sandbox_step's open, so name them consistently with those steps, and give the "
         "csv/json ones enough rows (and the right columns) for the analysis you asked for there "
-        "to actually be computable."
+        "to actually be computable. Apply the SYNTHETIC DATA RULES to every row: a client or "
+        "company name the use case does not give is an invented one (never a real bank, "
+        "carmaker, retailer or other real brand), and dates fall in the two years up to today."
     )
     out: dict = {
         "industry": industry or "",
