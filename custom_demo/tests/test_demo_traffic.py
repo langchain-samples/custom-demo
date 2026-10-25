@@ -681,8 +681,10 @@ def test_insights_config_clusters_conversations_not_middleware_runs():
     # One trace here is 50-151 runs; without this the clusters are chain runs.
     assert inner["filter"] == "eq(is_root, true)"
     assert inner["sample"] == DT.INSIGHTS_SAMPLE
-    # Insights templates the prompt per run: no variable, nothing to summarise.
-    assert inner["summary_prompt"].endswith("{{run.inputs}}")
+    # Insights templates the prompt per run: no variable, nothing to summarise. The
+    # answer has to be in it too, or every cluster calls answer quality unassessable.
+    assert "{{run.inputs}}" in inner["summary_prompt"]
+    assert inner["summary_prompt"].endswith("{{run.outputs}}")
     assert "churn" in inner["summary_prompt"] and "Acme" in inner["summary_prompt"]
     assert all(schema["filter_by"] is False for schema in inner["attribute_schemas"].values())
 

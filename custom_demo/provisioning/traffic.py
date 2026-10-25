@@ -610,8 +610,12 @@ INSIGHTS_FILTER = "eq(is_root, true)"
 
 # Appended to the summary prompt. Insights templates the prompt per run, and without a
 # `{{run.*}}` variable the model is asked to summarize a conversation it was never
-# shown. The UI's prompt editor adds exactly this.
-INSIGHTS_PROMPT_VARIABLE = "\n\n{{run.inputs}}"
+# shown. Both halves, because the prompt asks how well the assistant ANSWERED: with the
+# question alone every cluster reads "answer quality unassessable", and the fabricated
+# figures this config exists to surface live only in the outputs.
+INSIGHTS_PROMPT_VARIABLE = (
+    "\n\nTHE REQUEST:\n{{run.inputs}}\n\nTHE ASSISTANT'S ANSWER:\n{{run.outputs}}"
+)
 
 
 def ensure_insights_job(
@@ -630,7 +634,8 @@ def ensure_insights_job(
     UI saving one), because the differences were not cosmetic: without
     `cluster_model`/`summary_model` the job needs a per-workspace API key, without
     `filter` it clusters middleware runs instead of conversations, and without
-    `{{run.inputs}}` the summariser never sees the conversation.
+    `{{run.inputs}}` and `{{run.outputs}}` the summariser never sees the conversation
+    it is asked to judge.
     """
     session_id = str(client.read_project(project_name=project).id)
     topic = data_gap or "a topic the assistant has no data for"
